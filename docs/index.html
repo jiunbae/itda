@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Itda — 내 기기를 잇다</title>
+<meta name="title-ko" content="Itda — 내 기기를 잇다">
+<meta name="title-en" content="Itda — Connect your devices">
+<meta name="description" content="Itda(잇다)는 Windows에서 Mac 화면 공유, Windows PC, Linux VNC에 빠르게 연결하고, iPhone·Mac·Android 브라우저로도 내 기기를 여는 가볍고 빠른 원격 데스크톱입니다.">
+<meta name="theme-color" content="#0c0b16">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="canonical" href="https://jiunbae.github.io/itda/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Itda">
+<meta property="og:title" content="Itda — 내 기기를 잇다">
+<meta property="og:description" content="Mac, Windows PC, Linux를 Windows 앱과 브라우저에서. 가볍고 빠른 오픈 소스 원격 데스크톱.">
+<meta property="og:url" content="https://jiunbae.github.io/itda/">
+<meta property="og:image" content="https://jiunbae.github.io/itda/img/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Itda — 내 기기를 잇다">
+<meta name="twitter:description" content="Mac, Windows PC, Linux를 Windows 앱과 브라우저에서. 가볍고 빠른 오픈 소스 원격 데스크톱.">
+<meta name="twitter:image" content="https://jiunbae.github.io/itda/img/og.png">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-github" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.46-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.58 9.58 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2.5L4.5 13.5H11l-1 8 8.5-11H12l1-8z"/></symbol>
+    <symbol id="i-mac" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12.5" rx="2"/><path d="M8.5 20.5h7M12 16.5v4"/></symbol>
+    <symbol id="i-windows" viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.4l7.4-1v7.1H3zM11.4 4.2L21 3v8.5h-9.6zM3 12.5h7.4v7.1L3 18.6zM11.4 12.5H21V21l-9.6-1.3z"/></symbol>
+    <symbol id="i-linux" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c-2.2 0-3.4 1.9-3.4 4.4 0 1.6-.6 2.6-1.6 4-1.2 1.6-2 3.3-2 5.1 0 .9.4 1.6 1 2.1M12 3c2.2 0 3.4 1.9 3.4 4.4 0 1.6.6 2.6 1.6 4 1.2 1.6 2 3.3 2 5.1 0 .9-.4 1.6-1 2.1M8.5 20.5c1 .6 2.2.9 3.5.9s2.5-.3 3.5-.9"/><circle cx="10.4" cy="7.6" r=".6" fill="currentColor"/><circle cx="13.6" cy="7.6" r=".6" fill="currentColor"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="2.5" width="11" height="19" rx="2.6"/><path d="M10.5 18.5h3"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.4"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L19 4M15.5 7.5l2.5 2.5M17.5 5.5L20 8"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.4"/><path d="M2.8 19.5c.8-3.2 3.3-5 6.2-5s5.4 1.8 6.2 5"/><path d="M16 4.9a3.2 3.2 0 0 1 0 6.2M18 14.8c1.7.7 2.8 2.3 3.2 4.7"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-8.5 8.5"/><path d="M18 14v4.5A1.5 1.5 0 0 1 16.5 20h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10"/></symbol>
+    <symbol id="i-net" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M11 7l-5 9M13 7l5 9M7.2 18h9.6"/></symbol>
+    <symbol id="i-radar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M5 12a7 7 0 0 1 14 0M8.5 12a3.5 3.5 0 0 1 7 0"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><path d="M2 12a10 10 0 0 1 20 0"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 2.8l7.5 3v6c0 4.6-3.2 8.2-7.5 9.4-4.3-1.2-7.5-4.8-7.5-9.4v-6z"/><path d="M8.8 12l2.2 2.2 4.2-4.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="3" y="6" width="18" height="12" rx="3"/><path d="M7.5 12h.01M10.5 12h.01M13.5 12h.01M16.5 12h.01" stroke-width="2.6"/></symbol>
+    <symbol id="i-feather" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4c-7 0-12 4-13 13l-3 3M7 17h6c3-1 5-4 6-7M9.5 13H15"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  </defs>
+</svg>
+<a class="skip" href="#main"><span lang="ko">본문으로 건너뛰기</span><span lang="en">Skip to content</span></a>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="./" aria-label="Itda"><img src="favicon.svg" alt="" width="32" height="32">Itda<small>잇다</small></a>
+    <nav class="nav-links" aria-label="Main">
+      <a href="#features"><span lang="ko">기능</span><span lang="en">Features</span></a>
+      <a href="#how"><span lang="ko">작동 방식</span><span lang="en">How it works</span></a>
+      <a href="#security"><span lang="ko">보안</span><span lang="en">Security</span></a>
+      <a href="#faq">FAQ</a>
+      <a href="start.html"><span lang="ko">시작하기</span><span lang="en">Get started</span></a>
+    </nav>
+    <div class="nav-right">
+      <div class="lang" role="group" aria-label="Language"><button data-set="ko" aria-pressed="true">KO</button><button data-set="en" aria-pressed="false">EN</button></div>
+      <a class="icon-btn" href="https://github.com/jiunbae/itda" aria-label="GitHub"><svg><use href="#i-github"/></svg></a>
+      <a class="btn primary small" href="https://github.com/jiunbae/itda/releases/latest"><svg><use href="#i-download"/></svg><span class="label"><span lang="ko">다운로드</span><span lang="en">Download</span></span></a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <!-- hero -->
+  <section class="hero">
+    <div class="wrap">
+      <div class="hero-copy">
+        <span class="eyebrow"><span class="tag">NEW</span><span lang="ko">브라우저로도 열리는 원격 데스크톱 · RDP 지원</span><span lang="en">Now in your browser too · with RDP</span></span>
+        <h1 class="title"><span lang="ko">내 기기를,<br><span class="grad">잇다.</span></span><span lang="en">All your devices,<br><span class="grad">connected.</span></span></h1>
+        <p class="lead">
+          <span lang="ko">Itda는 Windows에서 Mac의 화면 공유, Windows PC, Linux에 바로 연결하는 가볍고 빠른 원격 데스크톱입니다. iPhone·Mac·Android에서는 앱 설치 없이 브라우저로 엽니다.</span>
+          <span lang="en">Itda is a tiny, fast remote desktop for Windows that opens your Mac's built-in Screen Sharing, other Windows PCs and Linux boxes — and lets iPhone, Mac and Android open them from a browser, no app needed.</span>
+        </p>
+        <div class="cta">
+          <a class="btn primary" href="https://github.com/jiunbae/itda/releases/latest"><svg><use href="#i-windows"/></svg><span lang="ko">Windows용 다운로드</span><span lang="en">Download for Windows</span> <span class="sub">· 무료</span></a>
+          <a class="btn" href="start.html"><span lang="ko">5분 시작 가이드</span><span lang="en">5-minute guide</span><svg><use href="#i-arrow"/></svg></a>
+        </div>
+        <div class="meta">
+          <span><svg><use href="#i-check"/></svg><span lang="ko">Windows 10 · 11</span><span lang="en">Windows 10 · 11</span></span>
+          <span><svg><use href="#i-check"/></svg><span lang="ko">설치 없이 exe 하나</span><span lang="en">One exe, no installer</span></span>
+          <span><svg><use href="#i-check"/></svg><span lang="ko">오픈 소스 · MIT</span><span lang="en">Open source · MIT</span></span>
+          <span><svg><use href="#i-check"/></svg><span lang="ko">계정 가입 없음</span><span lang="en">No sign-up</span></span>
+        </div>
+      </div>
+
+      <div class="stage reveal">
+        <div class="window">
+          <div class="chrome" aria-hidden="true"><i></i><i></i><i></i><b>Itda</b><span class="ctl"><span>—</span><span>☐</span><span>✕</span></span></div>
+          <picture>
+            <source srcset="img/home-light.webp" media="(prefers-color-scheme: light)">
+            <img src="img/home-dark.webp" width="2000" height="1135" alt="Itda 홈 화면: 저장된 Mac과 Windows PC가 미리보기 카드로 보입니다" data-ko-alt="Itda 홈 화면: 저장된 Mac과 Windows PC가 미리보기 카드로 보입니다" data-en-alt="Itda home: saved Macs and Windows PCs as live preview cards">
+          </picture>
+        </div>
+        <div class="phone"><img src="img/phone-list.webp" width="640" height="994" alt="iPhone 브라우저의 Itda 웹 뷰어" data-ko-alt="iPhone 브라우저의 Itda 웹 뷰어" data-en-alt="Itda web viewer on an iPhone browser"></div>
+        <div class="float-pill" aria-hidden="true"><span class="dot"><svg><use href="#i-bolt"/></svg></span><div><span lang="ko">mac-mini에 연결됨</span><span lang="en">Connected to mac-mini</span><small lang="ko">SSH 암호화 · 1920×1080</small><small lang="en">SSH encrypted · 1920×1080</small></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- works with -->
+  <section class="strip" aria-label="Works with">
+    <div class="wrap">
+      <p><span lang="ko">이 기기들과 함께</span><span lang="en">Works with</span></p>
+      <div class="logos">
+        <span><svg><use href="#i-mac"/></svg><span lang="ko">macOS 화면 공유</span><span lang="en">macOS Screen Sharing</span></span>
+        <span><svg><use href="#i-windows"/></svg><span lang="ko">Windows 원격 데스크톱</span><span lang="en">Windows Remote Desktop</span></span>
+        <span><svg><use href="#i-linux"/></svg>Linux · VNC</span>
+        <span><svg><use href="#i-phone"/></svg>iPhone · Android</span>
+        <span><svg><use href="#i-net"/></svg>Tailscale</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- features -->
+  <section class="section" id="features">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker"><span lang="ko">기능</span><span lang="en">Features</span></span>
+        <h2><span lang="ko">필요한 건 다 있고,<br>필요 없는 건 없습니다.</span><span lang="en">Everything you need.<br>Nothing you don't.</span></h2>
+        <p><span lang="ko">복잡한 설정 없이 켜고, 고르고, 연결하세요. 서비스 수준의 편의 기능은 그대로 담았습니다.</span><span lang="en">Turn it on, pick a device, connect. All the conveniences of a commercial remote desktop, none of the bloat.</span></p>
+      </div>
+      <div class="features">
+        <article class="feature reveal" style="--ic:var(--violet)">
+          <div class="ic"><svg><use href="#i-bolt"/></svg></div>
+          <h3><span lang="ko">빠른 네이티브 뷰어</span><span lang="en">Fast native viewer</span></h3>
+          <p><span lang="ko">Rust와 Win32로 만든 6 MB짜리 앱. ZRLE, 로컬 커서, 변경된 영역만 그려 지연이 거의 없습니다.</span><span lang="en">A 6 MB Rust + Win32 app. ZRLE, local cursor and dirty-region drawing keep latency down.</span></p>
+        </article>
+        <article class="feature reveal" style="--ic:var(--teal);--c:var(--glow-3)">
+          <div class="ic"><svg><use href="#i-mac"/></svg></div>
+          <h3><span lang="ko">Mac 화면 공유 그대로</span><span lang="en">Mac Screen Sharing, built in</span></h3>
+          <p><span lang="ko">Mac에 아무것도 설치하지 않습니다. 기본 화면 공유를 켜고 Mac 계정으로 로그인하면 끝.</span><span lang="en">Nothing to install on the Mac. Turn on Screen Sharing and sign in with your Mac account.</span></p>
+        </article>
+        <article class="feature reveal" style="--ic:#5ea8ff">
+          <div class="ic"><svg><use href="#i-windows"/></svg></div>
+          <h3><span lang="ko">Windows PC · RDP</span><span lang="en">Windows PCs · RDP</span></h3>
+          <p><span lang="ko">다른 PC의 Itda 공유(모든 Windows) 또는 원격 데스크톱(Pro)으로. 웹 뷰어에서는 RDP도 브라우저로 엽니다.</span><span lang="en">Via Itda's Share this PC (any Windows) or Remote Desktop (Pro). The web viewer even opens RDP in a browser.</span></p>
+        </article>
+        <article class="feature reveal" style="--ic:var(--coral);--c:var(--glow-2)">
+          <div class="ic"><svg><use href="#i-globe"/></svg></div>
+          <h3><span lang="ko">어디서나 브라우저로</span><span lang="en">Any browser, anywhere</span></h3>
+          <p><span lang="ko">iPhone·Mac·Android에서 QR을 찍고 PIN만 넣으면 열립니다. 홈 화면에 추가해 앱처럼(PWA).</span><span lang="en">Scan a QR code on iPhone, Mac or Android, enter a PIN, done. Add it to your home screen as an app (PWA).</span></p>
+        </article>
+        <article class="feature reveal" style="--ic:var(--teal);--c:var(--glow-3)">
+          <div class="ic"><svg><use href="#i-lock"/></svg></div>
+          <h3><span lang="ko">SSH 암호화</span><span lang="en">SSH encryption</span></h3>
+          <p><span lang="ko">공용 Wi-Fi나 인터넷 너머에서는 스위치 하나로 SSH 터널. 키 파일도 지원합니다.</span><span lang="en">One switch wraps the connection in an SSH tunnel for public Wi-Fi and the internet. Key files supported.</span></p>
+        </article>
+        <article class="feature reveal" style="--ic:var(--violet)">
+          <div class="ic"><svg><use href="#i-net"/></svg></div>
+          <h3><span lang="ko">Tailscale로 어디서나</span><span lang="en">Anywhere with Tailscale</span></h3>
+          <p><span lang="ko">공유기 설정 없이 집 밖에서도. Tailscale 기기를 자동으로 찾고 HTTPS 주소도 만들어 줍니다.</span><span lang="en">No port forwarding. Tailscale devices show up automatically, and Itda can mint an HTTPS address.</span></p>
+        </article>
+        <article class="feature reveal" style="--ic:#5ea8ff">
+          <div class="ic"><svg><use href="#i-users"/></svg></div>
+          <h3><span lang="ko">계정 한 번, 기기 여러 대</span><span lang="en">One account, many devices</span></h3>
+          <p><span lang="ko">같은 계정을 쓰는 Mac 여러 대는 계정 하나로. 암호를 바꿀 때도 한 곳만 고치면 됩니다.</span><span lang="en">Save an account once and reuse it on every Mac. Change the password in one place.</span></p>
+        </article>
+        <article class="feature reveal" style="--ic:var(--coral);--c:var(--glow-2)">
+          <div class="ic"><svg><use href="#i-share"/></svg></div>
+          <h3><span lang="ko">이 PC 공유</span><span lang="en">Share this PC</span></h3>
+          <p><span lang="ko">내 PC도 다른 기기에서 보고 조작할 수 있게. 연결마다 허락을 묻고 언제든 끊을 수 있습니다.</span><span lang="en">Let your other devices see and control this PC. Asks before each viewer, disconnect any time.</span></p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- showcase -->
+  <section class="section alt">
+    <div class="wrap">
+      <div class="show reveal">
+        <div class="show-copy">
+          <span class="kicker"><span lang="ko">주소록</span><span lang="en">Address book</span></span>
+          <h2><span lang="ko">연결은 카드 한 번 클릭</span><span lang="en">One click to connect</span></h2>
+          <p><span lang="ko">마지막 화면 미리보기, 온라인 표시, 즐겨찾기, 그룹, 검색. 주소를 바로 입력해도 됩니다.</span><span lang="en">Live previews, online dots, favourites, groups and search — or just type an address.</span></p>
+          <ul>
+            <li><svg><use href="#i-check"/></svg><span lang="ko"><b>주변 기기 자동 검색</b> — 같은 Wi-Fi의 Mac(Bonjour)과 Tailscale 기기</span><span lang="en"><b>Finds nearby devices</b> — Macs on your Wi-Fi (Bonjour) and your Tailscale devices</span></li>
+            <li><svg><use href="#i-check"/></svg><span lang="ko"><b>창마다 하나의 연결</b> — 툴바, 전체 화면, 1:1 보기, 스크린샷, 자동 재연결</span><span lang="en"><b>A window per connection</b> — toolbar, full screen, 1:1, screenshots, auto-reconnect</span></li>
+            <li><svg><use href="#i-check"/></svg><span lang="ko"><b>한글 입력과 클립보드</b> — 한/영 전환, 양방향 클립보드, ⌘ ↔ Ctrl</span><span lang="en"><b>Korean IME &amp; clipboard</b> — Hangul toggle, two-way clipboard, ⌘ ↔ Ctrl</span></li>
+          </ul>
+        </div>
+        <div class="shot-wrap"><div class="shot"><img src="img/nearby.webp" width="1600" height="908" loading="lazy" alt="주변 기기: 같은 Wi-Fi와 Tailscale에서 찾은 Mac과 PC" data-ko-alt="주변 기기: 같은 Wi-Fi와 Tailscale에서 찾은 Mac과 PC" data-en-alt="Nearby devices found on Wi-Fi and Tailscale"></div></div>
+      </div>
+
+      <div class="show flip reveal">
+        <div class="show-copy">
+          <span class="kicker"><span lang="ko">웹 뷰어</span><span lang="en">Web viewer</span></span>
+          <h2><span lang="ko">Mac 앱이 필요 없는 이유</span><span lang="en">Why there's no Mac app</span></h2>
+          <p><span lang="ko">이 PC의 Itda가 작은 웹 서버가 됩니다. 휴대폰·태블릿·Mac 브라우저로 저장된 모든 기기와 이 PC 자신을 열고, 기기와 계정도 관리하세요.</span><span lang="en">The PC running Itda becomes a tiny web server. Phones, tablets and Macs open every saved device — and this PC — from a browser, and can manage devices and accounts too.</span></p>
+          <ul>
+            <li><svg><use href="#i-check"/></svg><span lang="ko"><b>터치에 맞춘 조작</b> — 탭·두 손가락 스크롤, 한글 키보드, ⌘/Ctrl+Alt+Del 키 시트</span><span lang="en"><b>Made for touch</b> — tap, two-finger scroll, Korean keyboard, ⌘ and Ctrl+Alt+Del sheets</span></li>
+            <li><svg><use href="#i-check"/></svg><span lang="ko"><b>RDP도 브라우저에서</b> — Itda가 RDP(TLS + NLA)로 로그인해 화면을 전달</span><span lang="en"><b>RDP in the browser</b> — Itda signs in over RDP (TLS + NLA) and relays the screen</span></li>
+            <li><svg><use href="#i-check"/></svg><span lang="ko"><b>앱처럼 설치</b> — 홈 화면·Dock에 추가하면 전체 화면으로</span><span lang="en"><b>Installs like an app</b> — add to Home Screen or the Dock</span></li>
+          </ul>
+        </div>
+        <div class="shot-wrap">
+          <div class="shot"><img src="img/tablet-view.webp" width="1255" height="782" loading="lazy" alt="태블릿 브라우저에서 본 Mac 화면" data-ko-alt="태블릿 브라우저에서 본 Mac 화면" data-en-alt="A Mac's screen in a tablet browser"></div>
+          <div class="phone"><img src="img/phone-list.webp" width="640" height="994" loading="lazy" alt="휴대폰의 기기 목록" data-ko-alt="휴대폰의 기기 목록" data-en-alt="Device list on a phone"></div>
+        </div>
+      </div>
+
+      <div class="show reveal">
+        <div class="show-copy">
+          <span class="kicker"><span lang="ko">공유</span><span lang="en">Sharing</span></span>
+          <h2><span lang="ko">QR 하나로 시작</span><span lang="en">Start with one QR code</span></h2>
+          <p><span lang="ko">공유 페이지에서 ‘모두 켜기’를 누르면 QR과 PIN이 나옵니다. 휴대폰 카메라로 찍으면 끝.</span><span lang="en">Hit “Turn on both” on the Share page and you get a QR code and PIN. Point your phone's camera at it.</span></p>
+          <ul>
+            <li><svg><use href="#i-check"/></svg><span lang="ko"><b>같은 Wi-Fi 또는 Tailscale</b> 주소를 골라서</span><span lang="en"><b>Wi-Fi or Tailscale</b> address, your choice</span></li>
+            <li><svg><use href="#i-check"/></svg><span lang="ko"><b>보는 사람 표시</b>와 <b>모두 끊기</b>, 알림 영역 알림</span><span lang="en"><b>See who's watching</b>, <b>kick everyone</b>, tray notifications</span></li>
+          </ul>
+        </div>
+        <div class="shot-wrap"><div class="shot"><img src="img/share.webp" width="1600" height="908" loading="lazy" alt="공유 페이지: QR 코드, 주소, 접속 PIN" data-ko-alt="공유 페이지: QR 코드, 주소, 접속 PIN" data-en-alt="Share page with QR code, addresses and PIN"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- how it works -->
+  <section class="section" id="how">
+    <div class="wrap">
+      <div class="section-head center reveal">
+        <span class="kicker"><span lang="ko">작동 방식</span><span lang="en">How it works</span></span>
+        <h2><span lang="ko">이 PC가 다리가 됩니다</span><span lang="en">This PC is the bridge</span></h2>
+        <p><span lang="ko">클라우드 중계 서버도, 가입도 없습니다. 내 네트워크 안에서 내 기기끼리 바로 연결합니다.</span><span lang="en">No cloud relay, no accounts. Your devices talk to each other on your own network.</span></p>
+      </div>
+      <div class="flow reveal">
+        <div class="scroller" tabindex="0" role="group" aria-label="diagram"><svg class="diagram" viewBox="0 0 960 330" role="img" aria-labelledby="dg-t">
+          <title id="dg-t">휴대폰·Mac 브라우저 → 이 PC의 Itda → Mac, Windows PC, Linux</title>
+          <defs>
+            <linearGradient id="g-in" x1="0" x2="1"><stop offset="0" stop-color="#ff6a43"/><stop offset="1" stop-color="#a4a1ff"/></linearGradient>
+            <linearGradient id="g-out" x1="0" x2="1"><stop offset="0" stop-color="#a4a1ff"/><stop offset="1" stop-color="#33d1c2"/></linearGradient>
+            <linearGradient id="g-hub" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5a56e0"/><stop offset="1" stop-color="#26255f"/></linearGradient>
+            <filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="18"/></filter>
+          </defs>
+          <!-- left: clients -->
+          <g font-family="Pretendard Variable, Pretendard, Segoe UI, sans-serif" fill="currentColor">
+            <g transform="translate(40 52)">
+              <rect class="box" width="200" height="64" rx="16"/>
+              <text x="62" y="30" font-size="16" font-weight="700">iPhone · iPad</text><text x="62" y="49" font-size="12.5" class="muted">Safari · <tspan>PWA</tspan></text>
+              <rect x="18" y="14" width="26" height="36" rx="6" fill="none" stroke="#ff6a43" stroke-width="2.2"/>
+            </g>
+            <g transform="translate(40 133)">
+              <rect class="box" width="200" height="64" rx="16"/>
+              <text x="62" y="30" font-size="16" font-weight="700">Mac</text><text x="62" y="49" font-size="12.5" class="muted">Safari · Chrome</text>
+              <rect x="14" y="17" width="34" height="23" rx="4" fill="none" stroke="#ff6a43" stroke-width="2.2"/><path d="M24 46h14" stroke="#ff6a43" stroke-width="2.2" stroke-linecap="round"/>
+            </g>
+            <g transform="translate(40 214)">
+              <rect class="box" width="200" height="64" rx="16"/>
+              <text x="62" y="30" font-size="16" font-weight="700">Android</text><text x="62" y="49" font-size="12.5" class="muted">Chrome · PWA</text>
+              <rect x="18" y="14" width="26" height="36" rx="6" fill="none" stroke="#ff6a43" stroke-width="2.2"/>
+            </g>
+            <!-- hub -->
+            <ellipse cx="480" cy="165" rx="120" ry="90" fill="#4744b0" opacity=".35" filter="url(#soft)"/>
+            <g transform="translate(375 95)">
+              <rect width="210" height="140" rx="24" fill="url(#g-hub)"/>
+              <rect x=".5" y=".5" width="209" height="139" rx="23.5" fill="none" stroke="rgba(255,255,255,.18)"/>
+              <image href="favicon.svg" x="81" y="20" width="48" height="48"/>
+              <text x="105" y="94" font-size="17" font-weight="800" fill="#fff" text-anchor="middle">Itda</text>
+              <text x="105" y="116" font-size="12.5" fill="#c9c7e6" text-anchor="middle">Windows PC</text>
+            </g>
+            <!-- right: targets -->
+            <g transform="translate(720 52)">
+              <rect class="box" width="200" height="64" rx="16"/>
+              <text x="62" y="30" font-size="16" font-weight="700">Mac</text><text x="62" y="49" font-size="12.5" class="muted">Screen Sharing</text>
+              <rect x="14" y="17" width="34" height="23" rx="4" fill="none" stroke="#33d1c2" stroke-width="2.2"/><path d="M24 46h14" stroke="#33d1c2" stroke-width="2.2" stroke-linecap="round"/>
+            </g>
+            <g transform="translate(720 133)">
+              <rect class="box" width="200" height="64" rx="16"/>
+              <text x="62" y="30" font-size="16" font-weight="700">Windows PC</text><text x="62" y="49" font-size="12.5" class="muted">RDP · Itda</text>
+              <path d="M16 20l10-1.4v10H16zM28 18.4l12-1.6v12H28zM16 30.6h10v10L16 39.2zM28 30.6h12v12l-12-1.6z" fill="#33d1c2"/>
+            </g>
+            <g transform="translate(720 214)">
+              <rect class="box" width="200" height="64" rx="16"/>
+              <text x="62" y="30" font-size="16" font-weight="700">Linux · Pi</text><text x="62" y="49" font-size="12.5" class="muted">VNC</text>
+              <circle cx="31" cy="32" r="13" fill="none" stroke="#33d1c2" stroke-width="2.2"/>
+            </g>
+          </g>
+          <!-- links -->
+          <g fill="none" stroke-width="2.6" stroke-linecap="round">
+            <path class="dash" d="M240 84 C 310 84, 310 140, 375 150" stroke="url(#g-in)"/>
+            <path class="dash" d="M240 165 L 375 165" stroke="url(#g-in)"/>
+            <path class="dash" d="M240 246 C 310 246, 310 190, 375 180" stroke="url(#g-in)"/>
+            <path class="dash" d="M585 150 C 650 140, 650 84, 720 84" stroke="url(#g-out)"/>
+            <path class="dash" d="M585 165 L 720 165" stroke="url(#g-out)"/>
+            <path class="dash" d="M585 180 C 650 190, 650 246, 720 246" stroke="url(#g-out)"/>
+          </g>
+          <g font-family="Pretendard Variable, Pretendard, Segoe UI, sans-serif" font-size="12" font-weight="700" text-anchor="middle">
+            <text x="308" y="312" fill="#ff8d6c">PIN · HTTP / HTTPS</text>
+            <text x="652" y="312" fill="#33d1c2">VNC · RDP · SSH</text>
+          </g>
+        </svg></div>
+        <div class="legend">
+          <span style="--c:linear-gradient(90deg,#ff6a43,#a4a1ff)"><i></i><span lang="ko">브라우저 ↔ 이 PC: PIN 로그인, 화면 데이터만 전달</span><span lang="en">Browser ↔ this PC: PIN sign-in, screen data only</span></span>
+          <span style="--c:linear-gradient(90deg,#a4a1ff,#33d1c2)"><i></i><span lang="ko">이 PC ↔ 기기: 저장된 암호로 로그인, 필요하면 SSH 암호화</span><span lang="en">This PC ↔ device: saved credentials, SSH when you want it</span></span>
+        </div>
+      </div>
+      <div class="steps3">
+        <div class="reveal"><b><span class="n">1</span><span lang="ko">기기에서 공유 켜기</span><span lang="en">Turn on sharing</span></b><p><span lang="ko">Mac은 화면 공유, PC는 Itda 공유나 원격 데스크톱, Linux는 VNC 서버.</span><span lang="en">Screen Sharing on a Mac, Itda sharing or Remote Desktop on a PC, a VNC server on Linux.</span></p></div>
+        <div class="reveal"><b><span class="n">2</span><span lang="ko">Itda에 추가</span><span lang="en">Add it to Itda</span></b><p><span lang="ko">주변 기기에서 ‘추가’를 누르거나 주소를 입력하고 계정을 저장합니다.</span><span lang="en">Click Add in Nearby, or type an address and save the account.</span></p></div>
+        <div class="reveal"><b><span class="n">3</span><span lang="ko">어디서든 연결</span><span lang="en">Connect from anywhere</span></b><p><span lang="ko">PC에서는 창으로, 휴대폰·Mac에서는 브라우저로. 밖에서는 Tailscale.</span><span lang="en">In a window on the PC, in a browser everywhere else. Tailscale when you're out.</span></p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- security -->
+  <section class="section alt" id="security">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker"><span lang="ko">보안</span><span lang="en">Security</span></span>
+        <h2><span lang="ko">암호는 내 PC 밖으로<br>나가지 않습니다</span><span lang="en">Your passwords never<br>leave your PC</span></h2>
+        <p><span lang="ko">클라우드 계정도, 중계 서버도 없습니다. 투명하게 공개된 코드로 검증할 수 있습니다.</span><span lang="en">No cloud account, no relay server — and the code is open for you to check.</span></p>
+      </div>
+      <div class="sec-grid">
+        <div class="sec reveal"><div class="ic"><svg><use href="#i-key"/></svg></div><div><h3><span lang="ko">Windows 자격 증명 관리자</span><span lang="en">Windows Credential Manager</span></h3><p><span lang="ko">암호와 키 암호는 Windows가 암호화해 보관합니다. 설정 파일에는 저장하지 않습니다.</span><span lang="en">Passwords and key passphrases are encrypted by Windows, never written to settings files.</span></p></div></div>
+        <div class="sec reveal"><div class="ic"><svg><use href="#i-shield"/></svg></div><div><h3><span lang="ko">Apple 인증 · NLA</span><span lang="en">Apple auth · NLA</span></h3><p><span lang="ko">Mac은 Apple의 DH + AES 로그인, RDP는 TLS와 네트워크 수준 인증(NLA)으로 접속합니다.</span><span lang="en">Macs sign in with Apple's DH + AES scheme; RDP uses TLS with Network Level Authentication.</span></p></div></div>
+        <div class="sec reveal"><div class="ic"><svg><use href="#i-pin"/></svg></div><div><h3><span lang="ko">PIN과 잠금</span><span lang="en">PIN &amp; lockout</span></h3><p><span lang="ko">웹 뷰어는 6자리 PIN → HttpOnly 쿠키. 5번 틀리면 잠기고, 다른 사이트의 접속(Origin)은 거부합니다.</span><span lang="en">The web viewer uses a 6-digit PIN → HttpOnly cookie, locks after 5 misses and rejects cross-site requests.</span></p></div></div>
+        <div class="sec reveal"><div class="ic"><svg><use href="#i-eye"/></svg></div><div><h3><span lang="ko">허락을 묻는 공유</span><span lang="en">Sharing that asks first</span></h3><p><span lang="ko">이 PC 공유는 연결마다 화면에 허락 창을 띄우고, 보는 사람을 알림 영역에 표시합니다.</span><span lang="en">Share this PC pops an allow prompt for each viewer and shows who's watching in the tray.</span></p></div></div>
+      </div>
+      <p class="note reveal"><span lang="ko"><b>권장:</b> 웹 뷰어와 이 PC 공유는 같은 Wi-Fi나 Tailscale 안에서 쓰세요. 공유기에서 포트를 인터넷에 직접 열지 마세요. 밖에서는 Tailscale의 HTTPS 주소를 쓰면 됩니다.</span><span lang="en"><b>Recommended:</b> use the web viewer and Share this PC on your own Wi-Fi or over Tailscale. Don't forward these ports to the internet — use Tailscale's HTTPS address when you're away.</span></p>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="section" id="faq">
+    <div class="wrap">
+      <div class="section-head center reveal">
+        <span class="kicker">FAQ</span>
+        <h2><span lang="ko">자주 묻는 질문</span><span lang="en">Questions</span></h2>
+      </div>
+      <div class="faq">
+        <details class="reveal"><summary><span lang="ko">정말 무료인가요?</span><span lang="en">Is it really free?</span></summary><div><p><span lang="ko">네. MIT 라이선스의 오픈 소스이고, 가입·구독·광고가 없습니다.</span><span lang="en">Yes. It's open source under the MIT license — no sign-up, subscription or ads.</span></p></div></details>
+        <details class="reveal"><summary><span lang="ko">Mac에 무엇을 설치해야 하나요?</span><span lang="en">What do I install on the Mac?</span></summary><div><p><span lang="ko">아무것도요. 시스템 설정 → 일반 → 공유에서 ‘화면 공유’를 켜면 됩니다. 밖에서 쓸 거라면 ‘원격 로그인(SSH)’도 켜 두세요.</span><span lang="en">Nothing. Turn on Screen Sharing in System Settings → General → Sharing. Turn on Remote Login (SSH) too if you'll connect from outside.</span></p></div></details>
+        <details class="reveal"><summary><span lang="ko">Mac용·iPhone용 앱은 없나요?</span><span lang="en">Is there a Mac or iPhone app?</span></summary><div><p><span lang="ko">웹 뷰어가 그 역할을 합니다. Windows PC의 Itda에서 웹 뷰어를 켜고, Mac·iPhone 브라우저로 열어 Dock이나 홈 화면에 추가하세요. 기기와 계정 관리도 브라우저에서 됩니다.</span><span lang="en">The web viewer is the app. Turn it on in Itda on your Windows PC, open it in Safari or Chrome and add it to your Dock or Home Screen. You can manage devices and accounts there too.</span></p></div></details>
+        <details class="reveal"><summary><span lang="ko">Windows Home 에디션도 연결되나요?</span><span lang="en">Does Windows Home work?</span></summary><div><p><span lang="ko">네. Windows Home에는 원격 데스크톱 서버가 없지만, 그 PC에 Itda를 설치하고 ‘이 PC 공유’를 켜면 어떤 Windows든 연결됩니다.</span><span lang="en">Yes. Home has no Remote Desktop host, but install Itda on it and turn on Share this PC — that works on every edition.</span></p></div></details>
+        <details class="reveal"><summary><span lang="ko">집 밖에서는 어떻게 연결하나요?</span><span lang="en">How do I connect from outside?</span></summary><div><p><span lang="ko">모든 기기에 Tailscale을 설치하고 같은 계정으로 로그인하세요(개인 무료). Itda가 Tailscale 기기를 자동으로 보여 주고, 웹 뷰어의 Tailscale 주소·HTTPS 주소도 만들어 줍니다.</span><span lang="en">Install Tailscale on every device and sign in with the same account (free for personal use). Itda lists your Tailscale devices and shows the web viewer's Tailscale/HTTPS address.</span></p></div></details>
+        <details class="reveal"><summary><span lang="ko">Windows가 “PC를 보호했습니다”라고 해요.</span><span lang="en">Windows says “Windows protected your PC”.</span></summary><div><p><span lang="ko">아직 코드 서명이 없는 새 앱이라 SmartScreen이 경고합니다. ‘추가 정보’ → ‘실행’을 누르세요. 소스와 빌드 방법은 GitHub에 공개되어 있습니다.</span><span lang="en">The app isn't code-signed yet, so SmartScreen warns about it. Click “More info” → “Run anyway”. Source and build steps are on GitHub.</span></p></div></details>
+        <details class="reveal"><summary><span lang="ko">RealVNC·TeamViewer와 무엇이 다른가요?</span><span lang="en">How is it different from RealVNC or TeamViewer?</span></summary><div><p><span lang="ko">계정·클라우드 없이 Mac의 기본 화면 공유와 Windows 원격 데스크톱 같은 표준 프로토콜을 그대로 씁니다. 상대 기기에 별도 앱을 깔 필요가 없고, 앱은 6 MB짜리 exe 하나입니다.</span><span lang="en">No accounts or cloud: Itda speaks the standard protocols your devices already have — Mac Screen Sharing, Windows Remote Desktop, VNC. Nothing extra on the other side, and the app is a single 6 MB exe.</span></p></div></details>
+      </div>
+    </div>
+  </section>
+
+  <!-- final CTA -->
+  <section class="wrap" aria-label="Download">
+    <div class="final reveal">
+      <img class="mark" src="favicon.svg" alt="" width="64" height="64">
+      <h2><span lang="ko">지금 내 기기를 이어 보세요</span><span lang="en">Connect your devices now</span></h2>
+      <p><span lang="ko">다운로드 → 실행 → 연결. 5분이면 충분합니다.</span><span lang="en">Download → run → connect. Five minutes is plenty.</span></p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/jiunbae/itda/releases/latest"><svg><use href="#i-download"/></svg><span lang="ko">Windows용 다운로드</span><span lang="en">Download for Windows</span></a>
+        <a class="btn" href="start.html"><span lang="ko">시작 가이드 보기</span><span lang="en">Read the guide</span><svg><use href="#i-arrow"/></svg></a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <a class="brand" href="./"><img src="favicon.svg" alt="" width="32" height="32">Itda<small>잇다</small></a>
+      <p><span lang="ko">내 기기를 잇다 — 가볍고 빠른 원격 데스크톱.</span><span lang="en">Connect your devices — a light, fast remote desktop.</span></p>
+    </div>
+    <div>
+      <h4><span lang="ko">제품</span><span lang="en">Product</span></h4>
+      <ul>
+        <li><a href="start.html"><span lang="ko">시작하기</span><span lang="en">Get started</span></a></li>
+        <li><a href="https://github.com/jiunbae/itda/releases"><span lang="ko">릴리스</span><span lang="en">Releases</span></a></li>
+        <li><a href="#faq">FAQ</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4><span lang="ko">오픈 소스</span><span lang="en">Open source</span></h4>
+      <ul>
+        <li><a href="https://github.com/jiunbae/itda">GitHub</a></li>
+        <li><a href="https://github.com/jiunbae/itda/issues"><span lang="ko">문제 신고</span><span lang="en">Report an issue</span></a></li>
+        <li><a href="https://github.com/jiunbae/itda/blob/main/LICENSE"><span lang="ko">라이선스 (MIT)</span><span lang="en">License (MIT)</span></a></li>
+      </ul>
+    </div>
+    <div class="fine">
+      <span>© 2026 Itda contributors · MIT License</span>
+      <span><span lang="ko">웹 뷰어에 </span><span lang="en">Web viewer uses </span><a href="https://github.com/novnc/noVNC">noVNC</a> (MPL-2.0), <span lang="ko">RDP에 </span><span lang="en">RDP by </span><a href="https://github.com/Devolutions/IronRDP">IronRDP</a> (MIT/Apache-2.0)<span lang="ko">를 씁니다.</span><span lang="en">.</span></span>
+      <span><span lang="ko">macOS, Windows, Tailscale은 각 소유자의 상표입니다.</span><span lang="en">macOS, Windows and Tailscale are trademarks of their owners.</span></span>
+    </div>
+  </div>
+</footer>
+<script src="site.js"></script>
+</body>
+</html>

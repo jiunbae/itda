@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- 16–32 px master: heavier strokes, brighter colours, stronger rim. -->
+  <defs>
+    <linearGradient id="itdas-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5653C8"/>
+      <stop offset="1" stop-color="#2E2C74"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="52" fill="url(#itdas-bg)"/>
+  <rect x="5" y="5" width="246" height="246" rx="48" fill="none" stroke="#FFFFFF" stroke-opacity=".22" stroke-width="10"/>
+  <g fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="94" cy="94" r="38" stroke="#FF7A50"/>
+    <line x1="182" y1="52" x2="182" y2="138" stroke="#FFFFFF"/>
+    <polyline points="64,210 128,166 192,210" stroke="#3EE0D0"/>
+  </g>
+</svg>

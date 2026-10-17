@@ -1,0 +1,933 @@
+//! RDP → RFB bridge. Connects to a Windows PC over RDP (TLS + NLA/CredSSP, IronRDP) and
+//! looks to the caller like a VNC server that has already authenticated and sent
+//! ServerInit, so the web gateway relays it to noVNC exactly like a Mac.
+//!
+//! A bridge thread owns the RDP session and one end of a loopback socket pair; it decodes
+//! RDP graphics into a framebuffer, answers the browser's update requests with the same
+//! tile-diff + ZRLE encoder the "Share this PC" server uses, and turns RFB key/pointer
+//! events into RDP fast-path input.
+
+use crate::rfb::{self, Raw, Rx, ENC_CURSOR, ENC_DESKTOP_SIZE, ENC_ZRLE, PIXEL_FORMAT};
+use crate::share::{encode_rect, PixelFormat, TILE};
+use flate2::{Compress, Compression};
+use ironrdp_blocking::Framed;
+use ironrdp_connector::sspi;
+use ironrdp_connector::connection_activation::{ConnectionActivationFactory, ConnectionActivationState};
+use ironrdp_connector::{ClientConnector, ConnectorErrorKind, Credentials, DesktopSize, Sequence};
+use ironrdp_graphics::image_processing::PixelFormat as RdpPixelFormat;
+use ironrdp_graphics::pointer::DecodedPointer;
+use ironrdp_pdu::gcc::KeyboardType;
+use ironrdp_pdu::input::fast_path::{FastPathInputEvent, KeyboardFlags};
+use ironrdp_pdu::input::mouse::{MousePdu, PointerFlags};
+use ironrdp_pdu::rdp::capability_sets::MajorPlatformType;
+use ironrdp_pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
+use ironrdp_pdu::WriteBuf;
+use ironrdp_session::image::DecodedImage;
+use ironrdp_session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
+use std::collections::HashMap;
+use std::io::{self, BufReader, Read, Write};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+type Tls = rustls::StreamOwned<rustls::ClientConnection, TcpStream>;
+
+/// The desktop we ask for; the browser scales it to fit.
+const DESKTOP: DesktopSize = DesktopSize { width: 1920, height: 1080 };
+/// How long one RDP read waits before the bridge looks at browser input again.
+const POLL: Duration = Duration::from_millis(10);
+/// At most one framebuffer update per this interval (~60 fps).
+const FRAME: Duration = Duration::from_millis(16);
+
+/// Log in to an RDP host ("name" or "name:port"). On success the returned `Raw` behaves
+/// like a VNC connection right after ServerInit (32bpp, no auth left to do).
+pub fn open(host: &str, user: &str, pass: &str) -> io::Result<Raw> {
+    crate::log!("rdp open {host}");
+    let r = connect(host, user, pass);
+    if let Err(e) = &r {
+        crate::log!("rdp failed: {e} [{}]", rfb::classify(e));
+    }
+    r
+}
+
+fn connect(host: &str, user: &str, pass: &str) -> io::Result<Raw> {
+    let (name, port) = split(host);
+    if user.trim().is_empty() {
+        return Err(rfb::denied("사용자 이름을 입력하세요 (Windows 계정 이름)"));
+    }
+    let addrs: Vec<SocketAddr> = (name.as_str(), port).to_socket_addrs()?.collect();
+    if addrs.is_empty() {
+        return rfb::err("호스트를 찾을 수 없습니다");
+    }
+    let mut last = io::Error::other("연결할 수 없습니다");
+    let mut tcp = None;
+    for a in &addrs {
+        match TcpStream::connect_timeout(a, Duration::from_secs(10)) {
+            Ok(s) => {
+                tcp = Some(s);
+                break;
+            }
+            Err(e) => last = e,
+        }
+    }
+    let Some(tcp) = tcp else { return Err(last) };
+    tcp.set_nodelay(true)?;
+    tcp.set_read_timeout(Some(Duration::from_secs(20)))?;
+    tcp.set_write_timeout(Some(Duration::from_secs(20)))?;
+    let sock = tcp.try_clone()?;
+
+    let (username, domain) = match user.split_once('\\') {
+        Some((d, u)) if !d.is_empty() && d != "." => (u.to_string(), Some(d.to_string())),
+        Some((_, u)) => (u.to_string(), None),
+        None => (user.to_string(), None),
+    };
+    let client_name: String = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Itda".into()).chars().take(15).collect();
+    let config = ironrdp_connector::Config {
+        credentials: Credentials::UsernamePassword { username, password: pass.to_string() },
+        domain,
+        enable_tls: true,
+        enable_credssp: true,
+        keyboard_type: KeyboardType::IbmEnhanced,
+        keyboard_subtype: 0,
+        keyboard_layout: 0,
+        keyboard_functional_keys_count: 12,
+        ime_file_name: String::new(),
+        dig_product_id: String::new(),
+        desktop_size: DESKTOP,
+        bitmap: None,
+        client_build: 0,
+        client_name,
+        client_dir: "C:\\Windows\\System32\\mstscax.dll".into(),
+        platform: MajorPlatformType::WINDOWS,
+        enable_server_pointer: true,
+        pointer_software_rendering: false,
+        request_data: None,
+        autologon: false,
+        enable_audio_playback: false,
+        compression_type: None,
+        multitransport_flags: None,
+        performance_flags: PerformanceFlags::DISABLE_FULLWINDOWDRAG | PerformanceFlags::DISABLE_MENUANIMATIONS | PerformanceFlags::ENABLE_FONT_SMOOTHING,
+        desktop_scale_factor: 0,
+        hardware_id: None,
+        license_cache: None,
+        timezone_info: TimezoneInfo::default(),
+        alternate_shell: String::new(),
+        work_dir: String::new(),
+    };
+
+    let local = tcp.local_addr()?;
+    let mut framed = Framed::new(tcp);
+    let mut connector = ClientConnector::new(config, local);
+    let upgrade = ironrdp_blocking::connect_begin(&mut framed, &mut connector).map_err(conn_err)?;
+    let (tls, server_key) = tls_upgrade(framed.into_inner_no_leftover(), &name)?;
+    let upgraded = ironrdp_blocking::mark_as_upgraded(upgrade, &mut connector);
+    let mut framed = Framed::new(tls);
+    let result = ironrdp_blocking::connect_finalize(upgraded, connector, &mut framed, &mut NoKdc, name.clone().into(), server_key, None)
+        .map_err(conn_err)?;
+    let (w, h) = (result.desktop_size.width, result.desktop_size.height);
+    crate::log!("rdp {host}: connected {w}x{h}");
+
+    // Loopback pair: the caller gets one end, the bridge thread speaks RFB on the other.
+    let l = TcpListener::bind("127.0.0.1:0")?;
+    let ours = TcpStream::connect(l.local_addr()?)?;
+    let theirs = loop {
+        let (s, peer) = l.accept()?;
+        if peer == ours.local_addr()? {
+            break s;
+        }
+    };
+    drop(l);
+    ours.set_nodelay(true)?;
+    theirs.set_nodelay(true)?;
+
+    let title = format!("{name} (RDP)");
+    let mut server_init = Vec::new();
+    server_init.extend_from_slice(&w.to_be_bytes());
+    server_init.extend_from_slice(&h.to_be_bytes());
+    server_init.extend_from_slice(&PIXEL_FORMAT);
+    server_init.extend_from_slice(&(title.len() as u32).to_be_bytes());
+    server_init.extend_from_slice(title.as_bytes());
+
+    // Per handle on Windows: set it on the stream the bridge reads, not a clone.
+    framed.get_inner_mut().0.sock.set_read_timeout(Some(POLL))?;
+    let host = host.to_string();
+    std::thread::spawn(move || {
+        let r = theirs.try_clone().and_then(|c| Bridge::new(framed, result, c)).and_then(Bridge::run);
+        let _ = theirs.shutdown(Shutdown::Both);
+        let _ = sock.shutdown(Shutdown::Both);
+        match r {
+            Ok(()) => crate::log!("rdp {host}: closed"),
+            Err(e) => crate::log!("rdp {host}: {e}"),
+        }
+    });
+
+    Ok(Raw {
+        reader: BufReader::with_capacity(1 << 20, Rx(ours.try_clone()?)),
+        writer: ours,
+        width: w,
+        height: h,
+        name: title,
+        server_init,
+    })
+}
+
+/// "host[:port]" with RDP's default port; bracketed IPv6 allowed.
+fn split(host: &str) -> (String, u16) {
+    let host = host.trim();
+    if let Some(rest) = host.strip_prefix('[') {
+        if let Some((h, p)) = rest.split_once(']') {
+            return (h.to_string(), p.strip_prefix(':').and_then(|p| p.parse().ok()).unwrap_or(3389));
+        }
+    }
+    match host.rsplit_once(':') {
+        Some((h, p)) if !h.contains(':') => (h.to_string(), p.parse().unwrap_or(3389)),
+        _ => (host.to_string(), 3389),
+    }
+}
+
+/// Connector errors → io errors that `rfb::classify` explains to the person.
+fn conn_err(e: ironrdp_connector::ConnectorError) -> io::Error {
+    crate::log!("rdp connector: {e:?}");
+    match e.kind() {
+        ConnectorErrorKind::AccessDenied => rfb::denied("이 계정은 원격 데스크톱으로 로그인할 수 없습니다 (원격 데스크톱 사용자 권한 확인)"),
+        ConnectorErrorKind::Credssp(_) => rfb::denied("RDP 로그인 실패: 사용자 이름 또는 암호가 맞지 않습니다"),
+        ConnectorErrorKind::Negotiation(f) => io::Error::other(format!("원격 데스크톱 보안 협상 실패: {f}")),
+        _ => {
+            // Keep the socket error's kind (reset, timeout…) when there is one underneath.
+            let mut src: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(&e);
+            while let Some(s) = src {
+                if let Some(io) = s.downcast_ref::<io::Error>() {
+                    return io::Error::new(io.kind(), format!("RDP 연결 오류: {io}"));
+                }
+                src = s.source();
+            }
+            io::Error::other(format!("RDP 연결 오류: {e}"))
+        }
+    }
+}
+
+/// Kerberos would need a KDC; NTLM inside CredSSP is what home and work PCs accept.
+struct NoKdc;
+
+impl sspi::network_client::NetworkClient for NoKdc {
+    fn send(&self, _: &sspi::generator::NetworkRequest) -> sspi::Result<Vec<u8>> {
+        Err(sspi::Error::new(sspi::ErrorKind::NoAuthenticatingAuthority, "Kerberos is not supported"))
+    }
+}
+
+fn tls_upgrade(tcp: TcpStream, name: &str) -> io::Result<(Tls, Vec<u8>)> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let mut config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
+        .map_err(io::Error::other)?
+        .dangerous()
+        // RDP hosts use self-signed certificates; NLA binds the session to this key instead.
+        .with_custom_certificate_verifier(Arc::new(AnyCert))
+        .with_no_client_auth();
+    config.resumption = rustls::client::Resumption::disabled(); // CredSSP forbids resumption
+    let server_name = rustls::pki_types::ServerName::try_from(name.to_string())
+        .unwrap_or_else(|_| rustls::pki_types::ServerName::try_from("rdp").expect("static name"));
+    let conn = rustls::ClientConnection::new(Arc::new(config), server_name).map_err(io::Error::other)?;
+    let mut tls = rustls::StreamOwned::new(conn, tcp);
+    tls.flush()?;
+    while tls.conn.is_handshaking() {
+        tls.conn.complete_io(&mut tls.sock)?;
+    }
+    let cert = tls.conn.peer_certificates().and_then(|c| c.first()).ok_or_else(|| io::Error::other("RDP 서버 인증서가 없습니다"))?;
+    use x509_cert::der::Decode;
+    let cert = x509_cert::Certificate::from_der(cert).map_err(io::Error::other)?;
+    let key = cert.tbs_certificate.subject_public_key_info.subject_public_key.as_bytes().ok_or_else(|| io::Error::other("bad server key"))?.to_vec();
+    Ok((tls, key))
+}
+
+#[derive(Debug)]
+struct AnyCert;
+
+impl rustls::client::danger::ServerCertVerifier for AnyCert {
+    fn verify_server_cert(
+        &self,
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &[rustls::pki_types::CertificateDer<'_>],
+        _: &rustls::pki_types::ServerName<'_>,
+        _: &[u8],
+        _: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _: &[u8],
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _: &[u8],
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        rustls::crypto::ring::default_provider().signature_verification_algorithms.supported_schemes()
+    }
+}
+
+// ---------------------------------------------------------------- bridge
+
+enum Msg {
+    Format(PixelFormat),
+    Encodings(Vec<i32>),
+    Request { incremental: bool },
+    Key { down: bool, sym: u32 },
+    Pointer { mask: u8, x: u16, y: u16 },
+}
+
+/// Browser → bridge: parse RFB client messages (after ClientInit) into `Msg`s.
+fn read_client(mut r: BufReader<TcpStream>, tx: Sender<Msg>) -> io::Result<()> {
+    fn rd<const N: usize>(r: &mut impl Read) -> io::Result<[u8; N]> {
+        let mut b = [0u8; N];
+        r.read_exact(&mut b)?;
+        Ok(b)
+    }
+    loop {
+        let m = match rd::<1>(&mut r)?[0] {
+            0 => Msg::Format(PixelFormat::parse(&rd::<19>(&mut r)?[3..])),
+            2 => {
+                let b: [u8; 3] = rd(&mut r)?;
+                let n = u16::from_be_bytes([b[1], b[2]]) as usize;
+                let mut e = vec![0u8; n * 4];
+                r.read_exact(&mut e)?;
+                Msg::Encodings(e.chunks_exact(4).map(|c| i32::from_be_bytes([c[0], c[1], c[2], c[3]])).collect())
+            }
+            3 => Msg::Request { incremental: rd::<9>(&mut r)?[0] != 0 },
+            4 => {
+                let b: [u8; 7] = rd(&mut r)?;
+                Msg::Key { down: b[0] != 0, sym: u32::from_be_bytes([b[3], b[4], b[5], b[6]]) }
+            }
+            5 => {
+                let b: [u8; 5] = rd(&mut r)?;
+                Msg::Pointer { mask: b[0], x: u16::from_be_bytes([b[1], b[2]]), y: u16::from_be_bytes([b[3], b[4]]) }
+            }
+            6 => {
+                // Clipboard text: not carried over RDP yet; skip it.
+                let b: [u8; 7] = rd(&mut r)?;
+                let n = i32::from_be_bytes([b[3], b[4], b[5], b[6]]).unsigned_abs().min(16 << 20) as u64;
+                io::copy(&mut (&mut r).take(n), &mut io::sink())?;
+                continue;
+            }
+            other => return Err(io::Error::other(format!("unknown client message {other}"))),
+        };
+        if tx.send(m).is_err() {
+            return Ok(());
+        }
+    }
+}
+
+struct Bridge {
+    framed: Framed<Tls>,
+    stage: ActiveStage,
+    factory: ConnectionActivationFactory,
+    image: DecodedImage,
+    rx: Receiver<Msg>,
+    out: TcpStream,
+    /// RFB state
+    pf: PixelFormat,
+    encs: Vec<i32>,
+    want: Option<bool>,
+    prev: Vec<u32>,
+    z: Compress,
+    resized: bool,
+    cursor: Option<Cursor>,
+    dirty: bool,
+    last_sent: Instant,
+    /// Input state
+    keys: Keys,
+    buttons: u8,
+    pos: (u16, u16),
+}
+
+/// A pointer shape waiting to go out: (w, h, hotspot x, hotspot y, 0x00RRGGBB pixels, alpha).
+struct Cursor {
+    w: u16,
+    h: u16,
+    hx: u16,
+    hy: u16,
+    px: Vec<u32>,
+    opaque: Vec<bool>,
+}
+
+impl Bridge {
+    fn new(framed: Framed<Tls>, r: ironrdp_connector::ConnectionResult, client: TcpStream) -> io::Result<Bridge> {
+        let (tx, rx) = channel();
+        let reader = BufReader::new(client.try_clone()?);
+        std::thread::spawn(move || {
+            let _ = read_client(reader, tx);
+        });
+        let image = DecodedImage::new(RdpPixelFormat::BgrX32, r.desktop_size.width, r.desktop_size.height);
+        let stage = ActiveStageBuilder {
+            static_channels: r.static_channels,
+            user_channel_id: r.user_channel_id,
+            io_channel_id: r.io_channel_id,
+            message_channel_id: r.message_channel_id,
+            share_id: r.share_id,
+            compression_type: r.compression_type,
+            enable_server_pointer: r.enable_server_pointer,
+            pointer_software_rendering: r.pointer_software_rendering,
+        }
+        .build();
+        Ok(Bridge {
+            framed,
+            stage,
+            factory: r.activation_factory,
+            image,
+            rx,
+            out: client,
+            pf: PixelFormat::parse(&PIXEL_FORMAT),
+            encs: Vec::new(),
+            want: None,
+            prev: Vec::new(),
+            z: Compress::new(Compression::new(5), true),
+            resized: false,
+            cursor: Some(Cursor::arrow()),
+            dirty: true,
+            last_sent: Instant::now() - FRAME,
+            keys: Keys::default(),
+            buttons: 0,
+            pos: (0, 0),
+        })
+    }
+
+    fn run(mut self) -> io::Result<()> {
+        let r = self.pump();
+        // Say goodbye to the RDP host so the session is disconnected (not left hanging).
+        if let Ok(outs) = self.stage.graceful_shutdown() {
+            for o in outs {
+                if let ActiveStageOutput::ResponseFrame(f) = o {
+                    let _ = self.framed.write_all(&f);
+                }
+            }
+        }
+        r
+    }
+
+    fn pump(&mut self) -> io::Result<()> {
+        loop {
+            // RDP → framebuffer
+            match self.framed.read_pdu() {
+                Ok((action, payload)) => {
+                    let outs = self.stage.process(&mut self.image, action, &payload).map_err(|e| io::Error::other(format!("RDP: {e}")))?;
+                    if !self.outputs(outs)? {
+                        return Ok(());
+                    }
+                }
+                Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {}
+                Err(e) => return Err(e),
+            }
+            // Browser → RDP
+            loop {
+                match self.rx.try_recv() {
+                    Ok(m) => self.client_msg(m)?,
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => return Ok(()),
+                }
+            }
+            self.send_update()?;
+        }
+    }
+
+    /// Handle session outputs; false = the host ended the session.
+    fn outputs(&mut self, outs: Vec<ActiveStageOutput>) -> io::Result<bool> {
+        for o in outs {
+            match o {
+                ActiveStageOutput::ResponseFrame(f) => self.framed.write_all(&f)?,
+                ActiveStageOutput::GraphicsUpdate(_) => self.dirty = true,
+                ActiveStageOutput::PointerBitmap(p) => self.cursor = Some(Cursor::from_rdp(&p)),
+                ActiveStageOutput::PointerDefault => self.cursor = Some(Cursor::arrow()),
+                ActiveStageOutput::PointerHidden => self.cursor = Some(Cursor::hidden()),
+                ActiveStageOutput::Terminate(reason) => {
+                    crate::log!("rdp: host ended the session ({reason:?})");
+                    return Ok(false);
+                }
+                ActiveStageOutput::DeactivateAll => self.reactivate()?,
+                _ => {}
+            }
+        }
+        Ok(true)
+    }
+
+    /// Deactivation-Reactivation (the host changed resolution, reconnected a session…).
+    fn reactivate(&mut self) -> io::Result<()> {
+        let mut seq = self.factory.create();
+        let mut buf = WriteBuf::new();
+        loop {
+            if let ConnectionActivationState::Finalized { desktop_size, share_id, .. } = seq.connection_activation_state() {
+                self.stage.set_share_id(share_id);
+                if (desktop_size.width, desktop_size.height) != (self.image.width(), self.image.height()) {
+                    crate::log!("rdp: desktop is now {}x{}", desktop_size.width, desktop_size.height);
+                    self.image = DecodedImage::new(RdpPixelFormat::BgrX32, desktop_size.width, desktop_size.height);
+                    self.resized = true;
+                    self.prev.clear();
+                }
+                self.dirty = true;
+                return Ok(());
+            }
+            buf.clear();
+            let written = match seq.next_pdu_hint() {
+                Some(hint) => {
+                    let pdu = loop {
+                        match self.framed.read_by_hint(hint) {
+                            Ok(p) => break p,
+                            Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => continue,
+                            Err(e) => return Err(e),
+                        }
+                    };
+                    seq.step(&pdu, &mut buf)
+                }
+                None => seq.step_no_input(&mut buf),
+            }
+            .map_err(|e| io::Error::other(format!("RDP reactivation: {e}")))?;
+            if let Some(n) = written.size() {
+                self.framed.write_all(&buf[..n])?;
+            }
+        }
+    }
+
+    fn client_msg(&mut self, m: Msg) -> io::Result<()> {
+        let events = match m {
+            Msg::Format(p) => {
+                self.pf = p;
+                self.prev.clear();
+                return Ok(());
+            }
+            Msg::Encodings(e) => {
+                self.encs = e;
+                return Ok(());
+            }
+            Msg::Request { incremental } => {
+                self.want = Some(self.want.unwrap_or(true) && incremental);
+                return Ok(());
+            }
+            Msg::Key { down, sym } => self.keys.key(down, sym),
+            Msg::Pointer { mask, x, y } => self.pointer(mask, x, y),
+        };
+        if events.is_empty() {
+            return Ok(());
+        }
+        let outs = self.stage.process_fastpath_input(&mut self.image, &events).map_err(|e| io::Error::other(format!("RDP input: {e}")))?;
+        self.outputs(outs).map(|_| ())
+    }
+
+    fn pointer(&mut self, mask: u8, x: u16, y: u16) -> Vec<FastPathInputEvent> {
+        let x = x.min(self.image.width().saturating_sub(1));
+        let y = y.min(self.image.height().saturating_sub(1));
+        let ev = |flags: PointerFlags, wheel: i16| FastPathInputEvent::MouseEvent(MousePdu { flags, number_of_wheel_rotation_units: wheel, x_position: x, y_position: y });
+        let mut v = Vec::new();
+        if (x, y) != self.pos {
+            v.push(ev(PointerFlags::MOVE, 0));
+            self.pos = (x, y);
+        }
+        let changed = mask ^ self.buttons;
+        for (bit, flag) in [(1u8, PointerFlags::LEFT_BUTTON), (2, PointerFlags::MIDDLE_BUTTON_OR_WHEEL), (4, PointerFlags::RIGHT_BUTTON)] {
+            if changed & bit != 0 {
+                v.push(ev(if mask & bit != 0 { flag | PointerFlags::DOWN } else { flag }, 0));
+            }
+        }
+        let press = |bit: u8| changed & bit != 0 && mask & bit != 0;
+        if press(8) {
+            v.push(ev(PointerFlags::VERTICAL_WHEEL, 120));
+        }
+        if press(16) {
+            v.push(ev(PointerFlags::VERTICAL_WHEEL, -120));
+        }
+        if press(32) {
+            v.push(ev(PointerFlags::HORIZONTAL_WHEEL, -120));
+        }
+        if press(64) {
+            v.push(ev(PointerFlags::HORIZONTAL_WHEEL, 120));
+        }
+        self.buttons = mask;
+        v
+    }
+
+    /// Answer a pending FramebufferUpdateRequest with what changed (tiles), the new size
+    /// and pointer shape.
+    fn send_update(&mut self) -> io::Result<()> {
+        let Some(incremental) = self.want else { return Ok(()) };
+        let cursor_due = self.cursor.is_some() && self.encs.contains(&ENC_CURSOR);
+        if (incremental && !self.dirty && !cursor_due && !self.resized) || self.last_sent.elapsed() < FRAME {
+            return Ok(());
+        }
+        let (w, h) = (self.image.width() as usize, self.image.height() as usize);
+        let frame: Vec<u32> = self.image.data().chunks_exact(4).map(|p| u32::from_le_bytes([p[0], p[1], p[2], 0])).collect();
+        let mut out = Vec::new();
+        let mut rects = 0u16;
+        if self.resized && self.encs.contains(&ENC_DESKTOP_SIZE) {
+            out.extend_from_slice(&[0, 0, 0, 0]);
+            out.extend_from_slice(&(w as u16).to_be_bytes());
+            out.extend_from_slice(&(h as u16).to_be_bytes());
+            out.extend_from_slice(&ENC_DESKTOP_SIZE.to_be_bytes());
+            rects += 1;
+        }
+        self.resized = false;
+        if cursor_due {
+            if let Some(c) = self.cursor.take() {
+                c.encode(&mut out, &self.pf);
+                rects += 1;
+            }
+        }
+        let full = !incremental || self.prev.len() != frame.len();
+        let zrle = self.encs.contains(&ENC_ZRLE);
+        for ty in (0..h).step_by(TILE) {
+            let th = TILE.min(h - ty);
+            let mut tx = 0;
+            while tx < w {
+                let dirty = |x: usize| {
+                    full || (ty..ty + th).any(|y| {
+                        let a = y * w + x;
+                        let tw = TILE.min(w - x);
+                        frame[a..a + tw] != self.prev[a..a + tw]
+                    })
+                };
+                if !dirty(tx) {
+                    tx += TILE;
+                    continue;
+                }
+                let start = tx;
+                while tx < w && dirty(tx) {
+                    tx += TILE;
+                }
+                encode_rect(&mut out, &frame, w, start, ty, tx.min(w) - start, th, &self.pf, zrle, &mut self.z)?;
+                rects += 1;
+            }
+        }
+        self.dirty = false;
+        if rects == 0 {
+            return Ok(()); // nothing visible changed: keep the request pending
+        }
+        let mut msg = vec![0u8, 0];
+        msg.extend_from_slice(&rects.to_be_bytes());
+        msg.extend_from_slice(&out);
+        self.out.write_all(&msg)?;
+        self.prev = frame;
+        self.want = None;
+        self.last_sent = Instant::now();
+        Ok(())
+    }
+}
+
+impl Cursor {
+    fn from_rdp(p: &DecodedPointer) -> Cursor {
+        // RGBA, straight alpha.
+        let px = p.bitmap_data.chunks_exact(4).map(|c| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32).collect();
+        let opaque = p.bitmap_data.chunks_exact(4).map(|c| c[3] >= 0x80).collect();
+        Cursor { w: p.width, h: p.height, hx: p.hotspot_x, hy: p.hotspot_y, px, opaque }
+    }
+
+    fn hidden() -> Cursor {
+        Cursor { w: 0, h: 0, hx: 0, hy: 0, px: Vec::new(), opaque: Vec::new() }
+    }
+
+    /// Windows' default arrow, for "use the system pointer".
+    fn arrow() -> Cursor {
+        const ART: [&str; 17] = [
+            "X..........",
+            "XX.........",
+            "X#X........",
+            "X##X.......",
+            "X###X......",
+            "X####X.....",
+            "X#####X....",
+            "X######X...",
+            "X#######X..",
+            "X########X.",
+            "X#####XXXXX",
+            "X##X##X....",
+            "X#X.X##X...",
+            "XX..X##X...",
+            "X....X##X..",
+            ".....X##X..",
+            "......XX...",
+        ];
+        let px = ART.iter().flat_map(|r| r.bytes()).map(|b| if b == b'#' { 0xffffff } else { 0 }).collect();
+        let opaque = ART.iter().flat_map(|r| r.bytes()).map(|b| b != b'.').collect();
+        Cursor { w: 11, h: 17, hx: 0, hy: 0, px, opaque }
+    }
+
+    /// RFB Cursor pseudo-encoding rectangle.
+    fn encode(&self, out: &mut Vec<u8>, pf: &PixelFormat) {
+        for v in [self.hx, self.hy, self.w, self.h] {
+            out.extend_from_slice(&v.to_be_bytes());
+        }
+        out.extend_from_slice(&ENC_CURSOR.to_be_bytes());
+        let b = pf.bytes();
+        for &p in &self.px {
+            pf.put(p, out, b, 0);
+        }
+        let row = (self.w as usize).div_ceil(8);
+        for y in 0..self.h as usize {
+            let mut bits = vec![0u8; row];
+            for x in 0..self.w as usize {
+                if self.opaque[y * self.w as usize + x] {
+                    bits[x / 8] |= 0x80 >> (x % 8);
+                }
+            }
+            out.extend_from_slice(&bits);
+        }
+    }
+}
+
+// ---------------------------------------------------------------- keyboard
+
+#[derive(Clone, Copy)]
+enum Pressed {
+    Scan(u8, bool),
+    Unicode(u16),
+}
+
+#[derive(Default)]
+struct Keys {
+    /// keysym → what we sent for it, so the release matches.
+    down: HashMap<u32, Pressed>,
+}
+
+impl Keys {
+    fn key(&mut self, down: bool, sym: u32) -> Vec<FastPathInputEvent> {
+        if !down {
+            return self.down.remove(&sym).map(|p| vec![event(p, false)]).unwrap_or_default();
+        }
+        let p = if let Some((sc, ext)) = special(sym) {
+            Pressed::Scan(sc, ext)
+        } else {
+            let cp = if sym >= 0x0100_0000 { sym & 0x00ff_ffff } else { sym };
+            let Some(ch) = char::from_u32(cp) else { return Vec::new() };
+            match us_scancode(ch) {
+                // Shortcuts (Ctrl+C, Alt+F…) and space need real keys, not characters.
+                Some(sc) if ch == ' ' || self.modifiers_held() => Pressed::Scan(sc, false),
+                _ => {
+                    let mut b = [0u16; 2];
+                    let s = ch.encode_utf16(&mut b);
+                    if s.len() != 1 {
+                        // Outside the BMP: the surrogate pair as one keystroke.
+                        return s.iter().flat_map(|&u| [event(Pressed::Unicode(u), true), event(Pressed::Unicode(u), false)]).collect();
+                    }
+                    Pressed::Unicode(s[0])
+                }
+            }
+        };
+        self.down.insert(sym, p);
+        vec![event(p, true)]
+    }
+
+    fn modifiers_held(&self) -> bool {
+        self.down.values().any(|p| matches!(p, Pressed::Scan(0x1d | 0x38, _) | Pressed::Scan(0x5b | 0x5c, true)))
+    }
+}
+
+fn event(p: Pressed, down: bool) -> FastPathInputEvent {
+    let up = if down { KeyboardFlags::empty() } else { KeyboardFlags::RELEASE };
+    match p {
+        Pressed::Scan(sc, ext) => FastPathInputEvent::KeyboardEvent(if ext { up | KeyboardFlags::EXTENDED } else { up }, sc),
+        Pressed::Unicode(u) => FastPathInputEvent::UnicodeKeyboardEvent(up, u),
+    }
+}
+
+/// X11 keysym → (set-1 scancode, extended) for keys that are not characters.
+fn special(sym: u32) -> Option<(u8, bool)> {
+    const KP: [u8; 10] = [0x52, 0x4f, 0x50, 0x51, 0x4b, 0x4c, 0x4d, 0x47, 0x48, 0x49];
+    Some(match sym {
+        0xff08 => (0x0e, false), // BackSpace
+        0xff09 => (0x0f, false), // Tab
+        0xff0d => (0x1c, false), // Return
+        0xff8d => (0x1c, true),  // KP_Enter
+        0xff14 => (0x46, false), // Scroll_Lock
+        0xff1b => (0x01, false), // Escape
+        0xffff => (0x53, true),  // Delete
+        0xff50 => (0x47, true),  // Home
+        0xff51 => (0x4b, true),  // Left
+        0xff52 => (0x48, true),  // Up
+        0xff53 => (0x4d, true),  // Right
+        0xff54 => (0x50, true),  // Down
+        0xff55 => (0x49, true),  // Prior
+        0xff56 => (0x51, true),  // Next
+        0xff57 => (0x4f, true),  // End
+        0xff61 => (0x37, true),  // Print
+        0xff63 => (0x52, true),  // Insert
+        0xff67 => (0x5d, true),  // Menu
+        0xff7f => (0x45, false), // Num_Lock
+        0xff31 => (0x72, false), // Hangul
+        0xff34 => (0x71, false), // Hangul_Hanja
+        0xffaa => (0x37, false), // KP_Multiply
+        0xffab => (0x4e, false), // KP_Add
+        0xffad => (0x4a, false), // KP_Subtract
+        0xffae => (0x53, false), // KP_Decimal
+        0xffaf => (0x35, true),  // KP_Divide
+        0xffb0..=0xffb9 => (KP[(sym - 0xffb0) as usize], false),
+        0xffbe..=0xffc7 => (0x3b + (sym - 0xffbe) as u8, false), // F1–F10
+        0xffc8 => (0x57, false),                                  // F11
+        0xffc9 => (0x58, false),                                  // F12
+        0xffe1 => (0x2a, false),                                  // Shift_L
+        0xffe2 => (0x36, false),                                  // Shift_R
+        0xffe3 => (0x1d, false),                                  // Control_L
+        0xffe4 => (0x1d, true),                                   // Control_R
+        0xffe5 => (0x3a, false),                                  // Caps_Lock
+        0xffe7 | 0xffe9 => (0x38, false),                         // Meta_L, Alt_L
+        0xffe8 | 0xffea => (0x38, true),                          // Meta_R, Alt_R
+        0xffeb => (0x5b, true),                                   // Super_L
+        0xffec => (0x5c, true),                                   // Super_R
+        _ => return None,
+    })
+}
+
+/// The US-layout key that types `ch` (shifted symbols map to their key).
+fn us_scancode(ch: char) -> Option<u8> {
+    const ROW_Q: &[u8] = b"qwertyuiop";
+    const ROW_A: &[u8] = b"asdfghjkl";
+    const ROW_Z: &[u8] = b"zxcvbnm";
+    let c = ch.to_ascii_lowercase();
+    if !c.is_ascii() {
+        return None;
+    }
+    let b = c as u8;
+    let pos = |row: &[u8]| row.iter().position(|&x| x == b).map(|i| i as u8);
+    Some(match b {
+        b'a'..=b'z' => pos(ROW_Q).map(|i| 0x10 + i).or_else(|| pos(ROW_A).map(|i| 0x1e + i)).or_else(|| pos(ROW_Z).map(|i| 0x2c + i))?,
+        b'1'..=b'9' => 0x02 + (b - b'1'),
+        b'0' => 0x0b,
+        b'!' => 0x02,
+        b'@' => 0x03,
+        b'#' => 0x04,
+        b'$' => 0x05,
+        b'%' => 0x06,
+        b'^' => 0x07,
+        b'&' => 0x08,
+        b'*' => 0x09,
+        b'(' => 0x0a,
+        b')' => 0x0b,
+        b'-' | b'_' => 0x0c,
+        b'=' | b'+' => 0x0d,
+        b'[' | b'{' => 0x1a,
+        b']' | b'}' => 0x1b,
+        b';' | b':' => 0x27,
+        b'\'' | b'"' => 0x28,
+        b'`' | b'~' => 0x29,
+        b'\\' | b'|' => 0x2b,
+        b',' | b'<' => 0x33,
+        b'.' | b'>' => 0x34,
+        b'/' | b'?' => 0x35,
+        b' ' => 0x39,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// End-to-end against a test RDP server: ITDA_RDP_TEST="host:port|user|pass".
+    /// The server draws R = x & 255, G = y & 255, B = 0x80 on an 800x600 desktop.
+    #[test]
+    #[ignore]
+    fn bridge_e2e() {
+        let cfg = std::env::var("ITDA_RDP_TEST").expect("ITDA_RDP_TEST");
+        let mut it = cfg.split('|');
+        let (host, user, pass) = (it.next().unwrap(), it.next().unwrap(), it.next().unwrap());
+        crate::log::init("rdptest");
+
+        let e = open(host, user, "wrong-password").err().expect("bad password must fail");
+        assert_eq!(rfb::classify(&e), "auth", "{e}");
+
+        let raw = open(host, user, pass).expect("open");
+        assert_eq!((raw.width, raw.height), (800, 600));
+        assert_eq!(&raw.server_init[..4], &[3, 32, 2, 88]);
+        assert_eq!(&raw.server_init[4..20], &PIXEL_FORMAT);
+        let (mut r, mut w) = (raw.reader, raw.writer);
+        // SetEncodings: Raw, Cursor, DesktopSize
+        let mut m = vec![2, 0, 0, 3];
+        for e in [0i32, ENC_CURSOR, ENC_DESKTOP_SIZE] {
+            m.extend_from_slice(&e.to_be_bytes());
+        }
+        w.write_all(&m).unwrap();
+        let mut fb = vec![0u32; 800 * 600];
+        let want = |x: usize, y: usize| ((x & 255) << 16 | (y & 255) << 8 | 0x80) as u32;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut incremental = 0u8;
+        let mut cursor = false;
+        // The test server sends RemoteFX (lossy): allow small colour error.
+        let near = |fb: &[u32], x: usize, y: usize| {
+            let (a, b) = (fb[y * 800 + x], want(x, y));
+            (0..3).all(|i| ((a >> (8 * i)) & 255).abs_diff((b >> (8 * i)) & 255) <= 12)
+        };
+        let points = [(300, 50), (10, 10), (700, 500), (450, 300), (128, 590)];
+        while !points.iter().all(|&(x, y)| near(&fb, x, y)) {
+            assert!(Instant::now() < deadline, "pattern never arrived");
+            w.write_all(&[3, incremental, 0, 0, 0, 0, 3, 32, 2, 88]).unwrap();
+            incremental = 1;
+            assert_eq!(rfb::rd_u8(&mut r).unwrap(), 0);
+            rfb::rd_u8(&mut r).unwrap();
+            for _ in 0..rfb::rd_u16(&mut r).unwrap() {
+                let (x, y, rw, rh) = (rfb::rd_u16(&mut r).unwrap() as usize, rfb::rd_u16(&mut r).unwrap() as usize, rfb::rd_u16(&mut r).unwrap() as usize, rfb::rd_u16(&mut r).unwrap() as usize);
+                match rfb::rd_u32(&mut r).unwrap() as i32 {
+                    0 => {
+                        for row in y..y + rh {
+                            for col in x..x + rw {
+                                let p = rfb::rd_vec(&mut r, 4).unwrap();
+                                fb[row * 800 + col] = u32::from_le_bytes([p[0], p[1], p[2], 0]);
+                            }
+                        }
+                    }
+                    ENC_CURSOR => {
+                        rfb::rd_vec(&mut r, rw * rh * 4 + rw.div_ceil(8) * rh).unwrap();
+                        cursor = true;
+                    }
+                    other => panic!("unexpected encoding {other}"),
+                }
+            }
+        }
+        assert!(cursor, "pointer shape was not sent");
+        // Input: 'a', Ctrl+C, a move and a left click, a wheel notch.
+        let key = |down: u8, sym: u32| {
+            let mut m = vec![4, down, 0, 0];
+            m.extend_from_slice(&sym.to_be_bytes());
+            m
+        };
+        for m in [key(1, 'a' as u32), key(0, 'a' as u32), key(1, 0xffe3), key(1, 'c' as u32), key(0, 'c' as u32), key(0, 0xffe3), key(1, 0xac00), key(0, 0xac00)] {
+            w.write_all(&m).unwrap();
+        }
+        for (mask, x, y) in [(0u8, 10u16, 20u16), (1, 10, 20), (0, 10, 20), (8, 10, 20), (0, 10, 20)] {
+            let mut m = vec![5, mask];
+            m.extend_from_slice(&x.to_be_bytes());
+            m.extend_from_slice(&y.to_be_bytes());
+            w.write_all(&m).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        // Closing our end must end the RDP session too.
+        w.shutdown(Shutdown::Both).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    #[test]
+    fn host_port() {
+        assert_eq!(split("pc"), ("pc".into(), 3389));
+        assert_eq!(split("pc:3390"), ("pc".into(), 3390));
+        assert_eq!(split("[fe80::1]:3391"), ("fe80::1".into(), 3391));
+        assert_eq!(split("fe80::1"), ("fe80::1".into(), 3389));
+    }
+
+    #[test]
+    fn scancodes() {
+        assert_eq!(us_scancode('a'), Some(0x1e));
+        assert_eq!(us_scancode('Q'), Some(0x10));
+        assert_eq!(us_scancode('m'), Some(0x32));
+        assert_eq!(us_scancode('0'), Some(0x0b));
+        assert_eq!(us_scancode('한'), None);
+        assert_eq!(special(0xffc9), Some((0x58, false)));
+        assert_eq!(special(0xffbe + 9), Some((0x44, false)));
+    }
+}

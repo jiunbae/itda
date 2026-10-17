@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Itda: the jamo of 잇 — ㅇ (your device), ㅣ (the link), ㅅ (the bridge reaching out).
+       Three colours for the different machines it joins. -->
+  <defs>
+    <linearGradient id="itda-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4E4BBA"/>
+      <stop offset="1" stop-color="#26255F"/>
+    </linearGradient>
+    <linearGradient id="itda-rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity=".28"/>
+      <stop offset=".5" stop-color="#FFFFFF" stop-opacity=".06"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity=".02"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#itda-bg)"/>
+  <rect x="2" y="2" width="252" height="252" rx="54" fill="none" stroke="url(#itda-rim)" stroke-width="4"/>
+  <g fill="none" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="98" cy="96" r="36" stroke="#FF6A43"/>
+    <line x1="174" y1="58" x2="174" y2="134" stroke="#FFFFFF"/>
+    <polyline points="74,204 128,164 182,204" stroke="#33D1C2"/>
+  </g>
+</svg>

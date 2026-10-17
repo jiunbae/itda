@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ko" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Itda</title>
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="help.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo" aria-hidden="true"></div>
+      <div class="brand-text"><b>Itda</b><small>내 기기를 잇다</small></div>
+    </div>
+    <nav id="nav" class="nav" aria-label="보기"></nav>
+    <div class="nav nav-bottom">
+      <button class="nav-item" data-page="help"><span class="i">&#xE897;</span><span class="label">도움말</span></button>
+      <button class="nav-item" data-page="settings"><span class="i">&#xE713;</span><span class="label">설정</span></button>
+    </div>
+  </aside>
+  <main class="main">
+    <header class="topbar">
+      <h1 id="title">모든 연결</h1>
+      <div class="search">
+        <span class="i">&#xE721;</span>
+        <input id="search" type="text" autocomplete="off" spellcheck="false" placeholder="검색하거나 주소를 입력해 바로 연결">
+        <kbd>Ctrl F</kbd>
+      </div>
+      <div class="seg" id="viewToggle" role="group" aria-label="보기 방식">
+        <button data-view="grid" title="카드 보기"><span class="i">&#xF0E2;</span></button>
+        <button data-view="list" title="목록 보기"><span class="i">&#xE8FD;</span></button>
+      </div>
+      <button class="btn primary" id="newBtn" title="새 연결 (Ctrl+N)"><span class="i">&#xE710;</span><span class="label-text">새 연결</span></button>
+    </header>
+    <section id="content" class="content" tabindex="-1"></section>
+  </main>
+</div>
+<div id="modals"></div>
+<div id="ctx" class="ctx" hidden></div>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<script src="app.js"></script>
+<script src="help.js"></script>
+</body>
+</html>

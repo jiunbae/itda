@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --release
+      - name: Build
+        run: cargo build --release
+      - name: Size
+        shell: pwsh
+        run: "'itda.exe: {0:N2} MB' -f ((Get-Item target/release/itda.exe).Length / 1MB)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: itda-windows-x64
+          path: target/release/itda.exe

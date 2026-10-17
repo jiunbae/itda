@@ -1,0 +1,80 @@
+[package]
+name = "itda"
+version = "0.3.1"
+edition = "2021"
+description = "Itda (잇다): lightweight remote desktop for Windows. Opens Macs (Screen Sharing), Windows PCs and VNC servers, and shows them in any browser."
+license = "MIT"
+repository = "https://github.com/jiunbae/itda"
+homepage = "https://jiunbae.github.io/itda/"
+
+[dependencies]
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+des = "0.8"
+aes = "0.8"
+md-5 = "0.10"
+num-bigint = "0.4"
+getrandom = { version = "0.2", features = ["std"] }
+wry = "0.57.0"
+serde_json = "1.0.154"
+serde = { version = "1.0.229", features = ["derive"] }
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
+ironrdp-blocking = "0.10"
+ironrdp-connector = "0.10"
+ironrdp-session = "0.11"
+ironrdp-graphics = "0.9"
+ironrdp-pdu = "0.9"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+x509-cert = { version = "0.2", default-features = false, features = ["std"] }
+
+[dependencies.windows-sys]
+version = "0.59"
+features = [
+  "Win32_Foundation",
+  "Win32_Globalization",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Gdi",
+  "Win32_NetworkManagement_Dns",
+  "Win32_Networking_WinSock",
+  "Win32_Security_Credentials",
+  "Win32_System_Com",
+  "Win32_System_DataExchange",
+  "Win32_System_IO",
+  "Win32_System_JobObjects",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_Registry",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+  "Win32_UI_Controls",
+  "Win32_UI_Controls_Dialogs",
+  "Win32_UI_HiDpi",
+  "Win32_UI_Input_Ime",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# RDP login and protocol plumbing runs once per connection: favour size.
+[profile.release.package]
+sspi = { opt-level = "z" }
+picky = { opt-level = "z" }
+picky-krb = { opt-level = "z" }
+picky-asn1-x509 = { opt-level = "z" }
+picky-asn1-der = { opt-level = "z" }
+rsa = { opt-level = "z" }
+winscard = { opt-level = "z" }
+cryptoki = { opt-level = "z" }
+ironrdp-connector = { opt-level = "z" }
+ironrdp-pdu = { opt-level = "z" }
+rustls = { opt-level = "z" }
+x509-cert = { opt-level = "z" }
+
+[build-dependencies]
+embed-resource = "3.0.12"

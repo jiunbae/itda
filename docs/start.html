@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>시작하기 — Itda</title>
+<meta name="title-ko" content="시작하기 — Itda">
+<meta name="title-en" content="Get started — Itda">
+<meta name="description" content="Itda 시작 가이드: 다운로드, 첫 실행, Mac·Windows PC·Linux 연결, 휴대폰과 Mac 브라우저로 보기, Tailscale로 어디서나.">
+<meta name="theme-color" content="#0c0b16">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="canonical" href="https://jiunbae.github.io/itda/start.html">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Itda">
+<meta property="og:title" content="Itda 시작하기 — 5분 가이드">
+<meta property="og:description" content="다운로드부터 Mac·PC 연결, 휴대폰 브라우저로 보기까지.">
+<meta property="og:url" content="https://jiunbae.github.io/itda/start.html">
+<meta property="og:image" content="https://jiunbae.github.io/itda/img/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://jiunbae.github.io/itda/img/og.png">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-github" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.46-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.58 9.58 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/></symbol>
+    <symbol id="i-mac" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12.5" rx="2"/><path d="M8.5 20.5h7M12 16.5v4"/></symbol>
+    <symbol id="i-windows" viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.4l7.4-1v7.1H3zM11.4 4.2L21 3v8.5h-9.6zM3 12.5h7.4v7.1L3 18.6zM11.4 12.5H21V21l-9.6-1.3z"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="2.5" width="11" height="19" rx="2.6"/><path d="M10.5 18.5h3"/></symbol>
+    <symbol id="i-net" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M11 7l-5 9M13 7l5 9M7.2 18h9.6"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.6v.01"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5L2.5 20h19z"/><path d="M12 10v4.5M12 17.3v.01"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  </defs>
+</svg>
+<a class="skip" href="#main"><span lang="ko">본문으로 건너뛰기</span><span lang="en">Skip to content</span></a>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="./" aria-label="Itda"><img src="favicon.svg" alt="" width="32" height="32">Itda<small>잇다</small></a>
+    <nav class="nav-links" aria-label="Main">
+      <a href="./#features"><span lang="ko">기능</span><span lang="en">Features</span></a>
+      <a href="./#how"><span lang="ko">작동 방식</span><span lang="en">How it works</span></a>
+      <a href="./#security"><span lang="ko">보안</span><span lang="en">Security</span></a>
+      <a href="./#faq">FAQ</a>
+      <a href="start.html" aria-current="page"><span lang="ko">시작하기</span><span lang="en">Get started</span></a>
+    </nav>
+    <div class="nav-right">
+      <div class="lang" role="group" aria-label="Language"><button data-set="ko" aria-pressed="true">KO</button><button data-set="en" aria-pressed="false">EN</button></div>
+      <a class="icon-btn" href="https://github.com/jiunbae/itda" aria-label="GitHub"><svg><use href="#i-github"/></svg></a>
+      <a class="btn primary small" href="https://github.com/jiunbae/itda/releases/latest"><svg><use href="#i-download"/></svg><span class="label"><span lang="ko">다운로드</span><span lang="en">Download</span></span></a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <section class="page-hero">
+    <div class="wrap">
+      <span class="kicker"><span lang="ko">시작하기</span><span lang="en">Get started</span></span>
+      <h1><span lang="ko">5분이면 연결됩니다</span><span lang="en">Connected in five minutes</span></h1>
+      <p><span lang="ko">다운로드하고, 상대 기기에서 공유를 켜고, Itda에 추가하면 끝입니다. 무엇을 연결하고 싶은지 고르세요.</span><span lang="en">Download, turn on sharing on the other device, add it to Itda. Pick what you want to connect.</span></p>
+      <div class="paths">
+        <a class="path" href="#mac" style="--ic:var(--teal)"><span class="ic"><svg><use href="#i-mac"/></svg></span><b>Mac</b><span lang="ko">기본 화면 공유로</span><span lang="en">With built-in Screen Sharing</span></a>
+        <a class="path" href="#windows" style="--ic:#5ea8ff"><span class="ic"><svg><use href="#i-windows"/></svg></span><b>Windows PC</b><span lang="ko">Itda 공유 또는 원격 데스크톱</span><span lang="en">Itda sharing or Remote Desktop</span></a>
+        <a class="path" href="#browser" style="--ic:var(--coral)"><span class="ic"><svg><use href="#i-phone"/></svg></span><b><span lang="ko">휴대폰 · Mac 브라우저</span><span lang="en">Phone · Mac browser</span></b><span lang="ko">QR 찍고 PIN 입력</span><span lang="en">Scan a QR, enter a PIN</span></a>
+        <a class="path" href="#anywhere" style="--ic:var(--violet)"><span class="ic"><svg><use href="#i-net"/></svg></span><b><span lang="ko">집 밖에서</span><span lang="en">Away from home</span></b><span lang="ko">Tailscale로 어디서나</span><span lang="en">Anywhere with Tailscale</span></a>
+      </div>
+    </div>
+  </section>
+
+  <div class="wrap guide">
+    <nav class="toc" aria-label="Steps">
+      <b><span lang="ko">단계</span><span lang="en">Steps</span></b>
+      <a href="#install"><span class="n">1</span><span lang="ko">다운로드 · 실행</span><span lang="en">Download &amp; run</span></a>
+      <a href="#tour"><span class="n">2</span><span lang="ko">첫 화면 둘러보기</span><span lang="en">First look</span></a>
+      <a href="#mac"><span class="n">3</span><span lang="ko">Mac 연결</span><span lang="en">Connect a Mac</span></a>
+      <a href="#windows"><span class="n">4</span><span lang="ko">Windows PC 연결</span><span lang="en">Connect a Windows PC</span></a>
+      <a href="#linux"><span class="n">5</span><span lang="ko">Linux · 기타 VNC</span><span lang="en">Linux &amp; other VNC</span></a>
+      <a href="#browser"><span class="n">6</span><span lang="ko">휴대폰·Mac 브라우저</span><span lang="en">Phone &amp; Mac browser</span></a>
+      <a href="#anywhere"><span class="n">7</span><span lang="ko">어디서나 (Tailscale)</span><span lang="en">Anywhere (Tailscale)</span></a>
+      <a href="#trouble"><span class="n">?</span><span lang="ko">문제 해결</span><span lang="en">Troubleshooting</span></a>
+    </nav>
+
+    <div>
+      <!-- 1 -->
+      <section class="step" id="install">
+        <div class="step-head"><span class="step-num">1</span><h2><span lang="ko">다운로드하고 실행하기</span><span lang="en">Download and run</span></h2></div>
+        <ol class="sub">
+          <li><span lang="ko"><a href="https://github.com/jiunbae/itda/releases/latest">최신 릴리스</a>에서 Windows용 <code>itda.exe</code>를 받습니다. 설치 과정 없이 실행 파일 하나입니다.</span><span lang="en">Grab the Windows <code>itda.exe</code> from the <a href="https://github.com/jiunbae/itda/releases/latest">latest release</a>. There's no installer — it's a single executable.</span></li>
+          <li><span lang="ko">원하는 폴더(예: <code>문서\Itda</code>)에 두고 더블클릭합니다.</span><span lang="en">Put it somewhere permanent (e.g. <code>Documents\Itda</code>) and double-click it.</span></li>
+          <li><span lang="ko">알림 영역에 Itda 아이콘이 생깁니다. 창을 닫아도 거기서 계속 실행되며 다시 열 수 있습니다.</span><span lang="en">An Itda icon appears in the notification area. Closing the window keeps it running there.</span></li>
+        </ol>
+        <div class="callout warn"><svg><use href="#i-warn"/></svg><div><span lang="ko"><b>“Windows의 PC 보호” 창이 뜨면</b> — 아직 코드 서명이 없는 새 앱이라 SmartScreen이 경고합니다. <b>추가 정보 → 실행</b>을 누르세요.</span><span lang="en"><b>If “Windows protected your PC” appears</b> — the app isn't code-signed yet, so SmartScreen warns. Click <b>More info → Run anyway</b>.</span></div></div>
+        <div class="callout"><svg><use href="#i-info"/></svg><div><span lang="ko">화면은 Windows에 들어 있는 <b>Microsoft Edge WebView2</b>로 그립니다. Windows 11에는 기본으로 있고, Windows 10에서 없다고 나오면 <a href="https://developer.microsoft.com/microsoft-edge/webview2/">Microsoft에서 설치</a>하세요.</span><span lang="en">The home screen uses <b>Microsoft Edge WebView2</b>, which ships with Windows 11. If Windows 10 says it's missing, <a href="https://developer.microsoft.com/microsoft-edge/webview2/">install it from Microsoft</a>.</span></div></div>
+      </section>
+
+      <!-- 2 -->
+      <section class="step" id="tour">
+        <div class="step-head"><span class="step-num">2</span><h2><span lang="ko">첫 화면 둘러보기</span><span lang="en">A first look</span></h2></div>
+        <p><span lang="ko">왼쪽에는 <b>모든 연결 · 즐겨찾기 · 계정 · 주변 기기 · 공유</b>가, 가운데에는 저장한 기기가 카드로 보입니다. 위쪽 검색칸에 주소를 바로 입력해 연결할 수도 있습니다.</span><span lang="en">The sidebar has <b>All · Favourites · Accounts · Nearby · Share</b>; your saved devices appear as cards. You can also type an address straight into the search box.</span></p>
+        <div class="shot"><picture><source srcset="img/home-light.webp" media="(prefers-color-scheme: light)"><img src="img/home-dark.webp" width="2000" height="1135" loading="lazy" alt="Itda 홈 화면" data-ko-alt="Itda 홈 화면" data-en-alt="Itda home screen"></picture></div>
+        <p class="cap"><span lang="ko">초록 점은 지금 연결할 수 있다는 뜻입니다. <kbd>Ctrl</kbd> <kbd>+</kbd> / <kbd>−</kbd>로 화면 크기를 바꿀 수 있습니다.</span><span lang="en">A green dot means the device is reachable right now. Use <kbd>Ctrl</kbd> <kbd>+</kbd> / <kbd>−</kbd> to zoom the app.</span></p>
+      </section>
+
+      <!-- 3 -->
+      <section class="step" id="mac">
+        <div class="step-head"><span class="step-num">3</span><h2><span lang="ko">Mac 연결하기</span><span lang="en">Connect a Mac</span></h2></div>
+        <p><span lang="ko">Mac에는 아무것도 설치하지 않습니다. 기본 화면 공유를 켜기만 하면 됩니다.</span><span lang="en">Nothing to install on the Mac — just turn on its built-in Screen Sharing.</span></p>
+        <ol class="sub">
+          <li><span lang="ko">Mac에서 <span class="path-ui"><i>시스템 설정</i><i>일반</i><i>공유</i></span> 로 가서 <b>화면 공유</b>를 켭니다. <b>원격 관리</b>는 꺼 두세요(둘 다 켜면 화면 공유가 동작하지 않습니다).</span><span lang="en">On the Mac open <span class="path-ui"><i>System Settings</i><i>General</i><i>Sharing</i></span> and turn on <b>Screen Sharing</b>. Leave <b>Remote Management</b> off (they conflict).</span></li>
+          <li><span lang="ko">화면 공유 옆 ⓘ에서 <b>접근 허용</b>에 내 계정이 있는지 확인합니다.</span><span lang="en">Click ⓘ next to Screen Sharing and check your account is in <b>Allow access for</b>.</span></li>
+          <li><span lang="ko">Itda의 <b>주변 기기</b>에서 Mac 옆 <b>추가</b>를 누르고, <b>Mac 계정 이름(짧은 이름)</b>과 로그인 암호를 넣은 뒤 <b>저장 후 연결</b>. Apple ID가 아닙니다.</span><span lang="en">In Itda's <b>Nearby</b>, click <b>Add</b> next to the Mac, enter the <b>Mac account short name</b> and login password, then <b>Save &amp; connect</b>. Not your Apple ID.</span></li>
+        </ol>
+        <div class="shot"><img src="img/editor.webp" width="1600" height="908" loading="lazy" alt="연결 편집 창: 종류, 주소, 계정, SSH" data-ko-alt="연결 편집 창: 종류, 주소, 계정, SSH" data-en-alt="Connection editor: kind, address, account, SSH"></div>
+        <p class="cap"><span lang="ko">계정 이름이 헷갈리면 Mac 터미널에서 <code>whoami</code>. 여러 Mac에 같은 계정을 쓰면 <b>계정</b>을 만들어 고르기만 하세요.</span><span lang="en">Unsure of the short name? Run <code>whoami</code> in Terminal. Same account on several Macs? Create an <b>Account</b> once and pick it.</span></p>
+        <div class="callout ok"><svg><use href="#i-check"/></svg><div><span lang="ko"><b>밖에서도 쓸 거라면</b> 같은 공유 화면에서 <b>원격 로그인</b>도 켜고, 연결 편집에서 <b>SSH로 암호화해서 연결</b>을 켜세요.</span><span lang="en"><b>Using it away from home?</b> Also turn on <b>Remote Login</b> on the Mac and switch on <b>Encrypt with SSH</b> in the connection editor.</span></div></div>
+      </section>
+
+      <!-- 4 -->
+      <section class="step" id="windows">
+        <div class="step-head"><span class="step-num">4</span><h2><span lang="ko">Windows PC 연결하기</span><span lang="en">Connect a Windows PC</span></h2></div>
+        <div class="two">
+          <div class="card">
+            <h3><span lang="ko">A. Itda 공유</span><span lang="en">A. Itda sharing</span> <span class="badge"><span lang="ko">모든 Windows</span><span lang="en">Any Windows</span></span></h3>
+            <ol>
+              <li><span lang="ko">그 PC에도 Itda를 실행하고 <b>공유 → 이 PC 공유</b>를 켭니다. 주소와 8자리 <b>공유 암호</b>가 나옵니다.</span><span lang="en">Run Itda on that PC and turn on <b>Share → Share this PC</b>. You'll see its address and an 8-character <b>share password</b>.</span></li>
+              <li><span lang="ko">방화벽이 물으면 <b>개인 네트워크</b>만 허용합니다.</span><span lang="en">If the firewall asks, allow <b>Private networks</b> only.</span></li>
+              <li><span lang="ko">내 Itda의 주변 기기에 <b>Windows · Itda</b>로 나타납니다. 추가 → 종류 <b>Windows · Itda</b> → 공유 암호만 입력.</span><span lang="en">It shows up in Nearby as <b>Windows · Itda</b>. Add it, kind <b>Windows · Itda</b>, enter the share password.</span></li>
+              <li><span lang="ko">연결하면 그 PC 화면에 허락 창이 뜹니다. <b>예</b>를 누르면 연결됩니다.</span><span lang="en">The other PC shows an allow prompt — click <b>Yes</b>.</span></li>
+            </ol>
+          </div>
+          <div class="card">
+            <h3><span lang="ko">B. 원격 데스크톱</span><span lang="en">B. Remote Desktop</span> <span class="badge">Pro · Enterprise</span></h3>
+            <ol>
+              <li><span lang="ko">그 PC에서 <span class="path-ui"><i>설정</i><i>시스템</i><i>원격 데스크톱</i></span>을 켭니다.</span><span lang="en">On that PC turn on <span class="path-ui"><i>Settings</i><i>System</i><i>Remote Desktop</i></span>.</span></li>
+              <li><span lang="ko">Itda에서 종류 <b>Windows 원격 데스크톱</b>, 주소에 PC 이름이나 IP, 계정에 그 PC의 Windows 계정(Microsoft 계정이면 이메일).</span><span lang="en">In Itda pick <b>Windows Remote Desktop</b>, enter the PC name or IP and its Windows account (email for a Microsoft account).</span></li>
+              <li><span lang="ko">이 PC에서는 Windows 원격 데스크톱 앱으로, 웹 뷰어에서는 브라우저로 열립니다.</span><span lang="en">It opens in Windows' Remote Desktop app here, and right in the browser from the web viewer.</span></li>
+            </ol>
+          </div>
+        </div>
+        <div class="callout"><svg><use href="#i-info"/></svg><div><span lang="ko">Windows <b>Home</b>에는 원격 데스크톱 서버가 없습니다. 그런 PC는 A 방법을 쓰세요.</span><span lang="en">Windows <b>Home</b> has no Remote Desktop host — use option A there.</span></div></div>
+      </section>
+
+      <!-- 5 -->
+      <section class="step" id="linux">
+        <div class="step-head"><span class="step-num">5</span><h2><span lang="ko">Linux · 기타 VNC</span><span lang="en">Linux &amp; other VNC servers</span></h2></div>
+        <p><span lang="ko">x11vnc, TigerVNC, wayvnc, Raspberry Pi의 VNC 서버 등 표준 VNC 서버라면 연결됩니다. 연결 편집의 종류를 <b>Linux · 기타 VNC</b>로 고르고 <b>VNC 암호</b>를 넣으세요. 대부분 사용자 이름은 비워 둡니다.</span><span lang="en">Any standard VNC server works — x11vnc, TigerVNC, wayvnc, Raspberry Pi's VNC. Choose <b>Linux · other VNC</b> as the kind and enter the <b>VNC password</b>; most servers need no user name.</span></p>
+        <p><span lang="ko">포트가 5900이 아니면 주소 뒤에 붙입니다 (예: <code>raspberrypi.local:5901</code>). SSH가 켜진 기기라면 SSH 암호화도 쓸 수 있습니다.</span><span lang="en">Add the port if it isn't 5900 (e.g. <code>raspberrypi.local:5901</code>). If the box runs SSH you can encrypt the connection too.</span></p>
+      </section>
+
+      <!-- 6 -->
+      <section class="step" id="browser">
+        <div class="step-head"><span class="step-num">6</span><h2><span lang="ko">휴대폰·Mac 브라우저로 보기</span><span lang="en">View from a phone or Mac browser</span></h2></div>
+        <p><span lang="ko">Mac·iPhone·Android용 앱 대신 <b>웹 뷰어</b>를 씁니다. Windows PC의 Itda가 작은 웹 서버가 되어, 저장된 모든 기기와 이 PC 자신을 브라우저로 보여 줍니다.</span><span lang="en">Instead of Mac, iPhone and Android apps there's the <b>web viewer</b>: the Itda on your Windows PC serves every saved device — and the PC itself — to any browser.</span></p>
+        <ol class="sub">
+          <li><span lang="ko">PC의 Itda 왼쪽 <b>공유</b> → <b>모두 켜기</b>. QR 코드와 6자리 <b>접속 PIN</b>이 나옵니다.</span><span lang="en">In Itda on the PC, open <b>Share</b> → <b>Turn on both</b>. You get a QR code and a 6-digit <b>PIN</b>.</span></li>
+          <li><span lang="ko">휴대폰 카메라로 QR을 찍거나 Mac 브라우저에 주소를 입력하고 PIN을 넣습니다.</span><span lang="en">Scan the QR with your phone's camera (or type the address on a Mac) and enter the PIN.</span></li>
+          <li><span lang="ko">기기를 눌러 엽니다. 기기 추가·편집·계정 관리도 여기서 됩니다.</span><span lang="en">Tap a device to open it. You can add and edit devices and accounts here too.</span></li>
+        </ol>
+        <div class="shot"><img src="img/share.webp" width="1600" height="908" loading="lazy" alt="공유 페이지의 QR 코드와 PIN" data-ko-alt="공유 페이지의 QR 코드와 PIN" data-en-alt="QR code and PIN on the Share page"></div>
+        <div class="phone-row" style="margin-top:24px">
+          <div>
+            <h3><span lang="ko">앱처럼 설치하기</span><span lang="en">Install it like an app</span></h3>
+            <ul class="sub">
+              <li><span lang="ko"><b>iPhone·iPad</b> — Safari 공유 버튼 → <b>홈 화면에 추가</b></span><span lang="en"><b>iPhone · iPad</b> — Safari's Share button → <b>Add to Home Screen</b></span></li>
+              <li><span lang="ko"><b>Mac</b> — Safari <span class="path-ui"><i>파일</i><i>Dock에 추가</i></span>, Chrome·Edge는 <b>앱으로 설치</b></span><span lang="en"><b>Mac</b> — Safari <span class="path-ui"><i>File</i><i>Add to Dock</i></span>, or <b>Install app</b> in Chrome/Edge</span></li>
+              <li><span lang="ko"><b>Android</b> — Chrome의 <b>앱으로 설치</b></span><span lang="en"><b>Android</b> — <b>Install app</b> in Chrome</span></li>
+            </ul>
+            <p class="cap"><span lang="ko">Chrome·Edge·Android의 설치는 https:// 주소에서만 됩니다 — 아래 Tailscale HTTPS 주소를 쓰세요.</span><span lang="en">Chrome, Edge and Android only install from an https:// address — use the Tailscale HTTPS address below.</span></p>
+            <div class="callout"><svg><use href="#i-info"/></svg><div><span lang="ko">터치: <b>탭</b> = 클릭, <b>두 손가락 탭</b> = 오른쪽 클릭, <b>두 손가락 끌기</b> = 스크롤. 위쪽 도구 막대에서 키보드(한글 가능), ⌘·Ctrl+Alt+Del 키, 클립보드를 씁니다.</span><span lang="en">Touch: <b>tap</b> = click, <b>two-finger tap</b> = right-click, <b>two-finger drag</b> = scroll. The toolbar has the keyboard, ⌘ / Ctrl+Alt+Del keys and the clipboard.</span></div></div>
+          </div>
+          <div class="mini-phone"><img src="img/phone-list.webp" width="640" height="994" loading="lazy" alt="휴대폰 웹 뷰어의 기기 목록" data-ko-alt="휴대폰 웹 뷰어의 기기 목록" data-en-alt="Device list in the phone web viewer"></div>
+        </div>
+      </section>
+
+      <!-- 7 -->
+      <section class="step" id="anywhere">
+        <div class="step-head"><span class="step-num">7</span><h2><span lang="ko">집 밖에서도 — Tailscale</span><span lang="en">From anywhere — Tailscale</span></h2></div>
+        <p><span lang="ko">가장 쉽고 안전한 방법은 <a href="https://tailscale.com/download">Tailscale</a>입니다. 공유기 설정 없이, 기기들이 어디에 있든 같은 네트워크처럼 연결됩니다(개인 무료).</span><span lang="en">The easiest safe option is <a href="https://tailscale.com/download">Tailscale</a>: no router setup, and your devices behave as if they were on one network wherever they are (free for personal use).</span></p>
+        <ol class="sub">
+          <li><span lang="ko">이 PC, Mac·PC, 휴대폰에 Tailscale을 설치하고 <b>같은 계정</b>으로 로그인합니다.</span><span lang="en">Install Tailscale on this PC, your Macs/PCs and your phone and sign in with the <b>same account</b>.</span></li>
+          <li><span lang="ko">Itda <b>주변 기기</b>의 <b>Tailscale — 어디서나</b>에서 기기를 추가합니다.</span><span lang="en">Add devices from <b>Tailscale — anywhere</b> in Itda's <b>Nearby</b>.</span></li>
+          <li><span lang="ko">웹 뷰어의 QR을 <b>Tailscale</b>로 바꾸면 밖에서 쓸 주소가 나옵니다. Tailscale 관리 콘솔 → DNS에서 <b>HTTPS Certificates</b>를 켜면 <b>HTTPS 주소 만들기</b>도 됩니다.</span><span lang="en">Switch the web viewer's QR to <b>Tailscale</b> for the away-from-home address. Turn on <b>HTTPS Certificates</b> under DNS in the Tailscale admin console to get an <b>HTTPS address</b>.</span></li>
+        </ol>
+        <div class="shot"><img src="img/nearby.webp" width="1600" height="908" loading="lazy" alt="주변 기기의 Tailscale 목록" data-ko-alt="주변 기기의 Tailscale 목록" data-en-alt="Tailscale devices in Nearby"></div>
+      </section>
+
+      <!-- trouble -->
+      <section class="step" id="trouble">
+        <div class="step-head"><span class="step-num">?</span><h2><span lang="ko">문제 해결</span><span lang="en">Troubleshooting</span></h2></div>
+        <div class="faq" style="margin:0">
+          <details><summary><span lang="ko">“Mac이 연결을 거부했습니다”</span><span lang="en">“The Mac refused the connection”</span></summary><div><p><span lang="ko">화면 공유가 꺼져 있거나 원격 관리와 함께 켜져 있습니다. 화면 공유만 켜 두세요.</span><span lang="en">Screen Sharing is off, or Remote Management is on as well. Keep only Screen Sharing on.</span></p></div></details>
+          <details><summary><span lang="ko">“로그인하지 못했습니다”</span><span lang="en">“Couldn't sign in”</span></summary><div><p><span lang="ko">Mac은 계정의 <b>짧은 이름</b>과 로그인 암호(Apple ID 아님), Itda 공유 PC는 <b>공유 암호</b>, Linux는 <b>VNC 암호</b>입니다. 여러 번 틀리면 Mac이 잠시 막으니 1분 뒤 다시 하세요.</span><span lang="en">Macs want the account <b>short name</b> and login password (not Apple ID); Itda PCs want the <b>share password</b>; Linux wants the <b>VNC password</b>. Macs block repeated failures for a minute.</span></p></div></details>
+          <details><summary><span lang="ko">휴대폰에서 웹 뷰어가 안 열려요</span><span lang="en">The web viewer won't open on my phone</span></summary><div><p><span lang="ko"><b>공유</b> 페이지에서 <b>웹 뷰어</b>가 켜져 있는지 보세요(이 PC 공유의 5900 포트는 브라우저로 열리지 않습니다). 휴대폰이 같은 Wi-Fi이거나 Tailscale이 켜져 있어야 하고, 방화벽에서 ‘개인 네트워크’를 허용해야 합니다.</span><span lang="en">Check the <b>web viewer</b> is on in <b>Share</b> (Share this PC's port 5900 is for VNC apps, not browsers). The phone must be on the same Wi-Fi or Tailscale, and the firewall must allow Private networks.</span></p></div></details>
+          <details><summary><span lang="ko">그래도 안 되면</span><span lang="en">Still stuck?</span></summary><div><p><span lang="ko">Itda <b>설정 → 정보 → 로그</b>의 마지막 줄을 붙여 <a href="https://github.com/jiunbae/itda/issues">GitHub 이슈</a>로 알려 주세요.</span><span lang="en">Open <b>Settings → About → Log</b> in Itda and paste the last lines into a <a href="https://github.com/jiunbae/itda/issues">GitHub issue</a>.</span></p></div></details>
+        </div>
+      </section>
+
+      <div class="done reveal">
+        <h2><span lang="ko">다 됐습니다 🎉</span><span lang="en">You're all set 🎉</span></h2>
+        <p><span lang="ko">이제 어떤 기기에서든 내 기기를 열 수 있습니다. 앱 안의 <b>도움말</b>에도 같은 안내가 그림과 함께 있습니다.</span><span lang="en">You can now reach your devices from anywhere. The in-app <b>Help</b> has the same guide with pictures.</span></p>
+        <div class="cta" style="margin-top:0">
+          <a class="btn primary" href="https://github.com/jiunbae/itda/releases/latest"><svg><use href="#i-download"/></svg><span lang="ko">Itda 다운로드</span><span lang="en">Download Itda</span></a>
+          <a class="btn" href="./"><span lang="ko">홈으로</span><span lang="en">Back home</span><svg><use href="#i-arrow"/></svg></a>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <a class="brand" href="./"><img src="favicon.svg" alt="" width="32" height="32">Itda<small>잇다</small></a>
+      <p><span lang="ko">내 기기를 잇다 — 가볍고 빠른 원격 데스크톱.</span><span lang="en">Connect your devices — a light, fast remote desktop.</span></p>
+    </div>
+    <div>
+      <h4><span lang="ko">제품</span><span lang="en">Product</span></h4>
+      <ul>
+        <li><a href="./"><span lang="ko">홈</span><span lang="en">Home</span></a></li>
+        <li><a href="https://github.com/jiunbae/itda/releases"><span lang="ko">릴리스</span><span lang="en">Releases</span></a></li>
+        <li><a href="./#faq">FAQ</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4><span lang="ko">오픈 소스</span><span lang="en">Open source</span></h4>
+      <ul>
+        <li><a href="https://github.com/jiunbae/itda">GitHub</a></li>
+        <li><a href="https://github.com/jiunbae/itda/issues"><span lang="ko">문제 신고</span><span lang="en">Report an issue</span></a></li>
+        <li><a href="https://github.com/jiunbae/itda/blob/main/LICENSE"><span lang="ko">라이선스 (MIT)</span><span lang="en">License (MIT)</span></a></li>
+      </ul>
+    </div>
+    <div class="fine">
+      <span>© 2026 Itda contributors · MIT License</span>
+      <span><span lang="ko">웹 뷰어에 </span><span lang="en">Web viewer uses </span><a href="https://github.com/novnc/noVNC">noVNC</a> (MPL-2.0), <span lang="ko">RDP에 </span><span lang="en">RDP by </span><a href="https://github.com/Devolutions/IronRDP">IronRDP</a> (MIT/Apache-2.0)<span lang="ko">를 씁니다.</span><span lang="en">.</span></span>
+    </div>
+  </div>
+</footer>
+<script src="site.js"></script>
+</body>
+</html>

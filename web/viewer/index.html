@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#26255f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Itda">
+<title>Itda</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+<main id="login" class="screen center" hidden>
+  <div class="login-card">
+    <img src="icon.svg" alt="" class="login-logo">
+    <h1>Itda</h1>
+    <p class="muted">Windows PC의 Itda 설정 → ‘다른 기기에서 보기’에 표시된 6자리 PIN을 입력하세요.</p>
+    <form id="loginForm" autocomplete="off">
+      <input id="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="PIN 6자리" aria-label="PIN" required>
+      <button class="primary" type="submit">들어가기</button>
+    </form>
+    <p id="loginError" class="error" role="alert"></p>
+  </div>
+</main>
+
+<main id="list" class="screen" hidden>
+  <header class="bar">
+    <div class="brand"><img src="icon.svg" alt=""><b>Itda</b></div>
+    <button id="install" class="ghost text" hidden>앱으로 설치</button>
+    <button id="refresh" class="ghost" title="새로 고침" aria-label="새로 고침"></button>
+    <button id="logout" class="ghost text">로그아웃</button>
+  </header>
+  <div id="hint" class="hint" hidden></div>
+  <div class="tabs" role="tablist">
+    <button role="tab" data-tab="hosts" aria-selected="true">기기</button>
+    <button role="tab" data-tab="accounts" aria-selected="false">계정</button>
+  </div>
+  <section id="hosts" class="hosts"></section>
+  <section id="accounts" class="accounts" hidden></section>
+</main>
+
+<div id="editor" class="editor" hidden role="dialog" aria-modal="true" aria-labelledby="edTitle">
+  <form id="edForm" class="ed-card" autocomplete="off"></form>
+</div>
+
+<main id="view" class="screen" hidden>
+  <div id="screen"></div>
+  <nav id="tools" class="tools" aria-label="원격 화면 도구"></nav>
+  <div id="sheet" class="sheet" hidden></div>
+  <div id="status" class="status" hidden></div>
+  <textarea id="kbd" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="키보드 입력"></textarea>
+</main>
+<div id="toast" class="toast" hidden></div>
+<script type="module" src="novnc.min.js"></script>
+<script type="module" src="viewer.js"></script>
+</body>
+</html>

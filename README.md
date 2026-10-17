@@ -1,0 +1,244 @@
+<div align="center">
+
+<img src="assets/itda.svg" width="96" alt="Itda logo">
+
+# Itda · 잇다
+
+**Your devices, within reach.** · 내 기기를 잇다.
+
+A tiny, fast remote desktop for Windows that opens your **Macs**, **Windows PCs** and **Linux** machines, and lets you see them all from **any browser**, including your iPhone and Mac.
+
+[![Release](https://img.shields.io/github/v/release/jiunbae/itda?style=flat-square&color=4744b0)](https://github.com/jiunbae/itda/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/jiunbae/itda/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/jiunbae/itda/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-33d1c2?style=flat-square)](LICENSE)
+![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=flat-square&logo=windows)
+![Rust](https://img.shields.io/badge/Rust-~6%20MB%20exe-ff6a43?style=flat-square&logo=rust)
+
+[**Download**](https://github.com/jiunbae/itda/releases/latest) · [Website](https://jiunbae.github.io/itda/) · [Getting started](https://jiunbae.github.io/itda/start.html) · [Security](SECURITY.md)
+
+<img src="web/help/itda-home.webp" width="860" alt="Itda home: saved Macs and PCs as cards with live previews">
+
+</div>
+
+---
+
+## ✨ Why Itda
+
+|  |  |
+|---|---|
+| ⚡ **Native and fast** | A single ~6 MB exe with no installer. The remote screen is drawn by a native Win32 renderer (ZRLE, dirty-rect blits, per-monitor DPI), and each connection runs in its own process. |
+| 🍎 **Made for macOS Screen Sharing** | Apple ARD sign-in (DH + AES), Mac shortcuts (⌘Space, ⌘Tab, Mission Control…), Korean/English key, multi-display, and the clipboard in both directions. |
+| 🪟 **Windows PCs too** | **Share this PC** turns any Windows into a VNC server with an "allow?" prompt. **Remote Desktop** opens in `mstsc` here, and in the browser through the built-in RDP bridge. |
+| 🌐 **Any browser is a client** | Turn on the web viewer and scan a QR code. iPhone, Android, Mac and Linux open your devices *and this PC*, with no app to install. You can also install it as an app (PWA). |
+| 🔒 **Private by design** | Passwords stay in Windows Credential Manager and never reach the browser. Optional **SSH tunnel** encryption, PIN sign-in with lockout, and same-origin checks. |
+| 🛰️ **Anywhere with Tailscale** | Tailnet devices show up automatically, and the web viewer gets a `https://…ts.net` address. No port forwarding. |
+| 👤 **Accounts** | Save one login and use it on many devices. Change the password once, and every device that uses it is updated. |
+| 🧭 **Friendly** | A first-run guide, a help center with screenshots, and errors that say what to do in plain Korean. |
+
+## 🚀 Quick start
+
+1. **Download** `itda.exe` from [Releases](https://github.com/jiunbae/itda/releases/latest) and run it. WebView2 is built into Windows 11; on Windows 10 install the [WebView2 Runtime](https://go.microsoft.com/fwlink/p/?LinkId=2124703) if it's missing.
+2. **Get the other device ready**
+   - **Mac:** System Settings → General → Sharing → **Screen Sharing** on.
+   - **Windows:** Itda → **공유** → **이 PC 공유**, or turn on Remote Desktop on a Pro edition.
+   - **Linux:** run any VNC server.
+3. **Connect.** The first-run guide walks you through it, and nearby devices appear on their own.
+4. **From your phone or Mac:** open **공유** → **모두 켜기** → scan the QR code → enter the PIN.
+
+> Itda's interface is in Korean. The [website](https://jiunbae.github.io/itda/) has an English version of the guide.
+
+## 🖼️ Screenshots
+
+| Share page: web viewer QR, PIN and this PC | Connection editor (Mac / Windows / RDP / Linux) |
+|---|---|
+| <img src="web/help/itda-web.webp" alt="Share page"> | <img src="web/help/itda-edit.webp" alt="Connection editor"> |
+| **Nearby devices** (Bonjour + Tailscale) | **Accounts**: one login for many devices |
+| <img src="web/help/itda-nearby.webp" alt="Nearby devices"> | <img src="web/help/itda-accounts.webp" alt="Accounts"> |
+
+<p align="center">
+<img src="web/help/phone-list.webp" width="240" alt="Web viewer on a phone: device list">
+<img src="web/help/phone-view.webp" width="240" alt="Web viewer on a phone: a Mac screen">
+<img src="web/help/phone-edit.webp" width="240" alt="Web viewer on a phone: editing a device">
+</p>
+
+## 🧩 How it works
+
+```mermaid
+flowchart LR
+  subgraph You["Your screens"]
+    W["Windows PC<br/>Itda app"]
+    B["iPhone · Android · Mac<br/>any browser"]
+  end
+  subgraph Targets["Your devices"]
+    M["Mac<br/>Screen Sharing (VNC)"]
+    P["Windows PC<br/>Itda share · RDP"]
+    L["Linux<br/>VNC server"]
+  end
+  W -- "RFB (ARD / VNC auth)<br/>optional SSH tunnel" --> M
+  W --> P
+  W --> L
+  B -- "HTTP + WebSocket<br/>PIN, noVNC" --> G["Itda web gateway<br/>on the Windows PC"]
+  G -- "RFB relay / RDP → RFB bridge" --> Targets
+  G -. "this PC" .-> W
+```
+
+The browser never gets a password. The PC's Itda signs in to each device and relays only the screen and input.
+
+## 📖 Guide
+
+<details>
+<summary><b>Address book, connecting, and the session window</b></summary>
+
+| Screen | What's there |
+|---|---|
+| Address book | Cards or a list, a preview of the last screen, online ●, favorites ★, groups, search. Type an address and press Enter to connect right away. |
+| Nearby | Bonjour (mDNS) Macs and Itda PCs, plus your Tailscale devices. Add one with a single click. |
+| Connecting | Shows each step (address → connect → sign in → screen). You can cancel, or leave it running in the background. |
+| Errors | Explains the cause and what to do, worded for the kind of device: Mac, PC, RDP or Linux. |
+| Settings | Theme, **display size (Ctrl +/−, Ctrl+wheel)**, toolbar mode, hotkeys, defaults for new connections, tray, notifications, previews. |
+
+**Session window toolbar** (top center, auto-hides): fullscreen, fit or 1:1, pick a display, Mac special keys, clipboard, view-only, screenshot (`Pictures\Itda`), stats, pin, disconnect.
+
+**Hotkeys** (Ctrl+Alt, or Ctrl+Shift): `Enter` fullscreen · `0` fit · `1` 1:1 · `S` stats · `V` view-only · `P` screenshot · `I` info · `T` pin toolbar · `R` reconnect · `M` menu.
+
+**Key mapping:**
+
+| Windows | Mac |
+|---|---|
+| Win | ⌘ Command (captured while the window is focused) |
+| Alt | ⌥ Option |
+| Ctrl | ⌃ Control (or ⌘, with the Ctrl↔Cmd swap) |
+| 한/영 | Ctrl+Space or Caps Lock |
+
+If the network drops, the session dims and **reconnects automatically**. Options you change during a session are saved for that connection.
+
+**Command line:**
+- `itda <address>` opens the home and connects.
+- `itda <address> -u <user> -p <password>` connects directly.
+</details>
+
+<details>
+<summary><b>Web viewer: phones, tablets, and Macs</b></summary>
+
+Open **공유** in the sidebar → **웹 뷰어** (or **모두 켜기**). Open the address or scan the QR code on any device, then enter the **6-digit PIN**.
+
+- **What it opens:**
+  - Macs and other VNC servers
+  - Windows PCs over Remote Desktop (the PC's Itda speaks RDP)
+  - **This PC**, when "Share this PC" is on. There's no allow prompt, because the PIN already proved who you are.
+- **Manage from the browser:** add, edit and delete devices, and manage accounts. Changes are saved on the PC right away.
+- **Touch:**
+  - tap = click, two-finger tap = right-click, drag = scroll
+  - the phone keyboard (Korean works)
+  - modifier latches: ⌘⌥⌃⇧ for Macs, Ctrl/Alt/⇧/⊞ for PCs
+  - shortcut sheets: Mac, or Windows (Ctrl+Alt+Del, Alt+Tab, …)
+  - clipboard, fit/1:1, view-only
+- **Install as an app:**
+  - iPhone: Safari → Share → **Add to Home Screen**
+  - Mac: Safari → **File → Add to Dock**
+  - Chrome/Edge/Android: **Install app**. This needs the `https://…ts.net` Tailscale address.
+- **Security:**
+  - HttpOnly cookie for 12 hours
+  - 5 wrong PINs lock sign-in for 1 minute
+  - same-origin checks
+  - a new PIN signs everyone out
+  - The browser ↔ PC leg is plain HTTP, so use it on your own Wi-Fi or over Tailscale and **never forward the port to the internet**.
+</details>
+
+<details>
+<summary><b>Encryption (SSH), Tailscale, and accounts</b></summary>
+
+**SSH tunnel.** Turn on *SSH로 암호화해서 연결* in the connection editor. It needs the Mac's **Remote Login** (or any SSH server).
+- Itda runs Windows' built-in OpenSSH without a window, forwarding `127.0.0.1:<random> → device:5900`.
+- The password comes from Itda through `SSH_ASKPASS`, and your `~/.ssh` keys and config still work.
+- Host keys are pinned in `%APPDATA%\Itda\known_hosts`. If a key changes, the connection stops with a warning.
+- The tunnel reopens on its own after a network drop.
+
+**Tailscale.** Your tailnet's Macs, PCs and Linux machines appear under *Nearby → Tailscale*. The web viewer shows a `http://<pc>.<tailnet>.ts.net:8780/` QR code. Turn on HTTPS certificates in the Tailscale admin and press *HTTPS 주소 만들기* to get `https://<pc>.<tailnet>.ts.net/` through `tailscale serve`.
+
+**Accounts.** Save a login once (name, password, optional SSH key and passphrase) and pick it on each device. If several devices share a user name, Itda offers to group them into one account.
+</details>
+
+<details>
+<summary><b>Windows PCs: Share this PC and Remote Desktop</b></summary>
+
+| Method | Works on | How |
+|---|---|---|
+| **Share this PC** | Any Windows 10/11 with Itda | On that PC: **공유 → 이 PC 공유**. It shows up as "Windows · Itda" under Nearby; connect with the share password. macOS Screen Sharing and other VNC apps can connect too. |
+| **Remote Desktop** | Windows Pro / Enterprise / Education | Choose *Windows 원격 데스크톱* in the editor. On the PC, Itda hands the account to `mstsc`. In the web viewer, Itda connects itself (IronRDP: TLS + NLA) and streams the screen to the browser. |
+
+**How Share this PC works:**
+- GDI capture of every monitor, 64×64 tile diff, ZRLE
+- SendInput for the mouse and keyboard; a Mac's ⌘ acts as Ctrl
+- clipboard in both directions
+- a random VNC password plus an "allow?" prompt on every connection (on by default)
+- notifications and a tray badge while someone is watching, and a button that disconnects everyone
+- view-only mode and Bonjour registration
+
+Windows security doesn't let a remote viewer control the lock screen, UAC prompts or elevated windows.
+</details>
+
+<details>
+<summary><b>Your data</b></summary>
+
+| Where | What |
+|---|---|
+| `%APPDATA%\Itda\hosts.json`, `accounts.json`, `settings.json` | Address book, accounts, settings |
+| `%APPDATA%\Itda\thumbs\` | Small previews of the last screen (can be turned off) |
+| Windows Credential Manager `Itda/…` | Passwords, key passphrases, the web PIN, the share password |
+| `%TEMP%\itda.log`, `%TEMP%\itda\session-*.log` | Diagnostic logs (they never contain passwords) |
+</details>
+
+## 🛠️ Build from source
+
+```powershell
+cargo build --release      # → target\release\itda.exe
+cargo test --release
+```
+
+<details>
+<summary><b>Project layout</b></summary>
+
+| File | Role |
+|---|---|
+| `home.rs` | Home window, WebView2 hosting, page IPC, session processes, reachability, tray |
+| `web/` | Home UI (HTML/CSS/JS, embedded; `ITDA_WEB_DIR` serves it from disk) |
+| `session.rs` · `ui.rs` · `toolbar.rs` | Session process and window: rendering, input, toolbar, reconnect, screenshots |
+| `rfb.rs` · `net.rs` · `fb.rs` · `clip.rs` | RFB handshake/auth, receive loop and reconnect, decoders, clipboard |
+| `tunnel.rs` | SSH tunnel through Windows OpenSSH |
+| `gateway.rs` · `ws.rs` · `web/viewer/` | Web viewer: HTTP/WebSocket, PIN, address-book API, RFB relay, PWA |
+| `rdp.rs` | RDP → RFB bridge (IronRDP, TLS + NLA → framebuffer → ZRLE) |
+| `share.rs` | Share this PC: VNC server (GDI capture, tile diff, ZRLE, SendInput, Bonjour) |
+| `store.rs` · `mdns.rs` · `tailscale.rs` | Storage and credentials, Bonjour, Tailscale CLI |
+
+| Area | Implementation |
+|---|---|
+| Protocol | RFB 3.8 (macOS 3.889). Auth: None, VNC (DES), Apple ARD (DH + AES-128) |
+| Encodings | ZRLE, CopyRect, Raw, plus Cursor, DesktopSize, ExtendedDesktopSize and Extended Clipboard |
+| Latency | TCP_NODELAY, pipelined update requests, local cursor, liveness probes |
+| Rendering | DIB section, dirty-rect blits, `BitBlt` at 1:1 / `StretchBlt(HALFTONE)` when scaled, per-monitor DPI v2 |
+
+Test hooks `ITDA_TEST_HTTP`, `ITDA_TEST_SNAP` and `ITDA_DEBUG_PORT` do nothing unless those environment variables are set.
+</details>
+
+## 🗺️ Roadmap
+
+- [ ] Relay for reaching devices without a VPN
+- [ ] Native Mac / Linux apps (for now, use the web viewer)
+- [ ] RDP in the browser: clipboard, audio, drives, RD Gateway
+- [ ] Signed installer and auto-update
+
+## 🤝 Contributing & security
+
+Issues and PRs are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
+## 📜 License & credits
+
+[MIT](LICENSE) © 2026 Jiun Bae.
+
+Itda builds on:
+- [noVNC](https://github.com/novnc/noVNC) 1.7.0 (MPL-2.0, bundled unmodified in `web/viewer/novnc.min.js`)
+- [IronRDP](https://github.com/Devolutions/IronRDP) (MIT/Apache-2.0) and [rustls](https://github.com/rustls/rustls)
+- [wry](https://github.com/tauri-apps/wry) and the Rust crates in `Cargo.toml`
+
+<sub>The icon draws the letters of 잇: ㅇ is your device, ㅣ the link, and ㅅ the bridge to your other machines. Each stroke has its own colour for each platform Itda connects.</sub>

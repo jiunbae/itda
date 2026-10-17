@@ -1,0 +1,87 @@
+//! Itda (잇다) — fast, lightweight remote desktop for macOS Screen Sharing and other VNC servers.
+#![windows_subsystem = "windows"]
+
+mod clip;
+mod fb;
+mod gateway;
+mod home;
+mod img;
+mod keys;
+mod log;
+mod mdns;
+mod net;
+mod rdp;
+mod rfb;
+mod session;
+mod share;
+mod store;
+mod tailscale;
+mod toolbar;
+mod tunnel;
+mod ui;
+mod ws;
+
+/// Product name shown to people.
+pub const APP: &str = "Itda";
+
+const USAGE: &str = "itda [host[:port]] [-u user] [-p password] [--swap]
+
+인자 없이 실행하면 Itda 홈(주소록)이 열립니다.
+  host         주소만 주면 홈에서 바로 그 Mac에 연결합니다
+  -u user      Mac 계정 이름 (Apple 계정 로그인)
+  -p password  비밀번호 (또는 ITDA_PASSWORD 환경변수) — 주면 홈 없이 바로 접속
+  --swap       Ctrl ↔ Cmd 바꾸기
+
+접속 중 단축키 (Ctrl+Alt+…): Enter 전체 화면 · 0 맞춤 · 1 실제 크기 · S 통계 · V 보기 전용
+                           P 스크린샷 · I 연결 정보 · T 툴바 고정 · R 재연결 · M 메뉴";
+
+fn main() {
+    // ssh asking for the password: answer and leave before touching logs or windows.
+    if std::env::args().nth(1).as_deref() == Some("--askpass") || std::env::var_os("SSH_ASKPASS_REQUIRE").is_some() && std::env::var_os("ITDA_ASKPASS_SECRET").is_some() {
+        let prompt = std::env::args().last().unwrap_or_default();
+        std::process::exit(tunnel::askpass(&prompt));
+    }
+    let mut args = std::env::args().skip(1).peekable();
+    let managed = args.peek().map(String::as_str) == Some("--session");
+    log::init(if managed { "session" } else { "" });
+    std::panic::set_hook(Box::new(|p| {
+        crate::log!("PANIC: {p}");
+        session::emit(serde_json::json!({"ev": "error", "kind": "other", "msg": format!("내부 오류: {p}")}));
+        if !session::managed() {
+            ui::message(&format!("내부 오류로 종료합니다:\n{p}\n\n로그: {}", log::path().display()), true);
+        }
+    }));
+    if managed {
+        return session::run_managed();
+    }
+
+    let mut host = None;
+    let mut user = None;
+    let mut pass = std::env::var("ITDA_PASSWORD").or_else(|_| std::env::var("MVNC_PASSWORD")).ok();
+    let mut swap = false;
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "-u" => user = args.next(),
+            "-p" => pass = args.next(),
+            "--swap" => swap = true,
+            _ if host.is_none() && !a.starts_with('-') => host = Some(a),
+            _ => return ui::message(USAGE, false),
+        }
+    }
+
+    // Host + password on the command line: connect straight away, no home window.
+    if let (Some(h), Some(p)) = (&host, &pass) {
+        let st = store::load_settings();
+        return session::run(session::Launch {
+            title: h.clone(),
+            host: h.clone(),
+            user: user.unwrap_or_default(),
+            pass: p.clone(),
+            opts: store::HostOpts { swap: swap || st.defaults.swap, ..st.defaults },
+            hotkey: st.hotkey,
+            toolbar: st.toolbar,
+            ..Default::default()
+        });
+    }
+    home::run(host);
+}
