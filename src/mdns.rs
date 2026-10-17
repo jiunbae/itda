@@ -62,14 +62,43 @@ fn local_ipv4() -> Vec<Ipv4Addr> {
     v
 }
 
-/// macOS: the default route's interface (the OS picks the multicast interface from it).
+/// macOS: every interface's IPv4 address, as ifconfig lists them. Asking on each one matters
+/// when a VPN holds the default route: the OS would send the query only there.
 #[cfg(not(windows))]
 fn local_ipv4() -> Vec<Ipv4Addr> {
-    vec![Ipv4Addr::UNSPECIFIED]
+    let out = std::process::Command::new("/sbin/ifconfig").output().map(|o| o.stdout).unwrap_or_default();
+    let mut v: Vec<Ipv4Addr> = String::from_utf8_lossy(&out)
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("inet ")?.split_whitespace().next()?.parse().ok())
+        .filter(|ip: &Ipv4Addr| lan(*ip))
+        .collect();
+    if v.is_empty() {
+        v.push(Ipv4Addr::UNSPECIFIED);
+    }
+    v
+}
+
+/// Worth asking on: not loopback, link-local or Tailscale's 100.64/10 (no multicast there).
+#[cfg(not(windows))]
+fn lan(ip: Ipv4Addr) -> bool {
+    let o = ip.octets();
+    !ip.is_loopback() && !ip.is_link_local() && !(o[0] == 100 && o[1] & 0xc0 == 64)
 }
 
 #[cfg(not(windows))]
-fn set_multicast_if(_: &UdpSocket, _: Ipv4Addr) {}
+fn set_multicast_if(s: &UdpSocket, ip: Ipv4Addr) {
+    use std::os::fd::AsRawFd;
+    extern "C" {
+        fn setsockopt(fd: i32, level: i32, name: i32, value: *const core::ffi::c_void, len: u32) -> i32;
+    }
+    const IPPROTO_IP: i32 = 0;
+    const IP_MULTICAST_IF: i32 = 9;
+    if ip.is_unspecified() {
+        return;
+    }
+    let addr = u32::from_ne_bytes(ip.octets());
+    unsafe { setsockopt(s.as_raw_fd(), IPPROTO_IP, IP_MULTICAST_IF, (&addr as *const u32).cast(), 4) };
+}
 
 #[cfg(windows)]
 fn set_multicast_if(s: &UdpSocket, ip: Ipv4Addr) {
