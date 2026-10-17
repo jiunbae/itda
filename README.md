@@ -14,7 +14,7 @@ A tiny, fast remote desktop for Windows that opens your **Macs**, **Windows PCs*
 ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=flat-square&logo=windows)
 ![Rust](https://img.shields.io/badge/Rust-~6%20MB%20exe-ff6a43?style=flat-square&logo=rust)
 
-[**Download**](https://github.com/jiunbae/itda/releases/latest) · [Website](https://jiun.dev/itda/) · [Getting started](https://jiun.dev/itda/start.html) · [Security](SECURITY.md)
+[**Download**](https://github.com/jiunbae/itda/releases/latest) · [Website](https://jiun.dev/itda/) · [Getting started](https://jiun.dev/itda/start.html) · [Security](SECURITY.md) · [한국어](README.ko.md)
 
 <img src="web/help/itda-home.webp" width="860" alt="Itda home: saved Macs and PCs as cards with live previews">
 
@@ -60,7 +60,7 @@ Under the hood each connection window is the web viewer (noVNC) against a privat
 3. **Connect.** The first-run guide walks you through it, and nearby devices appear on their own.
 4. **From your phone or Mac:** open **공유** → **모두 켜기** → scan the QR code → enter the PIN.
 
-> Itda's interface is in Korean. The [website](https://jiun.dev/itda/) has an English version of the guide.
+> Itda's interface is in Korean. The [website](https://jiun.dev/itda/) has an English version of the guide, and there is a [Korean README](README.ko.md).
 
 ## 🖼️ Screenshots
 
