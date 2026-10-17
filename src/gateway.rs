@@ -3,7 +3,8 @@
 //! book (or this PC itself). The gateway logs in to the device with the saved password (over
 //! SSH when the connection uses it; RDP is translated to RFB here), then hands the browser a
 //! plain RFB stream over a WebSocket, so passwords never reach the browser. The browser can
-//! also manage the address book and accounts.
+//! also manage the address book and accounts. On macOS the same gateway runs in local mode
+//! (127.0.0.1, one-time token instead of a PIN) behind the app's own window.
 
 use crate::rfb::{self, Creds};
 use crate::store;
@@ -44,6 +45,14 @@ static FAILS: Mutex<(u32, Option<Instant>)> = Mutex::new((0, None));
 /// Open browser sessions, closed when the gateway stops.
 static LIVE: Mutex<Vec<TcpStream>> = Mutex::new(Vec::new());
 
+/// Local mode (the macOS app): the gateway listens on 127.0.0.1 only and the app's own
+/// window signs in once with this one-time token instead of a PIN.
+static LOCAL: Mutex<Option<String>> = Mutex::new(None);
+
+fn local() -> bool {
+    LOCAL.lock().unwrap().is_some()
+}
+
 pub fn running() -> Option<u16> {
     RUNNING.lock().unwrap().as_ref().map(|r| r.port)
 }
@@ -55,9 +64,32 @@ pub fn start(port: u16) -> io::Result<()> {
     }
     stop();
     let l = TcpListener::bind(("0.0.0.0", port)).map_err(|e| io::Error::new(e.kind(), format!("포트 {port}을(를) 열 수 없습니다: {e}")))?;
+    serve(l, port)
+}
+
+/// Start for this machine's own window: 127.0.0.1 on a free port. Returns the URL that
+/// signs the window in (it works once per token and only from this machine).
+#[cfg_attr(windows, allow(dead_code))]
+pub fn start_local() -> io::Result<String> {
+    stop();
+    let l = TcpListener::bind(("127.0.0.1", 0))?;
+    let port = l.local_addr()?.port();
+    let tok = random_token();
+    *LOCAL.lock().unwrap() = Some(tok.clone());
+    serve(l, port)?;
+    Ok(format!("http://127.0.0.1:{port}/auth?t={tok}"))
+}
+
+fn random_token() -> String {
+    let mut b = [0u8; 24];
+    let _ = getrandom::getrandom(&mut b);
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn serve(l: TcpListener, port: u16) -> io::Result<()> {
     l.set_nonblocking(true)?;
     let stop = Arc::new(AtomicBool::new(false));
-    crate::log!("web viewer on port {port}");
+    crate::log!("web viewer on port {port}{}", if local() { " (local)" } else { "" });
     let flag = stop.clone();
     let thread = std::thread::spawn(move || {
         let stop = flag;
@@ -137,6 +169,7 @@ pub struct Url {
 struct Req {
     method: String,
     path: String,
+    query: String,
     headers: HashMap<String, String>,
     body: Vec<u8>,
 }
@@ -146,7 +179,9 @@ fn read_req(r: &mut BufReader<TcpStream>) -> io::Result<Req> {
     r.read_line(&mut line)?;
     let mut it = line.split_whitespace();
     let method = it.next().unwrap_or("").to_string();
-    let path = it.next().unwrap_or("/").split('?').next().unwrap_or("/").to_string();
+    let target = it.next().unwrap_or("/");
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let (path, query) = (path.to_string(), query.to_string());
     let mut headers = HashMap::new();
     loop {
         let mut h = String::new();
@@ -163,7 +198,7 @@ fn read_req(r: &mut BufReader<TcpStream>) -> io::Result<Req> {
     let len: usize = headers.get("content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
     let mut body = vec![0; len.min(64 << 10)];
     r.read_exact(&mut body)?;
-    Ok(Req { method, path, headers, body })
+    Ok(Req { method, path, query, headers, body })
 }
 
 fn respond(c: &mut TcpStream, status: &str, mime: &str, extra: &str, body: &[u8]) -> io::Result<()> {
@@ -230,12 +265,26 @@ fn login(c: &mut TcpStream, req: &Req) -> io::Result<()> {
         return json_resp(c, "401 Unauthorized", json!({"error": "PIN이 맞지 않습니다"}));
     }
     *FAILS.lock().unwrap() = (0, None);
-    let mut b = [0u8; 24];
-    let _ = getrandom::getrandom(&mut b);
-    let tok: String = b.iter().map(|x| format!("{x:02x}")).collect();
-    TOKENS.lock().unwrap().push((tok.clone(), Instant::now()));
-    let cookie = format!("Set-Cookie: itda={tok}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}\r\n", SESSION_TTL.as_secs());
+    let cookie = new_session();
     respond(c, "200 OK", "application/json; charset=utf-8", &cookie, b"{\"ok\":true}")
+}
+
+/// A fresh session; returns its Set-Cookie header line.
+fn new_session() -> String {
+    let tok = random_token();
+    TOKENS.lock().unwrap().push((tok.clone(), Instant::now()));
+    format!("Set-Cookie: itda={tok}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}\r\n", SESSION_TTL.as_secs())
+}
+
+/// Local mode: the app window opens /auth?t=<token> once and gets a session cookie.
+fn local_auth(c: &mut TcpStream, req: &Req) -> io::Result<()> {
+    let given = req.query.split('&').find_map(|kv| kv.strip_prefix("t=")).unwrap_or("");
+    let good = LOCAL.lock().unwrap().as_ref().is_some_and(|t| eq_ct(t.as_bytes(), given.as_bytes()));
+    if !good {
+        return respond(c, "403 Forbidden", "text/plain", "", b"forbidden");
+    }
+    let cookie = new_session();
+    respond(c, "302 Found", "text/plain", &format!("{cookie}Location: /\r\n"), b"")
 }
 
 /// The address-book entry that stands for this PC itself (when "Share this PC" is on).
@@ -244,6 +293,7 @@ pub const THIS_PC: &str = "this-pc";
 fn hosts_json() -> serde_json::Value {
     let hosts = store::load_hosts();
     let accounts = store::load_accounts();
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut list: Vec<_> = hosts
         .iter()
         .map(|h| {
@@ -271,11 +321,131 @@ fn hosts_json() -> serde_json::Value {
             })
         })
         .collect();
+    #[cfg(windows)]
     if crate::share::running().is_some() {
         let name = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows".into());
         list.insert(0, json!({"id": THIS_PC, "label": format!("{name} (이 PC)"), "host": name, "this": true, "kind": "vnc", "os": "windows", "has_pw": true}));
     }
     json!(list)
+}
+
+/// Devices nearby that aren't in the address book yet: Bonjour on this network plus the
+/// Tailscale tailnet, with what kind of device each probably is.
+fn nearby_json() -> serde_json::Value {
+    let ts = std::thread::spawn(crate::tailscale::status);
+    let mut out: Vec<serde_json::Value> = crate::mdns::browse(Duration::from_millis(1500))
+        .into_iter()
+        .map(|f| json!({"name": f.name, "host": f.host, "os": if f.os == "windows" { "windows" } else { "mac" }, "kind": "vnc", "via": "lan"}))
+        .collect();
+    if let Ok(st) = ts.join() {
+        if st.running {
+            for p in st.peers.iter().filter(|p| p.online) {
+                let (os, kind) = match p.os.as_str() {
+                    "macOS" => ("mac", "vnc"),
+                    "windows" => ("windows", "rdp"),
+                    "linux" => ("linux", "vnc"),
+                    _ => continue,
+                };
+                let host = if p.dns.is_empty() { p.ip.clone() } else { p.dns.clone() };
+                out.push(json!({"name": p.name, "host": host, "os": os, "kind": kind, "via": "tailscale"}));
+            }
+        }
+    }
+    let book: Vec<String> = store::load_hosts().iter().map(|h| tunnel::split_host(&h.host, 0).0.to_ascii_lowercase()).collect();
+    let me = this_machine().to_ascii_lowercase();
+    out.retain(|f| {
+        let h = tunnel::split_host(f["host"].as_str().unwrap_or(""), 0).0.to_ascii_lowercase();
+        let name = f["name"].as_str().unwrap_or("").to_ascii_lowercase();
+        !book.contains(&h) && (me.is_empty() || (name != me && h.trim_end_matches(".local") != me && !h.starts_with(&format!("{me}."))))
+    });
+    json!(out)
+}
+
+/// This computer's network name (to leave it out of "nearby").
+fn this_machine() -> String {
+    #[cfg(windows)]
+    return std::env::var("COMPUTERNAME").unwrap_or_default();
+    #[cfg(not(windows))]
+    return std::process::Command::new("/usr/sbin/scutil")
+        .args(["--get", "LocalHostName"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+}
+
+/// Without a home window (macOS), the gateway owns the address book: apply a change the
+/// way the Windows home does (`home.rs` page commands).
+fn apply_edit(cmd: &serde_json::Value) -> bool {
+    let s = |k: &str| cmd.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    match s("cmd").as_str() {
+        "save_host" => {
+            let Ok(host) = serde_json::from_value::<store::Host>(cmd["host"].clone()) else { return false };
+            if let Some(p) = cmd.get("password").and_then(|x| x.as_str()).filter(|p| !p.is_empty()) {
+                store::set_password(&host.id, Some(p));
+            }
+            let mut hosts = store::load_hosts();
+            match hosts.iter_mut().find(|x| x.id == host.id) {
+                Some(x) => *x = host,
+                None => hosts.push(host),
+            }
+            store::save_hosts(&hosts);
+        }
+        "delete_host" => {
+            let id = s("id");
+            let mut hosts = store::load_hosts();
+            hosts.retain(|x| x.id != id);
+            store::set_password(&id, None);
+            let _ = std::fs::remove_file(store::thumb_path(&id));
+            store::save_hosts(&hosts);
+        }
+        "save_account" => {
+            let Ok(a) = serde_json::from_value::<store::Account>(cmd["account"].clone()) else { return false };
+            if let Some(p) = cmd.get("password").and_then(|x| x.as_str()).filter(|p| !p.is_empty()) {
+                store::set_password(&store::acct_key(&a.id), Some(p));
+            }
+            let mut accounts = store::load_accounts();
+            match accounts.iter_mut().find(|x| x.id == a.id) {
+                Some(x) => *x = a,
+                None => accounts.push(a),
+            }
+            store::save_accounts(&accounts);
+        }
+        "delete_account" => {
+            let id = s("id");
+            let mut accounts = store::load_accounts();
+            let gone = accounts.iter().find(|x| x.id == id).cloned();
+            accounts.retain(|x| x.id != id);
+            // Connections keep the user name and ask for a password next time.
+            let mut hosts = store::load_hosts();
+            for h in hosts.iter_mut().filter(|h| h.account == id) {
+                h.account.clear();
+                if let Some(a) = &gone {
+                    h.user = a.user.clone();
+                }
+            }
+            store::set_password(&store::acct_key(&id), None);
+            store::set_password(&store::acct_keypass(&id), None);
+            store::save_accounts(&accounts);
+            store::save_hosts(&hosts);
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// Remember a successful connection (macOS; on Windows the session process reports it).
+fn mark_used(id: &str, raw: &rfb::Raw) {
+    if ON_EDIT.get().is_some() {
+        return;
+    }
+    let mut hosts = store::load_hosts();
+    if let Some(h) = hosts.iter_mut().find(|h| h.id == id) {
+        h.last_used = store::now();
+        h.remote_name = raw.name.clone();
+        h.remote_size = format!("{}×{}", raw.width, raw.height);
+        store::save_hosts(&hosts);
+    }
 }
 
 fn accounts_json() -> serde_json::Value {
@@ -350,9 +520,14 @@ fn edit(c: &mut TcpStream, req: &Req) -> io::Result<()> {
         _ => return json_resp(c, "400 Bad Request", json!({"error": "알 수 없는 요청입니다"})),
     };
     let saved = ["/host/id", "/account/id", "/id"].iter().find_map(|p| cmd.pointer(p).cloned());
-    match ON_EDIT.get() {
-        Some(f) if f(cmd) => json_resp(c, "200 OK", json!({"ok": true, "id": saved, "hosts": hosts_json(), "accounts": accounts_json()})),
-        _ => json_resp(c, "503 Service Unavailable", json!({"error": "PC의 Itda가 응답하지 않습니다"})),
+    let done = match ON_EDIT.get() {
+        Some(f) => f(cmd),
+        None => apply_edit(&cmd),
+    };
+    if done {
+        json_resp(c, "200 OK", json!({"ok": true, "id": saved, "hosts": hosts_json(), "accounts": accounts_json()}))
+    } else {
+        json_resp(c, "503 Service Unavailable", json!({"error": "PC의 Itda가 응답하지 않습니다"}))
     }
 }
 
@@ -372,15 +547,17 @@ fn handle(mut c: TcpStream, peer: SocketAddr) -> io::Result<()> {
         ("GET", "/manifest.webmanifest") => respond(&mut c, "200 OK", "application/manifest+json", "", MANIFEST.as_bytes()),
         ("GET", "/icon-512.png") => respond(&mut c, "200 OK", "image/png", "", ICON_PNG_512),
         ("GET", "/sw.js") => respond(&mut c, "200 OK", "text/javascript; charset=utf-8", "", SW.as_bytes()),
-        ("POST", "/api/login") if same_origin(&req) => login(&mut c, &req),
+        ("GET", "/auth") if local() => local_auth(&mut c, &req),
+        ("POST", "/api/login") if same_origin(&req) && !local() => login(&mut c, &req),
         ("POST", "/api/logout") if same_origin(&req) => {
             if let Some(t) = token_of(&req) {
                 TOKENS.lock().unwrap().retain(|(k, _)| *k != t);
             }
             respond(&mut c, "200 OK", "application/json", "Set-Cookie: itda=; Path=/; Max-Age=0\r\n", b"{}")
         }
-        (_, "/api/me") => json_resp(&mut c, if ok { "200 OK" } else { "401 Unauthorized" }, json!({"ok": ok})),
+        (_, "/api/me") => json_resp(&mut c, if ok { "200 OK" } else { "401 Unauthorized" }, json!({"ok": ok, "local": local()})),
         (_, "/api/hosts") if ok => json_resp(&mut c, "200 OK", hosts_json()),
+        ("GET", "/api/nearby") if ok => json_resp(&mut c, "200 OK", nearby_json()),
         ("GET", "/api/accounts") if ok => json_resp(&mut c, "200 OK", accounts_json()),
         ("POST", "/api/edit") if ok && same_origin(&req) => edit(&mut c, &req),
         ("GET", _) if ok && p.starts_with("/thumb/") => {
@@ -428,9 +605,15 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr) -> io::Result<()> {
         Ok(())
     };
     let mut tunnel: Option<Arc<Tunnel>> = None;
+    #[cfg(not(windows))]
+    let _ = peer;
     let raw = if id == THIS_PC {
         // The PIN already proved who this is, so no "allow?" prompt at the PC.
-        crate::share::open_local(peer)
+        #[cfg(windows)]
+        let r = crate::share::open_local(peer);
+        #[cfg(not(windows))]
+        let r = Err(io::Error::new(io::ErrorKind::ConnectionRefused, "이 기기에서는 화면 공유를 제공하지 않습니다"));
+        r
     } else {
         let Some(host) = store::load_hosts().into_iter().find(|h| h.id == id) else {
             return fail(4004, "연결을 찾을 수 없습니다".into());
@@ -445,6 +628,9 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr) -> io::Result<()> {
         Ok(r) => r,
         Err(e) => return fail(4000 + kind_code(rfb::classify(&e)), e.to_string()),
     };
+    if id != THIS_PC {
+        mark_used(id, &raw);
+    }
     relay(c, raw, tx, id, tunnel)
 }
 

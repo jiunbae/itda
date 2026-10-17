@@ -6,7 +6,6 @@ use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use std::io::{Read, Write};
 use std::sync::atomic::Ordering::Relaxed;
 
-pub const ENC_EXT_CLIPBOARD: i32 = 0xc0a1_e5ce_u32 as i32;
 
 const TEXT: u32 = 1;
 const CAPS: u32 = 1 << 24;

@@ -8,7 +8,7 @@
 //! events into RDP fast-path input.
 
 use crate::rfb::{self, Raw, Rx, ENC_CURSOR, ENC_DESKTOP_SIZE, ENC_ZRLE, PIXEL_FORMAT};
-use crate::share::{encode_rect, PixelFormat, TILE};
+use crate::enc::{encode_rect, PixelFormat, TILE};
 use flate2::{Compress, Compression};
 use ironrdp_blocking::Framed;
 use ironrdp_connector::sspi;

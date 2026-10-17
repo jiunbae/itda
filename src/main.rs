@@ -1,25 +1,46 @@
 //! Itda (잇다) — fast, lightweight remote desktop for macOS Screen Sharing and other VNC servers.
+//! Windows: native viewer + WebView2 home. macOS: a window over the built-in web viewer.
 #![windows_subsystem = "windows"]
+// The portable core carries the Windows viewer's protocol paths too; on macOS only the
+// gateway's subset is used.
+#![cfg_attr(not(windows), allow(dead_code))]
 
-mod clip;
-mod fb;
+// Portable core: protocols, storage, discovery, the web gateway.
+mod enc;
 mod gateway;
-mod home;
 mod img;
-mod keys;
 mod log;
 mod mdns;
-mod net;
 mod rdp;
 mod rfb;
-mod session;
-mod share;
 mod store;
 mod tailscale;
-mod toolbar;
 mod tunnel;
-mod ui;
 mod ws;
+
+// Windows app: home window, native session windows, "Share this PC".
+#[cfg(windows)]
+mod clip;
+#[cfg(windows)]
+mod fb;
+#[cfg(windows)]
+mod home;
+#[cfg(windows)]
+mod keys;
+#[cfg(windows)]
+mod net;
+#[cfg(windows)]
+mod session;
+#[cfg(windows)]
+mod share;
+#[cfg(windows)]
+mod toolbar;
+#[cfg(windows)]
+mod ui;
+
+// macOS app.
+#[cfg(target_os = "macos")]
+mod mac;
 
 /// Product name shown to people.
 pub const APP: &str = "Itda";
@@ -35,12 +56,28 @@ const USAGE: &str = "itda [host[:port]] [-u user] [-p password] [--swap]
 접속 중 단축키 (Ctrl+Alt+…): Enter 전체 화면 · 0 맞춤 · 1 실제 크기 · S 통계 · V 보기 전용
                            P 스크린샷 · I 연결 정보 · T 툴바 고정 · R 재연결 · M 메뉴";
 
-fn main() {
-    // ssh asking for the password: answer and leave before touching logs or windows.
+/// ssh asking for the password: answer and leave before touching logs or windows.
+fn askpass_mode() {
     if std::env::args().nth(1).as_deref() == Some("--askpass") || std::env::var_os("SSH_ASKPASS_REQUIRE").is_some() && std::env::var_os("ITDA_ASKPASS_SECRET").is_some() {
         let prompt = std::env::args().last().unwrap_or_default();
         std::process::exit(tunnel::askpass(&prompt));
     }
+}
+
+#[cfg(not(windows))]
+fn main() {
+    askpass_mode();
+    log::init("");
+    std::panic::set_hook(Box::new(|p| crate::log!("PANIC: {p}")));
+    #[cfg(target_os = "macos")]
+    mac::run();
+    #[cfg(not(target_os = "macos"))]
+    eprintln!("Itda runs on Windows and macOS.");
+}
+
+#[cfg(windows)]
+fn main() {
+    askpass_mode();
     let mut args = std::env::args().skip(1).peekable();
     let managed = args.peek().map(String::as_str) == Some("--session");
     log::init(if managed { "session" } else { "" });

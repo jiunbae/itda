@@ -16,6 +16,8 @@ pub const ENC_ZRLE: i32 = 16;
 pub const ENC_CURSOR: i32 = -239;
 pub const ENC_DESKTOP_SIZE: i32 = -223;
 pub const ENC_EXT_DESKTOP_SIZE: i32 = -308;
+/// Extended Clipboard pseudo-encoding (handled in clip.rs).
+pub const ENC_EXT_CLIPBOARD: i32 = 0xc0a1_e5ce_u32 as i32;
 
 /// Total bytes received from the server (for the stats display).
 pub static RX_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -264,7 +266,7 @@ fn handshake(addr: &str, creds: &Creds) -> io::Result<Session> {
     // SetPixelFormat + SetEncodings + first full update request, in one packet.
     let mut m = vec![0u8, 0, 0, 0];
     m.extend_from_slice(&PIXEL_FORMAT);
-    let encs = [ENC_ZRLE, ENC_COPYRECT, ENC_RAW, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, ENC_DESKTOP_SIZE, crate::clip::ENC_EXT_CLIPBOARD];
+    let encs = [ENC_ZRLE, ENC_COPYRECT, ENC_RAW, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, ENC_DESKTOP_SIZE, ENC_EXT_CLIPBOARD];
     m.extend_from_slice(&[2, 0]);
     m.extend_from_slice(&(encs.len() as u16).to_be_bytes());
     for e in encs {

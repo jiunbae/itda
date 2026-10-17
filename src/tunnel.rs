@@ -1,19 +1,23 @@
 //! Encrypted transport: an SSH local forward through the system OpenSSH client
-//! (C:\Windows\System32\OpenSSH\ssh.exe, built into Windows 10 1809+ / 11).
-//! Using the OS client keeps crypto out of this binary and honours the user's own
+//! (C:\Windows\System32\OpenSSH\ssh.exe, built into Windows 10 1809+ / 11; /usr/bin/ssh on
+//! macOS). Using the OS client keeps crypto out of this binary and honours the user's own
 //! keys, agent and ~/.ssh/config. The password is answered through SSH_ASKPASS by
 //! this same executable (`itda --askpass`), so nothing is typed into a console.
 
 use std::io::{self, BufRead, BufReader};
 use std::net::TcpListener;
+#[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+#[cfg(windows)]
 use windows_sys::Win32::System::JobObjects::*;
 
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const ENV_SECRET: &str = "ITDA_ASKPASS_SECRET";
 const ENV_KEYPASS: &str = "ITDA_ASKPASS_KEYPASS";
@@ -39,9 +43,11 @@ pub struct Tunnel {
     port: Mutex<u16>,
     /// ssh's diagnostic output (it logs to stderr), for error classification.
     log: Arc<Mutex<String>>,
+    #[cfg(windows)]
     job: isize,
 }
 
+#[cfg(windows)]
 pub fn ssh_exe() -> Option<PathBuf> {
     let sys = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
     let p = sys.join("System32").join("OpenSSH").join("ssh.exe");
@@ -49,6 +55,22 @@ pub fn ssh_exe() -> Option<PathBuf> {
         return Some(p);
     }
     std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join("ssh.exe")).find(|p| p.exists())
+}
+
+#[cfg(not(windows))]
+pub fn ssh_exe() -> Option<PathBuf> {
+    let p = PathBuf::from("/usr/bin/ssh");
+    if p.exists() {
+        return Some(p);
+    }
+    std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join("ssh")).find(|p| p.exists())
+}
+
+/// Run ssh tools without a console window (Windows); nothing to do elsewhere.
+fn quiet(cmd: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
 }
 
 pub fn known_hosts() -> PathBuf {
@@ -94,6 +116,7 @@ fn classify(log: &str) -> io::Error {
     }
 }
 
+#[cfg(windows)]
 fn job() -> isize {
     // Every ssh we start dies with us, even if this process crashes.
     unsafe {
@@ -107,13 +130,20 @@ fn job() -> isize {
 
 impl Tunnel {
     pub fn open(cfg: SshCfg) -> io::Result<Arc<Tunnel>> {
-        let t = Arc::new(Tunnel { cfg, child: Mutex::new(None), port: Mutex::new(0), log: Arc::new(Mutex::new(String::new())), job: job() });
+        let t = Arc::new(Tunnel {
+            cfg,
+            child: Mutex::new(None),
+            port: Mutex::new(0),
+            log: Arc::new(Mutex::new(String::new())),
+            #[cfg(windows)]
+            job: job(),
+        });
         t.start()?;
         Ok(t)
     }
 
     fn start(&self) -> io::Result<()> {
-        let exe = ssh_exe().ok_or_else(|| err(io::ErrorKind::NotFound, "ssh.exe 없음 — Windows 'OpenSSH 클라이언트' 기능이 필요합니다"))?;
+        let exe = ssh_exe().ok_or_else(|| err(io::ErrorKind::NotFound, if cfg!(windows) { "ssh.exe 없음 — Windows 'OpenSSH 클라이언트' 기능이 필요합니다" } else { "ssh를 찾을 수 없습니다" }))?;
         // A free local port for the forward (tiny race with other apps; ExitOnForwardFailure catches it).
         let lport = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
         let c = &self.cfg;
@@ -140,11 +170,14 @@ impl Tunnel {
             .env(ENV_SECRET, &c.pass)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .creation_flags(CREATE_NO_WINDOW);
+            .stderr(Stdio::piped());
+        quiet(&mut cmd);
         crate::log!("ssh tunnel -> {target}:{} forwarding 127.0.0.1:{lport} -> localhost:{}", c.port, c.vnc_port);
         let mut child = cmd.spawn()?;
-        unsafe { AssignProcessToJobObject(self.job as _, child.as_raw_handle() as _) };
+        #[cfg(windows)]
+        unsafe {
+            AssignProcessToJobObject(self.job as _, child.as_raw_handle() as _)
+        };
         self.log.lock().unwrap().clear();
         let (log, err_pipe) = (self.log.clone(), child.stderr.take().unwrap());
         std::thread::spawn(move || {
@@ -220,15 +253,11 @@ pub fn askpass(prompt: &str) -> i32 {
 /// Forget the stored host key for `host:port` (after the user confirmed it really changed).
 pub fn forget_host_key(host: &str, port: u16) {
     let Some(ssh) = ssh_exe() else { return };
-    let keygen = ssh.with_file_name("ssh-keygen.exe");
+    let keygen = ssh.with_file_name(if cfg!(windows) { "ssh-keygen.exe" } else { "ssh-keygen" });
     let name = if port == 22 { host.to_string() } else { format!("[{host}]:{port}") };
-    let _ = Command::new(keygen)
-        .args(["-R", &name, "-f"])
-        .arg(known_hosts())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
-        .status();
+    let mut cmd = Command::new(keygen);
+    cmd.args(["-R", &name, "-f"]).arg(known_hosts()).stdout(Stdio::null()).stderr(Stdio::null());
+    let _ = quiet(&mut cmd).status();
 }
 
 #[cfg(test)]

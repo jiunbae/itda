@@ -35,6 +35,20 @@ A tiny, fast remote desktop for Windows that opens your **Macs**, **Windows PCs*
 | 👤 **Accounts** | Save one login and use it on many devices. Change the password once, and every device that uses it is updated. |
 | 🧭 **Friendly** | A first-run guide, a help center with screenshots, and errors that say what to do in plain Korean. |
 
+## 🍏 Itda for Mac
+
+Download `Itda-macos-universal.zip` from [Releases](https://github.com/jiunbae/itda/releases/latest). It runs on macOS 12+, on Apple silicon and Intel.
+
+1. Unzip it and move **Itda.app** to Applications.
+2. The app isn't notarized yet, so the first time right-click it → **Open** → **Open**.
+3. **Add a device:** pick one from **주변에서 찾은 기기** (Bonjour and Tailscale), or type an address.
+
+What works:
+- **Devices you can open:** other Macs (Screen Sharing, with the optional SSH tunnel), Windows PCs through **Itda sharing** or **Remote Desktop** (Itda speaks RDP itself), and Linux/VNC servers.
+- **Your devices and accounts:** manage them in the app. Passwords stay in your login **Keychain**, and your data is in `~/Library/Application Support/Itda`.
+
+The Mac app is the web viewer in a native window, running against a private gateway on `127.0.0.1` with no PIN. "Share this PC" isn't part of it: macOS has Screen Sharing built in.
+
 ## 🚀 Quick start
 
 1. **Download** `itda.exe` from [Releases](https://github.com/jiunbae/itda/releases/latest) and run it. WebView2 is built into Windows 11; on Windows 10 install the [WebView2 Runtime](https://go.microsoft.com/fwlink/p/?LinkId=2124703) if it's missing.
@@ -209,6 +223,8 @@ cargo test --release
 | `gateway.rs` · `ws.rs` · `web/viewer/` | Web viewer: HTTP/WebSocket, PIN, address-book API, RFB relay, PWA |
 | `rdp.rs` | RDP → RFB bridge (IronRDP, TLS + NLA → framebuffer → ZRLE) |
 | `share.rs` | Share this PC: VNC server (GDI capture, tile diff, ZRLE, SendInput, Bonjour) |
+| `enc.rs` | RFB pixel formats and Raw/ZRLE rectangles (shared by `share.rs` and `rdp.rs`) |
+| `mac.rs` · `scripts/macos-bundle.sh` | Itda for Mac: tao/WKWebView window over the gateway's local mode, app menu, `.app` bundle |
 | `store.rs` · `mdns.rs` · `tailscale.rs` | Storage and credentials, Bonjour, Tailscale CLI |
 
 | Area | Implementation |
@@ -218,13 +234,14 @@ cargo test --release
 | Latency | TCP_NODELAY, pipelined update requests, local cursor, liveness probes |
 | Rendering | DIB section, dirty-rect blits, `BitBlt` at 1:1 / `StretchBlt(HALFTONE)` when scaled, per-monitor DPI v2 |
 
-Test hooks `ITDA_TEST_HTTP`, `ITDA_TEST_SNAP` and `ITDA_DEBUG_PORT` do nothing unless those environment variables are set.
+Test hooks `ITDA_TEST_HTTP`, `ITDA_TEST_SNAP`, `ITDA_DEBUG_PORT` and (macOS) `ITDA_TEST_LOCAL` do nothing unless those environment variables are set.
 </details>
 
 ## 🗺️ Roadmap
 
 - [ ] Relay for reaching devices without a VPN
-- [ ] Native Mac / Linux apps (for now, use the web viewer)
+- [x] Native Mac app (Itda for Mac)
+- [ ] Native Linux app (for now, use the web viewer)
 - [ ] RDP in the browser: clipboard, audio, drives, RD Gateway
 - [ ] Signed installer and auto-update
 

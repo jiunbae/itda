@@ -133,109 +133,262 @@ function step(n, title, body, figure = '') {
 const path = (...xs) => `<span class="path">${xs.map(esc).join(` ${I('E76C')} `)}</span>`;
 const note = (t, kind = 'info') => `<p class="hnote ${kind}">${I(kind === 'warn' ? 'E7BA' : 'E946')}<span>${t}</span></p>`;
 
-// ---------------------------------------------------------------- topics
+// ---------------------------------------------------------------- scenarios
+// The help center is organised by what people want to do. Each scenario says what each
+// device needs, then the steps (where to click), a "do it now" button, how to tell it
+// worked, and what to do when it doesn't.
 
 const TOPICS = [
-  ['start', 'E80F', '시작하기'],
-  ['mac', 'E7F4', 'Mac에 연결'],
-  ['windows', 'E7F8', 'Windows PC에 연결'],
-  ['phone', 'E8EA', '휴대폰·Mac 브라우저로 보기'],
-  ['outside', 'E774', '밖에서 연결 (Tailscale)'],
-  ['accounts', 'E77B', '계정과 SSH'],
-  ['settings', 'E713', '설정 자세히'],
-  ['words', 'E82D', '용어 풀이'],
-  ['trouble', 'E90F', '문제 해결'],
-  ['keys', 'E765', '단축키'],
+  ['start', 'E80F', '무엇을 하고 싶으세요?', 'main'],
+  ['mac', 'E7F4', '다른 Mac에 접속하기', 'main'],
+  ['windows', 'E7F8', '다른 Windows PC에 접속하기', 'main'],
+  ['linux', 'E756', 'Linux·라즈베리파이에 접속하기', 'main'],
+  ['share', 'E72D', '이 PC를 공유하기', 'main'],
+  ['phone', 'E8EA', '휴대폰에서 이 PC·Mac 보기', 'main'],
+  ['macpc', 'E7F4', 'Mac에서 이 PC 보기', 'main'],
+  ['assist', 'E8F2', '다른 사람 PC 도와주기', 'main'],
+  ['outside', 'E774', '집 밖에서 연결하기', 'main'],
+  ['accounts', 'E77B', '계정과 암호화(SSH)', 'main'],
+  ['settings', 'E713', '설정 자세히', 'ref'],
+  ['words', 'E82D', '용어 풀이', 'ref'],
+  ['trouble', 'E90F', '문제 해결', 'ref'],
+  ['keys', 'E765', '단축키', 'ref'],
 ];
+
+// Shorter labels for the topic list (the page title keeps the full sentence).
+const NAV_SHORT = { start: '처음 화면', mac: 'Mac에 접속', windows: 'Windows PC에 접속', linux: 'Linux에 접속', share: '이 PC 공유하기', phone: '휴대폰에서 보기', macpc: 'Mac에서 이 PC 보기', assist: '다른 사람 도와주기', outside: '집 밖에서 연결', accounts: '계정과 암호화' };
+
+const doBtn = (label, attrs, primary = false) => `<button class="btn${primary ? ' primary' : ''}" ${attrs}>${label}</button>`;
+const goPage = (page, label, primary) => doBtn(label, `data-act="page" data-page="${page}"`, primary);
+const addKind = (os, label, primary) => doBtn(`${I('E710')}${label}`, `data-act="new-os" data-os="${os}"`, primary);
+
+/** One scenario page. */
+function scenario({ lead, needs = [], actions = '', steps = [], check = '', trouble = [], more = '' }) {
+  const need = needs.length
+    ? `<div class="hneeds"><b>${I('E73E')} 준비물</b><ul>${needs.map(([icon, who, what]) => `<li>${I(icon)}<span><b>${who}</b> — ${what}</span></li>`).join('')}</ul></div>`
+    : '';
+  return `<p class="hlead">${lead}</p>${need}
+    ${actions ? `<div class="hdo"><span>${I('E768')} 바로 하기</span>${actions}</div>` : ''}
+    <ol class="hsteps">${steps.map((s, i) => step(i + 1, ...s)).join('')}</ol>
+    ${check ? `<div class="hcheck">${I('E73E')}<div><b>잘 됐는지 확인</b><p>${check}</p></div></div>` : ''}
+    ${trouble.length ? `<h3 class="hsec">안 될 때</h3><div class="faq">${trouble.map(([q, a]) => `<details><summary>${q}</summary><p>${a}</p></details>`).join('')}</div>` : ''}
+    ${more}`;
+}
 
 function helpStart() {
   const tile = (t, icon, title, sub) => `<button class="htile" data-help="${t}">${I(icon)}<b>${title}</b><span>${sub}</span></button>`;
-  return `<div class="hhero"><h2>무엇을 연결할까요?</h2><p>어느 기기든 순서는 같습니다 — <b>① 상대 기기에서 공유를 켜고</b>, <b>② Itda에 추가해서</b>, <b>③ 연결</b>합니다.</p></div>
+  return `<div class="hhero"><h2>무엇을 하고 싶으세요?</h2><p>하고 싶은 일을 고르면, 각 기기에서 무엇을 해야 하는지 처음부터 끝까지 안내합니다.</p></div>
+    <h3 class="hsec">이 PC에서 다른 기기 열기</h3>
     <div class="htiles">
-      ${tile('mac', 'E7F4', 'Mac', '화면 공유를 켜면 Itda에서 바로 연결됩니다. 5분이면 됩니다.')}
-      ${tile('windows', 'E7F8', 'Windows PC', '상대 PC에 Itda를 설치해 ‘이 PC 공유’를 켜거나, 원격 데스크톱을 씁니다.')}
-      ${tile('phone', 'E8EA', '휴대폰·Mac에서 보기', 'iPhone·Android·Mac의 브라우저로 Mac과 Windows PC를 열고, 앱처럼 설치해 씁니다.')}
-      ${tile('outside', 'E774', '밖에서 연결', 'Tailscale을 쓰면 집·회사 밖에서도 그대로 연결됩니다.')}
-      ${tile('accounts', 'E77B', '계정과 SSH', '계정 하나로 여러 Mac을 관리하고, 연결을 암호화합니다.')}
-      ${tile('trouble', 'E90F', '문제 해결', '연결이 안 될 때 확인할 것')}
+      ${tile('mac', 'E7F4', '다른 Mac에 접속하기', '집이나 회사의 Mac 화면을 이 PC에서 보고 조작합니다.')}
+      ${tile('windows', 'E7F8', '다른 Windows PC에 접속하기', '다른 방이나 사무실의 Windows PC를 엽니다.')}
+      ${tile('linux', 'E756', 'Linux·라즈베리파이에 접속하기', 'VNC 서버가 있는 기기를 엽니다.')}
     </div>
-    ${shot('itda-home', 'Itda 홈 — 저장된 연결이 카드로 보입니다. 초록 점은 지금 연결할 수 있다는 뜻입니다.')}`;
+    <h3 class="hsec">다른 기기에서 이 PC 보기</h3>
+    <div class="htiles">
+      ${tile('share', 'E72D', '이 PC를 공유하기', '다른 PC·Mac·휴대폰이 이 PC를 보고 조작할 수 있게 합니다.')}
+      ${tile('phone', 'E8EA', '휴대폰에서 이 PC·Mac 보기', 'QR 하나로 iPhone·Android 브라우저에서 엽니다.')}
+      ${tile('macpc', 'E7F4', 'Mac에서 이 PC 보기', 'Mac의 Safari나 화면 공유 앱으로 이 PC를 엽니다.')}
+      ${tile('assist', 'E8F2', '다른 사람 PC 도와주기', '가족·동료의 PC 화면을 보면서 대신 설정해 줍니다.')}
+    </div>
+    <h3 class="hsec">더 편하게</h3>
+    <div class="htiles">
+      ${tile('outside', 'E774', '집 밖에서 연결하기', '카페·회사·여행지에서도 집의 기기를 엽니다.')}
+      ${tile('accounts', 'E77B', '계정과 암호화', '같은 로그인을 여러 기기에 쓰고, 연결을 암호화합니다.')}
+      ${tile('settings', 'E713', '설정 자세히', '모든 설정을 쉬운 말로 풀어 둔 안내')}
+    </div>
+    ${shot('itda-home', 'Itda 홈 — 저장된 기기가 카드로 보입니다. 초록 점은 지금 연결할 수 있다는 뜻입니다.')}`;
 }
 
 function helpMac() {
-  return `<p class="hlead">Mac에는 화면 공유가 기본으로 들어 있습니다. 한 번만 켜 두면 됩니다.</p><ol class="hsteps">
-    ${step(1, '화면 공유 켜기', `<p>Mac에서 ${path('Apple 메뉴', '시스템 설정', '일반', '공유')} 로 가서 <b>화면 공유</b>를 켭니다 ${mark(1)}.</p>
-       ${note('<b>원격 관리</b>는 끄세요. 둘 다 켜져 있으면 화면 공유가 동작하지 않습니다.', 'warn')}`, macWindow('general', '공유', macSharing('screen')))}
-    ${step(2, '연결할 계정 허용하기', `<p>화면 공유 옆 ⓘ ${mark(2)} 를 누르고, <b>다음 사용자에 대해 접근 허용</b>에 내 계정이 있는지 확인합니다 ${mark(1)}.</p>
-       <p>Itda에는 이 <b>Mac 계정 이름(짧은 이름)</b>과 Mac 로그인 암호를 넣습니다. Apple ID가 아닙니다.</p>
-       ${note('계정 이름이 헷갈리면 Mac의 터미널에서 <code>whoami</code>를 입력해 보세요.')}`, macWindow('general', '공유', macSharing('screen-i'), macScreenSheet()))}
-    ${step(3, '주소 확인 (같은 Wi-Fi라면 건너뛰어도 됩니다)', `<p>같은 공유 화면 아래의 <b>로컬 호스트 이름</b> ${mark(3)} 이 Mac의 주소입니다 (예: <code>mac-mini.local</code>).</p>
-       <p>같은 Wi-Fi에 있으면 Itda의 <b>주변 기기</b>에 자동으로 나타나니 주소를 몰라도 됩니다.</p>`, macWindow('general', '공유', macSharing('name')))}
-    ${step(4, 'Itda에 추가하고 연결하기', `<p>Itda 왼쪽의 <b>주변 기기</b>에서 Mac 옆 <b>추가</b>를 누르고, 계정 이름과 암호를 넣은 뒤 <b>저장 후 연결</b>을 누릅니다.</p>
-       <p>여러 Mac에 같은 계정을 쓴다면 먼저 <a href="#" data-help="accounts">계정</a>을 만들어 두면 편합니다.</p>`, shot('itda-nearby', '주변 기기 — 같은 Wi-Fi의 Mac(위)과 Tailscale의 기기(아래)'))}
-    ${step(5, '밖에서도 쓸 거라면 — 원격 로그인 켜기 (선택)', `<p>같은 공유 화면에서 <b>원격 로그인</b> ${mark(1)} 을 켜면, Itda가 SSH로 연결을 암호화할 수 있습니다. 연결 편집에서 <b>SSH로 암호화해서 연결</b>을 켜세요.</p>`, macWindow('general', '공유', macSharing('ssh')))}
-    ${step(6, '잠자는 Mac에도 연결되게 (선택)', `<p>${path('시스템 설정', '에너지')} 에서 <b>잠자기 방지</b> ${mark(1)} 와 <b>네트워크 접근으로 깨우기</b> ${mark(2)} 를 켭니다. MacBook은 ${path('배터리', '옵션')} 에 있습니다.</p>`, macWindow('energy', '에너지', macEnergy()))}
-  </ol>`;
+  return scenario({
+    lead: '집이나 회사에 있는 <b>Mac의 화면을 이 PC에서</b> 보고 마우스·키보드로 조작합니다. Mac에 따로 설치할 것은 없습니다.',
+    needs: [['E7F4', 'Mac', '화면 공유 켜기 (한 번만), Mac 로그인 이름과 암호'], ['E7F8', '이 PC', 'Itda'], ['E701', '네트워크', '같은 Wi-Fi (밖에서는 <a href="#" data-help="outside">Tailscale</a>)']],
+    actions: goPage('nearby', `${I('E701')}주변 Mac 찾기`, true) + addKind('mac', '주소로 직접 추가'),
+    steps: [
+      ['Mac에서 화면 공유 켜기', `<p>Mac에서 ${path('Apple 메뉴', '시스템 설정', '일반', '공유')} 로 가서 <b>화면 공유</b>를 켭니다 ${mark(1)}.</p>
+        ${note('<b>원격 관리</b>는 꺼 두세요. 둘 다 켜져 있으면 화면 공유가 동작하지 않습니다.', 'warn')}`, macWindow('general', '공유', macSharing('screen'))],
+      ['내 계정이 허용돼 있는지 확인', `<p>화면 공유 옆 ⓘ ${mark(2)} 를 눌러 <b>다음 사용자에 대해 접근 허용</b>에 내 계정이 있는지 봅니다 ${mark(1)}. ‘모든 사용자’여도 됩니다.</p>`, macWindow('general', '공유', macSharing('screen-i'), macScreenSheet())],
+      ['이 PC의 Itda에서 Mac 추가', `<p>Itda 왼쪽의 <b>주변 기기</b>를 엽니다. 같은 Wi-Fi의 Mac이 저절로 나타납니다. Mac 옆 <b>추가</b>를 누르세요.</p>
+        <p>목록에 없으면 위의 <b>주소로 직접 추가</b>를 누르고, Mac 공유 화면 아래의 <b>로컬 호스트 이름</b>(예: <code>mac-mini.local</code>)을 넣습니다.</p>`, shot('itda-nearby', '주변 기기 — 같은 Wi-Fi의 Mac(위)과 Tailscale의 기기(아래)')],
+      ['계정 이름과 암호 넣고 연결', `<p><b>Mac 계정 이름</b>(Mac 로그인할 때 쓰는 짧은 이름)과 <b>Mac 로그인 암호</b>를 넣고 <b>저장 후 연결</b>을 누릅니다.</p>
+        ${note('Apple ID(이메일)가 아닙니다. 이름이 헷갈리면 Mac의 터미널에서 <code>whoami</code>를 입력해 보세요.')}`, shot('itda-edit', '연결 편집 — 종류는 Mac')],
+    ],
+    check: '새 창에 Mac 화면이 나오고, 마우스를 움직이면 Mac의 커서가 따라 움직입니다. 홈의 카드에는 ‘연결됨’이 표시됩니다. 위쪽 가운데로 마우스를 가져가면 툴바(전체 화면, 맞춤, Mac 특수 키 등)가 나옵니다.',
+    trouble: [
+      ['‘Mac이 연결을 거부했습니다’', 'Mac의 화면 공유가 꺼져 있거나 원격 관리가 같이 켜져 있습니다. 1단계를 다시 확인하세요.'],
+      ['‘로그인하지 못했습니다’', 'Mac <b>계정 이름(짧은 이름)</b>과 로그인 암호인지 확인하세요. 2단계의 접근 허용에 그 계정이 있어야 합니다. 여러 번 틀리면 Mac이 잠시 막으니 1분 뒤 다시 하세요.'],
+      ['주변 기기에 Mac이 안 보여요', '같은 Wi-Fi인지 확인하세요. 회사·학교 Wi-Fi는 기기 찾기를 막기도 합니다. 그럴 땐 주소로 직접 추가하세요.'],
+      ['Mac이 잠들면 연결이 안 돼요', `Mac의 ${path('시스템 설정', '에너지')} 에서 <b>잠자기 방지</b>와 <b>네트워크 접근으로 깨우기</b>를 켜세요.`],
+      ['한/영 전환이나 ⌘C/⌘V가 이상해요', '연결 편집 → <b>키보드</b> 탭에서 한/영 키와 <b>Ctrl ↔ ⌘ 바꾸기</b>를 맞추세요. <a href="#" data-help="settings#defaults">설정 자세히</a>'],
+    ],
+    more: `<h3 class="hsec">잠자는 Mac에도 연결되게 (선택)</h3>${macWindow('energy', '에너지', macEnergy())}`,
+  });
 }
 
 function helpWindows() {
-  return `<p class="hlead">Windows PC는 두 가지 방법으로 연결합니다. 잘 모르겠다면 <b>방법 A</b>를 쓰세요 — 모든 Windows에서 됩니다.</p>
-    <div class="hcompare">
-      <div><b>A. Itda ‘이 PC 공유’</b><span>Windows 10/11 모든 버전 · 휴대폰 웹 뷰어·Mac 화면 공유 앱에서도 접속 · 연결할 때마다 허락</span></div>
-      <div><b>B. 원격 데스크톱 (RDP)</b><span>Windows Pro/Enterprise만 · 이 PC에서는 Windows 원격 데스크톱 앱으로, 휴대폰·Mac에서는 웹 뷰어로 열림</span></div>
-    </div>
-    <h3 class="hsec">A. Itda로 이 PC 공유하기</h3><ol class="hsteps">
-    ${step(1, '연결 받을 PC에 Itda를 설치하고 공유 켜기', `<p>그 PC의 Itda에서 ${path('공유', '이 PC 공유')} 를 켭니다. 주소와 <b>공유 암호</b>가 나타납니다.</p>
-       <p><b>연결할 때마다 묻기</b>는 켜 두세요 — 누가 연결하려 하면 그 PC 화면에 허락 창이 뜹니다.</p>`, shot('itda-share', '공유 → 이 PC 공유 — 주소, 공유 암호, 지금 보고 있는 사람'))}
-    ${step(2, '방화벽 허용', `<p>처음 켤 때 Windows가 묻습니다. <b>개인 네트워크</b> ${mark(1)} 만 체크하고 <b>액세스 허용</b> ${mark(2)} 을 누르세요.</p>`, winFirewall())}
-    ${step(3, '내 PC의 Itda에서 추가', `<p>내 Itda의 <b>주변 기기</b>에 그 PC가 <b>Windows · Itda</b>로 나타납니다. <b>추가</b>를 누르고 <b>계정 이름은 비운 채</b> 공유 암호만 넣으면 됩니다.</p>
-       ${note('다른 네트워크라면 그 PC에도 Tailscale을 설치하세요. 주소는 Tailscale 이름(예: living-pc.…ts.net)을 씁니다.')}`, shot('itda-nearby', '주변 기기의 STUDY-PC — Windows · Itda'))}
-    ${step(4, '상대 PC에서 허락하기', `<p>연결하면 상대 PC에 이런 창이 뜹니다. <b>예</b> ${mark(1)} 를 누르면 연결됩니다. 보는 동안은 알림 영역에 표시되고, <b>모두 끊기</b>로 언제든 끊을 수 있습니다.</p>
-       ${note('Windows 잠금 화면, 관리자 권한 확인 창(UAC), 관리자 권한으로 실행된 창은 Windows 보안 때문에 원격으로 조작할 수 없습니다.', 'warn')}`, winAllowPrompt())}
-    </ol>
-    <h3 class="hsec">B. 원격 데스크톱 쓰기 (Windows Pro)</h3><ol class="hsteps">
-    ${step(1, '원격 데스크톱 켜기', `<p>연결 받을 PC에서 ${path('설정', '시스템', '원격 데스크톱')} 을 켭니다 ${mark(1)}. 아래의 <b>PC 이름</b> ${mark(2)} 을 적어 두세요.</p>
-       ${note('Windows Home 에디션에는 원격 데스크톱이 없습니다. 방법 A를 쓰세요.', 'warn')}`, winRemoteDesktop())}
-    ${step(2, 'Itda에서 종류를 ‘Windows 원격 데스크톱’으로', `<p>연결 편집 맨 위 <b>종류</b>에서 <b>Windows 원격 데스크톱 (RDP)</b>를 고르고, 주소에 PC 이름(또는 IP·Tailscale 주소), 계정에 그 PC의 Windows 계정을 넣습니다.</p>
-       <p>연결하면 Itda가 계정을 넘겨 주고 Windows 원격 데스크톱 앱이 열립니다. <a href="#" data-help="phone">웹 뷰어</a>에서 열면 이 PC의 Itda가 직접 RDP로 접속해 휴대폰·Mac 브라우저에 화면을 보여 줍니다.</p>`, shot('itda-edit', '연결 편집 — 맨 위 ‘종류’에서 고릅니다'))}
-    </ol>`;
+  return scenario({
+    lead: '다른 방·사무실의 <b>Windows PC</b>를 이 PC에서 엽니다. 방법은 두 가지입니다. 잘 모르겠다면 <b>방법 A</b>를 쓰세요 — 어떤 Windows든 됩니다.',
+    needs: [['E7F8', '상대 PC', 'Itda 설치 (방법 A) 또는 Windows Pro의 원격 데스크톱 (방법 B)'], ['E7F8', '이 PC', 'Itda'], ['E701', '네트워크', '같은 Wi-Fi (밖에서는 Tailscale)']],
+    actions: addKind('windows', 'Windows · Itda로 추가', true) + addKind('rdp', '원격 데스크톱으로 추가'),
+    steps: [
+      ['[방법 A] 상대 PC에 Itda 설치하고 공유 켜기', `<p>상대 PC에서 Itda를 받아 실행하고, 왼쪽 <b>공유</b> → <b>이 PC 공유</b>를 켭니다. 화면에 <b>주소</b>와 8자리 <b>공유 암호</b>가 나옵니다.</p>
+        <p>처음 켤 때 Windows 방화벽 창이 뜨면 <b>개인 네트워크</b> ${mark(1)} 만 체크하고 <b>액세스 허용</b> ${mark(2)} 을 누릅니다.</p>`, shot('itda-share', '상대 PC의 공유 → 이 PC 공유 — 주소와 공유 암호') + winFirewall()],
+      ['[방법 A] 이 PC에서 추가하고 연결', `<p>이 PC의 Itda <b>주변 기기</b>에 그 PC가 <b>Windows · Itda</b>로 나타납니다. <b>추가</b>를 누르고 <b>공유 암호</b>만 넣으면 됩니다 (계정 이름은 필요 없습니다).</p>
+        <p>연결하면 상대 PC에 ‘허용할까요?’ 창이 뜹니다. 상대가 <b>예</b> ${mark(1)} 를 눌러야 연결됩니다.</p>`, winAllowPrompt()],
+      ['[방법 B] 원격 데스크톱 켜기 (Windows Pro)', `<p>상대 PC에서 ${path('설정', '시스템', '원격 데스크톱')} 을 켭니다 ${mark(1)}. 아래의 <b>PC 이름</b> ${mark(2)} 을 적어 둡니다.</p>
+        ${note('Windows <b>Home</b>에는 원격 데스크톱이 없습니다. 방법 A를 쓰세요.', 'warn')}`, winRemoteDesktop()],
+      ['[방법 B] 이 PC에서 추가하고 연결', `<p>위의 <b>원격 데스크톱으로 추가</b>를 누르고, 주소에 PC 이름, 계정에 그 PC의 <b>Windows 계정</b>(Microsoft 계정이면 이메일)과 암호를 넣습니다. 연결하면 Windows의 원격 데스크톱 앱이 열립니다.</p>`, shot('itda-edit', '연결 편집 — 종류에서 Windows를 고릅니다')],
+    ],
+    check: '방법 A는 새 창에, 방법 B는 Windows 원격 데스크톱 창에 상대 PC 화면이 나옵니다. 방법 A에서는 상대 PC의 알림 영역에 ‘누군가 보고 있습니다’가 표시됩니다.',
+    trouble: [
+      ['‘연결을 거부했습니다’', '방법 A: 상대 PC의 Itda에서 <b>공유 → 이 PC 공유</b>가 켜져 있는지 확인하세요. 방법 B: 원격 데스크톱이 켜져 있는지, Windows Pro인지 확인하세요.'],
+      ['‘로그인하지 못했습니다’', '방법 A는 상대 PC에 표시된 <b>공유 암호</b>, 방법 B는 그 PC의 <b>Windows 계정 암호</b>입니다. 공유 암호를 새로 만들었다면 새 암호를 넣으세요.'],
+      ['화면은 보이는데 조작이 안 돼요', '상대 PC가 잠금 화면이거나 관리자 권한 창(UAC)이 앞에 있으면 Windows가 입력을 막습니다. 상대 PC의 ‘보기만 허용’이 꺼져 있는지도 확인하세요.'],
+      ['응답이 없어요', '두 PC가 같은 Wi-Fi인지, 상대 PC가 켜져 있는지 확인하세요. 다른 곳에 있다면 두 PC 모두 Tailscale을 켜세요.'],
+    ],
+  });
+}
+
+function helpLinux() {
+  return scenario({
+    lead: 'Linux PC, 라즈베리파이 등 <b>VNC 서버가 있는 기기</b>를 엽니다.',
+    needs: [['E756', '상대 기기', 'VNC 서버 (아래 표 참고) 와 VNC 암호'], ['E7F8', '이 PC', 'Itda']],
+    actions: addKind('linux', 'Linux · VNC로 추가', true) + goPage('nearby', `${I('E701')}주변 기기 보기`),
+    steps: [
+      ['상대 기기에서 VNC 켜기', `<table class="shortcuts">
+          <tr><td>라즈베리파이</td><td><code>sudo raspi-config</code> → Interface Options → <b>VNC</b> → 켜기</td></tr>
+          <tr><td>Ubuntu (GNOME)</td><td>설정 → 시스템 → <b>원격 데스크톱</b> → 화면 공유·VNC 켜기 (버전에 따라 RDP만 있을 수 있습니다)</td></tr>
+          <tr><td>그 밖의 Linux</td><td><code>x11vnc</code>, TigerVNC, <code>wayvnc</code>(Wayland) 중 하나를 설치하고 암호를 정합니다</td></tr></table>
+        <p>대부분 포트는 <b>5900</b>이고, 두 번째 화면이면 <b>5901</b>입니다.</p>`],
+      ['이 PC에서 추가', '<p>위의 <b>Linux · VNC로 추가</b>를 누르고 주소(예: <code>raspberrypi.local</code>, <code>192.168.0.30:5901</code>)와 <b>VNC 암호</b>를 넣습니다. 사용자 이름은 대부분 비워 둡니다.</p>', shot('itda-edit', '연결 편집 — 종류에서 Linux · 기타 VNC')],
+      ['연결', '<p><b>저장 후 연결</b>을 누릅니다. 밖에서도 쓸 거라면 상대 기기에 SSH가 켜져 있을 때 <b>SSH로 암호화해서 연결</b>을 켜세요.</p>'],
+    ],
+    check: '새 창에 Linux 바탕화면이 나옵니다.',
+    trouble: [
+      ['‘연결을 거부했습니다’', 'VNC 서버가 실행 중인지, 포트(5900/5901)가 맞는지, 방화벽(ufw 등)이 막고 있지 않은지 확인하세요.'],
+      ['‘로그인하지 못했습니다’', 'Linux 로그인 암호가 아니라 <b>VNC 서버에 정한 암호</b>입니다.'],
+      ['검은 화면만 나와요', '모니터가 연결되지 않은 라즈베리파이는 가상 화면 해상도를 정해야 합니다 (raspi-config → Display Options).'],
+    ],
+  });
+}
+
+function helpShare() {
+  return scenario({
+    lead: '<b>다른 기기가 이 PC를</b> 보고 조작할 수 있게 합니다. 다른 PC의 Itda, Mac의 화면 공유 앱, 휴대폰 브라우저 모두 됩니다.',
+    needs: [['E7F8', '이 PC', 'Itda (지금 이 앱)'], ['E8EA', '볼 기기', 'Itda가 있는 PC, Mac, 또는 휴대폰 브라우저'], ['E701', '네트워크', '같은 Wi-Fi (밖에서는 Tailscale)']],
+    actions: doBtn(`${I('E768')}모두 켜기 (공유 + 웹 뷰어)`, 'data-act="share-all-on"', true) + goPage('share', '공유 페이지 열기'),
+    steps: [
+      ['공유 켜기', `<p>왼쪽 <b>공유</b> 페이지에서 <b>모두 켜기</b>를 누릅니다. 이 PC의 <b>주소</b>, <b>공유 암호</b>, 휴대폰용 <b>QR 코드</b>와 <b>PIN</b>이 나옵니다.</p>`, shot('itda-web', '공유 페이지 — 웹 뷰어(위)와 이 PC 공유(아래)')],
+      ['방화벽 허용', `<p>처음 켤 때 Windows가 묻습니다. <b>개인 네트워크</b> ${mark(1)} 만 체크하고 <b>액세스 허용</b> ${mark(2)} 을 누르세요. 놓쳤다면 Itda를 다시 시작하면 다시 묻습니다.</p>`, winFirewall()],
+      ['볼 기기에서 접속', `<ul class="hkeys">
+          <li><b>다른 PC의 Itda</b> — 주변 기기에 이 PC가 <b>Windows · Itda</b>로 나옵니다. 추가하고 공유 암호를 넣으세요. <a href="#" data-help="windows">자세히</a></li>
+          <li><b>휴대폰·태블릿</b> — 카메라로 QR을 찍고 PIN을 넣으세요. <a href="#" data-help="phone">자세히</a></li>
+          <li><b>Mac</b> — Safari로 웹 뷰어 주소를 열거나, Mac의 화면 공유 앱을 씁니다. <a href="#" data-help="macpc">자세히</a></li></ul>`],
+      ['누가 들어오면 허락하기', `<p><b>연결할 때마다 묻기</b>가 켜져 있으면(추천), 누가 들어오려 할 때 이 PC에 이런 창이 뜹니다. <b>예</b> ${mark(1)} 를 눌러야 들어옵니다. 휴대폰 웹 뷰어는 PIN으로 이미 확인했으므로 묻지 않습니다.</p>`, winAllowPrompt()],
+    ],
+    check: '누군가 보고 있는 동안 알림 영역의 Itda에 표시되고, 공유 페이지에 ‘○명이 보는 중’이 나옵니다. <b>모두 끊기</b>로 언제든 끊을 수 있습니다.',
+    trouble: [
+      ['다른 기기에서 ‘응답이 없다’고 나와요', '방화벽에서 ‘개인 네트워크’를 허용했는지, 두 기기가 같은 Wi-Fi인지 확인하세요. 공유 페이지의 포트를 바꿔 볼 수도 있습니다.'],
+      ['5900 주소를 브라우저에 넣었더니 안 열려요', '5900은 VNC 앱용입니다. 브라우저는 <b>웹 뷰어 주소</b>(:8780)를 쓰세요. 공유 페이지에서 웹 뷰어를 켜면 나옵니다.'],
+      ['잠금 화면에서는 조작이 안 돼요', 'Windows 보안 때문에 잠금 화면과 관리자 권한 창은 원격으로 조작할 수 없습니다. 이 PC의 잠금을 먼저 풀어 두세요.'],
+      ['다 쓰고 나면?', '공유 페이지에서 끄거나, 알림 영역의 Itda → 공유에서 끄세요. 쓰지 않을 때는 꺼 두는 것이 안전합니다.'],
+    ],
+  });
 }
 
 function helpPhone() {
-  return `<p class="hlead">따로 설치할 앱이 없습니다. 이 PC의 Itda가 작은 웹 서버가 되어 iPhone·Android·Mac·Linux의 브라우저에 Mac, Windows PC, 이 PC의 화면을 보여 줍니다. 암호는 이 PC에만 있고 브라우저로 가지 않습니다.</p>
-    ${note('<b>Mac에서 다른 기기를 열 때</b>도 이 방법을 씁니다. Mac용 Itda 앱 대신, Mac의 Safari·Chrome으로 웹 뷰어를 열어 Dock에 추가하세요 (5단계).')}<ol class="hsteps">
-    ${step(1, '이 PC에서 웹 뷰어 켜기', `<p>${path('공유', '웹 뷰어')} 를 켜면 QR 코드와 6자리 <b>접속 PIN</b>이 나옵니다. 처음 켤 때 방화벽이 물으면 <b>개인 네트워크</b>를 허용하세요.</p>
-       <p>같은 Wi-Fi면 ‘같은 Wi-Fi’ QR을, 밖에서 쓸 거면 ‘Tailscale’ QR을 고릅니다.</p>`, shot('itda-web', '공유 → 웹 뷰어 — QR, 주소, PIN'))}
-    ${step(2, '휴대폰 카메라로 QR 찍기 → PIN 입력', '<p>iPhone 기본 카메라로 QR을 비추면 링크가 뜹니다. 열어서 PIN을 넣습니다. 12시간 동안 다시 묻지 않습니다.</p>', shot('phone-login', 'PIN 입력', 'phone'))}
-    ${step(3, '기기 고르기', `<p>PC의 Itda에 저장된 기기가 보입니다. <b>이 PC 공유</b>가 켜져 있으면 맨 앞에 이 PC도 나옵니다 — PIN으로 이미 확인했으니 허락 창 없이 바로 열립니다.</p>
-       <p>브라우저에서도 <b>기기 추가</b>, 카드의 ✎ 로 <b>편집·삭제</b>, <b>계정</b> 탭에서 계정 관리를 할 수 있고, PC의 Itda에 바로 저장됩니다. 암호가 없는 기기는 누르면 암호를 물어봅니다.</p>`, shot('phone-list', '기기 목록', 'phone') + shot('phone-edit', '브라우저에서 기기 편집', 'phone'))}
-    ${step(4, '보고 조작하기', `<p><b>탭</b> = 클릭, <b>두 손가락 탭</b> = 오른쪽 클릭, <b>두 손가락 끌기</b> = 스크롤입니다. 위쪽 도구 막대:</p>
-       <ul class="hkeys"><li><b>‹</b> 목록으로</li><li><b>⌨</b> 휴대폰 키보드 (한글 입력 가능)</li><li><b>⌘</b> Mac 특수 키 — ⌘·⌥·⌃·⇧을 눌러 둔 채로 다음 키와 함께 보내기, ⌘Space·⌘Tab 등</li><li><b>📋</b> 클립보드 주고받기</li><li><b>⤢</b> 화면에 맞춤 / 실제 크기</li><li><b>👁</b> 보기 전용</li></ul>`, shot('phone-view', 'Mac 화면', 'phone') + shot('phone-keys', 'Mac 특수 키', 'phone'))}
-    ${step(5, '앱처럼 설치하기', `<p><b>iPhone·iPad</b>: Safari의 공유 버튼 ${mark(1)} → <b>홈 화면에 추가</b> ${mark(2)} 를 누르면 Itda 아이콘이 생기고 전체 화면으로 열립니다.</p>
-       <p><b>Mac</b>: Safari에서 ${path('파일', 'Dock에 추가')}, Chrome·Edge에서는 웹 뷰어 위쪽의 <b>앱으로 설치</b>를 누릅니다. <b>Android</b>: Chrome의 <b>앱으로 설치</b>.</p>
-       ${note('Chrome·Edge·Android의 앱 설치는 <b>https://</b> 주소에서만 됩니다. 설정의 Tailscale 칸에서 <b>HTTPS 주소 만들기</b>를 누르고 그 주소(https://…ts.net)로 여세요.')}`, iosShare())}
-  </ol>${note('브라우저와 PC 사이는 일반 HTTP입니다. 같은 Wi-Fi나 Tailscale에서만 쓰고, 공유기에서 이 포트를 인터넷에 열지 마세요.', 'warn')}`;
+  return scenario({
+    lead: '앱 설치 없이 <b>iPhone·Android 브라우저</b>로 이 PC와, 이 PC에 저장된 Mac·Windows PC를 봅니다. 암호는 이 PC에만 있고 휴대폰으로 가지 않습니다.',
+    needs: [['E7F8', '이 PC', 'Itda, 공유 페이지의 웹 뷰어 켜기'], ['E8EA', '휴대폰', '카메라와 브라우저(Safari·Chrome)'], ['E701', '네트워크', '같은 Wi-Fi (밖에서는 두 기기 모두 Tailscale)']],
+    actions: doBtn(`${I('E768')}모두 켜고 QR 보기`, 'data-act="share-all-on"', true),
+    steps: [
+      ['이 PC에서 켜기', `<p>위의 <b>모두 켜고 QR 보기</b>를 누르면 공유 페이지가 열리고 <b>QR 코드</b>와 6자리 <b>PIN</b>이 나옵니다. 휴대폰으로 <b>이 PC 자체</b>를 보려면 ‘이 PC 공유’도 켜져 있어야 합니다 (모두 켜기가 둘 다 켭니다).</p>`, shot('itda-web', '공유 → 웹 뷰어 — QR, 주소, PIN')],
+      ['휴대폰 카메라로 QR 찍기 → PIN', '<p>iPhone 기본 카메라로 QR을 비추면 링크가 뜹니다. 열어서 PIN을 넣습니다. 12시간 동안 다시 묻지 않습니다.</p>', shot('phone-login', 'PIN 입력', 'phone')],
+      ['보고 싶은 기기 고르기', '<p>맨 앞의 <b>○○ (이 PC)</b>가 지금 이 PC입니다. 그 뒤로 저장된 Mac과 PC가 있습니다. 암호가 없는 기기는 누르면 암호를 물어봅니다.</p>', shot('phone-list', '기기 목록 — 맨 앞이 이 PC', 'phone')],
+      ['손가락으로 조작하기', `<ul class="hkeys"><li><b>탭</b> = 클릭, <b>두 손가락 탭</b> = 오른쪽 클릭, <b>두 손가락 끌기</b> = 스크롤</li><li><b>두 손가락 벌리기/오므리기</b> = 실제 크기 ↔ 화면에 맞춤</li>
+          <li>위쪽 도구 막대: ‹ 목록 · ⌨ 키보드(한글 가능) · ⌘/⊞ 특수 키 · 📋 클립보드 · 👁 보기 전용 · ⤢ 전체 화면</li></ul>`, shot('phone-view', '원격 화면', 'phone') + shot('phone-keys', '특수 키', 'phone')],
+      ['홈 화면에 추가 (앱처럼)', `<p>Safari의 공유 버튼 ${mark(1)} → <b>홈 화면에 추가</b> ${mark(2)}. 다음부터 아이콘으로 바로 열립니다. Android는 Chrome 메뉴 → <b>앱 설치</b>(https 주소에서).</p>`, iosShare()],
+    ],
+    check: '휴대폰에 PC 화면이 보이고, 탭하면 PC의 마우스가 움직입니다. 이 PC의 공유 페이지에는 보고 있는 기기가 표시됩니다.',
+    trouble: [
+      ['QR을 찍어도 페이지가 안 열려요', '휴대폰이 <b>같은 Wi-Fi</b>인지 확인하세요 (모바일 데이터면 안 됩니다). 이 PC의 방화벽에서 ‘개인 네트워크’를 허용했는지도 보세요. 밖이라면 Tailscale QR을 쓰세요.'],
+      ['PIN을 계속 거부해요', '5번 틀리면 1분 동안 막힙니다. PIN을 새로 만들면 예전 PIN은 안 됩니다.'],
+      ['목록에 ‘이 PC’가 없어요', '공유 페이지에서 <b>이 PC 공유</b>도 켜야 나옵니다.'],
+      ['화면이 너무 작아요', '두 손가락으로 벌리면 실제 크기가 됩니다. 끌어서 보고 싶은 곳으로 옮기세요.'],
+    ],
+  });
+}
+
+function helpMacPc() {
+  return scenario({
+    lead: '<b>Mac에서 이 Windows PC를</b> 엽니다. Mac에 따로 설치할 것은 없습니다 — Safari(웹 뷰어)나 Mac에 들어 있는 화면 공유 앱을 씁니다.',
+    needs: [['E7F8', '이 PC', 'Itda, 공유 페이지에서 모두 켜기'], ['E7F4', 'Mac', 'Safari 또는 화면 공유 앱 (기본 포함)']],
+    actions: doBtn(`${I('E768')}모두 켜기`, 'data-act="share-all-on"', true) + goPage('share', '공유 페이지 열기'),
+    steps: [
+      ['이 PC에서 공유 켜기', '<p>공유 페이지에서 <b>모두 켜기</b>를 누릅니다. <b>웹 뷰어 주소·PIN</b>과 <b>이 PC 공유 주소·공유 암호</b>가 나옵니다.</p>', shot('itda-web', '공유 페이지')],
+      ['방법 1 — Safari로 (추천)', `<p>Mac의 Safari에 웹 뷰어 주소(예: <code>http://192.168.0.32:8780</code>)를 넣고 PIN을 입력합니다. 이 PC와 저장된 다른 기기도 여기서 열 수 있습니다.</p>
+        <p>${path('Safari', '파일', 'Dock에 추가')} 를 하면 Mac 앱처럼 Dock에서 바로 열립니다.</p>`],
+      ['방법 1-2 — Mac용 Itda 앱으로', `<p><a href="https://github.com/jiunbae/itda/releases/latest" data-ext>Mac용 Itda</a>(Itda-macos-universal.zip)를 받아 압축을 풀고, 처음 한 번은 <b>오른쪽 클릭 → 열기</b>로 실행합니다. 이 PC를 <b>Windows · Itda</b>로 추가하고 공유 암호를 넣으면 됩니다. 다른 Mac·Windows PC·Linux도 같은 앱에서 열 수 있습니다.</p>`],
+      ['방법 2 — Mac의 화면 공유 앱으로', `<p>Finder에서 ${path('이동', '서버에 연결')} (⌘K)을 누르고 <code>vnc://192.168.0.32</code>처럼 <b>이 PC 공유 주소</b>를 넣습니다. 암호에는 <b>공유 암호</b>를 넣습니다.</p>
+        <p>이 PC에 ‘허용할까요?’ 창이 뜨면 <b>예</b>를 누르세요. Mac의 ⌘C·⌘V가 이 PC의 Ctrl+C·Ctrl+V로 동작합니다.</p>`],
+    ],
+    check: 'Mac에 이 PC의 바탕화면이 보이고 조작됩니다.',
+    trouble: [
+      ['Safari에서 페이지가 안 열려요', '<b>웹 뷰어 주소</b>(:8780)를 썼는지 확인하세요. 같은 Wi-Fi인지, 이 PC 방화벽을 허용했는지 보세요.'],
+      ['화면 공유 앱이 ‘인증 실패’라고 해요', 'Mac 계정 암호가 아니라 이 PC의 <b>공유 암호</b>(8자리)를 넣으세요.'],
+    ],
+  });
+}
+
+function helpAssist() {
+  return scenario({
+    lead: '부모님·동료의 PC 화면을 보면서 <b>대신 설정해 주거나 알려 줄 때</b> 씁니다. 상대가 허락해야만 연결되고, 언제든 끊을 수 있습니다.',
+    needs: [['E7F8', '도움받는 사람의 PC', 'Itda 설치, 공유 켜기'], ['E7F8', '도와주는 사람(나)', 'Itda가 있는 PC, 또는 휴대폰'], ['E774', '멀리 떨어져 있다면', '두 PC 모두 Tailscale (같은 계정으로 로그인하거나 기기 공유)']],
+    steps: [
+      ['상대에게 이렇게 부탁하세요', `<div class="hscript"><b>상대에게 보낼 말</b><p>“Itda를 받아서 실행한 다음, 왼쪽 <b>공유</b>를 누르고 <b>이 PC 공유</b>를 켜 줘. 화면에 나오는 <b>주소</b>랑 <b>공유 암호</b>를 알려 줘. 내가 연결하면 ‘허용할까요?’ 창이 뜨는데 그때 <b>예</b>를 눌러 줘.”</p></div>`],
+      ['내 Itda에서 연결', '<p><b>Windows · Itda로 추가</b>를 누르고 받은 주소와 공유 암호를 넣습니다. 같은 Wi-Fi라면 주변 기기에 바로 보입니다.</p>' + addKind('windows', 'Windows · Itda로 추가', true)],
+      ['상대가 ‘예’를 누르면 시작', '<p>상대 화면에 허락 창이 뜹니다. 허락하면 연결됩니다. 상대는 알림 영역에서 언제든 <b>모두 끊기</b>로 끊을 수 있습니다.</p>', winAllowPrompt()],
+      ['다 끝나면', '<p>연결을 끊고, 상대에게 <b>공유를 끄라고</b>알려 주세요. 다음에 또 도울 일이 있으면 다시 켜면 됩니다.</p>'],
+    ],
+    check: '상대 PC의 화면이 내 창에 보이고, 상대 PC의 알림 영역에 ‘누군가 보고 있습니다’가 표시됩니다.',
+    trouble: [
+      ['멀리 있어서 연결이 안 돼요', '같은 Wi-Fi가 아니면 직접 연결되지 않습니다. 두 PC에 Tailscale을 설치하고, 상대 PC를 내 Tailscale에 공유받거나 같은 계정으로 로그인하세요. <a href="#" data-help="outside">집 밖에서 연결하기</a>'],
+      ['상대가 허락 창을 못 봤어요', '창이 다른 창 뒤에 있을 수 있습니다. 다시 연결하면 다시 뜹니다.'],
+    ],
+  });
 }
 
 function helpOutside() {
-  return `<p class="hlead">집·회사 밖에서 연결하는 가장 쉽고 안전한 방법은 <b>Tailscale</b>입니다. 기기들을 같은 계정으로 로그인해 두면, 어디에 있든 같은 네트워크처럼 연결됩니다. 공유기 설정은 필요 없습니다.</p><ol class="hsteps">
-    ${step(1, '모든 기기에 Tailscale 설치·로그인', `<p>이 PC, 연결할 Mac·PC, 휴대폰에 <a href="https://tailscale.com/download" data-ext>Tailscale</a>을 설치하고 <b>같은 계정</b>으로 로그인합니다. 개인 사용은 무료입니다.</p>`)}
-    ${step(2, 'Itda에서 Tailscale 기기 추가', '<p><b>주변 기기</b> 아래쪽 <b>Tailscale — 어디서나</b>에 기기들이 나타납니다. 여기서 추가한 연결은 밖에서도 그대로 됩니다.</p>', shot('itda-nearby', 'Tailscale — 어디서나'))}
-    ${step(3, '휴대폰으로 볼 때는 Tailscale QR', '<p>웹 뷰어 설정의 QR 탭을 <b>Tailscale</b>로 바꿔 찍으면, 휴대폰이 밖에 있어도 열립니다 (휴대폰의 Tailscale 앱이 켜져 있어야 합니다).</p>', shot('itda-web', 'QR을 Tailscale로'))}
-    ${step(4, 'https 주소 (선택)', `<p>Tailscale 관리 콘솔 ${path('DNS', 'HTTPS Certificates')} 를 켠 뒤, Itda에서 <b>HTTPS 주소 만들기</b>를 누르면 <code>https://내PC.…ts.net/</code> 주소가 생깁니다.</p>`)}
-  </ol>
-  <h3 class="hsec">Tailscale 없이 하려면</h3>
-  <p>Mac에서 <b>원격 로그인</b>을 켜고, 공유기에서 <b>SSH 포트(22)만</b> Mac으로 전달한 뒤 연결 편집에서 <b>SSH로 암호화해서 연결</b>을 켜세요. 화면 공유 포트(5900)나 웹 뷰어 포트를 인터넷에 직접 열면 안 됩니다.</p>`;
+  return scenario({
+    lead: '카페·회사·여행지에서 <b>집의 기기</b>를 엽니다. 가장 쉽고 안전한 방법은 무료 앱 <b>Tailscale</b>입니다. 공유기 설정은 필요 없습니다.',
+    needs: [['E774', '모든 기기', 'Tailscale 설치 후 같은 계정으로 로그인 (개인은 무료)']],
+    actions: goPage('nearby', `${I('E701')}Tailscale 기기 보기`, true),
+    steps: [
+      ['모든 기기에 Tailscale 설치', '<p>이 PC, 연결할 Mac·PC, 휴대폰에 <a href="https://tailscale.com/download" data-ext>Tailscale</a>을 설치하고 <b>같은 계정</b>으로 로그인합니다.</p>'],
+      ['Itda에서 Tailscale 기기 추가', '<p><b>주변 기기</b> 아래쪽 <b>Tailscale — 어디서나</b>에 기기들이 나타납니다. 여기서 추가한 연결은 밖에서도 그대로 됩니다.</p>', shot('itda-nearby', 'Tailscale — 어디서나')],
+      ['휴대폰에서 이 PC 보기', '<p>공유 페이지의 QR에서 <b>Tailscale</b>을 고르면 밖에서도 열리는 주소가 나옵니다. <b>HTTPS 주소 만들기</b>를 누르면 https 주소가 생겨 휴대폰에 앱처럼 설치할 수도 있습니다.</p>', shot('itda-web', '공유 → 웹 뷰어의 Tailscale 주소')],
+    ],
+    check: '휴대폰의 Wi-Fi를 끄고(모바일 데이터 + Tailscale 켬) 연결해 보세요. 그래도 열리면 성공입니다.',
+    trouble: [
+      ['Tailscale 기기가 안 보여요', 'Tailscale 앱이 켜져 있는지(연결됨), 같은 계정인지 확인하세요. Itda를 다시 시작하면 다시 찾습니다.'],
+      ['HTTPS 주소 만들기가 안 돼요', `<a href="https://login.tailscale.com/admin/dns" data-ext>Tailscale 관리 콘솔 → DNS</a>에서 ‘HTTPS Certificates’를 켜야 합니다.`],
+      ['Tailscale 없이 하고 싶어요', 'Mac에서 원격 로그인을 켜고 공유기에서 <b>SSH 포트(22)만</b> Mac으로 전달한 뒤 <b>SSH로 암호화해서 연결</b>을 쓰세요. 화면 공유(5900)나 웹 뷰어 포트를 인터넷에 직접 열면 안 됩니다.'],
+    ],
+  });
 }
 
 function helpAccounts() {
-  return `<p class="hlead">대부분 Mac 계정 하나로 여러 기기를 씁니다. <b>계정</b>을 만들어 두면 연결을 추가할 때 고르기만 하면 되고, 암호를 바꿔도 한 곳만 고치면 됩니다.</p><ol class="hsteps">
-    ${step(1, '계정 만들기', '<p>왼쪽 <b>계정</b> → <b>새 계정</b>. 이름, Mac 계정 이름, 암호를 넣습니다. SSH 키를 쓴다면 키 파일과 키 암호도 넣습니다.</p>', shot('itda-account-edit', '계정 편집 — SSH 키(선택)'))}
-    ${step(2, '연결에서 계정 고르기', '<p>연결 편집의 <b>로그인</b>에서 계정을 고릅니다. 그 자리에서 <b>새 계정 만들기…</b>도 됩니다.</p>', shot('itda-edit', '연결 편집 — 로그인'))}
-    ${step(3, '이미 만든 연결 묶기', '<p>같은 계정 이름을 쓰는 연결이 여러 개면 계정 화면에 <b>계정으로 묶기</b>가 뜹니다. 누르면 저장된 암호까지 한 계정으로 옮겨집니다.</p>', shot('itda-accounts', '계정 화면'))}
-  </ol>
-  <h3 class="hsec">SSH로 암호화</h3>
-  <p>일반 화면 공유(VNC)는 암호화되지 않습니다. 공용 Wi-Fi나 인터넷으로 연결한다면 Mac의 <b>원격 로그인</b>을 켜고 연결 편집에서 <b>SSH로 암호화해서 연결</b>을 켜세요. Windows에 기본으로 있는 OpenSSH를 쓰므로 따로 설치할 것이 없습니다. 카드에 🔒가 보이면 암호화된 연결입니다.</p>`;
+  return scenario({
+    lead: '여러 기기에 같은 이름·암호로 로그인한다면 <b>계정</b>을 한 번만 저장해 두세요. 암호를 바꿀 때 한 곳만 고치면 됩니다. 밖에서 쓸 때는 <b>SSH 암호화</b>도 켜세요.',
+    actions: goPage('accounts', `${I('E77B')}계정 열기`, true),
+    steps: [
+      ['계정 만들기', '<p>왼쪽 <b>계정</b> → <b>새 계정</b>. 이름, 계정 이름, 암호를 넣습니다. SSH 키를 쓴다면 키 파일과 키 암호도 넣습니다.</p>', shot('itda-account-edit', '계정 편집')],
+      ['기기에서 계정 고르기', '<p>연결 편집의 <b>로그인</b>에서 계정을 고릅니다. 그 자리에서 <b>새 계정 만들기…</b>도 됩니다.</p>', shot('itda-edit', '연결 편집 — 로그인')],
+      ['이미 만든 연결 묶기', '<p>같은 계정 이름을 쓰는 연결이 여러 개면 계정 화면에 <b>계정으로 묶기</b>가 뜹니다. 누르면 저장된 암호까지 한 계정으로 옮겨집니다.</p>', shot('itda-accounts', '계정 화면')],
+      ['SSH로 암호화 (밖에서 쓸 때)', `<p>Mac에서 <b>원격 로그인</b> ${mark(1)} 을 켜고, 연결 편집에서 <b>SSH로 암호화해서 연결</b>을 켭니다. Windows에 기본으로 있는 OpenSSH를 쓰므로 따로 설치할 것이 없습니다. 카드에 🔒가 보이면 암호화된 연결입니다.</p>`, macWindow('general', '공유', macSharing('ssh'))],
+    ],
+  });
 }
 
 const FAQ = [
@@ -336,10 +489,10 @@ function helpWords() {
 
 function renderHelp() {
   const t = S.helpTopic || 'start';
-  const body = { start: helpStart, mac: helpMac, windows: helpWindows, phone: helpPhone, outside: helpOutside, accounts: helpAccounts, settings: helpSettings, words: helpWords, trouble: helpTrouble, keys: helpKeys }[t] || helpStart;
+  const body = { start: helpStart, mac: helpMac, windows: helpWindows, linux: helpLinux, share: helpShare, phone: helpPhone, macpc: helpMacPc, assist: helpAssist, outside: helpOutside, accounts: helpAccounts, settings: helpSettings, words: helpWords, trouble: helpTrouble, keys: helpKeys }[t] || helpStart;
   const title = (TOPICS.find(([k]) => k === t) || TOPICS[0])[2];
   return `<div class="help">
-    <nav class="hnav" aria-label="도움말 주제">${TOPICS.map(([k, icon, label]) => `<button class="hnav-item${k === t ? ' on' : ''}" data-help="${k}">${I(icon)}<span>${label}</span></button>`).join('')}</nav>
+    <nav class="hnav" aria-label="도움말 주제">${TOPICS.map(([k, icon, label, sec], i) => `${sec === 'ref' && TOPICS[i - 1][3] !== 'ref' ? '<div class="hnav-sec">참고</div>' : ''}<button class="hnav-item${k === t ? ' on' : ''}" data-help="${k}">${I(icon)}<span>${NAV_SHORT[k] || label}</span></button>`).join('')}</nav>
     <article class="hbody">${t === 'start' ? '' : `<h2 class="htitle">${title}</h2>`}${body()}</article></div>`;
 }
 

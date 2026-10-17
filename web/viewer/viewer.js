@@ -54,8 +54,19 @@ async function api(path, body) {
 
 // ---------------------------------------------------------------- sign in & list
 
+// Where passwords end up, for the editor's reassurance line.
+const vault = () => (S.local ? '이 Mac의 키체인' : 'PC의 Windows 자격 증명 관리자');
+
 async function boot() {
   const me = await api('/api/me');
+  // Local mode: this page is the Mac app's own window (no PIN, nothing to install).
+  S.local = !!(me.data && me.data.local);
+  if (S.local) {
+    document.body.classList.add('local');
+    $('#logout').hidden = true;
+    $('#install').hidden = true;
+    $('#hint').hidden = true;
+  }
   if (me.ok) return loadHosts();
   show('login');
   setTimeout(() => $('#pin').focus(), 50);
@@ -199,6 +210,7 @@ function editHost(h, note = '') {
   editor(`
     <h2 id="edTitle">${isNew ? '기기 추가' : '기기 편집'}</h2>
     ${note ? `<p class="note">${esc(note)}</p>` : ''}
+    ${isNew ? '<div id="nearby" class="nearby"><span class="muted">주변 기기를 찾는 중…</span></div>' : ''}
     <div class="seg four" role="radiogroup" aria-label="종류">
       ${Object.entries(KINDS).map(([k, d]) => `<label><input type="radio" name="kind" value="${k}" ${kindOf(h) === k ? 'checked' : ''}><span>${d.label}</span></label>`).join('')}
     </div>
@@ -226,13 +238,14 @@ function editHost(h, note = '') {
     $('#userLabel').textContent = d.user || '';
     $('#userHint').textContent = d.userHint || '';
     $('#passLabel').textContent = d.pass;
-    $('#passHint').textContent = d.passHint || '암호는 PC의 Windows 자격 증명 관리자에만 저장되고 이 브라우저에는 남지 않습니다';
+    $('#passHint').textContent = d.passHint || (S.local ? '암호는 이 Mac의 키체인에만 저장됩니다' : `암호는 ${vault()}에만 저장되고 이 브라우저에는 남지 않습니다`);
     if (!f.password.placeholder.startsWith('저장됨')) f.password.placeholder = d.pass;
     $('#sshBox').hidden = !d.ssh;
     f.querySelector('[data-own]').hidden = !!f.account.value;
   };
   f.addEventListener('change', sync);
   sync();
+  if (isNew) showNearby(f, sync);
   f.querySelector('[data-a=delete]')?.addEventListener('click', async () => {
     if (!confirm(`‘${h.label}’을(를) 지울까요? 저장된 암호도 함께 지워집니다.`)) return;
     await saveEdit({ cmd: 'delete_host', id: h.id });
@@ -253,6 +266,31 @@ function editHost(h, note = '') {
   };
 }
 
+// "기기 추가": devices found on this network (Bonjour) and on Tailscale, one tap to fill in.
+async function showNearby(f, sync) {
+  const box = $('#nearby');
+  const r = await api('/api/nearby');
+  if (!box.isConnected) return;
+  const list = r.ok ? r.data || [] : [];
+  if (!list.length) { box.innerHTML = '<span class="muted">주변에서 찾은 기기가 없습니다 — 아래에 주소를 직접 넣으세요.</span>'; return; }
+  const OS = { mac: 'Mac', windows: 'Windows', linux: 'Linux' };
+  box.innerHTML = `<b>주변에서 찾은 기기</b><div class="chips">${list.map((d, i) =>
+    `<button type="button" class="chip" data-i="${i}">${icon(d.os === 'windows' ? 'pc' : 'monitor')}<span>${esc(d.name)}<small>${OS[d.os] || ''}${d.via === 'tailscale' ? ' · Tailscale' : ''}</small></span></button>`).join('')}</div>`;
+  box.onclick = (e) => {
+    const c = e.target.closest('[data-i]');
+    if (!c) return;
+    const d = list[+c.dataset.i];
+    const kind = d.kind === 'rdp' ? 'rdp' : d.os;
+    const radio = f.querySelector(`[name=kind][value=${kind}]`);
+    if (radio) radio.checked = true;
+    f.host.value = d.host;
+    if (!f.name.value) f.name.value = d.name;
+    box.querySelectorAll('.chip').forEach((x) => x.classList.toggle('on', x === c));
+    sync();
+    (f.user && !$('#userBox').hidden ? f.user : f.password).focus();
+  };
+}
+
 function editAccount(a) {
   const isNew = !a;
   a = a || { name: '', user: '', ssh_key: '', uses: 0 };
@@ -260,8 +298,8 @@ function editAccount(a) {
     <h2 id="edTitle">${isNew ? '계정 추가' : '계정 편집'}</h2>
     ${field('사용자 이름', `<input name="user" required value="${esc(a.user)}" autocapitalize="off" spellcheck="false" placeholder="로그인 이름">`)}
     ${field('표시 이름 <i>(선택)</i>', `<input name="name" value="${esc(a.name)}" placeholder="예: 내 Mac 계정">`)}
-    ${field('암호', `<input name="password" type="password" autocomplete="new-password" placeholder="${a.has_pw ? '저장됨 — 바꿀 때만 입력' : '암호'}">`, '암호는 PC의 Windows 자격 증명 관리자에만 저장됩니다')}
-    ${a.ssh_key ? `<p class="note">SSH 키: ${esc(a.ssh_key)} (PC의 Itda에서 바꿀 수 있습니다)</p>` : ''}
+    ${field('암호', `<input name="password" type="password" autocomplete="new-password" placeholder="${a.has_pw ? '저장됨 — 바꿀 때만 입력' : '암호'}">`, `암호는 ${vault()}에만 저장됩니다`)}
+    ${a.ssh_key ? `<p class="note">SSH 키: ${esc(a.ssh_key)}${S.local ? '' : ' (PC의 Itda에서 바꿀 수 있습니다)'}</p>` : ''}
     ${isNew ? '' : `<p class="note">이 계정을 쓰는 기기: ${a.uses}대</p>`}
     <p id="edErr" class="error" role="alert"></p>
     <div class="ed-actions">

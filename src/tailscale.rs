@@ -3,25 +3,37 @@
 
 use serde::Serialize;
 use serde_json::Value;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+#[cfg(windows)]
 fn exe() -> Option<PathBuf> {
     let pf = std::env::var_os("ProgramFiles").map(PathBuf::from).unwrap_or_else(|| "C:\\Program Files".into());
     let p = pf.join("Tailscale").join("tailscale.exe");
     p.exists().then_some(p)
 }
 
+/// The Mac App Store / standalone app ships its CLI inside the bundle; Homebrew puts it on PATH.
+#[cfg(not(windows))]
+fn exe() -> Option<PathBuf> {
+    let app = PathBuf::from("/Applications/Tailscale.app/Contents/MacOS/Tailscale");
+    if app.exists() {
+        return Some(app);
+    }
+    ["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"].iter().map(PathBuf::from).find(|p| p.exists())
+}
+
 fn run(args: &[&str]) -> Option<(bool, String)> {
-    let out = Command::new(exe()?)
-        .args(args)
-        .stdin(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()?;
+    let mut cmd = Command::new(exe()?);
+    cmd.args(args).stdin(Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let out = cmd.output().ok()?;
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     Some((out.status.success(), text))
 }

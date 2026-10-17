@@ -3,7 +3,9 @@
 
 use serde::Serialize;
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+#[cfg(windows)]
+use std::net::ToSocketAddrs;
 use std::time::{Duration, Instant};
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -31,6 +33,7 @@ fn query() -> Vec<u8> {
     q
 }
 
+#[cfg(windows)]
 fn local_ipv4() -> Vec<Ipv4Addr> {
     let host = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "localhost".into());
     let mut v: Vec<Ipv4Addr> = (host.as_str(), 0)
@@ -44,6 +47,16 @@ fn local_ipv4() -> Vec<Ipv4Addr> {
     v
 }
 
+/// macOS: the default route's interface (the OS picks the multicast interface from it).
+#[cfg(not(windows))]
+fn local_ipv4() -> Vec<Ipv4Addr> {
+    vec![Ipv4Addr::UNSPECIFIED]
+}
+
+#[cfg(not(windows))]
+fn set_multicast_if(_: &UdpSocket, _: Ipv4Addr) {}
+
+#[cfg(windows)]
 fn set_multicast_if(s: &UdpSocket, ip: Ipv4Addr) {
     use std::os::windows::io::AsRawSocket;
     use windows_sys::Win32::Networking::WinSock::{setsockopt, IPPROTO_IP, IP_MULTICAST_IF};
@@ -67,9 +80,11 @@ pub fn browse(wait: Duration) -> Vec<Found> {
     let mut recs = Records::default();
     let end = Instant::now() + wait;
     let mut buf = [0u8; 9000];
+    // A busy network never goes quiet, so keep to the deadline even mid-burst.
     while Instant::now() < end {
         for s in &socks {
-            while let Ok((n, from)) = s.recv_from(&mut buf) {
+            while Instant::now() < end {
+                let Ok((n, from)) = s.recv_from(&mut buf) else { break };
                 recs.parse(&buf[..n], from);
             }
         }
@@ -138,7 +153,12 @@ impl Records {
             let (hostname, port) = self.srv.get(inst).cloned().unwrap_or_default();
             let ip = self.a.get(&hostname.to_ascii_lowercase()).or(self.from.get(inst)).map(|i| i.to_string()).unwrap_or_default();
             let port = if port == 0 { 5900 } else { port };
+            // macOS always resolves .local names (and a lookup for a device that just left can
+            // block for a long time), so only Windows needs to be asked.
+            #[cfg(windows)]
             let resolvable = !hostname.is_empty() && (hostname.as_str(), port).to_socket_addrs().is_ok_and(|mut a| a.next().is_some());
+            #[cfg(not(windows))]
+            let resolvable = !hostname.is_empty();
             let mut host = if resolvable { hostname.clone() } else { ip.clone() };
             if host.is_empty() {
                 continue;

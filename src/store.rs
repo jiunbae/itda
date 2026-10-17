@@ -1,6 +1,7 @@
-//! Persistent data in %APPDATA%\Itda: the address book (hosts.json), app settings
-//! (settings.json) and thumbnails. Passwords live in Windows Credential Manager.
-//! Only the home process writes these files.
+//! Persistent data in %APPDATA%\Itda (macOS: ~/Library/Application Support/Itda): the
+//! address book (hosts.json), app settings (settings.json) and thumbnails. Passwords live in
+//! Windows Credential Manager (macOS: the login Keychain). Only the home process (on macOS,
+//! the gateway) writes these files.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -8,7 +9,13 @@ use std::path::PathBuf;
 pub fn dir() -> PathBuf {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
+        #[cfg(windows)]
         let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        #[cfg(not(windows))]
+        let base = std::env::var_os("ITDA_DATA_DIR")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support")))
+            .unwrap_or_else(std::env::temp_dir);
         let d = base.join(crate::APP);
         // The app was called mvnc before: carry its data over once.
         let old = base.join("mvnc");
@@ -355,18 +362,21 @@ fn migrate_hosts() -> Vec<Host> {
         .collect()
 }
 
-// ---------------------------------------------------------------- Credential Manager
-
-use windows_sys::Win32::Security::Credentials::*;
-
-fn w(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(Some(0)).collect()
-}
+// ---------------------------------------------------------------- secrets
 
 fn target(id: &str) -> String {
     format!("Itda/{id}")
 }
 
+#[cfg(windows)]
+use windows_sys::Win32::Security::Credentials::*;
+
+#[cfg(windows)]
+fn w(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(Some(0)).collect()
+}
+
+#[cfg(windows)]
 fn cred_read(target: &str) -> Option<String> {
     unsafe {
         let mut p: *mut CREDENTIALW = std::ptr::null_mut();
@@ -381,11 +391,76 @@ fn cred_read(target: &str) -> Option<String> {
     }
 }
 
+#[cfg(windows)]
 fn cred_delete(target: &str) {
     unsafe { CredDeleteW(w(target).as_ptr(), CRED_TYPE_GENERIC, 0) };
 }
 
+#[cfg(windows)]
+fn cred_write(target: &str, pass: &str) {
+    let target = w(target);
+    let mut blob: Vec<u16> = pass.encode_utf16().collect();
+    let mut user = w(crate::APP);
+    unsafe {
+        let mut cred: CREDENTIALW = std::mem::zeroed();
+        cred.Type = CRED_TYPE_GENERIC;
+        cred.TargetName = target.as_ptr() as *mut u16;
+        cred.CredentialBlobSize = (blob.len() * 2) as u32;
+        cred.CredentialBlob = blob.as_mut_ptr() as *mut u8;
+        cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
+        cred.UserName = user.as_mut_ptr();
+        CredWriteW(&cred, 0);
+    }
+}
+
+// macOS: generic passwords in the login Keychain (service "Itda", account = target), through
+// the system `security` tool so no extra crates are needed.
+#[cfg(not(windows))]
+const KEYCHAIN_SERVICE: &str = "Itda";
+
+#[cfg(not(windows))]
+fn security(args: &[&str]) -> Option<std::process::Output> {
+    std::process::Command::new("/usr/bin/security").args(args).stdin(std::process::Stdio::null()).output().ok()
+}
+
+#[cfg(not(windows))]
+fn cred_read(target: &str) -> Option<String> {
+    let o = security(&["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", target, "-w"])?;
+    if !o.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&o.stdout);
+    Some(s.strip_suffix('\n').unwrap_or(&s).to_string())
+}
+
+#[cfg(not(windows))]
+fn cred_delete(target: &str) {
+    let _ = security(&["delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", target]);
+}
+
+#[cfg(not(windows))]
+fn cred_write(target: &str, pass: &str) {
+    use std::io::Write;
+    // The secret goes through stdin (`security -i`), hex-encoded (-X), so it never shows up
+    // in the process list. -U updates an existing item.
+    let hex: String = pass.bytes().map(|b| format!("{b:02x}")).collect();
+    let line = format!("add-generic-password -U -s {KEYCHAIN_SERVICE} -a \"{target}\" -l \"Itda ({target})\" -X {hex}\n");
+    let child = std::process::Command::new("/usr/bin/security")
+        .arg("-i")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if let Ok(mut c) = child {
+        if let Some(mut i) = c.stdin.take() {
+            let _ = i.write_all(line.as_bytes());
+        }
+        let _ = c.wait();
+    }
+}
+
 /// Hand Remote Desktop its sign-in (the same TERMSRV/<host> entry mstsc's "remember me" makes).
+#[cfg(windows)]
 pub fn set_rdp_cred(host: &str, user: &str, pass: &str) {
     let target = w(&format!("TERMSRV/{host}"));
     let mut blob: Vec<u16> = pass.encode_utf16().collect();
@@ -403,6 +478,7 @@ pub fn set_rdp_cred(host: &str, user: &str, pass: &str) {
 }
 
 /// Password viewers use to see this PC (VNC uses at most 8 characters), created on first use.
+#[cfg(windows)]
 pub fn share_password(set: Option<&str>, reset: bool) -> String {
     let key = if std::env::var_os("ITDA_TEST_HTTP").is_some() { "share-pw-test" } else { "share-pw" };
     if let Some(p) = set {
@@ -455,19 +531,9 @@ pub fn get_password(id: &str) -> Option<String> {
 /// Store (Some) or delete (None) the saved password of host `id`.
 pub fn set_password(id: &str, pass: Option<&str>) {
     let t = target(id);
-    let Some(pass) = pass else { return cred_delete(&t) };
-    let target = w(&t);
-    let mut blob: Vec<u16> = pass.encode_utf16().collect();
-    let mut user = w(crate::APP);
-    unsafe {
-        let mut cred: CREDENTIALW = std::mem::zeroed();
-        cred.Type = CRED_TYPE_GENERIC;
-        cred.TargetName = target.as_ptr() as *mut u16;
-        cred.CredentialBlobSize = (blob.len() * 2) as u32;
-        cred.CredentialBlob = blob.as_mut_ptr() as *mut u8;
-        cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
-        cred.UserName = user.as_mut_ptr();
-        CredWriteW(&cred, 0);
+    match pass {
+        Some(p) => cred_write(&t, p),
+        None => cred_delete(&t),
     }
 }
 
@@ -475,6 +541,8 @@ pub fn set_password(id: &str, pass: Option<&str>) {
 mod tests {
     use super::*;
 
+    // (Keychain access needs the user's GUI login session, so this only runs on Windows.)
+    #[cfg(windows)]
     #[test]
     fn credential_roundtrip() {
         let id = "test-0000";
@@ -484,6 +552,7 @@ mod tests {
         assert_eq!(get_password(id), None);
     }
 
+    #[cfg(windows)]
     #[test]
     fn legacy_credential_moves() {
         let id = "test-0001";

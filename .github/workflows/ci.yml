@@ -26,3 +26,20 @@ jobs:
         with:
           name: itda-windows-x64
           path: target/release/itda.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --release
+      - name: Bundle (universal)
+        run: scripts/macos-bundle.sh universal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: itda-macos-universal
+          path: dist/Itda-macos-universal.zip

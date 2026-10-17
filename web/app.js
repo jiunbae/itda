@@ -1272,7 +1272,12 @@ function act(a, el) {
     case 'web-on':
       S.settings.web = { port: 8780, ...S.settings.web, on: true };
       S.web = {};
-      return saveSettings();
+      saveSettings();
+      return S.page === 'share' ? undefined : go('share');
+    case 'new-os': {
+      const os = el.dataset.os;
+      return openEdit(os === 'rdp' ? { kind: 'rdp', os: 'windows' } : { os });
+    }
     case 'pin-reset':
       return confirmDialog('새 PIN을 만들까요?', '지금 웹 뷰어에 들어와 있는 기기는 모두 로그아웃됩니다.', '새 PIN 만들기', false, () => { S.web = {}; send('web_reset_pin'); toast('새 PIN을 만들었습니다', 'E72C'); });
   }
