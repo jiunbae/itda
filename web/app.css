@@ -74,7 +74,7 @@
 [hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
 body {
-  font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", system-ui, sans-serif;
   color: var(--text);
   background: var(--bg);
   overflow: hidden;
@@ -91,8 +91,12 @@ button { cursor: default; }
   display: inline-block;
   speak: never;
 }
+/* Outside Windows the glyphs become stroke icons (icons.js). */
+.svg-icons .i { font-family: inherit; }
+.svg-icons .i svg { width: 1em; height: 1em; display: block; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; overflow: visible; }
+.svg-icons .i svg .f { fill: currentColor; stroke: none; }
 kbd {
-  font: 11px/1 "Segoe UI", sans-serif;
+  font: 11px/1 "Segoe UI", -apple-system, sans-serif;
   color: var(--text-3);
   border: 1px solid var(--border-strong);
   border-bottom-width: 2px;
@@ -362,7 +366,7 @@ kbd {
 .web-panel .qr svg { display: block; width: 100%; height: 100%; }
 .web-panel .txt { display: flex; flex-direction: column; gap: 8px; }
 .urls { display: flex; flex-direction: column; gap: 4px; }
-.url, .pin { font: 13px/1.4 "Cascadia Mono", Consolas, monospace; user-select: text; background: var(--surface-3); border-radius: 6px; padding: 4px 8px; width: fit-content; }
+.url, .pin { font: 13px/1.4 "Cascadia Mono", Consolas, Menlo, monospace; user-select: text; background: var(--surface-3); border-radius: 6px; padding: 4px 8px; width: fit-content; }
 .pin { font-size: 16px; letter-spacing: .25em; min-width: 92px; text-align: center; }
 .qr-col { display: flex; flex-direction: column; gap: 8px; align-items: center; flex: none; }
 .qr-seg button { min-width: 84px; }

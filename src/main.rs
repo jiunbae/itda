@@ -1,5 +1,5 @@
 //! Itda (잇다) — fast, lightweight remote desktop for macOS Screen Sharing and other VNC servers.
-//! Windows: native viewer + WebView2 home. macOS: a window over the built-in web viewer.
+//! Windows: WebView2 home + native viewer windows. macOS: WKWebView home + web viewer windows.
 #![windows_subsystem = "windows"]
 // The portable core carries the Windows viewer's protocol paths too; on macOS only the
 // gateway's subset is used.
@@ -24,8 +24,6 @@ mod clip;
 #[cfg(windows)]
 mod fb;
 #[cfg(windows)]
-mod home;
-#[cfg(windows)]
 mod keys;
 #[cfg(windows)]
 mod net;
@@ -38,9 +36,9 @@ mod toolbar;
 #[cfg(windows)]
 mod ui;
 
-// macOS app.
-#[cfg(target_os = "macos")]
-mod mac;
+// The home window (address book, settings, help) on both platforms.
+#[cfg(any(windows, target_os = "macos"))]
+mod home;
 
 /// Product name shown to people.
 pub const APP: &str = "Itda";
@@ -70,7 +68,7 @@ fn main() {
     log::init("");
     std::panic::set_hook(Box::new(|p| crate::log!("PANIC: {p}")));
     #[cfg(target_os = "macos")]
-    mac::run();
+    home::run(None);
     #[cfg(not(target_os = "macos"))]
     eprintln!("Itda runs on Windows and macOS.");
 }

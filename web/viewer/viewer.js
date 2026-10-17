@@ -28,7 +28,14 @@ const icon = (n) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${P[
 const XK = { cmd: 0xffeb, opt: 0xffe9, ctrl: 0xffe3, shift: 0xffe1, esc: 0xff1b, tab: 0xff09, enter: 0xff0d, back: 0xff08, del: 0xffff, space: 0x20,
   left: 0xff51, up: 0xff52, right: 0xff53, down: 0xff54, f3: 0xffc0, f4: 0xffc1, win: 0xffeb, alt: 0xffe9 };
 
-const S = { hosts: [], accounts: [], rfb: null, ws: null, host: null, fit: true, viewOnly: false, mods: new Set(), clip: '' };
+const S = { hosts: [], accounts: [], rfb: null, ws: null, host: null, fit: true, viewOnly: false, mods: new Set(), clip: '', ever: false, tries: 0 };
+
+// App window (Itda for Mac): this page shows one connection, chosen by the app, and reports
+// to the app's home instead of offering the list.
+const OPEN = new URLSearchParams(location.search).get('open');
+const APP = !!(OPEN && window.ipc);
+const post = (m) => { try { window.ipc.postMessage(JSON.stringify(m)); } catch (_) {} };
+const opt = (k, dflt) => (S.host && S.host.opts && k in S.host.opts ? S.host.opts[k] : dflt);
 // What to call the remote device in messages.
 const dev = () => (isWin(S.host) ? 'PC' : S.host && kindOf(S.host) === 'linux' ? '기기' : 'Mac');
 
@@ -67,6 +74,7 @@ async function boot() {
     $('#install').hidden = true;
     $('#hint').hidden = true;
   }
+  if (APP && me.ok) return openFromApp();
   if (me.ok) return loadHosts();
   show('login');
   setTimeout(() => $('#pin').focus(), 50);
@@ -110,6 +118,17 @@ async function loadHosts() {
   renderHosts();
   renderAccounts();
   show('list');
+}
+
+async function openFromApp() {
+  document.body.classList.add('app');
+  const r = await api('/api/hosts');
+  const h = (r.data || []).find((x) => x.id === OPEN);
+  if (!h) return post({ ev: 'error', kind: 'other', msg: '연결을 찾을 수 없습니다' });
+  document.title = h.label;
+  S.fit = !(h.opts && h.opts.actual);
+  S.viewOnly = !!(h.opts && h.opts.view_only);
+  open(h);
 }
 
 function renderHosts() {
@@ -380,15 +399,20 @@ function status(kind, title, text) {
   st.innerHTML = kind === 'busy'
     ? `<div class="card"><div class="spin"></div><h2>${esc(title)}</h2><p>${esc(text || '')}</p></div>`
     : `<div class="card"><h2>${esc(title)}</h2><p>${esc(text || '')}</p>
-        <div class="row"><button data-a="list">목록으로</button><button class="go" data-a="retry">다시 연결</button></div></div>`;
+        <div class="row"><button data-a="list">${APP ? '닫기' : '목록으로'}</button><button class="go" data-a="retry">다시 연결</button></div></div>`;
 }
 
 $('#status').addEventListener('click', (e) => {
   const a = e.target.closest('[data-a]');
   if (!a) return;
   if (a.dataset.a === 'retry') open(S.host);
+  else if (APP) post({ ev: 'close' });
   else leave();
 });
+
+// Close codes → the app's error kinds (the same words the Windows viewer reports).
+const KIND_OF = { 4010: 'auth', 4011: 'need_user', 4012: 'refused', 4013: 'unreachable', 4014: 'dns', 4020: 'ssh_auth', 4021: 'ssh_hostkey', 4022: 'ssh_refused', 4023: 'ssh_missing' };
+const RETRIES = 10;
 
 function open(h) {
   if (!h) return;
@@ -396,7 +420,7 @@ function open(h) {
   S.host = h;
   show('view');
   renderTools();
-  status('busy', `${h.label}에 연결하는 중`, h.ssh ? '암호화 연결(SSH)을 여는 중…' : h.kind === 'rdp' ? '원격 데스크톱에 로그인하는 중…' : '');
+  status('busy', S.tries ? `${h.label}에 다시 연결하는 중 (${S.tries}/${RETRIES})` : `${h.label}에 연결하는 중`, h.ssh ? '암호화 연결(SSH)을 여는 중…' : h.kind === 'rdp' ? '원격 데스크톱에 로그인하는 중…' : '');
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}`, ['binary']);
   let closeInfo = null;
@@ -411,10 +435,22 @@ function open(h) {
   rfb.focusOnClick = true;
   rfb.showDotCursor = true;
   rfb.qualityLevel = 7;
-  rfb.addEventListener('connect', () => { status(null); toast(`${h.label}에 연결했습니다`); rfb.focus(); dimToolsSoon(); });
+  let name = '';
+  rfb.addEventListener('desktopname', (e) => { name = (e.detail && e.detail.name) || ''; });
+  rfb.addEventListener('connect', () => {
+    status(null);
+    rfb.focus();
+    dimToolsSoon();
+    if (!APP) return toast(`${h.label}에 연결했습니다`);
+    post(S.tries ? { ev: 'reconnected' } : { ev: 'connected', name, w: rfb._fbWidth || 0, h: rfb._fbHeight || 0 });
+    S.ever = true;
+    S.tries = 0;
+    thumbSoon(2500);
+  });
   rfb.addEventListener('disconnect', () => {
     if (S.rfb !== rfb) return;
     S.rfb = null;
+    if (APP) return setTimeout(() => appDropped(h, closeInfo), 50);
     setTimeout(() => {
       const known = closeInfo && CLOSE_TEXT[closeInfo.code];
       const [t, d] = known ? known(h) : ['연결이 끊겼습니다', closeInfo && closeInfo.reason ? closeInfo.reason : '네트워크 상태를 확인하고 다시 연결하세요.'];
@@ -423,9 +459,46 @@ function open(h) {
   });
   rfb.addEventListener('clipboard', (e) => {
     S.clip = e.detail.text || '';
+    if (APP) { if (opt('clipboard', true)) post({ ev: 'clip', text: S.clip }); return; }
     toast(`${dev()} 클립보드를 받았습니다 — 📋에서 볼 수 있습니다`);
   });
 }
+
+// App window: a first attempt that fails goes back to the home (which explains it); a drop
+// after that reconnects on its own, like the Windows viewer.
+function appDropped(h, info) {
+  const code = info ? info.code : 0;
+  const msg = (info && info.reason) || '원격 기기와의 연결이 끊겼습니다';
+  if (!S.ever) return post({ ev: 'error', kind: KIND_OF[code] || 'other', msg });
+  if (opt('reconnect', true) && S.tries < RETRIES && !KIND_OF[code]?.includes('auth')) {
+    S.tries += 1;
+    post({ ev: 'reconnecting', n: S.tries });
+    status('busy', `${h.label} 연결이 끊겼습니다`, `${Math.min(S.tries * 2, 10)}초 뒤 다시 연결합니다… (${S.tries}/${RETRIES})`);
+    return setTimeout(() => { if (!S.rfb) open(h); }, Math.min(S.tries * 2000, 10000));
+  }
+  post({ ev: 'error', kind: 'lost', msg });
+}
+
+// The card picture in the app's address book: a small copy of the screen now and then.
+let thumbTimer;
+function thumbSoon(ms) {
+  clearTimeout(thumbTimer);
+  thumbTimer = setTimeout(() => {
+    const src = $('#screen canvas');
+    if (S.rfb && src && src.width) {
+      const k = Math.min(1, 480 / src.width);
+      const c = document.createElement('canvas');
+      c.width = Math.round(src.width * k);
+      c.height = Math.round(src.height * k);
+      c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+      try { post({ ev: 'thumb', png: c.toDataURL('image/png') }); } catch (_) {}
+    }
+    if (S.rfb) thumbSoon(60000);
+  }, ms);
+}
+
+// Text copied on the Mac, handed over by the app when this window comes forward.
+window.itdaPaste = (t) => { if (S.rfb && !S.viewOnly && opt('clipboard', true) && t) S.rfb.clipboardPasteFrom(t); };
 
 // noVNC turns a pinch into Ctrl + mouse wheel on the remote device, which zooms every app
 // there (and can leave Ctrl held). Keep pinches here: spread = 1:1, pinch in = fit.
@@ -459,11 +532,9 @@ function leave() {
 function renderTools() {
   const t = $('#tools');
   t.innerHTML = [
-    ['back', 'back', '목록으로'],
-    'sep',
-    ['keyboard', 'keyboard', '키보드'],
+    ...(APP ? [] : [['back', 'back', '목록으로'], 'sep', ['keyboard', 'keyboard', '키보드']]),
     ['keys', 'command', `${isWin(S.host) ? 'Windows' : 'Mac'} 특수 키`],
-    ['clip', 'clip', '클립보드'],
+    ...(APP ? [] : [['clip', 'clip', '클립보드']]),
     'sep',
     ['scale', S.fit ? 'fit' : 'actual', S.fit ? '실제 크기로' : '화면에 맞춤'],
     ['viewonly', 'eye', '보기 전용', S.viewOnly],
@@ -499,6 +570,7 @@ $('#tools').addEventListener('click', (e) => {
       toast(S.viewOnly ? '보기 전용 켜짐' : '보기 전용 꺼짐');
       return renderTools();
     case 'full': {
+      if (APP) return post({ ev: 'fullscreen' });
       const d = document.documentElement;
       if (document.fullscreenElement) document.exitFullscreen();
       else if (d.requestFullscreen) d.requestFullscreen().catch(() => toast('이 브라우저는 전체 화면을 지원하지 않습니다. 홈 화면에 추가하면 전체 화면으로 열립니다.'));

@@ -3,8 +3,8 @@
 //! book (or this PC itself). The gateway logs in to the device with the saved password (over
 //! SSH when the connection uses it; RDP is translated to RFB here), then hands the browser a
 //! plain RFB stream over a WebSocket, so passwords never reach the browser. The browser can
-//! also manage the address book and accounts. On macOS the same gateway runs in local mode
-//! (127.0.0.1, one-time token instead of a PIN) behind the app's own window.
+//! also manage the address book and accounts. On macOS a second, local listener (127.0.0.1,
+//! signed in with a token instead of a PIN) serves the app's own connection windows.
 
 use crate::rfb::{self, Creds};
 use crate::store;
@@ -13,7 +13,7 @@ use crate::ws;
 use serde_json::json;
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -39,19 +39,20 @@ struct Running {
     thread: std::thread::JoinHandle<()>,
 }
 
+/// The web viewer for other devices (0.0.0.0, PIN).
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
-static TOKENS: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
+/// Signed-in browser sessions: (token, since, from the local listener).
+static TOKENS: Mutex<Vec<(String, Instant, bool)>> = Mutex::new(Vec::new());
 static FAILS: Mutex<(u32, Option<Instant>)> = Mutex::new((0, None));
-/// Open browser sessions, closed when the gateway stops.
+/// Open browser sessions of the web viewer, closed when it stops.
 static LIVE: Mutex<Vec<TcpStream>> = Mutex::new(Vec::new());
 
-/// Local mode (the macOS app): the gateway listens on 127.0.0.1 only and the app's own
-/// window signs in once with this one-time token instead of a PIN.
-static LOCAL: Mutex<Option<String>> = Mutex::new(None);
+/// The local listener (the macOS app's connection windows): 127.0.0.1 only, signed in with
+/// this token instead of a PIN. Runs beside the web viewer and is never stopped.
+static LOCAL: Mutex<Option<(u16, String)>> = Mutex::new(None);
 
-fn local() -> bool {
-    LOCAL.lock().unwrap().is_some()
-}
+/// Passwords typed for one connection (not saved), for the app's own windows only.
+static TYPED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
 pub fn running() -> Option<u16> {
     RUNNING.lock().unwrap().as_ref().map(|r| r.port)
@@ -64,20 +65,42 @@ pub fn start(port: u16) -> io::Result<()> {
     }
     stop();
     let l = TcpListener::bind(("0.0.0.0", port)).map_err(|e| io::Error::new(e.kind(), format!("포트 {port}을(를) 열 수 없습니다: {e}")))?;
-    serve(l, port)
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread = serve(l, false, stop.clone())?;
+    crate::log!("web viewer on port {port}");
+    *RUNNING.lock().unwrap() = Some(Running { port, stop, thread });
+    Ok(())
 }
 
-/// Start for this machine's own window: 127.0.0.1 on a free port. Returns the URL that
-/// signs the window in (it works once per token and only from this machine).
+/// The URL that opens connection `id` in one of this machine's own windows, starting the
+/// local listener (127.0.0.1, a free port) the first time.
 #[cfg_attr(windows, allow(dead_code))]
-pub fn start_local() -> io::Result<String> {
-    stop();
-    let l = TcpListener::bind(("127.0.0.1", 0))?;
-    let port = l.local_addr()?.port();
-    let tok = random_token();
-    *LOCAL.lock().unwrap() = Some(tok.clone());
-    serve(l, port)?;
-    Ok(format!("http://127.0.0.1:{port}/auth?t={tok}"))
+pub fn local_url(id: &str) -> io::Result<String> {
+    let mut g = LOCAL.lock().unwrap();
+    if g.is_none() {
+        let l = TcpListener::bind(("127.0.0.1", 0))?;
+        let port = l.local_addr()?.port();
+        serve(l, true, Arc::new(AtomicBool::new(false)))?;
+        crate::log!("local viewer on port {port}");
+        *g = Some((port, random_token()));
+    }
+    let (port, tok) = g.as_ref().unwrap();
+    let id: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    Ok(format!("http://127.0.0.1:{port}/auth?t={tok}&open={id}"))
+}
+
+/// Use this password (typed, not saved) for connection `id`; None forgets it.
+#[cfg_attr(windows, allow(dead_code))]
+pub fn set_typed(id: &str, pass: Option<String>) {
+    let mut t = TYPED.lock().unwrap();
+    t.retain(|(k, _)| k != id);
+    if let Some(p) = pass {
+        t.push((id.to_string(), p));
+    }
+}
+
+fn typed(id: &str) -> Option<String> {
+    TYPED.lock().unwrap().iter().find(|(k, _)| k == id).map(|(_, p)| p.clone())
 }
 
 fn random_token() -> String {
@@ -86,19 +109,15 @@ fn random_token() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-fn serve(l: TcpListener, port: u16) -> io::Result<()> {
+fn serve(l: TcpListener, local: bool, stop: Arc<AtomicBool>) -> io::Result<std::thread::JoinHandle<()>> {
     l.set_nonblocking(true)?;
-    let stop = Arc::new(AtomicBool::new(false));
-    crate::log!("web viewer on port {port}{}", if local() { " (local)" } else { "" });
-    let flag = stop.clone();
-    let thread = std::thread::spawn(move || {
-        let stop = flag;
+    Ok(std::thread::spawn(move || {
         while !stop.load(Relaxed) {
             match l.accept() {
                 Ok((c, peer)) => {
                     let _ = c.set_nonblocking(false);
                     std::thread::spawn(move || {
-                        if let Err(e) = handle(c, peer) {
+                        if let Err(e) = handle(c, peer, local) {
                             crate::log!("web {peer}: {e}");
                         }
                     });
@@ -111,9 +130,7 @@ fn serve(l: TcpListener, port: u16) -> io::Result<()> {
             }
         }
         crate::log!("web viewer stopped");
-    });
-    *RUNNING.lock().unwrap() = Some(Running { port, stop, thread });
-    Ok(())
+    }))
 }
 
 pub fn stop() {
@@ -125,17 +142,13 @@ pub fn stop() {
     for s in LIVE.lock().unwrap().drain(..) {
         let _ = s.shutdown(Shutdown::Both);
     }
-    TOKENS.lock().unwrap().clear();
+    TOKENS.lock().unwrap().retain(|t| t.2);
     *FAILS.lock().unwrap() = (0, None);
 }
 
 /// Addresses other devices can use: every LAN IPv4 (Tailscale's 100.x included).
 pub fn urls(port: u16) -> Vec<Url> {
-    let host = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "localhost".into());
-    let mut ips: Vec<Ipv4Addr> = (host.as_str(), 0)
-        .to_socket_addrs()
-        .map(|it| it.filter_map(|a| if let SocketAddr::V4(a) = a { Some(*a.ip()) } else { None }).collect())
-        .unwrap_or_default();
+    let mut ips = local_ipv4();
     ips.retain(|ip| !ip.is_loopback() && !ip.is_link_local());
     ips.dedup();
     // Home Wi-Fi first (that is what the QR code encodes), Tailscale next; 172.16/12 is
@@ -154,6 +167,26 @@ pub fn urls(port: u16) -> Vec<Url> {
     }
     ips.into_iter()
         .map(|ip| Url { url: format!("http://{ip}:{port}/"), kind: if rank(&ip) == 2 { "tailscale" } else { "lan" } })
+        .collect()
+}
+
+#[cfg(windows)]
+fn local_ipv4() -> Vec<Ipv4Addr> {
+    use std::net::ToSocketAddrs;
+    let host = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "localhost".into());
+    (host.as_str(), 0)
+        .to_socket_addrs()
+        .map(|it| it.filter_map(|a| if let SocketAddr::V4(a) = a { Some(*a.ip()) } else { None }).collect())
+        .unwrap_or_default()
+}
+
+/// macOS: the interfaces' IPv4 addresses, as ifconfig lists them.
+#[cfg(not(windows))]
+fn local_ipv4() -> Vec<Ipv4Addr> {
+    let out = std::process::Command::new("/sbin/ifconfig").output().map(|o| o.stdout).unwrap_or_default();
+    String::from_utf8_lossy(&out)
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("inet ")?.split_whitespace().next()?.parse().ok())
         .collect()
 }
 
@@ -223,11 +256,11 @@ fn token_of(req: &Req) -> Option<String> {
     req.headers.get("cookie")?.split(';').find_map(|kv| kv.trim().strip_prefix("itda=").map(str::to_string))
 }
 
-fn authed(req: &Req) -> bool {
+fn authed(req: &Req, local: bool) -> bool {
     let Some(t) = token_of(req) else { return false };
     let mut toks = TOKENS.lock().unwrap();
-    toks.retain(|(_, at)| at.elapsed() < SESSION_TTL);
-    toks.iter().any(|(k, _)| eq_ct(k.as_bytes(), t.as_bytes()))
+    toks.retain(|(_, at, _)| at.elapsed() < SESSION_TTL);
+    toks.iter().any(|(k, _, l)| *l == local && eq_ct(k.as_bytes(), t.as_bytes()))
 }
 
 /// Constant-time comparison (PINs and tokens).
@@ -265,26 +298,28 @@ fn login(c: &mut TcpStream, req: &Req) -> io::Result<()> {
         return json_resp(c, "401 Unauthorized", json!({"error": "PIN이 맞지 않습니다"}));
     }
     *FAILS.lock().unwrap() = (0, None);
-    let cookie = new_session();
+    let cookie = new_session(false);
     respond(c, "200 OK", "application/json; charset=utf-8", &cookie, b"{\"ok\":true}")
 }
 
 /// A fresh session; returns its Set-Cookie header line.
-fn new_session() -> String {
+fn new_session(local: bool) -> String {
     let tok = random_token();
-    TOKENS.lock().unwrap().push((tok.clone(), Instant::now()));
+    TOKENS.lock().unwrap().push((tok.clone(), Instant::now(), local));
     format!("Set-Cookie: itda={tok}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}\r\n", SESSION_TTL.as_secs())
 }
 
-/// Local mode: the app window opens /auth?t=<token> once and gets a session cookie.
+/// Local listener: an app window opens /auth?t=<token>&open=<id>, gets a session cookie
+/// and goes straight to that connection.
 fn local_auth(c: &mut TcpStream, req: &Req) -> io::Result<()> {
-    let given = req.query.split('&').find_map(|kv| kv.strip_prefix("t=")).unwrap_or("");
-    let good = LOCAL.lock().unwrap().as_ref().is_some_and(|t| eq_ct(t.as_bytes(), given.as_bytes()));
+    let arg = |k: &str| req.query.split('&').find_map(|kv| kv.strip_prefix(k)).unwrap_or("");
+    let good = LOCAL.lock().unwrap().as_ref().is_some_and(|(_, t)| eq_ct(t.as_bytes(), arg("t=").as_bytes()));
     if !good {
         return respond(c, "403 Forbidden", "text/plain", "", b"forbidden");
     }
-    let cookie = new_session();
-    respond(c, "302 Found", "text/plain", &format!("{cookie}Location: /\r\n"), b"")
+    let open: String = arg("open=").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    let cookie = new_session(true);
+    respond(c, "302 Found", "text/plain", &format!("{cookie}Location: /?open={open}\r\n"), b"")
 }
 
 /// The address-book entry that stands for this PC itself (when "Share this PC" is on).
@@ -316,6 +351,8 @@ fn hosts_json() -> serde_json::Value {
                 "rdp": h.is_rdp(),
                 "has_pw": login.pass.is_some(),
                 "remote_size": h.remote_size,
+                "remote_name": h.remote_name,
+                "opts": h.opts,
                 "last_used": h.last_used,
                 "thumb": std::fs::metadata(store::thumb_path(&h.id)).is_ok(),
             })
@@ -531,11 +568,11 @@ fn edit(c: &mut TcpStream, req: &Req) -> io::Result<()> {
     }
 }
 
-fn handle(mut c: TcpStream, peer: SocketAddr) -> io::Result<()> {
+fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
     c.set_read_timeout(Some(Duration::from_secs(15)))?;
     let mut r = BufReader::new(c.try_clone()?);
     let req = read_req(&mut r)?;
-    let ok = authed(&req);
+    let ok = authed(&req, local);
     let p = req.path.as_str();
     match (req.method.as_str(), p) {
         ("GET", "/" | "/index.html") => respond(&mut c, "200 OK", "text/html; charset=utf-8", "", INDEX.as_bytes()),
@@ -547,15 +584,15 @@ fn handle(mut c: TcpStream, peer: SocketAddr) -> io::Result<()> {
         ("GET", "/manifest.webmanifest") => respond(&mut c, "200 OK", "application/manifest+json", "", MANIFEST.as_bytes()),
         ("GET", "/icon-512.png") => respond(&mut c, "200 OK", "image/png", "", ICON_PNG_512),
         ("GET", "/sw.js") => respond(&mut c, "200 OK", "text/javascript; charset=utf-8", "", SW.as_bytes()),
-        ("GET", "/auth") if local() => local_auth(&mut c, &req),
-        ("POST", "/api/login") if same_origin(&req) && !local() => login(&mut c, &req),
+        ("GET", "/auth") if local => local_auth(&mut c, &req),
+        ("POST", "/api/login") if same_origin(&req) && !local => login(&mut c, &req),
         ("POST", "/api/logout") if same_origin(&req) => {
             if let Some(t) = token_of(&req) {
-                TOKENS.lock().unwrap().retain(|(k, _)| *k != t);
+                TOKENS.lock().unwrap().retain(|(k, _, _)| *k != t);
             }
             respond(&mut c, "200 OK", "application/json", "Set-Cookie: itda=; Path=/; Max-Age=0\r\n", b"{}")
         }
-        (_, "/api/me") => json_resp(&mut c, if ok { "200 OK" } else { "401 Unauthorized" }, json!({"ok": ok, "local": local()})),
+        (_, "/api/me") => json_resp(&mut c, if ok { "200 OK" } else { "401 Unauthorized" }, json!({"ok": ok, "local": local})),
         (_, "/api/hosts") if ok => json_resp(&mut c, "200 OK", hosts_json()),
         ("GET", "/api/nearby") if ok => json_resp(&mut c, "200 OK", nearby_json()),
         ("GET", "/api/accounts") if ok => json_resp(&mut c, "200 OK", accounts_json()),
@@ -584,7 +621,7 @@ fn handle(mut c: TcpStream, peer: SocketAddr) -> io::Result<()> {
             write!(c, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n{proto}\r\n", ws::accept_key(&key))?;
             c.set_read_timeout(None)?;
             crate::log!("web {peer}: viewer for {id}");
-            proxy(c, &id, peer)
+            proxy(c, &id, peer, local)
         }
         (_, _) if p.starts_with("/api/") || p.starts_with("/thumb/") => {
             json_resp(&mut c, "401 Unauthorized", json!({"error": "로그인이 필요합니다"}))
@@ -596,9 +633,11 @@ fn handle(mut c: TcpStream, peer: SocketAddr) -> io::Result<()> {
 // ---------------------------------------------------------------- RFB relay
 
 /// Log in to the device, then act as a no-auth RFB server for the browser and pipe bytes.
-fn proxy(c: TcpStream, id: &str, peer: SocketAddr) -> io::Result<()> {
+fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool) -> io::Result<()> {
     let tx = ws::Sender::new(c.try_clone()?);
-    LIVE.lock().unwrap().push(c.try_clone()?);
+    if !local {
+        LIVE.lock().unwrap().push(c.try_clone()?);
+    }
     let fail = |code: u16, why: String| {
         crate::log!("web viewer {id}: {why}");
         tx.close(code, &why);
@@ -619,7 +658,7 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr) -> io::Result<()> {
             return fail(4004, "연결을 찾을 수 없습니다".into());
         };
         let login = store::resolve(&host, &store::load_accounts());
-        let Some(pass) = login.pass.clone() else {
+        let Some(pass) = local.then(|| typed(id)).flatten().or_else(|| login.pass.clone()) else {
             return fail(4001, "이 연결에는 저장된 암호가 없습니다. 연결을 편집해 암호를 저장하세요.".into());
         };
         open_host(&host, &login, pass, &mut tunnel)

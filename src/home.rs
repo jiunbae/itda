@@ -1,49 +1,33 @@
-//! Home window: the address book, settings and connection flow, rendered by WebView2
-//! from the embedded `web/` assets. Each connection runs in its own `itda --session`
-//! process; this process tracks them through their stdout events.
+//! Home window: the address book, settings and connection flow, rendered in a webview from
+//! the embedded `web/` assets. The page logic here is shared; the window, tray/menu and
+//! sessions are per platform (`home_win.rs`: WebView2, each connection in its own
+//! `itda --session` process; `home_mac.rs`: WKWebView, each connection in a window over the
+//! web viewer).
 
-use crate::session::Launch;
 use crate::store::{self, Host, Settings};
-use crate::ui::wide;
 use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::num::NonZeroIsize;
-use std::os::windows::process::CommandExt;
-use std::process::{Child, Command, Stdio};
-use std::ptr::{null, null_mut};
-use std::sync::atomic::{AtomicIsize, Ordering::Relaxed};
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Mutex;
 use std::time::Duration;
-use windows_sys::Win32::Foundation::*;
-use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
-use windows_sys::Win32::Graphics::Gdi::*;
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
-use windows_sys::Win32::System::Threading::CreateMutexW;
-use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
-use windows_sys::Win32::UI::Shell::*;
-use windows_sys::Win32::UI::WindowsAndMessaging::*;
-use wry::raw_window_handle::{HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle};
-use wry::{http, Rect, WebView, WebViewBuilder, WebViewBuilderExtWindows};
 
-const WM_EVENT: u32 = WM_APP + 20;
-const WM_TRAY: u32 = WM_APP + 21;
-const TRAY_OPEN: usize = 1;
-const TRAY_QUIT: usize = 2;
-const TRAY_SHARE: usize = 3;
-const TRAY_HOST0: usize = 100;
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
+#[cfg(windows)]
+#[path = "home_win.rs"]
+mod plat;
+#[cfg(target_os = "macos")]
+#[path = "home_mac.rs"]
+mod plat;
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // Embedded UI. Set ITDA_WEB_DIR to serve them from disk while working on the UI.
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const APP_CSS: &str = include_str!("../web/app.css");
 const APP_JS: &str = include_str!("../web/app.js");
+const ICONS_JS: &str = include_str!("../web/icons.js");
 const ICON_SVG: &str = include_str!("../assets/itda.svg");
 const HELP_JS: &str = include_str!("../web/help.js");
 const HELP_CSS: &str = include_str!("../web/help.css");
@@ -65,9 +49,9 @@ const HELP_IMG: &[(&str, &[u8])] = &[
 
 /// Messages from worker threads, drained on the UI thread.
 enum Event {
-    /// A line from a session process.
+    /// A line from a session (process or window).
     Session(String, Value),
-    /// A session process exited.
+    /// A session ended.
     Exit(String),
     Online(HashMap<String, bool>),
     Found(Vec<crate::mdns::Found>),
@@ -75,22 +59,24 @@ enum Event {
     /// Result of turning `tailscale serve` on/off.
     TsServe(Result<(), String>),
     /// Someone started or stopped viewing this PC.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Share,
     /// An address-book change from the web viewer (a page command); answered when saved.
     WebEdit(Value, std::sync::mpsc::Sender<()>),
+    /// A message for the page, produced off the UI thread.
+    #[cfg_attr(windows, allow(dead_code))]
+    Page(Value),
 }
 
 static QUEUE: Mutex<Vec<Event>> = Mutex::new(Vec::new());
-static HWND_HOME: AtomicIsize = AtomicIsize::new(0);
 
 fn post(e: Event) {
     QUEUE.lock().unwrap().push(e);
-    unsafe { PostMessageW(HWND_HOME.load(Relaxed) as HWND, WM_EVENT, 0, 0) };
+    plat::wake();
 }
 
 struct Sess {
-    child: Child,
-    hwnd: isize,
+    proc: plat::Proc,
     /// "connecting" | "connected" | "reconnecting"
     state: String,
     stage: String,
@@ -100,7 +86,6 @@ struct Sess {
 
 #[derive(Default)]
 struct Home {
-    hwnd: HWND,
     hosts: Vec<Host>,
     accounts: Vec<store::Account>,
     settings: Settings,
@@ -114,144 +99,59 @@ struct Home {
 
 thread_local! {
     static HOME: RefCell<Home> = RefCell::new(Home::default());
-    /// Kept apart from HOME: WebView2 calls can re-enter the window procedure, so the
-    /// webview is only ever borrowed shared (except when created and dropped).
-    static WEBVIEW: RefCell<Option<WebView>> = const { RefCell::new(None) };
 }
-static TRAY_MSG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 fn home<R>(f: impl FnOnce(&mut Home) -> R) -> R {
     HOME.with(|h| f(&mut h.borrow_mut()))
-}
-
-struct Win(HWND);
-
-impl HasWindowHandle for Win {
-    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-        let raw = Win32WindowHandle::new(NonZeroIsize::new(self.0 as isize).ok_or(HandleError::Unavailable)?);
-        Ok(unsafe { WindowHandle::borrow_raw(RawWindowHandle::Win32(raw)) })
-    }
-}
-
-fn system_dark() -> bool {
-    let mut v: u32 = 1;
-    let mut n = 4u32;
-    let key = wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
-    let val = wide("AppsUseLightTheme");
-    unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), val.as_ptr(), RRF_RT_REG_DWORD, null_mut(), &mut v as *mut u32 as _, &mut n) };
-    v == 0
 }
 
 fn is_dark(s: &Settings) -> bool {
     match s.theme.as_str() {
         "dark" => true,
         "light" => false,
-        _ => system_dark(),
+        _ => plat::system_dark(),
     }
 }
 
-unsafe fn apply_theme(h: HWND) {
-    let dark: BOOL = home(|m| is_dark(&m.settings)) as BOOL;
-    DwmSetWindowAttribute(h, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark as *const BOOL as _, 4);
+pub fn run(quick: Option<String>) {
+    plat::run(quick);
 }
 
-pub fn run(quick: Option<String>) {
-    unsafe {
-        // One home window: a second launch just brings the first to the front.
-        // Test runs are single-instance among themselves, apart from a real one.
-        let (name, title) = match std::env::var("ITDA_TEST_HTTP") {
-            Ok(port) => (format!("Local\\itda-home-test-{port}"), format!("{} (test {port})", crate::APP)),
-            Err(_) => ("Local\\itda-home".to_string(), crate::APP.to_string()),
-        };
-        CreateMutexW(null(), 0, wide(&name).as_ptr());
-        if GetLastError() == ERROR_ALREADY_EXISTS {
-            let w = FindWindowW(wide("itda_home").as_ptr(), wide(&title).as_ptr());
-            if !w.is_null() {
-                if let Some(q) = &quick {
-                    // Hand the address to the running home.
-                    let b = q.as_bytes();
-                    let cd = windows_sys::Win32::System::DataExchange::COPYDATASTRUCT { dwData: 1, cbData: b.len() as u32, lpData: b.as_ptr() as _ };
-                    SendMessageW(w, WM_COPYDATA, 0, &cd as *const _ as isize);
-                }
-                ShowWindow(w, SW_SHOW);
-                ShowWindow(w, SW_RESTORE);
-                SetForegroundWindow(w);
-            }
-            return;
-        }
-        let settings = store::load_settings();
-        let hosts = store::load_hosts();
-        let accounts = store::load_accounts();
-        let dark = is_dark(&settings);
-        home(|m| {
-            m.settings = settings;
-            m.hosts = hosts;
-            m.accounts = accounts;
-            m.pending_quick = quick;
-        });
+/// Load the address book and settings (the platform calls this once it owns the window).
+fn init(quick: Option<String>) {
+    let settings = store::load_settings();
+    let hosts = store::load_hosts();
+    let accounts = store::load_accounts();
+    home(|m| {
+        m.settings = settings;
+        m.hosts = hosts;
+        m.accounts = accounts;
+        m.pending_quick = quick;
+    });
+    // The web viewer's edits go through here so this list stays the one copy.
+    let _ = crate::gateway::ON_EDIT.set(|v| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        post(Event::WebEdit(v, tx));
+        rx.recv_timeout(Duration::from_secs(5)).is_ok()
+    });
+}
 
-        let hinst = GetModuleHandleW(null());
-        let icon = LoadIconW(hinst, 1 as _);
-        let cls = wide("itda_home");
-        let wc = WNDCLASSEXW {
-            cbSize: size_of::<WNDCLASSEXW>() as u32,
-            lpfnWndProc: Some(wndproc),
-            hInstance: hinst,
-            hIcon: icon,
-            hIconSm: icon,
-            hCursor: LoadCursorW(null_mut(), IDC_ARROW),
-            hbrBackground: CreateSolidBrush(if dark { 0x0020_2020 } else { 0x00f3_f3f3 }),
-            lpszClassName: cls.as_ptr(),
-            ..std::mem::zeroed()
-        };
-        RegisterClassExW(&wc);
-        let h = CreateWindowExW(0, cls.as_ptr(), wide(&title).as_ptr(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, 0, 100, 100,
-            null_mut(), null_mut(), hinst, null());
-        HWND_HOME.store(h as isize, Relaxed);
-        home(|m| m.hwnd = h);
-        apply_theme(h);
-        let dpi = GetDpiForWindow(h) as i32;
-        let (ww, wh) = (1080 * dpi / 96, 720 * dpi / 96);
-        let mut wa: RECT = std::mem::zeroed();
-        SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut wa as *mut _ as _, 0);
-        let (ww, wh) = (ww.min(wa.right - wa.left), wh.min(wa.bottom - wa.top));
-        SetWindowPos(h, null_mut(), (wa.left + wa.right - ww) / 2, (wa.top + wa.bottom - wh) / 2, ww, wh, SWP_NOZORDER);
-
-        let bridge = std::env::var("ITDA_TEST_HTTP").ok().and_then(|p| p.parse::<u16>().ok());
-        match bridge.map(|p| Ok(test_bridge::start(p))).unwrap_or_else(|| build_webview(h, dark).map(|wv| WEBVIEW.with(|w| *w.borrow_mut() = Some(wv)))) {
-            Ok(()) => apply_zoom(home(|m| m.settings.zoom)),
-            Err(e) => {
-                crate::log!("webview: {e}");
-                crate::ui::message(
-                    &format!("화면 구성 요소(Microsoft Edge WebView2)를 시작할 수 없습니다.\n\n{e}\n\nhttps://go.microsoft.com/fwlink/p/?LinkId=2124703 에서 설치할 수 있습니다."),
-                    true,
-                );
-                return;
-            }
-        }
-        resize_webview(h);
-        tray_add(h);
-        TRAY_MSG.store(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()), Relaxed);
-        ShowWindow(h, SW_SHOW);
-        SetForegroundWindow(h);
-        start_probes();
-        let w = home(|m| m.settings.web.clone());
-        if w.on {
-            apply_web(&w);
-        }
+/// The window is up: start the background work.
+fn started() {
+    plat::apply_zoom(home(|m| m.settings.zoom));
+    start_probes();
+    let w = home(|m| m.settings.web.clone());
+    if w.on {
+        apply_web(&w);
+    }
+    #[cfg(windows)]
+    {
         let sh = home(|m| m.settings.share.clone());
         if sh.on {
             apply_share(&sh);
         }
-        scan();
-
-        let mut msg: MSG = std::mem::zeroed();
-        while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-        tray_remove(h);
     }
+    scan();
 }
 
 fn asset(path: &str) -> Option<(Cow<'static, [u8]>, &'static str)> {
@@ -283,6 +183,7 @@ fn asset(path: &str) -> Option<(Cow<'static, [u8]>, &'static str)> {
         "index.html" => INDEX_HTML,
         "app.css" => APP_CSS,
         "app.js" => APP_JS,
+        "icons.js" => ICONS_JS,
         "icon.svg" => ICON_SVG,
         "help.js" => HELP_JS,
         "help.css" => HELP_CSS,
@@ -291,95 +192,15 @@ fn asset(path: &str) -> Option<(Cow<'static, [u8]>, &'static str)> {
     Some((Cow::Borrowed(body.as_bytes()), mime))
 }
 
-fn build_webview(h: HWND, dark: bool) -> wry::Result<WebView> {
-    let data = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir).join(crate::APP).join("WebView2");
-    let mut ctx = wry::WebContext::new(Some(data));
-    let bg = if dark { (32, 32, 32, 255) } else { (243, 243, 243, 255) };
-    let devtools = std::env::var_os("ITDA_DEVTOOLS").is_some();
-    // Test hook: expose the DevTools protocol so the UI can be driven and captured.
-    let mut args = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection".to_string();
-    if let Ok(port) = std::env::var("ITDA_DEBUG_PORT") {
-        args.push_str(&format!(" --remote-debugging-port={port}"));
-    }
-    WebViewBuilder::new_with_web_context(&mut ctx)
-        .with_additional_browser_args(args)
-        .with_custom_protocol("itda".into(), |_id, req| {
-            let resp = match asset(req.uri().path()) {
-                Some((body, mime)) => http::Response::builder().header("Content-Type", mime).header("Cache-Control", "no-store").body(body),
-                None => http::Response::builder().status(404).body(Cow::Borrowed(&b"not found"[..])),
-            };
-            resp.unwrap_or_else(|_| http::Response::new(Cow::Borrowed(&b""[..])))
-        })
-        .with_ipc_handler(|req| {
-            let body = req.into_body();
-            match serde_json::from_str::<Value>(&body) {
-                Ok(v) => {
-                    // Handle after this callback returns: WebView2 must not be re-entered from here.
-                    QUEUE.lock().unwrap().push(Event::Session("__ipc".into(), v));
-                    unsafe { PostMessageW(HWND_HOME.load(Relaxed) as HWND, WM_EVENT, 0, 0) };
-                }
-                Err(e) => crate::log!("ipc: bad message {e}"),
-            }
-        })
-        .with_navigation_handler(|url| {
-            // External links open in the browser, never inside the app.
-            if url.starts_with("http://itda.localhost/") || url.starts_with("itda://") {
-                return true;
-            }
-            if url.starts_with("https://") {
-                let u = wide(&url);
-                unsafe { ShellExecuteW(null_mut(), wide("open").as_ptr(), u.as_ptr(), null(), null(), SW_SHOWNORMAL) };
-            }
-            false
-        })
-        .with_new_window_req_handler(|_url, _features| wry::NewWindowResponse::Deny)
-        .with_url("itda://localhost/index.html")
-        .with_background_color(bg)
-        .with_devtools(devtools)
-        .with_hotkeys_zoom(false)
-        .with_browser_accelerator_keys(false)
-        .with_default_context_menus(devtools)
-        .build_as_child(&Win(h))
-}
-
-/// The home's own zoom (percent). WebView2's zoom shrinks the CSS viewport, so the page's
-/// narrow-window layout takes over at large sizes.
-fn apply_zoom(pct: u16) {
-    let z = if (50..=300).contains(&pct) { pct } else { 100 };
-    WEBVIEW.with(|w| {
-        if let Some(wv) = w.borrow().as_ref() {
-            let _ = wv.zoom(z as f64 / 100.0);
-        }
-    });
-}
-
-unsafe fn resize_webview(h: HWND) {
-    let mut rc: RECT = std::mem::zeroed();
-    GetClientRect(h, &mut rc);
-    WEBVIEW.with(|w| {
-        if let Some(wv) = w.borrow().as_ref() {
-            let _ = wv.set_bounds(Rect {
-                position: wry::dpi::PhysicalPosition::new(0, 0).into(),
-                size: wry::dpi::PhysicalSize::new(rc.right as u32, rc.bottom as u32).into(),
-            });
-        }
-    });
-}
-
 /// Send a message to the page.
 fn send(v: Value) {
-    let js = format!("window.itda&&itda.recv({v})");
     if !home(|m| m.ready) {
         return;
     }
     if test_bridge::active() {
         return test_bridge::push(v.to_string());
     }
-    WEBVIEW.with(|w| {
-        if let Some(wv) = w.borrow().as_ref() {
-            let _ = wv.evaluate_script(&js);
-        }
-    });
+    plat::eval(&format!("window.itda&&itda.recv({v})"));
 }
 
 fn thumb_version(id: &str) -> u64 {
@@ -431,13 +252,15 @@ fn send_state() {
         json!({
             "type": "state",
             "version": VERSION,
+            "platform": plat::PLATFORM,
+            "computer": plat::computer_name(),
             "hosts": m.hosts.iter().map(|h| host_json(h, &m.accounts)).collect::<Vec<_>>(),
             "accounts": accounts_json(m),
             "settings": m.settings,
             "sessions": sessions_json(m),
             "online": m.online,
             "found": m.found,
-            "dark": system_dark(),
+            "dark": plat::system_dark(),
             "ssh_ok": crate::tunnel::ssh_exe().is_some(),
             "tailnet": *TAILNET.lock().unwrap(),
             "quick": m.pending_quick.take(),
@@ -464,7 +287,7 @@ fn s(v: &Value, k: &str) -> String {
     v.get(k).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
-unsafe fn on_ipc(v: Value) {
+fn on_ipc(v: Value) {
     let id = s(&v, "id");
     match s(&v, "cmd").as_str() {
         "ready" => {
@@ -617,12 +440,7 @@ unsafe fn on_ipc(v: Value) {
             send_hosts();
             send(json!({"type": "account_saved", "id": aid, "grouped": members.len()}));
         }
-        "pick_file" => {
-            let field = s(&v, "field");
-            if let Some(path) = pick_file(home(|m| m.hwnd)) {
-                send(json!({"type": "picked", "field": field, "path": path}));
-            }
-        }
+        "pick_file" => plat::pick_file(s(&v, "field")),
         "forget_password" => {
             store::set_password(&id, None);
             send_hosts();
@@ -631,15 +449,16 @@ unsafe fn on_ipc(v: Value) {
             if let Ok(st) = serde_json::from_value::<Settings>(v["settings"].clone()) {
                 let old = home(|m| std::mem::replace(&mut m.settings, st.clone()));
                 store::save_settings(&st);
-                apply_theme(home(|m| m.hwnd));
+                plat::apply_theme(is_dark(&st));
                 if old.zoom != st.zoom {
-                    apply_zoom(st.zoom);
+                    plat::apply_zoom(st.zoom);
                 }
                 send(json!({"type": "settings", "settings": st}));
                 // Restart servers only when their own settings changed (restarts drop viewers).
                 if old.web != st.web {
                     apply_web(&st.web);
                 }
+                #[cfg(windows)]
                 if old.share != st.share {
                     apply_share(&st.share);
                 }
@@ -647,6 +466,7 @@ unsafe fn on_ipc(v: Value) {
         }
         "web_info" => send(web_info()),
         "share_info" => send(share_info()),
+        #[cfg(windows)]
         "share_reset_pw" | "share_set_pw" => {
             let p = s(&v, "password");
             if s(&v, "cmd") == "share_set_pw" && p.len() >= 6 {
@@ -658,6 +478,7 @@ unsafe fn on_ipc(v: Value) {
             let st = home(|m| m.settings.share.clone());
             apply_share(&st);
         }
+        #[cfg(windows)]
         "share_kick" => crate::share::kick_all(),
         "web_tailscale" => {
             let (on, port) = (v["on"].as_bool().unwrap_or(false), home_web_port());
@@ -675,58 +496,34 @@ unsafe fn on_ipc(v: Value) {
                 "log" => crate::log::path(),
                 "folder" => store::dir(),
                 "screenshots" => {
-                    let d = crate::ui::pictures_dir();
+                    let d = plat::screenshots_dir();
                     let _ = std::fs::create_dir_all(&d);
                     d
                 }
                 _ => return,
             };
             let _ = std::fs::create_dir_all(target.parent().unwrap_or(&target));
-            let t = wide(&target.to_string_lossy());
-            ShellExecuteW(null_mut(), wide("open").as_ptr(), t.as_ptr(), null(), null(), SW_SHOWNORMAL);
+            plat::open(&target.to_string_lossy());
         }
         "url" => {
             let u = s(&v, "url");
             if u.starts_with("https://") || u.starts_with("x-apple") {
-                ShellExecuteW(null_mut(), wide("open").as_ptr(), wide(&u).as_ptr(), null(), null(), SW_SHOWNORMAL);
+                plat::open(&u);
             }
         }
-        "minimize" => {
-            ShowWindow(home(|m| m.hwnd), SW_MINIMIZE);
-        }
+        "minimize" => plat::minimize(),
         c => crate::log!("ipc: unknown command {c}"),
     }
 }
 
-/// Standard "Open" dialog for an SSH private key, starting in ~/.ssh.
-unsafe fn pick_file(owner: HWND) -> Option<String> {
-    use windows_sys::Win32::UI::Controls::Dialogs::*;
-    let mut buf = vec![0u16; 1024];
-    let filter = wide("SSH 개인 키\0id_*;*.pem;*.key\0모든 파일\0*.*\0");
-    let start = std::env::var_os("USERPROFILE").map(|p| std::path::PathBuf::from(p).join(".ssh")).filter(|p| p.is_dir());
-    let start_w = start.map(|p| wide(&p.to_string_lossy()));
-    let title = wide("SSH 키 파일 선택");
-    let mut ofn: OPENFILENAMEW = std::mem::zeroed();
-    ofn.lStructSize = size_of::<OPENFILENAMEW>() as u32;
-    ofn.hwndOwner = owner;
-    ofn.lpstrFilter = filter.as_ptr();
-    ofn.lpstrFile = buf.as_mut_ptr();
-    ofn.nMaxFile = buf.len() as u32;
-    ofn.lpstrTitle = title.as_ptr();
-    ofn.lpstrInitialDir = start_w.as_ref().map_or(null(), |w| w.as_ptr());
-    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    if GetOpenFileNameW(&mut ofn) == 0 {
-        return None;
-    }
-    let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-    Some(String::from_utf16_lossy(&buf[..n]))
-}
-
 // ---------------------------------------------------------------- share this PC
 
+#[cfg(windows)]
 static SHARE_ERR: Mutex<String> = Mutex::new(String::new());
+#[cfg(windows)]
 static SHARE_SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+#[cfg(windows)]
 fn apply_share(s: &store::Share) {
     let _ = crate::share::ON_CHANGE.set(|| post(Event::Share));
     let r = if s.on {
@@ -745,6 +542,7 @@ fn apply_share(s: &store::Share) {
     send(share_info());
 }
 
+#[cfg(windows)]
 fn share_info() -> Value {
     let port = crate::share::running();
     let addrs: Vec<Value> = port
@@ -759,20 +557,16 @@ fn share_info() -> Value {
         "tailscale": ts.zip(port).map(|(d, p)| if p == 5900 { d } else { format!("{d}:{p}") }),
         "password": if port.is_some() { store::share_password(None, false) } else { String::new() },
         "viewers": crate::share::viewers(),
-        "name": std::env::var("COMPUTERNAME").unwrap_or_default(),
+        "name": plat::computer_name(),
         "error": *SHARE_ERR.lock().unwrap(),
     })
 }
 
-/// Tray tooltip says when someone is watching.
-fn tray_tip(viewers: &[crate::share::Viewer]) {
-    unsafe {
-        let mut d = tray_data(home(|m| m.hwnd));
-        d.uFlags = NIF_TIP;
-        let tip = if viewers.is_empty() { crate::APP.to_string() } else { format!("{} — {}명이 이 PC를 보는 중", crate::APP, viewers.len()) };
-        copy_w(&mut d.szTip, &tip);
-        Shell_NotifyIconW(NIM_MODIFY, &d);
-    }
+/// Elsewhere the system's own screen sharing is the way in (macOS: Screen Sharing).
+#[cfg(not(windows))]
+fn share_info() -> Value {
+    let ts = TAILNET.lock().unwrap().clone().filter(|t| t.running).map(|t| t.me.dns).filter(|d| !d.is_empty());
+    json!({"type": "share", "running": false, "builtin": true, "name": plat::computer_name(), "local_name": plat::local_name(), "user": std::env::var("USER").unwrap_or_default(), "tailscale": ts})
 }
 
 // ---------------------------------------------------------------- web viewer
@@ -784,11 +578,6 @@ static SERVING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 
 /// Start/stop the gateway to match the settings, then tell the page.
 fn apply_web(w: &store::Web) {
-    let _ = crate::gateway::ON_EDIT.set(|v| {
-        let (tx, rx) = std::sync::mpsc::channel();
-        post(Event::WebEdit(v, tx));
-        rx.recv_timeout(Duration::from_secs(5)).is_ok()
-    });
     WEB_PORT.store(w.port, Relaxed);
     let r = if w.on { crate::gateway::start(w.port) } else { crate::gateway::stop(); Ok(()) };
     *WEB_ERR.lock().unwrap() = r.err().map(|e| e.to_string()).unwrap_or_default();
@@ -827,14 +616,23 @@ fn web_info() -> Value {
 
 // ---------------------------------------------------------------- sessions
 
-unsafe fn connect(id: &str, typed: Option<String>, save: bool) {
+fn connect(id: &str, typed: Option<String>, save: bool) {
     if home(|m| m.sessions.contains_key(id)) {
         return focus_session(id);
     }
     let Some(host) = home(|m| m.hosts.iter().find(|x| x.id == id).cloned()) else { return };
     let login = home(|m| store::resolve(&host, &m.accounts));
+    #[cfg(windows)]
     if host.is_rdp() {
-        return open_rdp(&host, &login, typed);
+        return match plat::open_rdp(&host, &login, typed) {
+            Ok(()) => {
+                home(|m| m.hosts.iter_mut().filter(|h| h.id == id).for_each(|h| h.last_used = store::now()));
+                save_hosts();
+                send_hosts();
+                send(json!({"type": "toast", "text": format!("{} — 원격 데스크톱을 열었습니다", host.label())}));
+            }
+            Err(e) => send(json!({"type": "error", "id": id, "kind": "other", "msg": format!("원격 데스크톱(mstsc)을 열 수 없습니다: {e}")})),
+        };
     }
     let pass = match typed.clone().or_else(|| login.pass.clone()) {
         Some(p) => p,
@@ -844,109 +642,53 @@ unsafe fn connect(id: &str, typed: Option<String>, save: bool) {
         }
     };
     let settings = home(|m| m.settings.clone());
-    let launch = Launch {
-        id: id.to_string(),
-        title: host.label().to_string(),
-        host: host.host.clone(),
-        user: login.user.clone(),
-        pass,
-        opts: host.opts,
-        ssh_key: login.ssh_key.clone(),
-        key_pass: login.key_pass.clone().unwrap_or_default(),
-        hotkey: settings.hotkey.clone(),
-        toolbar: settings.toolbar.clone(),
-        thumbnails: settings.thumbnails,
-        ssh: host.ssh.clone(),
-    };
-    let exe = std::env::current_exe().unwrap_or_else(|_| "itda.exe".into());
-    let child = Command::new(exe)
-        .arg("--session")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn();
-    let mut child = match child {
-        Ok(c) => c,
+    let proc = match plat::spawn_session(&host, &login, pass, &settings) {
+        Ok(p) => p,
         Err(e) => {
             send(json!({"type": "error", "id": id, "kind": "other", "msg": format!("세션을 시작할 수 없습니다: {e}")}));
             return;
         }
     };
-    AllowSetForegroundWindow(child.id());
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = writeln!(stdin, "{}", serde_json::to_string(&launch).unwrap_or_default());
-    }
-    if let Some(out) = child.stdout.take() {
-        let sid = id.to_string();
-        std::thread::spawn(move || {
-            for line in BufReader::new(out).lines().map_while(Result::ok) {
-                if let Ok(v) = serde_json::from_str::<Value>(&line) {
-                    post(Event::Session(sid.clone(), v));
-                }
-            }
-            post(Event::Exit(sid));
-        });
-    }
     let save_pw = if save { typed } else { None };
     home(|m| {
-        m.sessions.insert(id.to_string(), Sess { child, hwnd: 0, state: "connecting".into(), stage: "start".into(), save_pw });
+        m.sessions.insert(id.to_string(), Sess { proc, state: "connecting".into(), stage: "start".into(), save_pw });
     });
     send_session(id);
 }
 
-/// Windows Remote Desktop: hand mstsc the sign-in, then let it run on its own.
-fn open_rdp(host: &Host, login: &store::Login, typed: Option<String>) {
-    let target = host.host.trim();
-    let name = target.rsplit_once(':').filter(|(_, p)| p.parse::<u16>().is_ok()).map_or(target, |(h, _)| h);
-    if let Some(p) = typed.or_else(|| login.pass.clone()) {
-        if !login.user.is_empty() {
-            store::set_rdp_cred(name, &login.user, &p);
-        }
-    }
-    let mut cmd = Command::new("mstsc.exe");
-    cmd.arg(format!("/v:{target}"));
-    if host.opts.fullscreen {
-        cmd.arg("/f");
-    }
-    match cmd.spawn() {
-        Ok(_) => {
-            let id = host.id.clone();
-            home(|m| m.hosts.iter_mut().filter(|h| h.id == id).for_each(|h| h.last_used = store::now()));
-            save_hosts();
-            send_hosts();
-            send(json!({"type": "toast", "text": format!("{} — 원격 데스크톱을 열었습니다", host.label())}));
-        }
-        Err(e) => send(json!({"type": "error", "id": host.id, "kind": "other", "msg": format!("원격 데스크톱(mstsc)을 열 수 없습니다: {e}")})),
-    }
-}
-
 fn stop_session(id: &str) {
-    let hw = home(|m| m.sessions.get(id).map(|s| s.hwnd));
-    match hw {
-        Some(hwnd) if hwnd != 0 => unsafe {
-            PostMessageW(hwnd as HWND, WM_CLOSE, 0, 0);
-        },
-        Some(_) => home(|m| {
-            if let Some(s) = m.sessions.get_mut(id) {
-                let _ = s.child.kill();
-            }
-        }),
-        None => {}
-    }
-}
-
-unsafe fn focus_session(id: &str) {
-    if let Some(hw) = home(|m| m.sessions.get(id).map(|s| s.hwnd)).filter(|&h| h != 0) {
-        let w = hw as HWND;
-        if IsIconic(w) != 0 {
-            ShowWindow(w, SW_RESTORE);
+    home(|m| {
+        if let Some(s) = m.sessions.get_mut(id) {
+            plat::stop_session(&mut s.proc);
         }
-        SetForegroundWindow(w);
+    });
+}
+
+fn focus_session(id: &str) {
+    home(|m| {
+        if let Some(s) = m.sessions.get(id) {
+            plat::focus_session(&s.proc);
+        }
+    });
+}
+
+fn host_label(id: &str) -> String {
+    home(|m| m.hosts.iter().find(|x| x.id == id).map(|h| h.label().to_string())).unwrap_or_default()
+}
+
+/// Keep a session's last picture (a PNG data URL from the window) as the card thumbnail.
+fn save_thumb(id: &str, url: &str) -> bool {
+    let Some(b64) = url.strip_prefix("data:image/png;base64,") else { return false };
+    if !home(|m| m.settings.thumbnails) || !id.chars().all(|c| c.is_ascii_hexdigit()) || b64.len() > 4 << 20 {
+        return false;
+    }
+    match crate::ws::base64_decode(b64) {
+        Some(png) if png.starts_with(b"\x89PNG") => std::fs::write(store::thumb_path(id), png).is_ok(),
+        _ => false,
     }
 }
 
-unsafe fn on_session(id: &str, v: Value) {
+fn on_session(id: &str, v: Value) {
     match s(&v, "ev").as_str() {
         "stage" => {
             home(|m| {
@@ -957,10 +699,11 @@ unsafe fn on_session(id: &str, v: Value) {
             send_session(id);
         }
         "connected" => {
+            let label = host_label(id);
             let pw = home(|m| {
                 let x = m.sessions.get_mut(id)?;
                 x.state = "connected".into();
-                x.hwnd = v["hwnd"].as_i64().unwrap_or(0) as isize;
+                plat::session_connected(&mut x.proc, &v, &label);
                 x.save_pw.take()
             });
             if let Some(p) = pw {
@@ -984,11 +727,10 @@ unsafe fn on_session(id: &str, v: Value) {
             home(|m| m.sessions.remove(id));
             send_session(id);
             let kind = s(&v, "kind");
-            let label = home(|m| m.hosts.iter().find(|x| x.id == id).map(|h| h.label().to_string())).unwrap_or_default();
             if kind == "lost" || kind == "auth" {
-                notify(&format!("{label} 연결 종료"), &s(&v, "msg"));
+                notify(&format!("{} 연결 종료", host_label(id)), &s(&v, "msg"));
             }
-            ShowWindow(home(|m| m.hwnd), SW_SHOW);
+            plat::show_home();
             send(json!({"type": "error", "id": id, "kind": kind, "msg": s(&v, "msg")}));
         }
         "reconnecting" => {
@@ -998,8 +740,7 @@ unsafe fn on_session(id: &str, v: Value) {
                 }
             });
             if v["n"].as_u64() == Some(1) {
-                let label = home(|m| m.hosts.iter().find(|x| x.id == id).map(|h| h.label().to_string())).unwrap_or_default();
-                notify(&format!("{label} 연결이 끊겼습니다"), "자동으로 다시 연결하는 중입니다.");
+                notify(&format!("{} 연결이 끊겼습니다", host_label(id)), "자동으로 다시 연결하는 중입니다.");
             }
             send_session(id);
         }
@@ -1026,17 +767,23 @@ unsafe fn on_session(id: &str, v: Value) {
             store::save_settings(&st);
             send(json!({"type": "settings", "settings": st}));
         }
-        "thumb" => send(json!({"type": "thumb", "id": id, "v": thumb_version(id)})),
+        "thumb" => {
+            if v.get("png").is_none() || save_thumb(id, &s(&v, "png")) {
+                send(json!({"type": "thumb", "id": id, "v": thumb_version(id)}));
+            }
+        }
         "closed" => {}
+        // The connection's window asked to close (macOS).
+        "close" => stop_session(id),
         e => crate::log!("session {id}: unknown event {e}"),
     }
 }
 
-unsafe fn on_exit(id: &str) {
+fn on_exit(id: &str) {
     let gone = home(|m| m.sessions.remove(id));
-    if let Some(mut s) = gone {
-        let _ = s.child.wait();
-        if s.state == "connecting" {
+    if let Some(s) = gone {
+        let early = s.state == "connecting";
+        if plat::reap(s.proc) && early {
             // Died before reporting anything useful.
             send(json!({"type": "error", "id": id, "kind": "other", "msg": "연결 프로세스가 예기치 않게 종료되었습니다"}));
         }
@@ -1044,7 +791,7 @@ unsafe fn on_exit(id: &str) {
     send_session(id);
 }
 
-unsafe fn drain() {
+fn drain() {
     let evs = std::mem::take(&mut *QUEUE.lock().unwrap());
     for e in evs {
         match e {
@@ -1078,6 +825,7 @@ unsafe fn drain() {
                     send(web_info());
                 }
             }
+            #[cfg(windows)]
             Event::Share => {
                 let now = crate::share::viewers();
                 let fresh: Vec<String> = now.iter().map(|v| v.peer.clone()).filter(|p| !SHARE_SEEN.lock().unwrap().contains(p)).collect();
@@ -1085,9 +833,11 @@ unsafe fn drain() {
                 for p in fresh {
                     notify("누군가 이 PC를 보고 있습니다", &format!("{p}에서 연결했습니다. 알림 영역의 Itda에서 끊을 수 있습니다."));
                 }
-                tray_tip(&now);
+                plat::tray_tip(now.len());
                 send(share_info());
             }
+            #[cfg(not(windows))]
+            Event::Share => {}
             Event::TsServe(r) => {
                 *TS_ERR.lock().unwrap() = r.err().unwrap_or_default();
                 scan_tailnet();
@@ -1097,7 +847,15 @@ unsafe fn drain() {
                 on_ipc(v);
                 let _ = done.send(());
             }
+            Event::Page(v) => send(v),
         }
+    }
+}
+
+/// A notification from the system (when the settings allow).
+fn notify(title: &str, text: &str) {
+    if home(|m| m.settings.notify) {
+        plat::notify(title, text);
     }
 }
 
@@ -1182,180 +940,9 @@ fn home_web_port() -> u16 {
     WEB_PORT.load(Relaxed)
 }
 
-// ---------------------------------------------------------------- tray
-
-unsafe fn tray_data(h: HWND) -> NOTIFYICONDATAW {
-    let mut d: NOTIFYICONDATAW = std::mem::zeroed();
-    d.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
-    d.hWnd = h;
-    d.uID = 1;
-    d
-}
-
-fn copy_w(dst: &mut [u16], s: &str) {
-    let w: Vec<u16> = s.encode_utf16().take(dst.len() - 1).collect();
-    dst[..w.len()].copy_from_slice(&w);
-    dst[w.len()] = 0;
-}
-
-unsafe fn tray_add(h: HWND) {
-    let mut d = tray_data(h);
-    d.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-    d.uCallbackMessage = WM_TRAY;
-    d.hIcon = LoadIconW(GetModuleHandleW(null()), 1 as _);
-    if d.hIcon.is_null() {
-        d.hIcon = LoadIconW(null_mut(), IDI_APPLICATION);
-    }
-    copy_w(&mut d.szTip, crate::APP);
-    Shell_NotifyIconW(NIM_ADD, &d);
-}
-
-unsafe fn tray_remove(h: HWND) {
-    let d = tray_data(h);
-    Shell_NotifyIconW(NIM_DELETE, &d);
-}
-
-/// Windows notification (balloon from the tray icon).
-fn notify(title: &str, text: &str) {
-    if !home(|m| m.settings.notify) {
-        return;
-    }
-    unsafe {
-        let h = home(|m| m.hwnd);
-        let mut d = tray_data(h);
-        d.uFlags = NIF_INFO;
-        copy_w(&mut d.szInfoTitle, title);
-        copy_w(&mut d.szInfo, if text.is_empty() { " " } else { text });
-        d.dwInfoFlags = NIIF_INFO;
-        Shell_NotifyIconW(NIM_MODIFY, &d);
-    }
-}
-
-unsafe fn show_home(h: HWND) {
-    ShowWindow(h, SW_SHOW);
-    if IsIconic(h) != 0 {
-        ShowWindow(h, SW_RESTORE);
-    }
-    SetForegroundWindow(h);
-}
-
-unsafe fn tray_menu(h: HWND) {
-    let m = CreatePopupMenu();
-    AppendMenuW(m, MF_STRING | MF_DEFAULT, TRAY_OPEN, wide("Itda 열기").as_ptr());
-    let mut recent = home(|m| m.hosts.clone());
-    recent.sort_by(|a, b| b.last_used.cmp(&a.last_used));
-    recent.truncate(6);
-    if !recent.is_empty() {
-        AppendMenuW(m, MF_SEPARATOR, 0, null());
-        for (i, x) in recent.iter().enumerate() {
-            let live = home(|mm| mm.sessions.contains_key(&x.id));
-            let label = format!("{}{}", x.label(), if live { "  (연결됨)" } else { "" });
-            AppendMenuW(m, MF_STRING, TRAY_HOST0 + i, wide(&label).as_ptr());
-        }
-    }
-    AppendMenuW(m, MF_SEPARATOR, 0, null());
-    let sharing = home(|m| m.settings.web.on || m.settings.share.on);
-    AppendMenuW(m, MF_STRING, TRAY_SHARE, wide(if sharing { "공유 중 — QR·주소 보기" } else { "다른 기기에서 보기 (공유)…" }).as_ptr());
-    AppendMenuW(m, MF_STRING, TRAY_QUIT, wide("종료").as_ptr());
-    let mut pt = POINT { x: 0, y: 0 };
-    GetCursorPos(&mut pt);
-    SetForegroundWindow(h);
-    let cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, h, null()) as usize;
-    DestroyMenu(m);
-    match cmd {
-        TRAY_OPEN => show_home(h),
-        TRAY_SHARE => {
-            show_home(h);
-            send(json!({"type": "go", "page": "share"}));
-        }
-        TRAY_QUIT => {
-            DestroyWindow(h);
-        }
-        c if c >= TRAY_HOST0 && c < TRAY_HOST0 + recent.len() => {
-            let id = recent[c - TRAY_HOST0].id.clone();
-            if store::get_password(&id).is_none() && !home(|m| m.sessions.contains_key(&id)) {
-                show_home(h); // the page asks for the password
-            }
-            connect(&id, None, false);
-        }
-        _ => {}
-    }
-}
-
-// ---------------------------------------------------------------- window
-
-unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    match m {
-        WM_SIZE => resize_webview(h),
-        WM_EVENT => drain(),
-        WM_COPYDATA => {
-            let cd = &*(lp as *const windows_sys::Win32::System::DataExchange::COPYDATASTRUCT);
-            if cd.dwData == 1 && !cd.lpData.is_null() && cd.cbData < 4096 {
-                let q = String::from_utf8_lossy(std::slice::from_raw_parts(cd.lpData as *const u8, cd.cbData as usize)).into_owned();
-                show_home(h);
-                send(json!({"type": "quick", "address": q}));
-            }
-            return 1;
-        }
-        WM_TRAY => match (lp & 0xffff) as u32 {
-            WM_LBUTTONUP | WM_LBUTTONDBLCLK => show_home(h),
-            WM_RBUTTONUP | WM_CONTEXTMENU => tray_menu(h),
-            _ => {}
-        },
-        WM_GETMINMAXINFO => {
-            let mi = &mut *(lp as *mut MINMAXINFO);
-            let d = GetDpiForWindow(h).max(96) as i32;
-            mi.ptMinTrackSize = POINT { x: 720 * d / 96, y: 500 * d / 96 };
-        }
-        WM_SETTINGCHANGE => {
-            if lp != 0 {
-                let p = lp as *const u16;
-                let mut n = 0;
-                while *p.add(n) != 0 && n < 64 {
-                    n += 1;
-                }
-                if String::from_utf16_lossy(std::slice::from_raw_parts(p, n)) == "ImmersiveColorSet" {
-                    apply_theme(h);
-                    send(json!({"type": "system_theme", "dark": system_dark()}));
-                }
-            }
-            return DefWindowProcW(h, m, wp, lp);
-        }
-        WM_DPICHANGED => {
-            let r = &*(lp as *const RECT);
-            SetWindowPos(h, null_mut(), r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-        WM_CLOSE => {
-            let (tray, hinted) = home(|m| (m.settings.tray, m.settings.tray_hint_shown));
-            if tray {
-                ShowWindow(h, SW_HIDE);
-                if !hinted {
-                    let st = home(|m| {
-                        m.settings.tray_hint_shown = true;
-                        m.settings.clone()
-                    });
-                    store::save_settings(&st);
-                    notify("Itda는 계속 실행 중입니다", "알림 영역 아이콘에서 다시 열거나 종료할 수 있습니다.");
-                }
-            } else {
-                DestroyWindow(h);
-            }
-        }
-        WM_DESTROY => {
-            let wv = WEBVIEW.with(|w| w.borrow_mut().take());
-            drop(wv);
-            PostQuitMessage(0);
-        }
-        _ if m != 0 && m == TRAY_MSG.load(Relaxed) => tray_add(h),
-        _ => return DefWindowProcW(h, m, wp, lp),
-    }
-    0
-}
-
-
-/// Test-only stand-in for WebView2 (`ITDA_TEST_HTTP=<port>`): serves the same page on
+/// Test-only stand-in for the webview (`ITDA_TEST_HTTP=<port>`): serves the same page on
 /// 127.0.0.1 and carries the same IPC over HTTP, so a headless browser can drive the real
-/// home logic where WebView2 can't run (e.g. a non-interactive window station).
+/// home logic where the webview can't run (e.g. a non-interactive window station).
 mod test_bridge {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::{TcpListener, TcpStream};
@@ -1414,8 +1001,17 @@ mod test_bridge {
         let (status, mime, data): (&str, &str, Vec<u8>) = match (line.starts_with("POST"), path.as_str()) {
             (true, "/ipc") => {
                 if let Ok(v) = serde_json::from_slice(&body) {
-                    super::QUEUE.lock().unwrap().push(super::Event::Session("__ipc".into(), v));
-                    unsafe { super::PostMessageW(super::HWND_HOME.load(Relaxed) as _, super::WM_EVENT, 0, 0) };
+                    super::post(super::Event::Session("__ipc".into(), v));
+                }
+                ("204 No Content", "text/plain", Vec::new())
+            }
+            // What a connection would report (macOS windows): drives the home's session logic.
+            (true, p) if p.starts_with("/session/") => {
+                let id = p.trim_start_matches("/session/").to_string();
+                match serde_json::from_slice::<serde_json::Value>(&body) {
+                    Ok(v) if v["ev"] == "exit" => super::post(super::Event::Exit(id)),
+                    Ok(v) => super::post(super::Event::Session(id, v)),
+                    Err(_) => {}
                 }
                 ("204 No Content", "text/plain", Vec::new())
             }

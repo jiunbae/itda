@@ -59,6 +59,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
   <key>NSLocalNetworkUsageDescription</key><string>같은 네트워크의 Mac과 PC를 찾고 연결하려면 로컬 네트워크 접근이 필요합니다.</string>
   <key>NSBonjourServices</key><array><string>_rfb._tcp</string></array>
+  <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
   <key>NSHumanReadableCopyright</key><string>MIT License · https://jiun.dev/itda/</string>
 </dict>
 </plist>

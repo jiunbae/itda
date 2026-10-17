@@ -21,6 +21,17 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const I = (code) => `<span class="i">&#x${code};</span>`;
 
+// Itda for Mac shows this same home; the words and a few controls follow the platform.
+const MAC = /Macintosh|Mac OS X/.test(navigator.userAgent) && !/Windows/.test(navigator.userAgent);
+const HERE = MAC ? '이 Mac' : '이 PC';
+const MOD = MAC ? '⌘' : 'Ctrl';
+const VAULT = MAC ? '이 Mac의 키체인' : '이 PC의 Windows 자격 증명 관리자';
+if (MAC) {
+  document.documentElement.classList.add('mac');
+  document.querySelector('.search kbd').textContent = '⌘F';
+  document.getElementById('newBtn').title = '새 연결 (⌘N)';
+}
+
 function send(cmd, data = {}) {
   try {
     window.ipc.postMessage(JSON.stringify({ cmd, ...data }));
@@ -90,7 +101,7 @@ function setZoom(z) {
   S.settings.zoom = z;
   saveSettings();
   clearTimeout(zoomToast);
-  zoomToast = setTimeout(() => toast(`화면 크기 ${z}% — Ctrl+0으로 원래대로`, 'E71E'), 120);
+  zoomToast = setTimeout(() => toast(`화면 크기 ${z}% — ${MOD}+0으로 원래대로`, 'E71E'), 120);
 }
 document.addEventListener('wheel', (e) => {
   if (!e.ctrlKey) return;
@@ -192,6 +203,9 @@ function onMessage(m) {
     case 'go':
       closeModal();
       go(m.page);
+      break;
+    case 'new':
+      if (!topModal()) openEdit();
       break;
     case 'share':
       S.share = m;
@@ -397,11 +411,11 @@ function showOnboarding(step = 'welcome') {
   const back = `<button class="btn subtle left" data-ob="welcome">${I('E72B')}처음으로</button>`;
   const steps = {
     welcome: () => `<div class="ob-hero"><div class="logo ob-logo"></div><h2>Itda에 오신 것을 환영합니다</h2>
-        <p>이 PC에서 Mac과 다른 PC를 열고, 휴대폰이나 Mac의 브라우저로 이 PC와 내 기기들을 볼 수 있습니다.<br>무엇부터 할까요?</p></div>
+        <p>${MAC ? '이 Mac에서 다른 Mac과 Windows PC, Linux를 열고, 휴대폰 브라우저로 내 기기들을 볼 수 있습니다.' : '이 PC에서 Mac과 다른 PC를 열고, 휴대폰이나 Mac의 브라우저로 이 PC와 내 기기들을 볼 수 있습니다.'}<br>무엇부터 할까요?</p></div>
       <div class="ob-choices">
         ${choice('mac', 'E7F4', 'Mac 화면 열기', 'Mac의 화면 공유로 연결합니다')}
         ${choice('win', 'E7F8', '다른 Windows PC 열기', 'Itda 공유 또는 원격 데스크톱')}
-        ${choice('phone', 'E8EA', '휴대폰·Mac에서 보기', 'QR 하나로 브라우저에서 엽니다')}
+        ${choice('phone', 'E8EA', MAC ? '휴대폰에서 보기' : '휴대폰·Mac에서 보기', 'QR 하나로 브라우저에서 엽니다')}
         ${choice('linux', 'E756', 'Linux · 기타 VNC', 'VNC 서버가 있는 기기')}
       </div>
       <div class="foot"><span class="ob-dots"><i class="on"></i><i></i><i></i></span><button class="btn subtle" data-ob="skip">건너뛰기</button></div>`,
@@ -424,7 +438,15 @@ function showOnboarding(step = 'welcome') {
             <button class="btn" data-ob="win-rdp">${I('E710')}원격 데스크톱으로 추가</button></div>
         </div></div>
       <div class="foot">${back}<span class="ob-dots"><i></i><i class="on"></i><i></i></span></div>`,
-    phone: () => `<div class="ob-body"><h2>${I('E8EA')} 휴대폰·Mac 브라우저에서 보기</h2>
+    phone: () => MAC ? `<div class="ob-body"><h2>${I('E8EA')} 휴대폰 브라우저에서 보기</h2>
+        <ol class="ob-list">
+          ${check(1, '아래 버튼을 누르면 <b>웹 뷰어</b>가 켜지고 QR 코드가 나옵니다.')}
+          ${check(2, 'macOS가 <b>들어오는 네트워크 연결</b>을 허용할지 물으면 <b>허용</b>을 누르세요.')}
+          ${check(3, '휴대폰 카메라로 QR을 찍고 <b>6자리 PIN</b>을 넣으면 이 Mac에 저장된 기기가 보입니다.')}
+          ${check(4, 'iPhone은 공유 → <b>홈 화면에 추가</b>로 앱처럼 씁니다.')}
+        </ol>${note('집 밖에서도 쓰려면 이 Mac과 휴대폰에 <b>Tailscale</b>을 설치해 같은 계정으로 로그인하세요.')}</div>
+      <div class="foot">${back}<span class="ob-dots"><i></i><i class="on"></i><i></i></span><button class="btn primary" data-ob="phone-on">${I('E768')}켜고 QR 보기</button></div>`
+    : `<div class="ob-body"><h2>${I('E8EA')} 휴대폰·Mac 브라우저에서 보기</h2>
         <ol class="ob-list">
           ${check(1, '아래 버튼을 누르면 <b>웹 뷰어</b>와 <b>이 PC 공유</b>가 켜지고 QR 코드가 나옵니다.')}
           ${check(2, 'Windows 방화벽이 물으면 <b>개인 네트워크</b>를 허용하세요.')}
@@ -549,7 +571,7 @@ function webPanel(w) {
       <input class="input port" id="web-port" value="${esc(w.port)}" inputmode="numeric" aria-label="포트"></div>`;
   }
   if (!info.running) return `<div class="setting last"><span class="spin"></span><div class="txt"><b>시작하는 중…</b></div></div>`;
-  const urls = (info.urls || []).filter((u) => !(info.tailscale && u.kind === 'tailscale')).map((u) => `<div class="url-row"><code class="url">${esc(u.url)}</code>${u.kind === 'tailscale' ? '<span class="pill mute">Tailscale · 밖에서</span>' : '<span class="pill mute">같은 Wi-Fi</span>'}</div>`).join('') || '<span>이 PC의 네트워크 주소를 찾지 못했습니다</span>';
+  const urls = (info.urls || []).filter((u) => !(info.tailscale && u.kind === 'tailscale')).map((u) => `<div class="url-row"><code class="url">${esc(u.url)}</code>${u.kind === 'tailscale' ? '<span class="pill mute">Tailscale · 밖에서</span>' : '<span class="pill mute">같은 Wi-Fi</span>'}</div>`).join('') || `<span>${HERE}의 네트워크 주소를 찾지 못했습니다</span>`;
   const ts = info.tailscale;
   const useTs = ts && S.qrMode === 'ts';
   const qrSwitch = ts ? `<div class="seg qr-seg"><button data-act="qr-lan" class="${useTs ? '' : 'on'}">같은 Wi-Fi</button><button data-act="qr-ts" class="${useTs ? 'on' : ''}">Tailscale</button></div>` : '';
@@ -571,7 +593,7 @@ function webPanel(w) {
         <div class="pin-row"><span>접속 PIN</span><code class="pin" id="web-pin" data-pin="${esc(info.pin)}">••••••</code>
           <button class="btn sm" data-act="pin-show">${I('E7B3')}보기</button>
           <button class="btn sm subtle" data-act="pin-reset">${I('E72C')}새 PIN</button></div>
-        <span>같은 Wi-Fi에서 쓰세요. 밖에서는 Tailscale 같은 VPN으로 이 PC에 접속하고, 인터넷에 이 포트를 직접 열지 마세요. 처음 켤 때 Windows 방화벽이 허용을 물으면 ‘개인 네트워크’를 허용하세요.</span>
+        <span>같은 Wi-Fi에서 쓰세요. 밖에서는 Tailscale 같은 VPN으로 ${HERE}에 접속하고, 인터넷에 이 포트를 직접 열지 마세요. ${MAC ? '처음 켤 때 macOS가 들어오는 연결을 허용할지 물으면 ‘허용’을 누르세요.' : '처음 켤 때 Windows 방화벽이 허용을 물으면 ‘개인 네트워크’를 허용하세요.'}</span>
       </div></div>
     <div class="setting last">${I('E968')}<div class="txt"><b>포트</b><span>다른 앱과 겹치면 바꾸세요</span></div>
       <input class="input port" id="web-port" value="${esc(w.port)}" inputmode="numeric" aria-label="포트"></div>`;
@@ -580,6 +602,7 @@ function webPanel(w) {
 // One place for everything other devices use: the web viewer (browsers) and this PC's
 // VNC server (other Itdas, VNC apps). Turning on "this PC from a browser" needs both.
 function renderShare() {
+  if (MAC) return renderShareMac();
   const st = S.settings;
   const web = st.web || {}, sh = st.share || {};
   const both = !web.on && !sh.on
@@ -602,6 +625,34 @@ function renderShare() {
   </div>`;
 }
 
+// macOS: the web viewer as on Windows; this Mac itself is shared with the system's own
+// Screen Sharing, so the page shows how to turn it on and what others should type.
+function renderShareMac() {
+  const web = S.settings.web || {};
+  const info = S.share || {};
+  const hero = !web.on
+    ? `<div class="share-hero">${I('E8EA')}<div class="txt"><b>휴대폰이나 다른 기기의 브라우저로 내 기기들을 보세요</b>
+        <span>한 번 켜면 QR 코드가 나옵니다. 휴대폰 카메라로 찍고 PIN을 넣으면 이 Mac에 저장된 기기가 보입니다.</span></div>
+        <button class="btn primary" data-act="web-on">${I('E768')}웹 뷰어 켜기</button></div>`
+    : '';
+  const addr = info.local_name || 'mac.local';
+  const ts = info.tailscale ? `<div class="url-row"><code class="url">${esc(info.tailscale)}</code><span class="pill mute">Tailscale · 어디서나</span></div>` : '';
+  return `<div class="page share-page">
+    ${hero}
+    <div class="group-title" id="web-viewer">${I('E774')} 브라우저로 보기 — 웹 뷰어 <span class="pill ok">추천</span><a href="#" class="help-link" data-help="phone">자세히</a></div>
+    ${setting('E8EA', '웹 뷰어', 'iPhone·Android·PC의 브라우저로 이 Mac에 저장된 Mac·Windows PC·Linux를 엽니다. 설치할 앱이 없고, 암호는 이 Mac 밖으로 나가지 않습니다.', toggle('on', web.on, 'web'), !web.on)}
+    ${web.on ? webPanel(web) : ''}
+    <div class="group-title" id="share-pc">${I('E7F4')} 이 Mac 화면 공유 — macOS 화면 공유<a href="#" class="help-link" data-help="share">자세히</a></div>
+    <div class="setting">${I('E7F4')}<div class="txt"><b>이 Mac은 macOS에 들어 있는 ‘화면 공유’로 공유합니다</b>
+        <span><strong>시스템 설정 → 일반 → 공유 → 화면 공유</strong>를 켜면 다른 기기의 Itda, Mac의 화면 공유 앱, VNC 앱에서 이 Mac을 보고 조작할 수 있습니다.</span></div>
+      <button class="btn" data-act="sys-sharing">${I('E8A7')}공유 설정 열기</button></div>
+    <div class="setting last">${I('E946')}<div class="txt"><b>다른 기기에서는 이렇게 추가하세요</b>
+        <span>종류는 <strong>Mac</strong>, 주소는 아래 중 하나, 계정은 이 Mac의 사용자 이름${info.user ? `(<strong>${esc(info.user)}</strong>)` : '(짧은 이름)'}과 로그인 암호입니다.</span>
+        <div class="urls"><div class="url-row"><code class="url">${esc(addr)}</code><span class="pill mute">같은 Wi-Fi</span></div>${ts}</div>
+        <span>같은 화면의 <strong>원격 로그인</strong>도 켜 두면 밖에서 SSH로 암호화해 연결할 수 있습니다.</span></div></div>
+  </div>`;
+}
+
 function renderSettings() {
   const st = S.settings;
   const d = st.defaults || {};
@@ -615,36 +666,36 @@ function renderSettings() {
     <div class="banner">${I('E897')}<div class="txt"><b>설정이 무엇인지 모르겠다면</b><span>모든 설정을 쉬운 말로 풀어 둔 안내가 있습니다. 처음 설치한 상태가 추천 설정입니다.</span></div>
       <button class="btn" data-help="settings">${I('E713')}설정 자세히</button></div>
     <div class="group-title">모양${more('look')}</div>
-    ${setting('E790', '테마', 'Windows 설정을 따르거나 직접 고릅니다', seg('theme', st.theme, [['system', '시스템'], ['light', '라이트'], ['dark', '다크']]))}
+    ${setting('E790', '테마', `${MAC ? 'macOS' : 'Windows'} 설정을 따르거나 직접 고릅니다`, seg('theme', st.theme, [['system', '시스템'], ['light', '라이트'], ['dark', '다크']]))}
     ${setting('F0E2', '주소록 보기', '', seg('view', st.view, [['grid', '카드'], ['list', '목록']]))}
-    ${setting('E71E', '화면 크기', 'Ctrl + / Ctrl − / Ctrl+휠로도 바꿀 수 있습니다 (Ctrl+0 = 100%)', seg('zoom', st.zoom || 100, [[90, '90%'], [100, '100%'], [110, '110%'], [125, '125%'], [150, '150%']]), true)}
+    ${setting('E71E', '화면 크기', MAC ? '⌘ + / ⌘ − 로도 바꿀 수 있습니다 (⌘0 = 100%)' : 'Ctrl + / Ctrl − / Ctrl+휠로도 바꿀 수 있습니다 (Ctrl+0 = 100%)', seg('zoom', st.zoom || 100, [[90, '90%'], [100, '100%'], [110, '110%'], [125, '125%'], [150, '150%']]), true)}
 
-    <div class="group-title">접속 창${more('session')}<a href="#" class="help-link" data-help="keys">단축키 전체 보기</a></div>
+    ${MAC ? '' : `<div class="group-title">접속 창${more('session')}<a href="#" class="help-link" data-help="keys">단축키 전체 보기</a></div>
     ${setting('E7C4', '툴바', '화면 위쪽 가운데의 툴바 표시 방식', `<select class="input" data-select="toolbar"><option value="auto" ${st.toolbar === 'auto' ? 'selected' : ''}>자동 숨김</option><option value="pinned" ${st.toolbar === 'pinned' ? 'selected' : ''}>항상 표시</option><option value="hidden" ${st.toolbar === 'hidden' ? 'selected' : ''}>숨김 (단축키만)</option></select>`)}
     ${setting('E765', '단축키 조합', 'Mac으로 보내지 않고 Itda가 처리하는 키 조합', seg('hotkey', st.hotkey, [['ctrl_alt', 'Ctrl+Alt'], ['ctrl_shift', 'Ctrl+Shift']]))}
-    <div class="setting last" style="align-items:flex-start">${I('E8AB')}<div class="txt"><b>단축키</b><table class="shortcuts">${keys.map(([a, k]) => `<tr><td>${a}</td><td><kbd>${p}+${k}</kbd></td></tr>`).join('')}</table></div></div>
+    <div class="setting last" style="align-items:flex-start">${I('E8AB')}<div class="txt"><b>단축키</b><table class="shortcuts">${keys.map(([a, k]) => `<tr><td>${a}</td><td><kbd>${p}+${k}</kbd></td></tr>`).join('')}</table></div></div>`}
 
     <div class="group-title">새 연결 기본값${more('defaults')}</div>
     ${setting('E9A6', '화면 배율', '', seg('actual', d.actual, [[false, '창에 맞춤'], [true, '실제 크기']], 'defaults'))}
-    ${setting('E77F', '클립보드 공유', '복사한 텍스트를 Windows와 Mac이 주고받습니다', toggle('clipboard', d.clipboard, 'defaults'))}
-    ${setting('E72C', '자동 재연결', '네트워크가 끊기면 자동으로 다시 연결합니다', toggle('reconnect', d.reconnect, 'defaults'))}
-    ${setting('E765', 'Ctrl ↔ ⌘ Cmd 바꾸기', '켜면 Ctrl+C/V가 Mac의 ⌘C/⌘V로 동작합니다 (Windows 키는 Ctrl)', toggle('swap', d.swap, 'defaults'))}
-    ${setting('E8C1', '한/영 키', 'Mac의 입력 소스 전환 단축키에 맞추세요', seg('hangul_caps', d.hangul_caps, [[false, 'Ctrl+Space'], [true, 'Caps Lock']], 'defaults'), true)}
+    ${setting('E77F', '클립보드 공유', MAC ? '복사한 텍스트를 이 Mac과 원격 기기가 주고받습니다' : '복사한 텍스트를 Windows와 Mac이 주고받습니다', toggle('clipboard', d.clipboard, 'defaults'))}
+    ${setting('E72C', '자동 재연결', '네트워크가 끊기면 자동으로 다시 연결합니다', toggle('reconnect', d.reconnect, 'defaults'), MAC)}
+    ${MAC ? '' : `${setting('E765', 'Ctrl ↔ ⌘ Cmd 바꾸기', '켜면 Ctrl+C/V가 Mac의 ⌘C/⌘V로 동작합니다 (Windows 키는 Ctrl)', toggle('swap', d.swap, 'defaults'))}
+    ${setting('E8C1', '한/영 키', 'Mac의 입력 소스 전환 단축키에 맞추세요', seg('hangul_caps', d.hangul_caps, [[false, 'Ctrl+Space'], [true, 'Caps Lock']], 'defaults'), true)}`}
 
     <div class="group-title">공유</div>
-    ${setting('E72D', '다른 기기에서 보기 · 이 PC 공유', '웹 뷰어(QR·PIN)와 이 PC 공유는 왼쪽의 ‘공유’ 페이지에서 켭니다', `<button class="btn" data-act="page" data-page="share">${I('E72D')}공유 열기</button>`, true)}
+    ${setting('E72D', MAC ? '다른 기기에서 보기' : '다른 기기에서 보기 · 이 PC 공유', MAC ? '웹 뷰어(QR·PIN)와 이 Mac의 화면 공유 안내는 왼쪽의 ‘공유’ 페이지에 있습니다' : '웹 뷰어(QR·PIN)와 이 PC 공유는 왼쪽의 ‘공유’ 페이지에서 켭니다', `<button class="btn" data-act="page" data-page="share">${I('E72D')}공유 열기</button>`, true)}
 
     <div class="group-title">앱${more('app')}</div>
-    ${setting('E8A5', '창을 닫으면 알림 영역에서 계속 실행', '알림 영역 아이콘으로 빠르게 다시 연결할 수 있습니다', toggle('tray', st.tray))}
+    ${MAC ? '' : setting('E8A5', '창을 닫으면 알림 영역에서 계속 실행', '알림 영역 아이콘으로 빠르게 다시 연결할 수 있습니다', toggle('tray', st.tray))}
     ${setting('EA8F', '알림', '연결이 끊기거나 다시 연결될 때 알려 줍니다', toggle('notify', st.notify))}
-    ${setting('E91B', '미리보기 저장', '마지막 화면을 이 PC에만 작게 저장해 주소록에 표시합니다', toggle('thumbnails', st.thumbnails), true)}
+    ${setting('E91B', '미리보기 저장', `마지막 화면을 ${HERE}에만 작게 저장해 주소록에 표시합니다`, toggle('thumbnails', st.thumbnails), true)}
 
     <div class="group-title">정보</div>
     <div class="setting last"><div class="logo" style="width:36px;height:36px"></div><div class="txt"><b>Itda ${esc(S.version)}</b><span>내 기기를 잇다 — 가볍고 빠른 원격 데스크톱</span></div>
       <button class="btn" data-act="onboard">${I('E768')}시작 안내</button>
       <button class="btn" data-act="open" data-what="log">${I('E9F9')}로그</button>
       <button class="btn" data-act="open" data-what="folder">${I('E8B7')}데이터 폴더</button>
-      <button class="btn" data-act="open" data-what="screenshots">${I('E722')}스크린샷</button></div>
+      ${MAC ? '' : `<button class="btn" data-act="open" data-what="screenshots">${I('E722')}스크린샷</button>`}</div>
   </div>`;
 }
 
@@ -752,7 +803,7 @@ function renderAccounts() {
   return `<div class="page">${sugg}
     ${S.accounts.length ? `<div class="section-head">${I('E77B')}계정 ${S.accounts.length}개<span class="line"></span><button class="btn sm" data-act="acct-new">${I('E710')}새 계정</button></div>` : ''}
     ${list}
-    <p class="note-line" style="margin-top:16px">암호와 SSH 키 암호는 이 PC의 Windows 자격 증명 관리자에만 저장됩니다. 웹 뷰어로 접속한 기기에는 전달되지 않습니다.</p></div>`;
+    <p class="note-line" style="margin-top:16px">암호와 SSH 키 암호는 ${VAULT}에만 저장됩니다. 웹 뷰어로 접속한 기기에는 전달되지 않습니다.</p></div>`;
 }
 
 function openAccount(init = {}) {
@@ -808,7 +859,7 @@ const KINDS = {
     user: 'Mac 계정 이름', userPh: '예: alex', userHint: 'Mac 로그인에 쓰는 짧은 이름 (Apple ID 아님)', pass: 'Mac 로그인 암호', ssh: true },
   windows: { kind: '', os: 'windows', label: 'Windows · Itda', hint: '그 PC의 Itda에서 ‘공유 → 이 PC 공유’를 켜 두세요. 어떤 Windows든 됩니다.', hostPh: 'STUDY-PC.local, 192.168.0.40',
     user: null, pass: '공유 암호', passHint: '그 PC의 Itda → 공유 페이지에 표시된 8자리 암호', ssh: false },
-  rdp: { kind: 'rdp', os: 'windows', label: 'Windows 원격 데스크톱', hint: 'Windows Pro의 원격 데스크톱(설정 → 시스템 → 원격 데스크톱)이 켜진 PC. 이 PC에서는 Windows 원격 데스크톱 앱으로, 웹 뷰어에서는 브라우저로 엽니다.', hostPh: 'OFFICE-PC, 192.168.0.40',
+  rdp: { kind: 'rdp', os: 'windows', label: 'Windows 원격 데스크톱', hint: MAC ? 'Windows Pro의 원격 데스크톱(설정 → 시스템 → 원격 데스크톱)이 켜진 PC. Itda 창에서 바로 엽니다.' : 'Windows Pro의 원격 데스크톱(설정 → 시스템 → 원격 데스크톱)이 켜진 PC. 이 PC에서는 Windows 원격 데스크톱 앱으로, 웹 뷰어에서는 브라우저로 엽니다.', hostPh: 'OFFICE-PC, 192.168.0.40',
     user: 'Windows 계정', userPh: '예: alex, PC이름\\alex, 이메일', userHint: 'Microsoft 계정이면 이메일 주소', pass: 'Windows 암호', ssh: false },
   linux: { kind: '', os: 'linux', label: 'Linux · 기타 VNC', hint: 'Linux(x11vnc, TigerVNC, wayvnc), Raspberry Pi 등 VNC 서버가 있는 기기', hostPh: 'raspberrypi.local, 192.168.0.30:5901',
     user: '사용자 이름 (선택)', userPh: '대부분 비워 둡니다', userHint: 'VNC 암호만 쓰는 서버는 비워 두세요', pass: 'VNC 암호', ssh: true },
@@ -832,7 +883,7 @@ function openEdit(init = {}, mode = {}) {
   const ssh = h.ssh || { on: false, user: '', port: 0 };
   const title = quick ? `${esc(h.host)}에 연결` : existing ? '연결 편집' : '새 연결';
   const tabs = quick ? '' : `<div class="tabs" role="tablist">
-      <button class="on" data-tab="general">일반</button><button data-tab="display">화면</button><button data-tab="input">키보드</button><button data-tab="conn">연결</button></div>`;
+      <button class="on" data-tab="general">일반</button><button data-tab="display">화면</button>${MAC ? '' : '<button data-tab="input">키보드</button>'}<button data-tab="conn">연결</button></div>`;
   const groupsList = groups().map((g) => `<option value="${esc(g)}">`).join('');
   const general = `<div data-pane="general">
       ${quick ? '' : `<div class="field"><label>종류</label><div class="seg kind-seg">
@@ -852,7 +903,7 @@ function openEdit(init = {}, mode = {}) {
           <div class="field" id="user-field" ${KD.user ? '' : 'hidden'}><label id="user-label">${KD.user || ''}</label><input class="input" id="f-user" value="${esc(h.user)}" placeholder="${KD.userPh || ''}" ${quick || existing ? 'autofocus' : ''}><span class="hint" id="user-hint">${KD.userHint || ''}</span></div>
           <div class="field"><label id="pass-label">${KD.pass}</label><div class="input-wrap"><input class="input" id="f-pass" type="password" placeholder="${hasPw && !h.account ? '저장된 암호 사용 (바꾸려면 입력)' : KD.pass}"><button class="reveal i" tabindex="-1" title="암호 보기">&#xE7B3;</button></div></div>
         </div>
-        <label class="check"><input type="checkbox" id="f-save" ${hasPw || !existing ? 'checked' : ''}>암호 저장 <span style="color:var(--text-3);font-size:12px">— Windows 자격 증명 관리자에 암호화되어 저장됩니다</span></label>
+        <label class="check"><input type="checkbox" id="f-save" ${hasPw || !existing ? 'checked' : ''}>암호 저장 <span style="color:var(--text-3);font-size:12px">— ${MAC ? 'Mac 키체인에' : 'Windows 자격 증명 관리자에 암호화되어'} 저장됩니다</span></label>
       </div>
       <span class="hint" id="pass-hint" ${KD.passHint ? '' : 'hidden'}>${KD.passHint || ''}</span>
       <div class="ssh-box" ${KD.ssh ? '' : 'hidden'}>
@@ -870,7 +921,7 @@ function openEdit(init = {}, mode = {}) {
       ${optRow('actual', '실제 크기 (1:1)로 시작', '끄면 창 크기에 맞춰 축소해서 보여 줍니다', o.actual)}
       ${optRow('fullscreen', '전체 화면으로 시작', '', o.fullscreen)}
       ${optRow('view_only', '보기 전용', '마우스와 키보드를 Mac으로 보내지 않습니다', o.view_only)}
-      ${optRow('stats', '통계 표시', 'fps, 전송 속도, 응답 시간', o.stats)}
+      ${MAC ? '' : optRow('stats', '통계 표시', 'fps, 전송 속도, 응답 시간', o.stats)}
     </div>`;
   const input = `<div data-pane="input" hidden>
       ${optRow('swap', 'Ctrl ↔ ⌘ Cmd 바꾸기', '켜면 Ctrl+C/V가 ⌘C/⌘V로 동작합니다. Windows 키는 Ctrl이 됩니다.', o.swap)}
@@ -1102,7 +1153,7 @@ const ERRORS = {
     'Mac이 잠자기 중이라면 <b>에너지 → 네트워크 접근 시 깨우기</b>를 켜 두세요.',
     'Mac의 IP 주소가 바뀌었을 수 있습니다. 주변 Mac 검색으로 다시 찾아보세요.',
   ]],
-  unreachable: ['Mac에 도달할 수 없습니다', '이 PC에서 그 주소로 가는 네트워크 경로가 없습니다.', [
+  unreachable: ['Mac에 도달할 수 없습니다', `${HERE}에서 그 주소로 가는 네트워크 경로가 없습니다.`, [
     'Wi-Fi 또는 유선 네트워크에 연결되어 있는지 확인하세요.',
     '다른 네트워크의 Mac이라면 VPN을 먼저 연결하세요.',
   ]],
@@ -1265,7 +1316,9 @@ function act(a, el) {
       return confirmDialog('새 공유 암호를 만들까요?', '지금 이 PC를 보고 있는 기기는 연결이 끊기고, 다음부터 새 암호가 필요합니다.', '새 암호 만들기', false, () => { S.share = {}; send('share_reset_pw'); toast('새 공유 암호를 만들었습니다', 'E72C'); });
     case 'share-kick': return send('share_kick');
     case 'onboard': return showOnboarding();
+    case 'sys-sharing': return send('url', { url: 'x-apple.systempreferences:com.apple.Sharing-Settings.extension' });
     case 'share-all-on':
+      if (MAC) return act('web-on', el);
       S.settings.share = { port: 5900, ask: true, cmd_as_ctrl: true, ...S.settings.share, on: true };
       S.share = {};
     // falls through
@@ -1381,19 +1434,20 @@ document.addEventListener('keydown', (e) => {
     const m = topModal();
     if (m) return closeModal(m.dataset.key);
   }
-  if (e.ctrlKey && !e.altKey && ['=', '+', '-', '0'].includes(e.key)) {
+  const cmd = MAC ? e.metaKey : e.ctrlKey;
+  if (cmd && !e.altKey && ['=', '+', '-', '0'].includes(e.key)) {
     e.preventDefault();
     return setZoom(e.key === '0' ? 100 : zoomStep(e.key === '-' ? -1 : 1));
   }
   if (topModal()) return;
-  if (e.ctrlKey && !e.altKey && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); return openEdit(); }
-  if ((e.ctrlKey && (e.key === 'f' || e.key === 'F')) || (e.key === '/' && !typing)) { e.preventDefault(); search.focus(); search.select(); return; }
+  if (cmd && !e.altKey && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); return openEdit(); }
+  if ((cmd && (e.key === 'f' || e.key === 'F')) || (e.key === '/' && !typing)) { e.preventDefault(); search.focus(); search.select(); return; }
   if (e.key === 'F5') { e.preventDefault(); return scan(); }
   if (typing) return;
   const c = e.target.closest && e.target.closest('.card, .list-row:not(.list-head)');
   if (c) {
     if (e.key === 'Enter') { e.preventDefault(); connect(c.dataset.id); }
-    else if (e.key === 'Delete') askDelete(c.dataset.id);
+    else if (e.key === 'Delete' || (MAC && e.metaKey && e.key === 'Backspace')) askDelete(c.dataset.id);
     else if (e.key === 'F2') openEdit({ id: c.dataset.id });
     else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) { const r = c.getBoundingClientRect(); showCtx(c.dataset.id, r.left + 20, r.top + 20); }
     else if (['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp'].includes(e.key)) {

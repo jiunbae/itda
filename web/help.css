@@ -28,7 +28,7 @@
 .hstep-txt h3 { margin: 3px 0 8px; font-size: 16px; }
 .hstep-txt p { margin: 0 0 8px; color: var(--text-2); font-size: 14px; line-height: 1.6; }
 .hstep-txt p b, .hstep-txt li b { color: var(--text); }
-.hstep-txt code { font: 12.5px "Cascadia Mono", Consolas, monospace; background: var(--surface-3); border-radius: 4px; padding: 1px 5px; user-select: text; }
+.hstep-txt code { font: 12.5px "Cascadia Mono", Consolas, Menlo, monospace; background: var(--surface-3); border-radius: 4px; padding: 1px 5px; user-select: text; }
 .hstep-txt a, .faq a, .hlead a, .hbody p a { color: var(--accent); }
 .hstep-fig { grid-column: 2; display: flex; gap: 14px; flex-wrap: wrap; justify-content: flex-start; min-width: 0; }
 .hstep-fig > .shot:not(.phone) { width: 100%; max-width: 640px; }
@@ -38,7 +38,7 @@
 .hnote .i { color: var(--accent); margin-top: 2px; }
 .hnote.warn { background: var(--warn-soft); }
 .hnote.warn .i { color: var(--warn); }
-.mark { display: inline-grid; place-items: center; width: 19px; height: 19px; margin: 0 2px; border-radius: 50%; background: #ff5a36; color: #fff; font: 700 11px/1 "Segoe UI", sans-serif; vertical-align: 1px; box-shadow: 0 0 0 2px rgba(255, 90, 54, .25); }
+.mark { display: inline-grid; place-items: center; width: 19px; height: 19px; margin: 0 2px; border-radius: 50%; background: #ff5a36; color: #fff; font: 700 11px/1 "Segoe UI", -apple-system, sans-serif; vertical-align: 1px; box-shadow: 0 0 0 2px rgba(255, 90, 54, .25); }
 
 /* real screenshots */
 .shot { margin: 0; display: block; min-width: 0; }
@@ -186,8 +186,8 @@
 .hset-rec { font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); }
 .hset p { margin: 0; color: var(--text-2); font-size: 14px; line-height: 1.65; }
 .hset p b { color: var(--text); }
-.hset kbd { font: 12px "Segoe UI", sans-serif; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border-strong); background: var(--surface-2); }
-.hset code, .hword code { font: 12.5px "Cascadia Mono", Consolas, monospace; background: var(--surface-3); border-radius: 4px; padding: 1px 5px; }
+.hset kbd { font: 12px "Segoe UI", -apple-system, sans-serif; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border-strong); background: var(--surface-2); }
+.hset code, .hword code { font: 12.5px "Cascadia Mono", Consolas, Menlo, monospace; background: var(--surface-3); border-radius: 4px; padding: 1px 5px; }
 .hset-when { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px !important; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .hset-when .i { color: var(--accent); margin-top: 3px; }
 .hwords { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }

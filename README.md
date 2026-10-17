@@ -41,13 +41,14 @@ Download `Itda-macos-universal.zip` from [Releases](https://github.com/jiunbae/i
 
 1. Unzip it and move **Itda.app** to Applications.
 2. The app isn't notarized yet, so the first time right-click it → **Open** → **Open**.
-3. **Add a device:** pick one from **주변에서 찾은 기기** (Bonjour and Tailscale), or type an address.
+3. **Add a device:** pick one from **주변 기기** (Bonjour and Tailscale), or type an address.
 
-What works:
-- **Devices you can open:** other Macs (Screen Sharing, with the optional SSH tunnel), Windows PCs through **Itda sharing** or **Remote Desktop** (Itda speaks RDP itself), and Linux/VNC servers.
-- **Your devices and accounts:** manage them in the app. Passwords stay in your login **Keychain**, and your data is in `~/Library/Application Support/Itda`.
+It is the same home as on Windows: address book with live previews, nearby devices, accounts, the web viewer for your phone (QR + PIN), the help center and settings, worded for the Mac.
+- **Devices you can open:** other Macs (Screen Sharing, with the optional SSH tunnel), Windows PCs through **Itda sharing** or **Remote Desktop** (Itda speaks RDP itself), and Linux/VNC servers. Each opens in its own window that sizes itself to the remote screen, reconnects on its own and shares the clipboard.
+- **Your devices and accounts:** passwords stay in your login **Keychain**, and your data is in `~/Library/Application Support/Itda`.
+- **Sharing this Mac:** macOS has Screen Sharing built in; the 공유 page opens its settings and shows what other devices should type.
 
-The Mac app is the web viewer in a native window, running against a private gateway on `127.0.0.1` with no PIN. "Share this PC" isn't part of it: macOS has Screen Sharing built in.
+Under the hood each connection window is the web viewer (noVNC) against a private gateway on `127.0.0.1`, signed in with a per-launch token.
 
 ## 🚀 Quick start
 
@@ -215,7 +216,7 @@ cargo test --release
 
 | File | Role |
 |---|---|
-| `home.rs` | Home window, WebView2 hosting, page IPC, session processes, reachability, tray |
+| `home.rs` · `home_win.rs` · `home_mac.rs` | Home window and page IPC, sessions, reachability; per platform: WebView2 + tray + session processes (Windows), WKWebView + menu bar + viewer windows (macOS) |
 | `web/` | Home UI (HTML/CSS/JS, embedded; `ITDA_WEB_DIR` serves it from disk) |
 | `session.rs` · `ui.rs` · `toolbar.rs` | Session process and window: rendering, input, toolbar, reconnect, screenshots |
 | `rfb.rs` · `net.rs` · `fb.rs` · `clip.rs` | RFB handshake/auth, receive loop and reconnect, decoders, clipboard |
@@ -224,7 +225,7 @@ cargo test --release
 | `rdp.rs` | RDP → RFB bridge (IronRDP, TLS + NLA → framebuffer → ZRLE) |
 | `share.rs` | Share this PC: VNC server (GDI capture, tile diff, ZRLE, SendInput, Bonjour) |
 | `enc.rs` | RFB pixel formats and Raw/ZRLE rectangles (shared by `share.rs` and `rdp.rs`) |
-| `mac.rs` · `scripts/macos-bundle.sh` | Itda for Mac: tao/WKWebView window over the gateway's local mode, app menu, `.app` bundle |
+| `web/icons.js` · `scripts/macos-bundle.sh` | Itda for Mac: stroke icons in place of Segoe Fluent glyphs, `.app` bundle |
 | `store.rs` · `mdns.rs` · `tailscale.rs` | Storage and credentials, Bonjour, Tailscale CLI |
 
 | Area | Implementation |
@@ -234,7 +235,7 @@ cargo test --release
 | Latency | TCP_NODELAY, pipelined update requests, local cursor, liveness probes |
 | Rendering | DIB section, dirty-rect blits, `BitBlt` at 1:1 / `StretchBlt(HALFTONE)` when scaled, per-monitor DPI v2 |
 
-Test hooks `ITDA_TEST_HTTP`, `ITDA_TEST_SNAP`, `ITDA_DEBUG_PORT` and (macOS) `ITDA_TEST_LOCAL` do nothing unless those environment variables are set.
+Test hooks `ITDA_TEST_HTTP`, `ITDA_TEST_SNAP` and `ITDA_DEBUG_PORT` do nothing unless those environment variables are set.
 </details>
 
 ## 🗺️ Roadmap

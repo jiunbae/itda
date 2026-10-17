@@ -66,6 +66,30 @@ pub fn base64(data: &[u8]) -> String {
     s
 }
 
+/// Standard base64 (padding optional); None on any other character.
+pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    let val = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let s = s.trim_end_matches('=').as_bytes();
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0);
+    for &c in s {
+        acc = acc << 6 | val(c)? as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
 pub fn accept_key(key: &str) -> String {
     base64(&sha1(format!("{}{GUID}", key.trim()).as_bytes()))
 }
@@ -211,5 +235,10 @@ mod tests {
         assert_eq!(hex, "a9993e364706816aba3e25717850c26c9cd0d89d");
         assert_eq!(base64(b"Ma"), "TWE=");
         assert_eq!(base64(b"M"), "TQ==");
+        for s in [&b""[..], b"M", b"Ma", b"Man", b"\x89PNG\r\n\x1a\n\0\xff"] {
+            assert_eq!(base64_decode(&base64(s)).as_deref(), Some(s));
+        }
+        assert_eq!(base64_decode("TQ"), Some(b"M".to_vec()));
+        assert_eq!(base64_decode("T!=="), None);
     }
 }
