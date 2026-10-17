@@ -868,7 +868,7 @@ const KINDS = {
   mac: { kind: '', os: 'mac', label: 'Mac', hint: 'Mac의 화면 공유 (시스템 설정 → 일반 → 공유 → 화면 공유)', hostPh: '192.168.0.10, mac-mini.local',
     user: 'Mac 계정 이름', userPh: '예: alex', userHint: 'Mac 로그인에 쓰는 짧은 이름 (Apple ID 아님)', pass: 'Mac 로그인 암호', ssh: true },
   windows: { kind: '', os: 'windows', label: 'Windows · Itda', hint: '그 PC의 Itda에서 ‘공유 → 이 PC 공유’를 켜 두세요. 어떤 Windows든 됩니다.', hostPh: 'STUDY-PC.local, 192.168.0.40',
-    user: null, pass: '공유 암호', passHint: '그 PC의 Itda → 공유 페이지에 표시된 8자리 암호', ssh: false },
+    user: null, pass: '공유 암호', passHint: '그 PC의 Itda → 공유 페이지에 표시된 8글자 암호 (Windows 로그인 암호나 이메일 아님)', ssh: false },
   rdp: { kind: 'rdp', os: 'windows', label: 'Windows 원격 데스크톱', hint: MAC ? 'Windows Pro의 원격 데스크톱(설정 → 시스템 → 원격 데스크톱)이 켜진 PC. Itda 창에서 바로 엽니다.' : 'Windows Pro의 원격 데스크톱(설정 → 시스템 → 원격 데스크톱)이 켜진 PC. 이 PC에서는 Windows 원격 데스크톱 앱으로, 웹 뷰어에서는 브라우저로 엽니다.', hostPh: 'OFFICE-PC, 192.168.0.40',
     user: 'Windows 계정 (Microsoft 계정은 이메일)', userPh: '예: alex@outlook.com 또는 alex', userHint: 'Microsoft 계정으로 로그인하는 PC는 이메일 주소, 로컬 계정은 사용자 이름, 회사 계정은 회사\\이름입니다.',
     pass: 'Windows 암호 (PIN 아님)', passHint: 'Microsoft 계정이면 그 계정의 암호입니다. 로그인 화면의 숫자 PIN이나 얼굴 인식은 원격 접속에 쓸 수 없습니다.', ssh: false },
@@ -1192,7 +1192,7 @@ function showError(id, kind, msg) {
     title = title.replace(/Mac이/g, `${w}이(가)`).replace(/Mac에/g, `${w}에`).replace(/Mac /g, `${w} `);
     lead = lead.replace(/Mac이/g, `${w}이(가)`).replace(/Mac /g, `${w} `);
     const OTHER = {
-      auth: { windows: ['그 PC의 Itda → <b>공유</b> 페이지에 표시된 <b>공유 암호</b>를 입력하세요.', '공유 암호를 새로 만들었다면 새 암호가 필요합니다.'],
+      auth: { windows: ['그 PC의 Itda → <b>공유</b> 페이지에 표시된 <b>8글자 공유 암호</b>를 입력하세요. Windows 로그인 암호나 Microsoft 계정 암호가 <b>아닙니다</b>.', '공유 암호를 새로 만들었다면 새 암호가 필요합니다.'],
         rdp: ['Microsoft 계정으로 로그인하는 PC(대부분의 Windows 11 가정용 PC)라면 계정에 <b>이메일 주소</b>(예: alex@outlook.com), 암호에 그 <b>Microsoft 계정 암호</b>를 넣으세요. 로그인 화면의 <b>숫자 PIN·얼굴 인식은 쓸 수 없습니다</b>.',
           '로컬 계정이면 사용자 이름과 그 암호, 회사 계정이면 <b>회사\\이름</b> 형식입니다. 그 PC의 <b>설정 → 계정 → 사용자 정보</b>에 이메일이 보이면 Microsoft 계정입니다.',
           '그 PC의 <b>설정 → 계정 → 로그인 옵션</b>에서 ‘Microsoft 계정에 Windows Hello 로그인만 허용’이 켜져 있으면 끄고, 그 PC에서 한 번 <b>암호로</b> 로그인한 뒤 다시 시도하세요.',

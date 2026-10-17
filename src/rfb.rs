@@ -136,11 +136,13 @@ pub fn classify(e: &io::Error) -> &'static str {
 
 fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
     progress("resolve");
-    let addrs: Vec<_> = addr.to_socket_addrs()?.collect();
+    let mut addrs: Vec<_> = addr.to_socket_addrs()?.collect();
     if addrs.is_empty() {
         return err("호스트를 찾을 수 없습니다");
     }
-    // .local names often resolve to both IPv6 link-local and IPv4: try each.
+    // .local names often resolve to both IPv6 link-local and IPv4: try each, IPv4 first
+    // (a Windows PC's link-local IPv6 is usually firewalled and only times out).
+    addrs.sort_by_key(|a| a.is_ipv6());
     progress("tcp");
     let per_try = Duration::from_secs(if addrs.len() > 1 { 5 } else { 10 });
     let mut last = None;
