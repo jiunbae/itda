@@ -104,7 +104,7 @@ const isWin = (h) => !!(h && (h.this || h.kind === 'rdp' || h.os === 'windows'))
 const KINDS = {
   mac: { kind: 'vnc', os: 'mac', label: 'Mac', user: 'Mac 계정 이름', userHint: 'Mac 로그인에 쓰는 짧은 이름 (Apple ID 아님)', pass: 'Mac 로그인 암호', port: 5900, ssh: true },
   windows: { kind: 'vnc', os: 'windows', label: 'Windows · Itda', user: null, pass: '공유 암호', passHint: '그 PC의 Itda → 공유 페이지에 표시된 8자리 암호', port: 5900 },
-  rdp: { kind: 'rdp', os: 'windows', label: '원격 데스크톱', user: 'Windows 계정', userHint: '도메인 계정은 DOMAIN\\이름, Microsoft 계정은 이메일', pass: 'Windows 암호', port: 3389 },
+  rdp: { kind: 'rdp', os: 'windows', label: '원격 데스크톱', user: 'Windows 계정 (Microsoft 계정은 이메일)', userHint: 'Microsoft 계정은 이메일 주소(예: alex@outlook.com), 로컬 계정은 이름, 회사 계정은 회사\\이름', pass: 'Windows 암호 (PIN 아님)', passHint: 'Microsoft 계정이면 그 계정의 암호입니다. 로그인 화면의 숫자 PIN은 쓸 수 없습니다', port: 3389 },
   linux: { kind: 'vnc', os: 'linux', label: 'Linux · VNC', user: '사용자 이름 (선택)', userHint: 'VNC 암호만 쓰는 서버는 비워 두세요', pass: 'VNC 암호', port: 5900, ssh: true },
 };
 const kindOf = (h) => (h.kind === 'rdp' ? 'rdp' : KINDS[h.os] ? h.os : 'mac');
@@ -294,7 +294,7 @@ async function showNearby(f, sync) {
   if (!list.length) { box.innerHTML = '<span class="muted">주변에서 찾은 기기가 없습니다 — 아래에 주소를 직접 넣으세요.</span>'; return; }
   const OS = { mac: 'Mac', windows: 'Windows', linux: 'Linux' };
   box.innerHTML = `<b>주변에서 찾은 기기</b><div class="chips">${list.map((d, i) =>
-    `<button type="button" class="chip" data-i="${i}">${icon(d.os === 'windows' ? 'pc' : 'monitor')}<span>${esc(d.name)}<small>${OS[d.os] || ''}${d.via === 'tailscale' ? ' · Tailscale' : ''}</small></span></button>`).join('')}</div>`;
+    `<button type="button" class="chip" data-i="${i}">${icon(d.os === 'windows' ? 'pc' : 'monitor')}<span>${esc(d.name)}<small>${OS[d.os] || ''}${d.kind === 'rdp' ? ' · 원격 데스크톱' : ''}${d.via === 'tailscale' ? ' · Tailscale' : ''}${d.off ? ' · 공유 꺼짐' : ''}</small></span></button>`).join('')}</div>`;
   box.onclick = (e) => {
     const c = e.target.closest('[data-i]');
     if (!c) return;
@@ -382,7 +382,7 @@ installHint();
 const CLOSE_TEXT = {
   4004: () => ['연결을 찾을 수 없습니다', '목록에서 지워졌을 수 있습니다.'],
   4001: () => ['저장된 암호가 없습니다', '목록에서 이 기기를 편집해 암호를 저장하세요.'],
-  4010: (h) => [`${dev()} 로그인에 실패했습니다`, h.this ? 'PC의 Itda → 공유 페이지의 공유 암호를 확인하세요.' : '이 기기(또는 계정)에 저장된 사용자 이름과 암호를 확인하세요.'],
+  4010: (h) => [`${dev()} 로그인에 실패했습니다`, h.this ? 'PC의 Itda → 공유 페이지의 공유 암호를 확인하세요.' : h.kind === 'rdp' ? 'Microsoft 계정이면 사용자 이름에 이메일 주소, 암호에 Microsoft 계정 암호를 넣으세요. 숫자 PIN은 쓸 수 없습니다.' : '이 기기(또는 계정)에 저장된 사용자 이름과 암호를 확인하세요.'],
   4011: () => ['사용자 이름이 필요합니다', '기기를 편집해 사용자 이름을 넣으세요.'],
   4012: (h) => [`${dev()}이(가) 연결을 거부했습니다`, h.kind === 'rdp' ? 'Windows 설정 → 시스템 → 원격 데스크톱이 켜져 있는지 확인하세요. (Home 에디션은 원격 데스크톱 서버가 없습니다 — 대신 그 PC에서 Itda의 ‘이 PC 공유’를 켜세요.)' : h.this ? 'PC의 Itda에서 ‘이 PC 공유’가 켜져 있는지 확인하세요.' : { windows: '그 PC의 Itda에서 ‘공유 → 이 PC 공유’가 켜져 있는지 확인하세요.', linux: 'VNC 서버가 실행 중인지, 포트(보통 5900·5901)가 맞는지 확인하세요.' }[kindOf(h)] || 'Mac에서 화면 공유가 켜져 있는지 확인하세요.'],
   4013: () => [`${dev()}이(가) 응답하지 않습니다`, '기기가 켜져 있고 Itda가 있는 PC와 같은 네트워크(또는 Tailscale)에 있는지 확인하세요.'],
@@ -422,7 +422,11 @@ function open(h) {
   renderTools();
   status('busy', S.tries ? `${h.label}에 다시 연결하는 중 (${S.tries}/${RETRIES})` : `${h.label}에 연결하는 중`, h.ssh ? '암호화 연결(SSH)을 여는 중…' : h.kind === 'rdp' ? '원격 데스크톱에 로그인하는 중…' : '');
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}`, ['binary']);
+  // Remote Desktop follows this window's size (not on phones: a desktop that small is no use).
+  const follow = h.kind === 'rdp' && opt('resize', true) && (APP || matchMedia('(pointer: fine)').matches);
+  const scr = $('#screen');
+  const size = follow && scr.clientWidth ? `?w=${Math.round(scr.clientWidth)}&h=${Math.round(scr.clientHeight)}` : '';
+  const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}${size}`, ['binary']);
   let closeInfo = null;
   ws.addEventListener('close', (e) => { closeInfo = e; });
   S.ws = ws;
@@ -430,6 +434,7 @@ function open(h) {
   S.rfb = rfb;
   rfb.scaleViewport = S.fit;
   rfb.clipViewport = !S.fit;
+  rfb.resizeSession = follow;
   rfb.dragViewport = false;
   rfb.viewOnly = S.viewOnly;
   rfb.focusOnClick = true;

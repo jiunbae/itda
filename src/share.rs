@@ -12,7 +12,7 @@ use flate2::{Compress, Compression};
 use std::collections::HashMap;
 use std::io::{self, BufReader, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -40,7 +40,7 @@ struct Running {
     cfg: Arc<Config>,
     stop: Arc<AtomicBool>,
     thread: std::thread::JoinHandle<()>,
-    mdns: Option<Bonjour>,
+    mdns: Option<crate::mdns::Registration>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -103,7 +103,7 @@ pub fn start(cfg: Config) -> io::Result<()> {
             }
         }
     });
-    let mdns = Bonjour::register(port);
+    let mdns = crate::mdns::register("_rfb._tcp", port, &[("itda", "1"), ("os", "windows")]);
     crate::log!("sharing this PC on port {port} (bonjour {})", mdns.is_some());
     *RUNNING.lock().unwrap() = Some(Running { port, cfg, stop, thread, mdns });
     Ok(())
@@ -759,57 +759,3 @@ fn clipboard_set(text: &str) {
         CloseClipboard();
     }
 }
-
-// ---------------------------------------------------------------- Bonjour
-
-/// DNS-SD registration through Windows' own mDNS responder (Windows 10 1809+).
-struct Bonjour {
-    req: Box<windows_sys::Win32::NetworkManagement::Dns::DNS_SERVICE_REGISTER_REQUEST>,
-}
-
-unsafe extern "system" fn registered(status: u32, _ctx: *const core::ffi::c_void, inst: *const windows_sys::Win32::NetworkManagement::Dns::DNS_SERVICE_INSTANCE) {
-    crate::log!("bonjour registration status {status}");
-    if !inst.is_null() {
-        windows_sys::Win32::NetworkManagement::Dns::DnsServiceFreeInstance(inst);
-    }
-}
-
-impl Bonjour {
-    fn register(port: u16) -> Option<Bonjour> {
-        use windows_sys::Win32::NetworkManagement::Dns::*;
-        let pc = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows".into());
-        let name = crate::ui::wide(&format!("{pc}._rfb._tcp.local"));
-        let host = crate::ui::wide(&format!("{pc}.local"));
-        let (k1, v1, k2, v2) = (crate::ui::wide("itda"), crate::ui::wide("1"), crate::ui::wide("os"), crate::ui::wide("windows"));
-        let keys = [k1.as_ptr(), k2.as_ptr()];
-        let vals = [v1.as_ptr(), v2.as_ptr()];
-        unsafe {
-            let inst = DnsServiceConstructInstance(name.as_ptr(), host.as_ptr(), null(), null(), port, 0, 0, 2, keys.as_ptr(), vals.as_ptr());
-            if inst.is_null() {
-                return None;
-            }
-            let mut req: Box<DNS_SERVICE_REGISTER_REQUEST> = Box::new(std::mem::zeroed());
-            req.Version = DNS_QUERY_REQUEST_VERSION1;
-            req.pServiceInstance = inst;
-            req.pRegisterCompletionCallback = Some(registered);
-            let r = DnsServiceRegister(&*req, null_mut());
-            if r != DNS_REQUEST_PENDING as u32 {
-                crate::log!("bonjour register failed: {r}");
-                DnsServiceFreeInstance(inst);
-                return None;
-            }
-            Some(Bonjour { req })
-        }
-    }
-}
-
-impl Drop for Bonjour {
-    fn drop(&mut self) {
-        unsafe {
-            windows_sys::Win32::NetworkManagement::Dns::DnsServiceDeRegister(&*self.req, null_mut());
-            windows_sys::Win32::NetworkManagement::Dns::DnsServiceFreeInstance(self.req.pServiceInstance);
-        }
-    }
-}
-
-unsafe impl Send for Bonjour {}

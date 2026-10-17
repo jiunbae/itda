@@ -372,7 +372,12 @@ fn nearby_json() -> serde_json::Value {
     let ts = std::thread::spawn(crate::tailscale::status);
     let mut out: Vec<serde_json::Value> = crate::mdns::browse(Duration::from_millis(1500))
         .into_iter()
-        .map(|f| json!({"name": f.name, "host": f.host, "os": if f.os == "windows" { "windows" } else { "mac" }, "kind": "vnc", "via": "lan"}))
+        .map(|f| {
+            let os = if f.os == "windows" { "windows" } else { "mac" };
+            // A PC with Itda but sharing off can still be opened over Remote Desktop.
+            let kind = if os == "windows" && !f.share && f.rdp { "rdp" } else { "vnc" };
+            json!({"name": f.name, "host": f.host, "os": os, "kind": kind, "via": "lan", "off": f.itda && !f.share && kind != "rdp"})
+        })
         .collect();
     if let Ok(st) = ts.join() {
         if st.running {
@@ -621,7 +626,10 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             write!(c, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n{proto}\r\n", ws::accept_key(&key))?;
             c.set_read_timeout(None)?;
             crate::log!("web {peer}: viewer for {id}");
-            proxy(c, &id, peer, local)
+            // The viewer's size, for a Remote Desktop that can match it.
+            let arg = |k: &str| req.query.split('&').find_map(|kv| kv.strip_prefix(k)).and_then(|v| v.parse::<u32>().ok());
+            let size = arg("w=").zip(arg("h="));
+            proxy(c, &id, peer, local, size)
         }
         (_, _) if p.starts_with("/api/") || p.starts_with("/thumb/") => {
             json_resp(&mut c, "401 Unauthorized", json!({"error": "로그인이 필요합니다"}))
@@ -633,7 +641,7 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
 // ---------------------------------------------------------------- RFB relay
 
 /// Log in to the device, then act as a no-auth RFB server for the browser and pipe bytes.
-fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool) -> io::Result<()> {
+fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u32, u32)>) -> io::Result<()> {
     let tx = ws::Sender::new(c.try_clone()?);
     if !local {
         LIVE.lock().unwrap().push(c.try_clone()?);
@@ -661,7 +669,7 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool) -> io::Result<()
         let Some(pass) = local.then(|| typed(id)).flatten().or_else(|| login.pass.clone()) else {
             return fail(4001, "이 연결에는 저장된 암호가 없습니다. 연결을 편집해 암호를 저장하세요.".into());
         };
-        open_host(&host, &login, pass, &mut tunnel)
+        open_host(&host, &login, pass, &mut tunnel, size)
     };
     let raw = match raw {
         Ok(r) => r,
@@ -673,9 +681,9 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool) -> io::Result<()
     relay(c, raw, tx, id, tunnel)
 }
 
-fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mut Option<Arc<Tunnel>>) -> io::Result<rfb::Raw> {
+fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mut Option<Arc<Tunnel>>, size: Option<(u32, u32)>) -> io::Result<rfb::Raw> {
     if host.is_rdp() {
-        return crate::rdp::open(&host.host, &login.user, &pass);
+        return crate::rdp::open(&host.host, &login.user, &pass, size.filter(|_| host.opts.resize));
     }
     let creds = Creds { user: login.user.clone(), pass: pass.clone() };
     if host.ssh.on {

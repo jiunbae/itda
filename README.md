@@ -28,7 +28,7 @@ A tiny, fast remote desktop for Windows that opens your **Macs**, **Windows PCs*
 |---|---|
 | ⚡ **Native and fast** | A single ~6 MB exe with no installer. The remote screen is drawn by a native Win32 renderer (ZRLE, dirty-rect blits, per-monitor DPI), and each connection runs in its own process. |
 | 🍎 **Made for macOS Screen Sharing** | Apple ARD sign-in (DH + AES), Mac shortcuts (⌘Space, ⌘Tab, Mission Control…), Korean/English key, multi-display, and the clipboard in both directions. |
-| 🪟 **Windows PCs too** | **Share this PC** turns any Windows into a VNC server with an "allow?" prompt. **Remote Desktop** opens in `mstsc` here, and in the browser through the built-in RDP bridge. |
+| 🪟 **Windows PCs too** | **Share this PC** turns any Windows into a VNC server with an "allow?" prompt. **Remote Desktop** opens in `mstsc` here, and in the browser and the Mac app through the built-in RDP bridge, whose resolution follows your window. |
 | 🌐 **Any browser is a client** | Turn on the web viewer and scan a QR code. iPhone, Android, Mac and Linux open your devices *and this PC*, with no app to install. You can also install it as an app (PWA). |
 | 🔒 **Private by design** | Passwords stay in Windows Credential Manager and never reach the browser. Optional **SSH tunnel** encryption, PIN sign-in with lockout, and same-origin checks. |
 | 🛰️ **Anywhere with Tailscale** | Tailnet devices show up automatically, and the web viewer gets a `https://…ts.net` address. No port forwarding. |
@@ -44,7 +44,7 @@ Download `Itda-macos-universal.zip` from [Releases](https://github.com/jiunbae/i
 3. **Add a device:** pick one from **주변 기기** (Bonjour and Tailscale), or type an address.
 
 It is the same home as on Windows: address book with live previews, nearby devices, accounts, the web viewer for your phone (QR + PIN), the help center and settings, worded for the Mac.
-- **Devices you can open:** other Macs (Screen Sharing, with the optional SSH tunnel), Windows PCs through **Itda sharing** or **Remote Desktop** (Itda speaks RDP itself), and Linux/VNC servers. Each opens in its own window that sizes itself to the remote screen, reconnects on its own and shares the clipboard.
+- **Devices you can open:** other Macs (Screen Sharing, with the optional SSH tunnel), Windows PCs through **Itda sharing** or **Remote Desktop** (Itda speaks RDP itself), and Linux/VNC servers. Each opens in its own window that sizes itself to the remote screen, reconnects on its own and shares the clipboard. A Remote Desktop takes the window's size and follows it as you resize.
 - **Your devices and accounts:** passwords stay in your login **Keychain**, and your data is in `~/Library/Application Support/Itda`.
 - **Sharing this Mac:** macOS has Screen Sharing built in; the 공유 page opens its settings and shows what other devices should type.
 
@@ -107,7 +107,7 @@ The browser never gets a password. The PC's Itda signs in to each device and rel
 | Screen | What's there |
 |---|---|
 | Address book | Cards or a list, a preview of the last screen, online ●, favorites ★, groups, search. Type an address and press Enter to connect right away. |
-| Nearby | Bonjour (mDNS) Macs and Itda PCs, plus your Tailscale devices. Add one with a single click. |
+| Nearby | Bonjour (mDNS): Macs with Screen Sharing and every PC or Mac running Itda, even with sharing off (it says how to turn it on); refreshed every 30 s. Plus your Tailscale devices. Add one with a single click. |
 | Connecting | Shows each step (address → connect → sign in → screen). You can cancel, or leave it running in the background. |
 | Errors | Explains the cause and what to do, worded for the kind of device: Mac, PC, RDP or Linux. |
 | Settings | Theme, **display size (Ctrl +/−, Ctrl+wheel)**, toolbar mode, hotkeys, defaults for new connections, tray, notifications, previews. |

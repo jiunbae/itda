@@ -83,6 +83,11 @@ pub fn apply_theme(dark: bool) {
     with_home(|p| p.window.set_theme(if system { None } else if dark { Some(Theme::Dark) } else { Some(Theme::Light) }));
 }
 
+/// Macs have no Remote Desktop server.
+pub fn rdp_enabled() -> bool {
+    false
+}
+
 pub fn computer_name() -> String {
     static NAME: OnceLock<String> = OnceLock::new();
     NAME.get_or_init(|| output("/usr/sbin/scutil", &["--get", "ComputerName"])).clone()

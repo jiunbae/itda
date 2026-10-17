@@ -49,6 +49,8 @@ pub struct HostOpts {
     pub clipboard: bool,
     pub reconnect: bool,
     pub stats: bool,
+    /// Remote Desktop (and VNC servers that allow it) follow the window's size.
+    pub resize: bool,
 }
 
 impl Default for HostOpts {
@@ -62,6 +64,7 @@ impl Default for HostOpts {
             clipboard: true,
             reconnect: true,
             stats: false,
+            resize: true,
         }
     }
 }
@@ -192,6 +195,8 @@ pub struct Settings {
     pub web: Web,
     /// Share this PC: a VNC server for other devices.
     pub share: Share,
+    /// Tell other Itdas on the network that Itda runs here (Bonjour `_itda._tcp`).
+    pub announce: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -241,6 +246,7 @@ impl Default for Settings {
             defaults: HostOpts::default(),
             web: Web::default(),
             share: Share::default(),
+            announce: true,
         }
     }
 }

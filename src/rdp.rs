@@ -6,8 +6,14 @@
 //! RDP graphics into a framebuffer, answers the browser's update requests with the same
 //! tile-diff + ZRLE encoder the "Share this PC" server uses, and turns RFB key/pointer
 //! events into RDP fast-path input.
+//!
+//! Dynamic resolution: the desktop starts at the size the viewer asked for, and an RFB
+//! SetDesktopSize (noVNC's "resize session") becomes a Display Control monitor layout, so
+//! the Windows desktop follows the window. Its answer is an ExtendedDesktopSize update.
 
-use crate::rfb::{self, Raw, Rx, ENC_CURSOR, ENC_DESKTOP_SIZE, ENC_ZRLE, PIXEL_FORMAT};
+use crate::rfb::{self, Raw, Rx, ENC_CURSOR, ENC_DESKTOP_SIZE, ENC_EXT_DESKTOP_SIZE, ENC_ZRLE, PIXEL_FORMAT};
+use ironrdp_displaycontrol::client::DisplayControlClient;
+use ironrdp_dvc::DrdynvcClient;
 use crate::enc::{encode_rect, PixelFormat, TILE};
 use flate2::{Compress, Compression};
 use ironrdp_blocking::Framed;
@@ -33,25 +39,32 @@ use std::time::{Duration, Instant};
 
 type Tls = rustls::StreamOwned<rustls::ClientConnection, TcpStream>;
 
-/// The desktop we ask for; the browser scales it to fit.
+/// The desktop we ask for when the viewer doesn't say; the browser scales it to fit.
 const DESKTOP: DesktopSize = DesktopSize { width: 1920, height: 1080 };
+/// Display Control limits (MS-RDPEDISP): 200…8192, even width.
+fn clamp_size(w: u32, h: u32) -> (u32, u32) {
+    ((w.clamp(200, 8192)) & !1, h.clamp(200, 8192))
+}
+/// Windows wants a breath between layout changes; the latest request wins.
+const RESIZE_GAP: Duration = Duration::from_millis(300);
 /// How long one RDP read waits before the bridge looks at browser input again.
 const POLL: Duration = Duration::from_millis(10);
 /// At most one framebuffer update per this interval (~60 fps).
 const FRAME: Duration = Duration::from_millis(16);
 
-/// Log in to an RDP host ("name" or "name:port"). On success the returned `Raw` behaves
-/// like a VNC connection right after ServerInit (32bpp, no auth left to do).
-pub fn open(host: &str, user: &str, pass: &str) -> io::Result<Raw> {
-    crate::log!("rdp open {host}");
-    let r = connect(host, user, pass);
+/// Log in to an RDP host ("name" or "name:port"), asking for a `size` desktop (else 1920×1080).
+/// On success the returned `Raw` behaves like a VNC connection right after ServerInit (32bpp,
+/// no auth left to do).
+pub fn open(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>) -> io::Result<Raw> {
+    crate::log!("rdp open {host} {size:?}");
+    let r = connect(host, user, pass, size);
     if let Err(e) = &r {
         crate::log!("rdp failed: {e} [{}]", rfb::classify(e));
     }
     r
 }
 
-fn connect(host: &str, user: &str, pass: &str) -> io::Result<Raw> {
+fn connect(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>) -> io::Result<Raw> {
     let (name, port) = split(host);
     if user.trim().is_empty() {
         return Err(rfb::denied("사용자 이름을 입력하세요 (Windows 계정 이름)"));
@@ -94,7 +107,10 @@ fn connect(host: &str, user: &str, pass: &str) -> io::Result<Raw> {
         keyboard_functional_keys_count: 12,
         ime_file_name: String::new(),
         dig_product_id: String::new(),
-        desktop_size: DESKTOP,
+        desktop_size: size.map_or(DESKTOP, |(w, h)| {
+            let (w, h) = clamp_size(w, h);
+            DesktopSize { width: w as u16, height: h as u16 }
+        }),
         bitmap: None,
         client_build: 0,
         client_name,
@@ -118,7 +134,9 @@ fn connect(host: &str, user: &str, pass: &str) -> io::Result<Raw> {
 
     let local = tcp.local_addr()?;
     let mut framed = Framed::new(tcp);
-    let mut connector = ClientConnector::new(config, local);
+    // Display Control: lets the desktop follow the viewer's size.
+    let dvc = DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+    let mut connector = ClientConnector::new(config, local).with_static_channel(dvc);
     let upgrade = ironrdp_blocking::connect_begin(&mut framed, &mut connector).map_err(conn_err)?;
     let (tls, server_key) = tls_upgrade(framed.into_inner_no_leftover(), &name)?;
     let upgraded = ironrdp_blocking::mark_as_upgraded(upgrade, &mut connector);
@@ -287,6 +305,8 @@ enum Msg {
     Request { incremental: bool },
     Key { down: bool, sym: u32 },
     Pointer { mask: u8, x: u16, y: u16 },
+    /// SetDesktopSize: the viewer would like this desktop size.
+    Resize { w: u16, h: u16 },
 }
 
 /// Browser → bridge: parse RFB client messages (after ClientInit) into `Msg`s.
@@ -322,6 +342,11 @@ fn read_client(mut r: BufReader<TcpStream>, tx: Sender<Msg>) -> io::Result<()> {
                 io::copy(&mut (&mut r).take(n), &mut io::sink())?;
                 continue;
             }
+            251 => {
+                let b: [u8; 7] = rd(&mut r)?;
+                io::copy(&mut (&mut r).take(b[5] as u64 * 16), &mut io::sink())?;
+                Msg::Resize { w: u16::from_be_bytes([b[1], b[2]]), h: u16::from_be_bytes([b[3], b[4]]) }
+            }
             other => return Err(io::Error::other(format!("unknown client message {other}"))),
         };
         if tx.send(m).is_err() {
@@ -344,6 +369,12 @@ struct Bridge {
     prev: Vec<u32>,
     z: Compress,
     resized: bool,
+    /// ExtendedDesktopSize: told the viewer it may ask for sizes; a requested size waiting
+    /// for its turn; the answer owed to the viewer (status: 0 = done, 1 = not allowed).
+    ext_told: bool,
+    pending_size: Option<(u32, u32)>,
+    last_resize: Instant,
+    resize_reply: Option<u16>,
     cursor: Option<Cursor>,
     dirty: bool,
     last_sent: Instant,
@@ -395,6 +426,10 @@ impl Bridge {
             prev: Vec::new(),
             z: Compress::new(Compression::new(5), true),
             resized: false,
+            ext_told: false,
+            pending_size: None,
+            last_resize: Instant::now() - RESIZE_GAP,
+            resize_reply: None,
             cursor: Some(Cursor::arrow()),
             dirty: true,
             last_sent: Instant::now() - FRAME,
@@ -438,6 +473,7 @@ impl Bridge {
                     Err(TryRecvError::Disconnected) => return Ok(()),
                 }
             }
+            self.resize_now()?;
             self.send_update()?;
         }
     }
@@ -514,6 +550,15 @@ impl Bridge {
                 self.want = Some(self.want.unwrap_or(true) && incremental);
                 return Ok(());
             }
+            Msg::Resize { w, h } => {
+                let size = clamp_size(w as u32, h as u32);
+                if size == (self.image.width() as u32, self.image.height() as u32) {
+                    self.resize_reply = Some(0);
+                } else {
+                    self.pending_size = Some(size);
+                }
+                return Ok(());
+            }
             Msg::Key { down, sym } => self.keys.key(down, sym),
             Msg::Pointer { mask, x, y } => self.pointer(mask, x, y),
         };
@@ -522,6 +567,55 @@ impl Bridge {
         }
         let outs = self.stage.process_fastpath_input(&mut self.image, &events).map_err(|e| io::Error::other(format!("RDP input: {e}")))?;
         self.outputs(outs).map(|_| ())
+    }
+
+    /// Send the waiting size request once Display Control is up (and not too soon after the
+    /// last one). The new size arrives later as a reactivation.
+    fn resize_now(&mut self) -> io::Result<()> {
+        let Some((w, h)) = self.pending_size else { return Ok(()) };
+        if self.last_resize.elapsed() < RESIZE_GAP {
+            return Ok(());
+        }
+        let ready = self
+            .stage
+            .get_dvc::<DisplayControlClient>()
+            .and_then(|d| d.channel_processor_downcast_ref::<DisplayControlClient>())
+            .is_some_and(DisplayControlClient::ready);
+        if !ready {
+            // The host never offered Display Control (older Windows, policy): say no.
+            if self.last_resize.elapsed() > Duration::from_secs(5) {
+                self.pending_size = None;
+                self.resize_reply = Some(1);
+            }
+            return Ok(());
+        }
+        self.pending_size = None;
+        self.last_resize = Instant::now();
+        match self.stage.encode_resize(w, h, None, None) {
+            Some(Ok(frame)) => {
+                crate::log!("rdp: asking for {w}x{h}");
+                self.framed.write_all(&frame)
+            }
+            Some(Err(e)) => Err(io::Error::other(format!("RDP resize: {e}"))),
+            None => {
+                self.resize_reply = Some(1);
+                Ok(())
+            }
+        }
+    }
+
+    /// One ExtendedDesktopSize rectangle: reason (0 server, 1 this client), status, one screen.
+    fn ext_size(out: &mut Vec<u8>, reason: u16, status: u16, w: u16, h: u16) {
+        out.extend_from_slice(&reason.to_be_bytes());
+        out.extend_from_slice(&status.to_be_bytes());
+        out.extend_from_slice(&w.to_be_bytes());
+        out.extend_from_slice(&h.to_be_bytes());
+        out.extend_from_slice(&ENC_EXT_DESKTOP_SIZE.to_be_bytes());
+        out.extend_from_slice(&[1, 0, 0, 0]);
+        out.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]); // screen id 0 at 0,0
+        out.extend_from_slice(&w.to_be_bytes());
+        out.extend_from_slice(&h.to_be_bytes());
+        out.extend_from_slice(&[0, 0, 0, 0]);
     }
 
     fn pointer(&mut self, mask: u8, x: u16, y: u16) -> Vec<FastPathInputEvent> {
@@ -561,14 +655,22 @@ impl Bridge {
     fn send_update(&mut self) -> io::Result<()> {
         let Some(incremental) = self.want else { return Ok(()) };
         let cursor_due = self.cursor.is_some() && self.encs.contains(&ENC_CURSOR);
-        if (incremental && !self.dirty && !cursor_due && !self.resized) || self.last_sent.elapsed() < FRAME {
+        let ext = self.encs.contains(&ENC_EXT_DESKTOP_SIZE);
+        let ext_due = ext && (!self.ext_told || self.resize_reply.is_some());
+        if (incremental && !self.dirty && !cursor_due && !self.resized && !ext_due) || self.last_sent.elapsed() < FRAME {
             return Ok(());
         }
         let (w, h) = (self.image.width() as usize, self.image.height() as usize);
         let frame: Vec<u32> = self.image.data().chunks_exact(4).map(|p| u32::from_le_bytes([p[0], p[1], p[2], 0])).collect();
         let mut out = Vec::new();
         let mut rects = 0u16;
-        if self.resized && self.encs.contains(&ENC_DESKTOP_SIZE) {
+        if ext && (self.resized || ext_due) {
+            // A new size we asked for is the answer to the viewer's request.
+            let reason = if self.resized || self.resize_reply.is_some() { 1 } else { 0 };
+            Self::ext_size(&mut out, reason, self.resize_reply.take().unwrap_or(0), w as u16, h as u16);
+            self.ext_told = true;
+            rects += 1;
+        } else if self.resized && self.encs.contains(&ENC_DESKTOP_SIZE) {
             out.extend_from_slice(&[0, 0, 0, 0]);
             out.extend_from_slice(&(w as u16).to_be_bytes());
             out.extend_from_slice(&(h as u16).to_be_bytes());
@@ -840,10 +942,10 @@ mod tests {
         let (host, user, pass) = (it.next().unwrap(), it.next().unwrap(), it.next().unwrap());
         crate::log::init("rdptest");
 
-        let e = open(host, user, "wrong-password").err().expect("bad password must fail");
+        let e = open(host, user, "wrong-password", None).err().expect("bad password must fail");
         assert_eq!(rfb::classify(&e), "auth", "{e}");
 
-        let raw = open(host, user, pass).expect("open");
+        let raw = open(host, user, pass, None).expect("open");
         assert_eq!((raw.width, raw.height), (800, 600));
         assert_eq!(&raw.server_init[..4], &[3, 32, 2, 88]);
         assert_eq!(&raw.server_init[4..20], &PIXEL_FORMAT);
@@ -910,6 +1012,75 @@ mod tests {
         // Closing our end must end the RDP session too.
         w.shutdown(Shutdown::Both).unwrap();
         std::thread::sleep(Duration::from_millis(500));
+    }
+
+    /// Dynamic resolution against the test server in resize mode:
+    /// ITDA_RDP_TEST="host:port|user|pass" with `rdpsrv <port> <user> <pass> resize`.
+    #[test]
+    #[ignore]
+    fn bridge_resize() {
+        let cfg = std::env::var("ITDA_RDP_TEST").expect("ITDA_RDP_TEST");
+        let mut it = cfg.split('|');
+        let (host, user, pass) = (it.next().unwrap(), it.next().unwrap(), it.next().unwrap());
+        crate::log::init("rdptest");
+
+        // (Windows starts at the size asked for here; the IronRDP test server keeps its own.)
+        let raw = open(host, user, pass, Some((1001, 701))).expect("open");
+        let (w0, h0) = (raw.width as usize, raw.height as usize);
+        let (mut r, mut w) = (raw.reader, raw.writer);
+        let mut m = vec![2, 0, 0, 3];
+        for e in [0i32, ENC_EXT_DESKTOP_SIZE, ENC_DESKTOP_SIZE] {
+            m.extend_from_slice(&e.to_be_bytes());
+        }
+        w.write_all(&m).unwrap();
+        // Read updates until an ExtendedDesktopSize arrives: (reason, status, w, h).
+        let mut size = (w0, h0);
+        let mut next_ext = |w: &mut TcpStream, r: &mut BufReader<Rx>, size: &mut (usize, usize)| -> (u16, u16, usize, usize) {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                assert!(Instant::now() < deadline, "no ExtendedDesktopSize");
+                w.write_all(&[3, 1, 0, 0, 0, 0, (size.0 >> 8) as u8, size.0 as u8, (size.1 >> 8) as u8, size.1 as u8]).unwrap();
+                assert_eq!(rfb::rd_u8(r).unwrap(), 0);
+                rfb::rd_u8(r).unwrap();
+                let mut found = None;
+                for _ in 0..rfb::rd_u16(r).unwrap() {
+                    let (x, y, rw, rh) = (rfb::rd_u16(r).unwrap(), rfb::rd_u16(r).unwrap(), rfb::rd_u16(r).unwrap() as usize, rfb::rd_u16(r).unwrap() as usize);
+                    match rfb::rd_u32(r).unwrap() as i32 {
+                        0 => {
+                            rfb::rd_vec(r, rw * rh * 4).unwrap();
+                        }
+                        ENC_EXT_DESKTOP_SIZE => {
+                            let n = rfb::rd_u8(r).unwrap() as usize;
+                            rfb::rd_vec(r, 3 + n * 16).unwrap();
+                            *size = (rw, rh);
+                            found = Some((x, y, rw, rh));
+                        }
+                        other => panic!("unexpected encoding {other}"),
+                    }
+                }
+                if let Some(f) = found {
+                    return f;
+                }
+            }
+        };
+        let first = next_ext(&mut w, &mut r, &mut size);
+        assert_eq!(first, (0, 0, w0, h0), "first update says resizing is possible");
+        // SetDesktopSize 1281x800 → the host reactivates at 1280x800 (even width).
+        let mut req = vec![251, 0];
+        req.extend_from_slice(&1281u16.to_be_bytes());
+        req.extend_from_slice(&800u16.to_be_bytes());
+        req.extend_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 3, 32, 0, 0, 0, 0]);
+        w.write_all(&req).unwrap();
+        let done = next_ext(&mut w, &mut r, &mut size);
+        assert_eq!(done, (1, 0, 1280, 800), "resized as asked");
+        // Asking for the current size is answered at once.
+        let mut req = vec![251, 0];
+        req.extend_from_slice(&1280u16.to_be_bytes());
+        req.extend_from_slice(&800u16.to_be_bytes());
+        req.extend_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 3, 32, 0, 0, 0, 0]);
+        w.write_all(&req).unwrap();
+        assert_eq!(next_ext(&mut w, &mut r, &mut size), (1, 0, 1280, 800));
+        w.shutdown(Shutdown::Both).unwrap();
     }
 
     #[test]

@@ -434,7 +434,7 @@ function showOnboarding(step = 'welcome') {
             <ol class="ob-list">${check(1, '그 PC에도 Itda를 설치합니다.')}${check(2, '그 PC의 Itda → <b>공유 → 이 PC 공유</b>를 켭니다.')}${check(3, '표시된 <b>공유 암호</b>로 여기서 추가합니다.')}</ol>
             <button class="btn primary" data-ob="win-itda">${I('E710')}Windows · Itda로 추가</button></div>
           <div class="ob-card"><b>B. 원격 데스크톱 <span class="pill mute">Pro·Enterprise</span></b>
-            <ol class="ob-list">${check(1, '그 PC의 <b>설정 → 시스템 → 원격 데스크톱</b>을 켭니다.')}${check(2, '그 PC의 Windows 계정과 암호로 추가합니다.')}</ol>
+            <ol class="ob-list">${check(1, '그 PC의 <b>설정 → 시스템 → 원격 데스크톱</b>을 켭니다.')}${check(2, '그 PC의 Windows 계정과 암호로 추가합니다. <b>Microsoft 계정이면 이메일 주소</b>와 그 계정 암호를 넣습니다 (숫자 PIN은 안 됩니다).')}</ol>
             <button class="btn" data-ob="win-rdp">${I('E710')}원격 데스크톱으로 추가</button></div>
         </div></div>
       <div class="foot">${back}<span class="ob-dots"><i></i><i class="on"></i><i></i></span></div>`,
@@ -478,19 +478,28 @@ function emptyBook() {
     <div class="actions"><button class="btn primary" data-act="new">${I('E710')}새 연결</button><button class="btn" data-act="onboard">${I('E768')}시작 안내</button><button class="btn" data-help="start">${I('E897')}도움말</button></div>
   </div>`;
   if (found.length) {
-    html += `<div class="page" style="margin:36px auto 0"><div class="section-head">${I('E701')}주변에서 찾은 Mac<span class="line"></span></div><div class="found-list">${found.map(foundRow).join('')}</div></div>`;
+    html += `<div class="page" style="margin:36px auto 0"><div class="section-head">${I('E701')}주변에서 찾은 기기<span class="line"></span></div><div class="found-list">${found.map(foundRow).join('')}</div></div>`;
   }
   return html;
 }
 
+// A device found on this Wi-Fi: what it is, how it would open, and what is missing.
+// Windows PCs announce themselves while Itda runs, even with sharing off.
 function foundRow(f) {
   const have = inBook(f);
+  const win = f.os === 'windows';
+  const rdp = win && !f.share && f.rdp;
   const addr = [f.hostname, f.ip].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' · ');
   const act = have
     ? `<span class="pill mute">추가됨</span><button class="btn sm" data-act="connect" data-id="${esc(have.id)}">${I('E768')}연결</button>`
-    : `<button class="btn sm primary" data-act="add-found" data-host="${esc(f.host)}" data-name="${esc(f.name)}" data-os="${esc(f.os || '')}" data-itda="${f.os === 'windows' ? '1' : ''}">${I('E710')}추가</button>`;
-  const pill = f.os === 'windows' ? ' <span class="pill mute">Windows · Itda</span>' : '';
-  return `<div class="found"><div class="ico">${I('E7F4')}</div><div class="txt"><b>${esc(f.name)}${pill}</b><span>${esc(addr)}</span></div>${act}</div>`;
+    : `<button class="btn sm primary" data-act="add-found" data-host="${esc(f.host)}" data-name="${esc(f.name)}" data-os="${esc(f.os || '')}" data-itda="${win && !rdp ? '1' : ''}">${I('E710')}추가</button>`;
+  const pill = win
+    ? ` <span class="pill ${f.share || rdp ? 'ok' : 'mute'}">${f.share ? 'Windows · Itda 공유 중' : rdp ? 'Windows · 원격 데스크톱' : 'Windows · Itda'}</span>`
+    : f.itda ? ` <span class="pill ${f.share ? 'ok' : 'mute'}">Mac · Itda</span>` : '';
+  const off = !f.itda || f.share || rdp ? ''
+    : win ? '<span class="off">공유가 꺼져 있습니다 — 그 PC의 Itda에서 <strong>공유 → 이 PC 공유</strong>를 켜면 연결됩니다.</span>'
+      : '<span class="off">화면 공유가 꺼져 있습니다 — 그 Mac의 <strong>시스템 설정 → 일반 → 공유 → 화면 공유</strong>를 켜면 연결됩니다.</span>';
+  return `<div class="found"><div class="ico">${I(win ? 'E7F8' : 'E7F4')}</div><div class="txt"><b>${esc(f.name)}${pill}</b><span>${esc(addr)}</span>${off}</div>${act}</div>`;
 }
 
 function peerRow(p) {
@@ -503,11 +512,11 @@ function peerRow(p) {
 }
 
 function renderNearby() {
-  const head = `<div class="banner">${I('E946')}<div class="txt"><b>연결할 수 있는 기기</b><span>같은 Wi-Fi의 Mac은 Bonjour로, 어디에 있든 연결되는 기기는 Tailscale로 찾습니다.</span></div>
+  const head = `<div class="banner">${I('E946')}<div class="txt"><b>연결할 수 있는 기기</b><span>같은 Wi-Fi에서는 화면 공유가 켜진 Mac과 Itda가 실행 중인 PC·Mac을 찾고(30초마다 새로 고침), 어디에 있든 연결되는 기기는 Tailscale로 찾습니다.</span></div>
     <button class="btn" data-act="scan" ${S.scanning ? 'disabled' : ''}>${S.scanning ? '<span class="spin"></span>검색 중…' : `${I('E72C')}다시 검색`}</button></div>`;
   const lan = S.found.length
     ? `<div class="found-list">${S.found.map(foundRow).join('')}</div>`
-    : `<p class="note-line">${S.scanning ? '찾는 중…' : '같은 Wi-Fi에서 화면 공유가 켜진 Mac을 찾지 못했습니다.'}</p>`;
+    : `<p class="note-line">${S.scanning ? '찾는 중…' : '같은 Wi-Fi에서 찾은 기기가 없습니다. 화면 공유가 켜진 Mac과 Itda가 켜진 PC·Mac이 여기에 나타납니다. 원격 데스크톱만 켠 PC는 주소로 직접 추가하세요.'}</p>`;
   const peers = tailPeers();
   const t = S.tailnet;
   const ts = !t
@@ -683,6 +692,7 @@ function renderSettings() {
     ${setting('E8C1', '한/영 키', 'Mac의 입력 소스 전환 단축키에 맞추세요', seg('hangul_caps', d.hangul_caps, [[false, 'Ctrl+Space'], [true, 'Caps Lock']], 'defaults'), true)}`}
 
     <div class="group-title">공유</div>
+    ${setting('E701', `주변에 ${HERE} 알리기`, `같은 Wi-Fi의 다른 Itda ‘주변 기기’에 ${HERE}가 바로 나타납니다. 이름과 공유·원격 데스크톱이 켜져 있는지만 알리고, 주소나 암호는 알리지 않습니다.`, toggle('announce', st.announce !== false))}
     ${setting('E72D', MAC ? '다른 기기에서 보기' : '다른 기기에서 보기 · 이 PC 공유', MAC ? '웹 뷰어(QR·PIN)와 이 Mac의 화면 공유 안내는 왼쪽의 ‘공유’ 페이지에 있습니다' : '웹 뷰어(QR·PIN)와 이 PC 공유는 왼쪽의 ‘공유’ 페이지에서 켭니다', `<button class="btn" data-act="page" data-page="share">${I('E72D')}공유 열기</button>`, true)}
 
     <div class="group-title">앱${more('app')}</div>
@@ -860,7 +870,8 @@ const KINDS = {
   windows: { kind: '', os: 'windows', label: 'Windows · Itda', hint: '그 PC의 Itda에서 ‘공유 → 이 PC 공유’를 켜 두세요. 어떤 Windows든 됩니다.', hostPh: 'STUDY-PC.local, 192.168.0.40',
     user: null, pass: '공유 암호', passHint: '그 PC의 Itda → 공유 페이지에 표시된 8자리 암호', ssh: false },
   rdp: { kind: 'rdp', os: 'windows', label: 'Windows 원격 데스크톱', hint: MAC ? 'Windows Pro의 원격 데스크톱(설정 → 시스템 → 원격 데스크톱)이 켜진 PC. Itda 창에서 바로 엽니다.' : 'Windows Pro의 원격 데스크톱(설정 → 시스템 → 원격 데스크톱)이 켜진 PC. 이 PC에서는 Windows 원격 데스크톱 앱으로, 웹 뷰어에서는 브라우저로 엽니다.', hostPh: 'OFFICE-PC, 192.168.0.40',
-    user: 'Windows 계정', userPh: '예: alex, PC이름\\alex, 이메일', userHint: 'Microsoft 계정이면 이메일 주소', pass: 'Windows 암호', ssh: false },
+    user: 'Windows 계정 (Microsoft 계정은 이메일)', userPh: '예: alex@outlook.com 또는 alex', userHint: 'Microsoft 계정으로 로그인하는 PC는 이메일 주소, 로컬 계정은 사용자 이름, 회사 계정은 회사\\이름입니다.',
+    pass: 'Windows 암호 (PIN 아님)', passHint: 'Microsoft 계정이면 그 계정의 암호입니다. 로그인 화면의 숫자 PIN이나 얼굴 인식은 원격 접속에 쓸 수 없습니다.', ssh: false },
   linux: { kind: '', os: 'linux', label: 'Linux · 기타 VNC', hint: 'Linux(x11vnc, TigerVNC, wayvnc), Raspberry Pi 등 VNC 서버가 있는 기기', hostPh: 'raspberrypi.local, 192.168.0.30:5901',
     user: '사용자 이름 (선택)', userPh: '대부분 비워 둡니다', userHint: 'VNC 암호만 쓰는 서버는 비워 두세요', pass: 'VNC 암호', ssh: true },
 };
@@ -920,6 +931,7 @@ function openEdit(init = {}, mode = {}) {
   const display = `<div data-pane="display" hidden>
       ${optRow('actual', '실제 크기 (1:1)로 시작', '끄면 창 크기에 맞춰 축소해서 보여 줍니다', o.actual)}
       ${optRow('fullscreen', '전체 화면으로 시작', '', o.fullscreen)}
+      ${optRow('resize', '창 크기에 맞춰 해상도 바꾸기 (원격 데스크톱)', MAC ? 'Windows 원격 데스크톱의 해상도가 연결 창 크기를 따라갑니다.' : '웹 뷰어(PC·Mac 브라우저)에서 Windows 원격 데스크톱의 해상도가 창 크기를 따라갑니다. 이 PC의 원격 데스크톱 앱은 원래 창 크기를 따라갑니다.', o.resize !== false)}
       ${optRow('view_only', '보기 전용', '마우스와 키보드를 Mac으로 보내지 않습니다', o.view_only)}
       ${MAC ? '' : optRow('stats', '통계 표시', 'fps, 전송 속도, 응답 시간', o.stats)}
     </div>`;
@@ -1181,7 +1193,10 @@ function showError(id, kind, msg) {
     lead = lead.replace(/Mac이/g, `${w}이(가)`).replace(/Mac /g, `${w} `);
     const OTHER = {
       auth: { windows: ['그 PC의 Itda → <b>공유</b> 페이지에 표시된 <b>공유 암호</b>를 입력하세요.', '공유 암호를 새로 만들었다면 새 암호가 필요합니다.'],
-        rdp: ['그 PC에 로그인하는 <b>Windows 계정</b>과 암호를 입력하세요. Microsoft 계정이면 이메일 주소입니다.', '그 계정이 <b>원격 데스크톱 사용자</b>로 허용되어 있는지 확인하세요.'],
+        rdp: ['Microsoft 계정으로 로그인하는 PC(대부분의 Windows 11 가정용 PC)라면 계정에 <b>이메일 주소</b>(예: alex@outlook.com), 암호에 그 <b>Microsoft 계정 암호</b>를 넣으세요. 로그인 화면의 <b>숫자 PIN·얼굴 인식은 쓸 수 없습니다</b>.',
+          '로컬 계정이면 사용자 이름과 그 암호, 회사 계정이면 <b>회사\\이름</b> 형식입니다. 그 PC의 <b>설정 → 계정 → 사용자 정보</b>에 이메일이 보이면 Microsoft 계정입니다.',
+          '그 PC의 <b>설정 → 계정 → 로그인 옵션</b>에서 ‘Microsoft 계정에 Windows Hello 로그인만 허용’이 켜져 있으면 끄고, 그 PC에서 한 번 <b>암호로</b> 로그인한 뒤 다시 시도하세요.',
+          '그 계정이 <b>원격 데스크톱 사용자</b>로 허용되어 있는지 확인하세요 (관리자 계정은 기본으로 허용).'],
         linux: ['VNC 서버에 설정한 <b>VNC 암호</b>를 입력하세요 (리눅스 로그인 암호와 다를 수 있습니다).', '사용자 이름이 필요 없는 서버라면 사용자 이름을 비워 두세요.'] },
       refused: { windows: ['그 PC의 Itda에서 <b>공유 → 이 PC 공유</b>가 켜져 있는지 확인하세요.', '포트를 바꿨다면 주소 뒤에 <b>:포트</b>를 붙이세요.'],
         rdp: ['그 PC의 <b>설정 → 시스템 → 원격 데스크톱</b>을 켜세요. Windows Home에는 없으니 대신 Itda의 ‘이 PC 공유’를 쓰세요.'],

@@ -18,7 +18,7 @@ use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD};
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Shell::*;
@@ -82,6 +82,16 @@ pub fn system_dark() -> bool {
 pub fn apply_theme(dark: bool) {
     let dark = dark as BOOL;
     unsafe { DwmSetWindowAttribute(hwnd(), DWMWA_USE_IMMERSIVE_DARK_MODE, &dark as *const BOOL as _, 4) };
+}
+
+/// Remote Desktop accepts connections (Settings → System → Remote Desktop).
+pub fn rdp_enabled() -> bool {
+    let mut v: u32 = 1;
+    let mut n = 4u32;
+    let key = wide(r"SYSTEM\CurrentControlSet\Control\Terminal Server");
+    let val = wide("fDenyTSConnections");
+    let r = unsafe { RegGetValueW(HKEY_LOCAL_MACHINE, key.as_ptr(), val.as_ptr(), RRF_RT_REG_DWORD, null_mut(), &mut v as *mut u32 as _, &mut n) };
+    r == 0 && v == 0
 }
 
 pub fn computer_name() -> String {

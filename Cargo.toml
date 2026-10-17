@@ -1,6 +1,6 @@
 [package]
 name = "itda"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "Itda (잇다): lightweight remote desktop for Windows. Opens Macs (Screen Sharing), Windows PCs and VNC servers, and shows them in any browser."
 license = "MIT"
@@ -23,6 +23,8 @@ ironrdp-connector = "0.10"
 ironrdp-session = "0.11"
 ironrdp-graphics = "0.9"
 ironrdp-pdu = "0.9"
+ironrdp-dvc = "0.8"
+ironrdp-displaycontrol = "0.8"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 x509-cert = { version = "0.2", default-features = false, features = ["std"] }
 

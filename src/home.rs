@@ -151,7 +151,8 @@ fn started() {
             apply_share(&sh);
         }
     }
-    scan();
+    announce();
+    start_discovery();
 }
 
 fn asset(path: &str) -> Option<(Cow<'static, [u8]>, &'static str)> {
@@ -461,6 +462,9 @@ fn on_ipc(v: Value) {
                 #[cfg(windows)]
                 if old.share != st.share {
                     apply_share(&st.share);
+                }
+                if (old.announce, &old.web, &old.share) != (st.announce, &st.web, &st.share) {
+                    announce();
                 }
             }
         }
@@ -911,12 +915,58 @@ fn start_probes() {
     });
 }
 
+static ANNOUNCED: Mutex<Option<crate::mdns::Registration>> = Mutex::new(None);
+
+/// Tell other Itdas on this network that Itda runs here, and whether this machine can be
+/// opened right now (sharing, Remote Desktop). Called again when that changes.
+fn announce() {
+    let st = home(|m| m.settings.clone());
+    let old = ANNOUNCED.lock().unwrap().take();
+    drop(old);
+    if !st.announce {
+        return;
+    }
+    #[cfg(windows)]
+    let share = crate::share::running().is_some();
+    #[cfg(not(windows))]
+    let share = false;
+    let web = if st.web.on { st.web.port.to_string() } else { String::new() };
+    let rdp = if plat::rdp_enabled() { "1" } else { "0" };
+    let txt = [("itda", "1"), ("os", plat::PLATFORM), ("v", VERSION), ("share", if share { "1" } else { "0" }), ("rdp", rdp), ("web", web.as_str())];
+    let reg = crate::mdns::register("_itda._tcp", st.web.port, &txt);
+    crate::log!("announce: itda share={share} rdp={rdp} web={web} ({})", if reg.is_some() { "ok" } else { "failed" });
+    *ANNOUNCED.lock().unwrap() = reg;
+}
+
+static SCAN_WAKE: Mutex<bool> = Mutex::new(false);
+static SCAN_CV: std::sync::Condvar = std::sync::Condvar::new();
+
 fn scan() {
     scan_tailnet();
-    std::thread::spawn(|| {
-        let found = crate::mdns::browse(Duration::from_millis(1500));
-        crate::log!("bonjour: {} found {:?}", found.len(), found.iter().map(|f| &f.host).collect::<Vec<_>>());
-        post(Event::Found(found));
+    *SCAN_WAKE.lock().unwrap() = true;
+    SCAN_CV.notify_all();
+}
+
+/// Bonjour every 30 s (or on demand), so devices that start Itda or sharing show up on
+/// their own. The page hears only about changes.
+fn start_discovery() {
+    let me = crate::mdns::this_name().to_ascii_lowercase();
+    std::thread::spawn(move || {
+        let mut last: Option<Vec<crate::mdns::Found>> = None;
+        loop {
+            let mut found = crate::mdns::browse(Duration::from_millis(1500));
+            found.retain(|f| f.name.to_ascii_lowercase() != me && !f.hostname.to_ascii_lowercase().starts_with(&format!("{me}.")));
+            found.sort_by(|a, b| a.name.cmp(&b.name));
+            if last.as_ref() != Some(&found) {
+                crate::log!("bonjour: {} found {:?}", found.len(), found.iter().map(|f| &f.host).collect::<Vec<_>>());
+                last = Some(found.clone());
+            }
+            // Always answer: a scan the page asked for waits for this.
+            post(Event::Found(found));
+            let g = SCAN_WAKE.lock().unwrap();
+            let (mut g, _) = SCAN_CV.wait_timeout_while(g, Duration::from_secs(30), |w| !*w).unwrap();
+            *g = false;
+        }
     });
 }
 
