@@ -339,7 +339,7 @@ function helpMacPc() {
       ['이 PC에서 공유 켜기', '<p>공유 페이지에서 <b>모두 켜기</b>를 누릅니다. <b>웹 뷰어 주소·PIN</b>과 <b>이 PC 공유 주소·공유 암호</b>가 나옵니다.</p>', shot('itda-web', '공유 페이지')],
       ['방법 1 — Safari로 (추천)', `<p>Mac의 Safari에 웹 뷰어 주소(예: <code>http://192.168.0.32:8780</code>)를 넣고 PIN을 입력합니다. 이 PC와 저장된 다른 기기도 여기서 열 수 있습니다.</p>
         <p>${path('Safari', '파일', 'Dock에 추가')} 를 하면 Mac 앱처럼 Dock에서 바로 열립니다.</p>`],
-      ['방법 1-2 — Mac용 Itda 앱으로', `<p><a href="https://github.com/jiunbae/itda/releases/latest" data-ext>Mac용 Itda</a>(Itda-macos-universal.zip)를 받아 압축을 풀고, 처음 한 번은 <b>오른쪽 클릭 → 열기</b>로 실행합니다. 이 PC를 <b>Windows · Itda</b>로 추가하고 공유 암호를 넣으면 됩니다. 다른 Mac·Windows PC·Linux도 같은 앱에서 열 수 있습니다.</p>`],
+      ['방법 1-2 — Mac용 Itda 앱으로', `<p><a href="https://github.com/jiunbae/itda/releases/latest" data-ext>Mac용 Itda</a>(Itda-macos-universal.zip)를 받아 압축을 풀고, 처음 열 때 ‘Apple이 확인할 수 없습니다’가 뜨면 <b>완료</b>를 누르고 ${path('시스템 설정', '개인정보 보호 및 보안')} 아래쪽의 <b>그래도 열기</b>를 누릅니다 (macOS 14 이하는 오른쪽 클릭 → 열기). 이 PC를 <b>Windows · Itda</b>로 추가하고 공유 암호를 넣으면 됩니다. 다른 Mac·Windows PC·Linux도 같은 앱에서 열 수 있습니다.</p>`],
       ['방법 2 — Mac의 화면 공유 앱으로', `<p>Finder에서 ${path('이동', '서버에 연결')} (⌘K)을 누르고 <code>vnc://192.168.0.32</code>처럼 <b>이 PC 공유 주소</b>를 넣습니다. 암호에는 <b>공유 암호</b>를 넣습니다.</p>
         <p>이 PC에 ‘허용할까요?’ 창이 뜨면 <b>예</b>를 누르세요. Mac의 ⌘C·⌘V가 이 PC의 Ctrl+C·Ctrl+V로 동작합니다.</p>`],
     ],

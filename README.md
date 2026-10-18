@@ -40,7 +40,7 @@ A tiny, fast remote desktop for Windows that opens your **Macs**, **Windows PCs*
 Download `Itda-macos-universal.zip` from [Releases](https://github.com/jiunbae/itda/releases/latest). It runs on macOS 12+, on Apple silicon and Intel.
 
 1. Unzip it and move **Itda.app** to Applications.
-2. The app isn't notarized yet, so the first time right-click it → **Open** → **Open**.
+2. The app isn't notarized yet. If macOS says it can't check Itda, click **Done**, then **Open Anyway** near the bottom of **System Settings → Privacy & Security**. On macOS 14 and earlier, right-click it → **Open** → **Open**.
 3. **Add a device:** pick one from **주변 기기** (Bonjour and Tailscale), or type an address.
 
 It is the same home as on Windows: address book with live previews, nearby devices, accounts, the web viewer for your phone (QR + PIN), the help center and settings, worded for the Mac.
