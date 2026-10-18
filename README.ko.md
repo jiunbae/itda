@@ -210,7 +210,7 @@ cargo build --release      # → target\release\itda.exe
 cargo test --release
 ```
 
-Mac에서는 `scripts/macos-bundle.sh universal`로 `dist/Itda-macos-universal.zip`을 만듭니다.
+Mac에서는 `scripts/macos-bundle.sh universal`로 `dist/Itda-macos-universal.zip`을 만듭니다. 배포용 Windows exe는 `scripts/windows-release.ps1`로 빌드합니다. 두 스크립트 모두 빌드한 컴퓨터의 경로를 바이너리에 남기지 않습니다.
 
 <details>
 <summary><b>프로젝트 구성</b></summary>

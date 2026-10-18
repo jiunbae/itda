@@ -15,6 +15,8 @@ cargo build --release      # target\release\itda.exe
 cargo test --release
 ```
 
+For a release, build with `scripts/windows-release.ps1` (and `scripts/macos-bundle.sh universal` on a Mac) so the binaries don't carry your home folder's path.
+
 The home UI lives in `web/` and is embedded in the exe. To edit it without rebuilding, set `ITDA_WEB_DIR=<path to web>` to serve it from disk.
 
 ## Guidelines

@@ -211,6 +211,8 @@ cargo build --release      # → target\release\itda.exe
 cargo test --release
 ```
 
+Release builds go through `scripts/windows-release.ps1` (Windows) and `scripts/macos-bundle.sh universal` (Mac → `dist/Itda-macos-universal.zip`). Both keep the build machine's paths out of the binary.
+
 <details>
 <summary><b>Project layout</b></summary>
 
