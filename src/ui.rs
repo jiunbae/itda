@@ -1257,6 +1257,9 @@ fn wheel(horizontal: bool, delta: i32) {
         *acc -= n * 120;
         (u.buttons, u.pos, n)
     });
+    // A Mac scrolls about a line per click: send as many as Windows scrolls lines (or
+    // characters) per notch, so the wheel feels the same as on this PC.
+    let clicks = if crate::rfb::APPLE.load(Relaxed) { clicks * wheel_lines(horizontal) } else { clicks };
     // X11 buttons 4/5 = up/down, 6/7 = left/right.
     let bit = match (horizontal, clicks > 0) {
         (false, true) => 8,
@@ -1268,6 +1271,15 @@ fn wheel(horizontal: bool, delta: i32) {
         sh().pointer(b | bit, pos.0, pos.1);
         sh().pointer(b, pos.0, pos.1);
     }
+}
+
+/// Windows' "lines (characters) to scroll per notch" setting, 3 by default; "one screen at a
+/// time" counts as 10.
+fn wheel_lines(horizontal: bool) -> i32 {
+    let mut n: u32 = 3;
+    let what = if horizontal { SPI_GETWHEELSCROLLCHARS } else { SPI_GETWHEELSCROLLLINES };
+    unsafe { SystemParametersInfoW(what, 0, &mut n as *mut u32 as _, 0) };
+    if n == u32::MAX { 10 } else { n.clamp(1, 20) as i32 }
 }
 
 fn down(vk: u16) -> bool {

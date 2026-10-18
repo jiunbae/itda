@@ -2,7 +2,7 @@
 
 use std::io::{self, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -21,6 +21,9 @@ pub const ENC_EXT_CLIPBOARD: i32 = 0xc0a1_e5ce_u32 as i32;
 
 /// Total bytes received from the server (for the stats display).
 pub static RX_BYTES: AtomicU64 = AtomicU64::new(0);
+/// The last server we logged in to is a Mac's Screen Sharing ("RFB 003.889", Apple auth).
+/// It scrolls about one line per wheel click, where other servers scroll a Windows notch.
+pub static APPLE: AtomicBool = AtomicBool::new(false);
 
 /// Socket reader that counts received bytes.
 pub struct Rx(pub TcpStream);
@@ -179,6 +182,7 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
         _ => 3,
     };
     crate::log!("server version {:?} -> 3.{minor}", String::from_utf8_lossy(&v).trim_end());
+    let mut apple = &v[..11] == b"RFB 003.889";
     w.write_all(format!("RFB 003.00{minor}\n").as_bytes())?;
 
     let sec = if minor == 3 {
@@ -193,6 +197,7 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
         }
         let types = rd_vec(&mut r, n)?;
         let has = |t| types.contains(&t);
+        apple |= has(30);
         let pick = if has(30) && !creds.user.is_empty() {
             30
         } else if has(2) {
@@ -209,6 +214,7 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
         pick
     };
 
+    APPLE.store(apple, Relaxed);
     progress("auth");
     match sec {
         1 => {}
