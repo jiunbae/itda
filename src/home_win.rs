@@ -314,6 +314,8 @@ pub fn spawn_session(host: &Host, login: &store::Login, pass: String, settings: 
         key_pass: login.key_pass.clone().unwrap_or_default(),
         hotkey: settings.hotkey.clone(),
         toolbar: settings.toolbar.clone(),
+        mac_scroll: settings.mac_scroll.clone(),
+        scroll_accel: settings.scroll_accel,
         thumbnails: settings.thumbnails,
         ssh: host.ssh.clone(),
     };

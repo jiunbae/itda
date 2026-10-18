@@ -29,6 +29,9 @@ pub struct Launch {
     pub hotkey: String,
     /// "auto" | "pinned" | "hidden"
     pub toolbar: String,
+    /// Mac wheel speed and acceleration (see store::Settings).
+    pub mac_scroll: String,
+    pub scroll_accel: bool,
     pub thumbnails: bool,
 }
 

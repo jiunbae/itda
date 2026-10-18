@@ -106,6 +106,9 @@ struct Ui {
     buttons: u8,
     pos: (u16, u16),
     wheel: (i32, i32),
+    /// Last notch sent to a Mac (time, direction) and how many came in quick succession.
+    wheel_last: Option<(Instant, i32)>,
+    wheel_run: u32,
     /// key id -> keysym sent on press, so the release matches.
     keys: HashMap<u32, u32>,
     cursor: Option<HCURSOR>, // None = system arrow, Some(null) = hidden
@@ -1250,16 +1253,33 @@ fn wheel(horizontal: bool, delta: i32) {
     if VIEW_ONLY.load(Relaxed) {
         return;
     }
+    let apple = crate::rfb::APPLE.load(Relaxed);
     let (b, pos, clicks) = ui(|u| {
         let acc = if horizontal { &mut u.wheel.1 } else { &mut u.wheel.0 };
         *acc += delta;
         let n = *acc / 120;
         *acc -= n * 120;
-        (u.buttons, u.pos, n)
+        if n == 0 || !apple {
+            return (u.buttons, u.pos, n);
+        }
+        // A Mac scrolls a short line per click: send Windows' lines (or characters) per notch,
+        // times the chosen speed, so a notch goes about as far as it does here.
+        let speed = match u.l.mac_scroll.as_str() {
+            "normal" => 1.0,
+            "faster" => 3.0,
+            _ => 2.0,
+        };
+        // Notches in quick succession speed up, as a Mac's own wheel does: up to ×3 after
+        // a few fast ones in the same direction.
+        let dir = n.signum() * if horizontal { 2 } else { 1 };
+        let now = Instant::now();
+        let quick = u.wheel_last.is_some_and(|(t, d)| d == dir && now.duration_since(t) < Duration::from_millis(150));
+        u.wheel_run = if quick && u.l.scroll_accel { (u.wheel_run + 1).min(4) } else { 0 };
+        u.wheel_last = Some((now, dir));
+        let accel = 1.0 + 0.5 * u.wheel_run as f64;
+        let per_notch = (wheel_lines(horizontal) as f64 * speed * accel).round() as i32;
+        (u.buttons, u.pos, n * per_notch.max(1))
     });
-    // A Mac scrolls about a line per click: send as many as Windows scrolls lines (or
-    // characters) per notch, so the wheel feels the same as on this PC.
-    let clicks = if crate::rfb::APPLE.load(Relaxed) { clicks * wheel_lines(horizontal) } else { clicks };
     // X11 buttons 4/5 = up/down, 6/7 = left/right.
     let bit = match (horizontal, clicks > 0) {
         (false, true) => 8,

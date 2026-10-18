@@ -4,7 +4,7 @@
 const S = {
   hosts: [],
   accounts: [],
-  settings: { theme: 'system', view: 'grid', toolbar: 'auto', hotkey: 'ctrl_alt', tray: true, notify: true, thumbnails: true, defaults: {} },
+  settings: { theme: 'system', view: 'grid', toolbar: 'auto', hotkey: 'ctrl_alt', mac_scroll: 'fast', scroll_accel: true, tray: true, notify: true, thumbnails: true, defaults: {} },
   sessions: {},
   online: {},
   found: [],
@@ -683,6 +683,8 @@ function renderSettings() {
     ${MAC ? '' : `<div class="group-title">접속 창${more('session')}<a href="#" class="help-link" data-help="keys">단축키 전체 보기</a></div>
     ${setting('E7C4', '툴바', '화면 위쪽 가운데의 툴바 표시 방식', `<select class="input" data-select="toolbar"><option value="auto" ${st.toolbar === 'auto' ? 'selected' : ''}>자동 숨김</option><option value="pinned" ${st.toolbar === 'pinned' ? 'selected' : ''}>항상 표시</option><option value="hidden" ${st.toolbar === 'hidden' ? 'selected' : ''}>숨김 (단축키만)</option></select>`)}
     ${setting('E765', '단축키 조합', 'Mac으로 보내지 않고 Itda가 처리하는 키 조합', seg('hotkey', st.hotkey, [['ctrl_alt', 'Ctrl+Alt'], ['ctrl_shift', 'Ctrl+Shift']]))}
+    ${setting('E962', 'Mac 스크롤 속도', '마우스 휠 한 칸에 Mac 화면이 움직이는 양. 보통은 Windows의 ‘한 번에 스크롤할 줄 수’만큼입니다', seg('mac_scroll', st.mac_scroll || 'fast', [['normal', '보통'], ['fast', '빠르게'], ['faster', '아주 빠르게']]))}
+    ${setting('E945', '빠르게 굴리면 가속', 'Mac 마우스처럼, 휠을 빠르게 연달아 굴리면 더 멀리 스크롤합니다', toggle('scroll_accel', st.scroll_accel !== false))}
     <div class="setting last" style="align-items:flex-start">${I('E8AB')}<div class="txt"><b>단축키</b><table class="shortcuts">${keys.map(([a, k]) => `<tr><td>${a}</td><td><kbd>${p}+${k}</kbd></td></tr>`).join('')}</table></div></div>`}
 
     <div class="group-title">새 연결 기본값${more('defaults')}</div>

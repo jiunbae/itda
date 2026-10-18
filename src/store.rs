@@ -181,6 +181,10 @@ pub struct Settings {
     pub hotkey: String,
     /// In-session toolbar: "auto" (slides in at the top edge) | "pinned" | "hidden"
     pub toolbar: String,
+    /// How far a wheel notch scrolls a Mac: "normal" (Windows' lines per notch) | "fast" (×2) | "faster" (×3)
+    pub mac_scroll: String,
+    /// Rolling the wheel quickly scrolls a Mac further, like a Mac's own mouse.
+    pub scroll_accel: bool,
     /// Home layout: "grid" | "list"
     pub view: String,
     /// Shown the "still running in the tray" notice once.
@@ -241,6 +245,8 @@ impl Default for Settings {
             notify: true,
             hotkey: "ctrl_alt".into(),
             toolbar: "auto".into(),
+            mac_scroll: "fast".into(),
+            scroll_accel: true,
             view: "grid".into(),
             tray_hint_shown: false,
             zoom: 100,
