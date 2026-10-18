@@ -206,6 +206,8 @@ pub struct Share {
     pub port: u16,
     /// Ask the person at this PC before each viewer gets in.
     pub ask: bool,
+    /// ...except devices on this network or this tailnet: the password alone lets them in.
+    pub trust_near: bool,
     /// A Mac's ⌘ acts as Ctrl on this PC.
     pub cmd_as_ctrl: bool,
     pub view_only: bool,
@@ -213,7 +215,7 @@ pub struct Share {
 
 impl Default for Share {
     fn default() -> Self {
-        Share { on: false, port: 5900, ask: true, cmd_as_ctrl: true, view_only: false }
+        Share { on: false, port: 5900, ask: true, trust_near: true, cmd_as_ctrl: true, view_only: false }
     }
 }
 

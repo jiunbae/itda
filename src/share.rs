@@ -30,6 +30,8 @@ pub struct Config {
     pub password: String,
     /// Ask the person at this PC before each viewer gets in.
     pub ask: bool,
+    /// ...but not viewers on this network or this tailnet (see `near`).
+    pub trust_near: bool,
     /// A Mac's ⌘ (Super) acts as Ctrl here, so ⌘C/⌘V copy and paste.
     pub cmd_as_ctrl: bool,
     pub view_only: bool,
@@ -156,6 +158,30 @@ fn rd<const N: usize>(r: &mut impl Read) -> io::Result<[u8; N]> {
     Ok(b)
 }
 
+/// A viewer on this local network (private, link-local or loopback address) or on this PC's
+/// tailnet (Tailscale's 100.64/10 and fd7a:115c:a1e0::/48): the user's own devices. The share
+/// port isn't something people forward from the internet, so these can't be strangers'.
+fn near(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    let ip = match ip {
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => IpAddr::V6(v6),
+        },
+        v4 => v4,
+    };
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_private() || v4.is_loopback() || v4.is_link_local() || (o[0] == 100 && o[1] & 0xc0 == 64)
+        }
+        IpAddr::V6(v6) => {
+            let s = v6.segments();
+            v6.is_loopback() || s[0] & 0xffc0 == 0xfe80 || s[0] & 0xfe00 == 0xfc00 // link-local, ULA (Tailscale's too)
+        }
+    }
+}
+
 fn ask_user(peer: &SocketAddr) -> bool {
     let text = format!(
         "{}에서 이 PC의 화면을 보고 조작하려고 합니다.\n\n허용할까요?\n\n(허용하면 연결이 끝날 때까지 화면과 입력이 공유됩니다. 알림 영역의 Itda에서 언제든 끊을 수 있습니다.)",
@@ -198,7 +224,11 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
         std::thread::sleep(Duration::from_secs(1)); // slow down guessing
         return deny(&mut c, "Authentication failed");
     }
-    if cfg.ask && !ask_user(&peer) {
+    let trusted = cfg.trust_near && near(peer.ip());
+    if trusted && cfg.ask {
+        crate::log!("share {peer}: nearby device, no prompt");
+    }
+    if cfg.ask && !trusted && !ask_user(&peer) {
         crate::log!("share {peer}: refused by the user");
         return deny(&mut c, "The person at this PC declined");
     }
@@ -757,5 +787,19 @@ fn clipboard_set(text: &str) {
             SetClipboardData(CF_UNICODETEXT, mem as _);
         }
         CloseClipboard();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn nearby_devices_are_this_network_or_tailnet() {
+        let near = |s: &str| super::near(s.parse().unwrap());
+        for ip in ["192.168.0.54", "10.0.0.7", "172.20.1.2", "127.0.0.1", "169.254.3.4", "100.101.10.3", "fe80::1c2d:3e4f:5a6b:7c8d", "fd7a:115c:a1e0::1", "::ffff:192.168.0.9"] {
+            assert!(near(ip), "{ip}");
+        }
+        for ip in ["8.8.8.8", "100.128.0.1", "211.234.10.1", "2001:db8::1", "::ffff:1.2.3.4"] {
+            assert!(!near(ip), "{ip}");
+        }
     }
 }

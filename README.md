@@ -186,7 +186,7 @@ Open **공유** in the sidebar → **웹 뷰어** (or **모두 켜기**). Open t
 - GDI capture of every monitor, 64×64 tile diff, ZRLE
 - SendInput for the mouse and keyboard; a Mac's ⌘ acts as Ctrl
 - clipboard in both directions
-- a random VNC password plus an "allow?" prompt on every connection (on by default)
+- a random VNC password plus an "allow?" prompt on every connection (on by default). Devices on the same network or your tailnet get in with the password alone
 - notifications and a tray badge while someone is watching, and a button that disconnects everyone
 - view-only mode and Bonjour registration
 

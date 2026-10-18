@@ -535,6 +535,7 @@ fn apply_share(s: &store::Share) {
             port: s.port,
             password: store::share_password(None, false),
             ask: s.ask,
+            trust_near: s.trust_near,
             cmd_as_ctrl: s.cmd_as_ctrl,
             view_only: s.view_only,
         })

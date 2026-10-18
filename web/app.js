@@ -567,6 +567,7 @@ function sharePanel(sh) {
         ${viewers}
       </div></div>
     ${setting('E8D7', '연결할 때마다 묻기', '누가 연결하려 하면 이 PC에 허용 여부를 묻습니다 (권장)', toggle('ask', sh.ask, 'share'))}
+    ${sh.ask ? setting('E7F8', '내 기기는 묻지 않기', '같은 Wi-Fi·유선 네트워크와 내 Tailscale 기기는 공유 암호만 맞으면 바로 연결합니다. 그 밖에서 오는 연결만 묻습니다.', toggle('trust_near', sh.trust_near !== false, 'share')) : ''}
     ${setting('E765', 'Mac의 ⌘을 Ctrl로', 'Mac에서 연결했을 때 ⌘C·⌘V로 복사·붙여넣기', toggle('cmd_as_ctrl', sh.cmd_as_ctrl, 'share'))}
     ${setting('E890', '보기만 허용', '마우스·키보드 입력은 받지 않습니다', toggle('view_only', sh.view_only, 'share'))}
     <div class="setting last">${I('E968')}<div class="txt"><b>포트</b><span>기본 5900 (VNC 표준)</span></div>
@@ -1334,7 +1335,7 @@ function act(a, el) {
     case 'sys-sharing': return send('url', { url: 'x-apple.systempreferences:com.apple.Sharing-Settings.extension' });
     case 'share-all-on':
       if (MAC) return act('web-on', el);
-      S.settings.share = { port: 5900, ask: true, cmd_as_ctrl: true, ...S.settings.share, on: true };
+      S.settings.share = { port: 5900, ask: true, trust_near: true, cmd_as_ctrl: true, ...S.settings.share, on: true };
       S.share = {};
     // falls through
     case 'web-on':
@@ -1386,7 +1387,7 @@ document.addEventListener('change', (e) => {
   const t = e.target;
   if (t.dataset.set) {
     if (t.dataset.path === 'defaults') S.settings.defaults = { ...S.settings.defaults, [t.dataset.set]: t.checked };
-    else if (t.dataset.path === 'share') { S.settings.share = { port: 5900, ask: true, cmd_as_ctrl: true, ...S.settings.share, [t.dataset.set]: t.checked }; if (t.dataset.set === 'on') S.share = {}; }
+    else if (t.dataset.path === 'share') { S.settings.share = { port: 5900, ask: true, trust_near: true, cmd_as_ctrl: true, ...S.settings.share, [t.dataset.set]: t.checked }; if (t.dataset.set === 'on') S.share = {}; }
     else if (t.dataset.path === 'web') { S.settings.web = { port: 8780, ...S.settings.web, [t.dataset.set]: t.checked }; S.web = {}; }
     else S.settings[t.dataset.set] = t.checked;
     saveSettings();
