@@ -11,6 +11,10 @@ OUT=dist
 APP="$OUT/Itda.app"
 rm -rf "$APP" && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
+# Keep the build machine's paths (home folder, user name) out of the binary: panic messages
+# and dependency file names would otherwise carry them. The last matching prefix wins.
+export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$HOME=~$(printf '\037')--remap-path-prefix=$PWD=itda"
+
 if [ "$MODE" = universal ]; then
   cargo build --release --target aarch64-apple-darwin
   cargo build --release --target x86_64-apple-darwin
