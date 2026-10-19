@@ -45,7 +45,7 @@ function macSharing(highlight) {
       ${macRow('파일 공유', sw(false))}
       ${macRow('미디어 공유', sw(false))}
       ${r('원격 로그인', 'ssh')}
-      ${macRow('원격 관리', sw(false), { sub: '화면 공유와 함께 켜지 마세요' })}
+      ${macRow('원격 관리', sw(false), { sub: '켜져 있다면 화면 공유 대신 이것으로 연결됩니다' })}
     </div>
     <div class="mac-group">${macRow('로컬 호스트 이름', '<span class="mac-val">mac-mini.local</span>', { hl: highlight === 'name', n: highlight === 'name' ? 3 : '' })}</div>`;
 }
@@ -211,7 +211,7 @@ function helpMac() {
     actions: goPage('nearby', `${I('E701')}주변 Mac 찾기`, true) + addKind('mac', '주소로 직접 추가'),
     steps: [
       ['Mac에서 화면 공유 켜기', `<p>Mac에서 ${path('Apple 메뉴', '시스템 설정', '일반', '공유')} 로 가서 <b>화면 공유</b>를 켭니다 ${mark(1)}.</p>
-        ${note('<b>원격 관리</b>는 꺼 두세요. 둘 다 켜져 있으면 화면 공유가 동작하지 않습니다.', 'warn')}`, macWindow('general', '공유', macSharing('screen'))],
+        ${note('<b>원격 관리</b>를 이미 쓰고 있다면 그대로 두어도 됩니다. 원격 관리가 켜져 있으면 화면 공유 스위치는 켤 수 없지만, 원격 관리로 똑같이 연결됩니다. 이때는 원격 관리 옆 ⓘ → <b>옵션</b>에서 들어올 계정에 <b>관찰</b>과 <b>제어</b>를 켜 두세요.', 'info')}`, macWindow('general', '공유', macSharing('screen'))],
       ['내 계정이 허용돼 있는지 확인', `<p>화면 공유 옆 ⓘ ${mark(2)} 를 눌러 <b>다음 사용자에 대해 접근 허용</b>에 내 계정이 있는지 봅니다 ${mark(1)}. ‘모든 사용자’여도 됩니다.</p>`, macWindow('general', '공유', macSharing('screen-i'), macScreenSheet())],
       [`${HERE}의 Itda에서 Mac 추가`, `<p>Itda 왼쪽의 <b>주변 기기</b>를 엽니다. 같은 Wi-Fi의 Mac이 저절로 나타납니다. Mac 옆 <b>추가</b>를 누르세요.</p>
         <p>목록에 없으면 위의 <b>주소로 직접 추가</b>를 누르고, Mac 공유 화면 아래의 <b>로컬 호스트 이름</b>(예: <code>mac-mini.local</code>)을 넣습니다.</p>`, shot('itda-nearby', '주변 기기 — 같은 Wi-Fi의 Mac(위)과 Tailscale의 기기(아래)')],
@@ -361,7 +361,7 @@ function helpShareMac() {
     actions: doBtn(`${I('E8A7')}공유 설정 열기`, 'data-act="sys-sharing"', true) + goPage('share', '공유 페이지 열기'),
     steps: [
       ['화면 공유 켜기', `<p>${path('Apple 메뉴', '시스템 설정', '일반', '공유')} 에서 <b>화면 공유</b>를 켭니다 ${mark(1)}. 위의 <b>공유 설정 열기</b>를 누르면 바로 열립니다.</p>
-        ${note('<b>원격 관리</b>는 꺼 두세요. 둘 다 켜져 있으면 화면 공유가 동작하지 않습니다.', 'warn')}`, macWindow('general', '공유', macSharing('screen'))],
+        ${note('<b>원격 관리</b>를 이미 쓰고 있다면 그대로 두어도 됩니다. 원격 관리가 켜져 있으면 화면 공유 스위치는 켤 수 없지만, 원격 관리로 똑같이 연결됩니다. 이때는 원격 관리 옆 ⓘ → <b>옵션</b>에서 들어올 계정에 <b>관찰</b>과 <b>제어</b>를 켜 두세요.', 'info')}`, macWindow('general', '공유', macSharing('screen'))],
       ['들어올 계정 정하기', `<p>화면 공유 옆 ⓘ ${mark(2)} → <b>다음 사용자에 대해 접근 허용</b> ${mark(1)} 에 들어올 계정이 있는지 봅니다. 다른 기기에서는 <b>이 Mac의 계정 이름과 로그인 암호</b>로 들어옵니다.</p>`, macWindow('general', '공유', macSharing('screen-i'), macScreenSheet())],
       ['이 Mac의 이름 확인', `<p>공유 화면 아래의 <b>로컬 호스트 이름</b> ${mark(3)} (예: <code>mac-mini.local</code>)이 이 Mac의 주소입니다. Itda의 왼쪽 <b>공유</b> 페이지에도 주소와 계정 이름이 나옵니다.</p>`, macWindow('general', '공유', macSharing('name'))],
       ['볼 기기에서 추가', `<ul class="hkeys">

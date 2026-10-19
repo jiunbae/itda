@@ -473,8 +473,8 @@ function showOnboarding(step = 'welcome') {
       <div class="foot"><span class="ob-dots"><i class="on"></i><i></i><i></i></span><button class="btn subtle" data-ob="skip">건너뛰기</button></div>`,
     mac: () => `<div class="ob-body"><h2>${I('E7F4')} Mac 화면 열기</h2>
         <div class="ob-split"><ol class="ob-list">
-          ${check(1, `Mac에서 <b>시스템 설정 → 일반 → 공유</b>를 열고 <b>화면 공유</b>를 켭니다.`)}
-          ${check(2, `화면 공유 옆 ⓘ → <b>접근 허용</b>에 내 계정이 있는지 확인합니다.`)}
+          ${check(1, `Mac에서 <b>시스템 설정 → 일반 → 공유</b>를 열고 <b>화면 공유</b>를 켭니다. <b>원격 관리</b>가 켜져 있다면 그대로 두어도 연결됩니다.`)}
+          ${check(2, `화면 공유 옆 ⓘ → <b>접근 허용</b>에 내 계정이 있는지 확인합니다. 원격 관리라면 ⓘ → <b>옵션</b>에서 내 계정에 <b>관찰</b>과 <b>제어</b>를 켭니다.`)}
           ${check(3, `Itda에는 <b>Mac 계정 이름(짧은 이름)</b>과 로그인 암호를 넣습니다. Apple ID가 아닙니다.`)}
           ${check(4, `밖에서도 쓸 거라면 같은 화면의 <b>원격 로그인</b>도 켜 두세요 (SSH 암호화).`)}
         </ol><div class="ob-art">${typeof macWindow === 'function' ? macWindow('general', '공유', macSharing('screen')) : ''}</div></div></div>
@@ -547,7 +547,7 @@ function foundRow(f) {
     : f.itda ? ` <span class="pill ${f.share ? 'ok' : 'mute'}">Mac · Itda</span>` : '';
   const off = !f.itda || f.share || rdp ? ''
     : win ? '<span class="off">공유가 꺼져 있습니다 — 그 PC의 Itda에서 <strong>공유 → 이 PC 공유</strong>를 켜면 연결됩니다.</span>'
-      : '<span class="off">화면 공유가 꺼져 있습니다 — 그 Mac의 <strong>시스템 설정 → 일반 → 공유 → 화면 공유</strong>를 켜면 연결됩니다.</span>';
+      : '<span class="off">화면 공유가 꺼져 있습니다 — 그 Mac의 <strong>시스템 설정 → 일반 → 공유 → 화면 공유</strong>(또는 원격 관리)를 켜면 연결됩니다.</span>';
   return `<div class="found"><div class="ico">${osIcon({ os: win ? 'windows' : 'mac' })}</div><div class="txt"><b>${esc(f.name)}${pill}</b><span>${esc(addr)}</span>${off}</div>${act}</div>`;
 }
 
@@ -1284,6 +1284,7 @@ const ERRORS = {
   auth: ['로그인하지 못했습니다', 'Mac이 계정 이름 또는 암호를 받아들이지 않았습니다.', [
     'Mac 로그인 화면에서 쓰는 <b>계정 이름(짧은 이름)</b>과 암호를 입력하세요. Apple ID가 아닙니다.',
     'Mac의 <b>화면 공유 ⓘ → 접근 허용</b>에 이 계정이 포함되어 있는지 확인하세요.',
+    'Mac이 <b>원격 관리</b>를 쓰고 있다면 원격 관리 ⓘ → <b>옵션</b>에서 이 계정에 <b>관찰</b>과 <b>제어</b>가 켜져 있는지 확인하세요.',
   ]],
   ssh_auth: ['SSH 로그인에 실패했습니다', 'Mac이 원격 로그인(SSH) 계정 이름 또는 암호를 받아들이지 않았습니다.', [
     'Mac 계정의 <b>짧은 이름</b>과 로그인 암호를 입력하세요. SSH 사용자를 따로 지정했다면 그 이름을 확인하세요.',
@@ -1303,7 +1304,7 @@ const ERRORS = {
   declined: ['상대 PC에서 연결을 거절했습니다', '그 PC 앞에 있는 사람이 화면 공유 요청에 ‘아니요’를 눌렀습니다.', ['상대에게 알린 뒤 다시 연결하세요. 요청 창이 뜨면 ‘예’를 눌러 달라고 하세요.']],
   need_user: ['Mac 계정 이름이 필요합니다', '이 Mac은 VNC 암호 대신 Mac 계정으로 로그인하도록 설정되어 있습니다.', ['연결 편집에서 <b>Mac 계정 이름</b>을 입력하세요.']],
   refused: ['Mac이 연결을 거부했습니다', '화면 공유가 꺼져 있는 것 같습니다.', [
-    'Mac의 <b>시스템 설정 → 일반 → 공유 → 화면 공유</b>를 켜세요.',
+    'Mac의 <b>시스템 설정 → 일반 → 공유 → 화면 공유</b>를 켜세요. <b>원격 관리</b>를 켜도 연결됩니다.',
     '이미 켜져 있다면 껐다가 다시 켜 보세요. 다른 원격 앱이 같은 포트(5900)를 쓰고 있을 수도 있습니다.',
   ]],
   timeout: ['Mac이 응답하지 않습니다', '주소로 연결을 시도했지만 응답이 없었습니다.', [
