@@ -160,6 +160,7 @@ function onMessage(m) {
       break;
     }
     case 'online':
+      if (JSON.stringify(m.online) === JSON.stringify(S.online)) break;
       S.online = m.online;
       render();
       break;
@@ -189,14 +190,19 @@ function onMessage(m) {
       toast(m.text, 'E73E');
       break;
     case 'tailnet':
+      // Asked every 30 s: draw again only when something changed.
+      if (JSON.stringify(m.tailnet) === JSON.stringify(S.tailnet)) break;
       S.tailnet = m.tailnet;
       render();
       break;
-    case 'found':
+    case 'found': {
+      const same = JSON.stringify(m.found) === JSON.stringify(S.found);
+      const was = S.scanning;
       S.found = m.found;
       S.scanning = false;
-      render();
+      if (!same || was) render();
       break;
+    }
     case 'error':
       closeModal('connecting');
       showError(m.id, m.kind, m.msg);
@@ -206,8 +212,21 @@ function onMessage(m) {
       showPassword(m.id);
       break;
     case 'thumb': {
+      // Load and decode the new preview first, then swap it in: the old one stays until then.
       const h = hostById(m.id);
-      if (h) { h.thumb = m.v; render(); }
+      if (!h) break;
+      const src = `thumb/${h.id}.png?v=${m.v}`;
+      const img = new Image();
+      img.alt = '';
+      img.dataset.thumb = '';
+      img.setAttribute('onerror', 'this.remove()');
+      img.src = src;
+      img.decode().catch(() => {}).then(() => {
+        if (hostById(m.id) !== h) return;
+        READY.set(src, img);
+        h.thumb = m.v;
+        render();
+      });
       break;
     }
     case 'settings':
@@ -317,7 +336,7 @@ function dot(h) {
 }
 
 function thumb(h) {
-  const img = h.thumb ? `<img src="thumb/${esc(h.id)}.png?v=${h.thumb}" alt="" loading="lazy" onerror="this.remove()">` : '';
+  const img = h.thumb ? `<img data-thumb src="thumb/${esc(h.id)}.png?v=${h.thumb}" alt="" loading="lazy" onerror="this.remove()">` : '';
   const initial = esc((label(h)[0] || '?').toUpperCase());
   return `<div class="thumb" style="--h:${hue(h.id)}">
     <span class="ph">${osIcon(h)}</span><span class="ph-initial">${initial}</span>${img}`;
@@ -739,6 +758,9 @@ function renderSettings() {
   </div>`;
 }
 
+// New previews, loaded and decoded before render() swaps them in (see there).
+const READY = new Map();
+
 function render() {
   renderNav();
   renderTop();
@@ -746,7 +768,19 @@ function render() {
   const focusId = document.activeElement && document.activeElement.closest && document.activeElement.closest('[data-id]') && c.contains(document.activeElement) ? document.activeElement.closest('[data-id]').dataset.id : null;
   const scroll = c.scrollTop;
   const p = S.page;
+  // Previews already on screen are kept as they are: a fresh <img> is decoded again before
+  // it shows, so for a frame the placeholder behind it would flash through.
+  const shown = new Map([...c.querySelectorAll('img[data-thumb]')].map((i) => [i.getAttribute('src'), i]));
   c.innerHTML = p === 'accounts' ? renderAccounts() : p === 'settings' ? renderSettings() : p === 'share' ? renderShare() : p === 'help' ? renderHelp() : p === 'nearby' ? renderNearby() : renderHosts();
+  for (const img of c.querySelectorAll('img[data-thumb]')) {
+    const src = img.getAttribute('src');
+    const old = shown.get(src) || READY.get(src);
+    if (old) {
+      img.replaceWith(old);
+      shown.delete(src);
+    }
+  }
+  READY.clear();
   c.scrollTop = scroll;
   if (focusId) {
     const el = c.querySelector(`.card[data-id="${CSS.escape(focusId)}"], .list-row[data-id="${CSS.escape(focusId)}"]`);
