@@ -943,18 +943,18 @@ static SCAN_WAKE: Mutex<bool> = Mutex::new(false);
 static SCAN_CV: std::sync::Condvar = std::sync::Condvar::new();
 
 fn scan() {
-    scan_tailnet();
     *SCAN_WAKE.lock().unwrap() = true;
     SCAN_CV.notify_all();
 }
 
-/// Bonjour every 30 s (or on demand), so devices that start Itda or sharing show up on
-/// their own. The page hears only about changes.
+/// Bonjour and the tailnet every 30 s (or on demand), so devices that start Itda or sharing,
+/// or come online in Tailscale, show up on their own.
 fn start_discovery() {
     let me = crate::mdns::this_name().to_ascii_lowercase();
     std::thread::spawn(move || {
         let mut last: Option<Vec<crate::mdns::Found>> = None;
         loop {
+            scan_tailnet();
             let mut found = crate::mdns::browse(Duration::from_millis(1500));
             found.retain(|f| f.name.to_ascii_lowercase() != me && !f.hostname.to_ascii_lowercase().starts_with(&format!("{me}.")));
             found.sort_by(|a, b| a.name.cmp(&b.name));
@@ -980,7 +980,12 @@ fn scan_tailnet() {
         }
         let port = home_web_port();
         let serving = st.running && crate::tailscale::serving(port);
-        crate::log!("tailscale: running={} peers={} https={} serving={serving}", st.running, st.peers.len(), st.https);
+        static LAST: Mutex<String> = Mutex::new(String::new());
+        let line = format!("tailscale: running={} peers={} https={} serving={serving}", st.running, st.peers.len(), st.https);
+        if *LAST.lock().unwrap() != line {
+            crate::log!("{line}");
+            *LAST.lock().unwrap() = line;
+        }
         post(Event::Tailnet(st, serving));
     });
 }

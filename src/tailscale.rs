@@ -77,6 +77,7 @@ pub fn status() -> Status {
     let Some((_, out)) = run(&["status", "--json"]) else { return Status::default() };
     let Ok(v) = serde_json::from_str::<Value>(&out) else { return Status { installed: true, ..Status::default() } };
     let mut peers: Vec<Peer> = v["Peer"].as_object().map(|m| m.values().map(peer).collect()).unwrap_or_default();
+    keep_openable(&mut peers);
     peers.sort_by(|a, b| (!a.online, &a.name).cmp(&(!b.online, &b.name)));
     Status {
         installed: true,
@@ -86,6 +87,41 @@ pub fn status() -> Status {
         https: v["CertDomains"].as_array().is_some_and(|a| !a.is_empty()),
     }
 }
+
+/// The ports a device of this kind is opened on: screen sharing / VNC, and for a PC also
+/// Remote Desktop. (Linux VNC servers often sit on display :1.)
+fn ports(os: &str) -> &'static [u16] {
+    match os {
+        "macOS" => &[5900],
+        "windows" => &[5900, 3389],
+        "linux" => &[5900, 5901],
+        _ => &[],
+    }
+}
+
+/// Drop online devices with nothing to open: none of their ports answers. Offline ones
+/// stay (they can't be asked; they'll answer once they're back). All asked at once.
+fn keep_openable(peers: &mut Vec<Peer>) {
+    let open: Vec<bool> = std::thread::scope(|sc| {
+        let asks: Vec<_> = peers
+            .iter()
+            .map(|p| {
+                sc.spawn(move || {
+                    let Ok(ip) = p.ip.parse::<std::net::IpAddr>() else { return false };
+                    !p.online || ports(&p.os).iter().any(|&port| std::net::TcpStream::connect_timeout(&(ip, port).into(), PROBE).is_ok())
+                })
+            })
+            .collect();
+        asks.into_iter().map(|a| a.join().unwrap_or(false)).collect()
+    });
+    let mut i = 0;
+    peers.retain(|_| {
+        i += 1;
+        open[i - 1]
+    });
+}
+
+const PROBE: std::time::Duration = std::time::Duration::from_millis(1000);
 
 /// Is the web viewer currently published over HTTPS on this tailnet?
 pub fn serving(port: u16) -> bool {
