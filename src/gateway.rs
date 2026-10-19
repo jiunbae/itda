@@ -783,17 +783,20 @@ fn relay(c: TcpStream, raw: rfb::Raw, tx: ws::Sender, id: &str, tunnel: Option<A
     let down = tx.clone();
     let mac_sock = writer.try_clone()?;
     let mut reader = reader;
+    // Whatever the 1 MB read buffer holds goes out as one message: no copy into a smaller
+    // buffer first, and fewer, larger messages for the browser to handle.
     let pump = std::thread::spawn(move || {
-        let mut buf = vec![0u8; 1 << 16];
         loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if down.binary(&buf[..n]).is_err() {
+            let n = match reader.fill_buf() {
+                Ok([]) | Err(_) => break,
+                Ok(b) => {
+                    if down.binary(b).is_err() {
                         break;
                     }
+                    b.len()
                 }
-            }
+            };
+            reader.consume(n);
         }
         down.close(1000, "원격 기기와의 연결이 끊겼습니다");
     });
