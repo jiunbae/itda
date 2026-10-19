@@ -31,6 +31,10 @@ fn exe() -> Option<PathBuf> {
 fn run(args: &[&str]) -> Option<(bool, String)> {
     let mut cmd = Command::new(exe()?);
     cmd.args(args).stdin(Stdio::null());
+    // The app bundle's binary is GUI and CLI in one; launched outside a terminal (Itda opened
+    // from Finder) it tries to start the GUI and never answers unless told to be the CLI.
+    #[cfg(not(windows))]
+    cmd.env("TAILSCALE_BE_CLI", "1");
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     let out = cmd.output().ok()?;
