@@ -147,17 +147,23 @@ async function openFromApp() {
 function renderHosts() {
   const el = $('#hosts');
   const add = `<button class="host add" data-new="host">${icon('plus')}<b>기기 추가</b><span>Mac 또는 Windows PC</span></button>`;
+  // Previews already shown stay as they are (a new <img> would be decoded again and flash).
+  const shown = new Map([...el.querySelectorAll('img')].map((i) => [i.getAttribute('src'), i]));
   el.innerHTML = S.hosts.map((h) => `
       <div class="host${h.has_pw ? '' : ' nopw'}" data-id="${esc(h.id)}">
         <button class="open" aria-label="${esc(h.label)} 열기">
-          <div class="th ${esc(osName(h) || '')}">${osMark(h)}${h.thumb ? `<img alt="" src="thumb/${esc(h.id)}.png?t=${Date.now()}">` : ''}</div>
+          <div class="th ${esc(osName(h) || '')}">${osMark(h)}${h.thumb ? `<img alt="" src="thumb/${esc(h.id)}.png?v=${esc(String(h.thumb))}">` : ''}</div>
           <div class="meta"><b>${esc(h.label)}</b>
             <span>${h.ssh ? icon('lock') : ''}${esc(h.this ? 'Itda가 실행 중인 PC' : h.user ? `${h.user}@${h.host}` : h.host)}</span>
             ${h.has_pw ? `<span class="kind">${esc(KIND_TEXT(h))}</span>` : '<span class="warn">암호를 저장해야 열 수 있습니다 — 눌러서 입력</span>'}</div>
         </button>
         ${h.this ? '' : `<button class="more" data-edit="${esc(h.id)}" title="편집" aria-label="${esc(h.label)} 편집">${icon('edit')}</button>`}
       </div>`).join('') + add;
-  el.querySelectorAll('img').forEach((img) => img.addEventListener('error', () => img.remove()));
+  el.querySelectorAll('img').forEach((img) => {
+    const old = shown.get(img.getAttribute('src'));
+    if (old) img.replaceWith(old);
+    else img.addEventListener('error', () => img.remove());
+  });
 }
 
 function renderAccounts() {
@@ -499,6 +505,7 @@ function appDropped(h, info) {
 
 // The card picture in the app's address book: a small copy of the screen now and then.
 let thumbTimer;
+let lastThumb = '';
 function thumbSoon(ms) {
   clearTimeout(thumbTimer);
   thumbTimer = setTimeout(() => {
@@ -509,7 +516,12 @@ function thumbSoon(ms) {
       c.width = Math.round(src.width * k);
       c.height = Math.round(src.height * k);
       c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
-      try { post({ ev: 'thumb', png: c.toDataURL('image/png') }); } catch (_) {}
+      try {
+        // An unchanged screen isn't sent again (the app would rewrite the file and redraw).
+        const png = c.toDataURL('image/png');
+        if (png !== lastThumb) post({ ev: 'thumb', png });
+        lastThumb = png;
+      } catch (_) {}
     }
     if (S.rfb) thumbSoon(60000);
   }, ms);

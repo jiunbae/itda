@@ -402,7 +402,11 @@ fn hosts_json() -> serde_json::Value {
                 "remote_name": h.remote_name,
                 "opts": h.opts,
                 "last_used": h.last_used,
-                "thumb": std::fs::metadata(store::thumb_path(&h.id)).is_ok(),
+                // The preview's version (its time), 0 = none: part of its URL, so it's cached
+                // until it changes.
+                "thumb": std::fs::metadata(store::thumb_path(&h.id))
+                    .and_then(|m| m.modified())
+                    .map_or(0, |t| t.duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_secs().max(1))),
             })
         })
         .collect();
@@ -660,7 +664,8 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
         ("GET", _) if ok && p.starts_with("/thumb/") => {
             let id = p.trim_start_matches("/thumb/").trim_end_matches(".png");
             match std::fs::read(store::thumb_path(id)).ok().filter(|_| id.chars().all(|c| c.is_ascii_hexdigit())) {
-                Some(b) => respond(&mut c, "200 OK", "image/png", "", &b),
+                // Asked for by version (?v=), so the browser may keep it.
+                Some(b) => send(&mut c, "200 OK", "image/png", "private, max-age=86400", "", &b),
                 None => respond(&mut c, "404 Not Found", "text/plain", "", b"not found"),
             }
         }

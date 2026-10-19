@@ -289,7 +289,7 @@ function renderNav() {
     html += `<div class="nav-section">그룹</div>`;
     for (const g of gs) html += navItem(`group:${g}`, 'E8B7', g, S.hosts.filter((h) => h.group === g).length);
   }
-  $('#nav').innerHTML = html;
+  morph($('#nav'), html);
   $$('.nav-bottom .nav-item').forEach((b) => b.classList.toggle('active', b.dataset.page === S.page));
 }
 
@@ -758,8 +758,88 @@ function renderSettings() {
   </div>`;
 }
 
-// New previews, loaded and decoded before render() swaps them in (see there).
+// New previews, loaded and decoded before render() swaps them in (see morph).
 const READY = new Map();
+
+// Bring el's children in line with `html`, changing only what differs. Rebuilding with
+// innerHTML made every redraw (sessions, online checks, previews) flash: previews decoded
+// again behind their placeholder, a hovered card lost its connect button until the mouse
+// moved, spinners restarted, and a field being typed in lost focus. Nodes keep their
+// identity here; keyed ones (id, data-id, data-page) are matched by key.
+function morph(el, html) {
+  const t = document.createElement('template');
+  t.innerHTML = html;
+  morphChildren(el, t.content);
+}
+
+function morphKey(n) {
+  if (n.nodeType !== 1) return null;
+  const k = n.id || n.dataset.id || n.dataset.page || n.dataset.help;
+  return k ? `${n.nodeName}|${k}|${n.dataset.act || ''}` : null;
+}
+
+function morphChildren(parent, next) {
+  let a = parent.firstChild;
+  for (let b = next.firstChild; b; ) {
+    const nb = b.nextSibling;
+    const key = morphKey(b);
+    let m = null;
+    if (key) {
+      for (let s = a; s; s = s.nextSibling) {
+        if (morphKey(s) === key) { m = s; break; }
+      }
+    } else if (a && !morphKey(a) && a.nodeType === b.nodeType && a.nodeName === b.nodeName) {
+      m = a;
+    }
+    if (m) {
+      if (m !== a) parent.insertBefore(m, a);
+      a = m.nextSibling;
+      morphNode(m, b);
+    } else {
+      parent.insertBefore(b, a);
+    }
+    b = nb;
+  }
+  while (a) {
+    const n = a.nextSibling;
+    parent.removeChild(a);
+    a = n;
+  }
+}
+
+function morphNode(old, b) {
+  if (old.nodeType !== 1) {
+    if (old.nodeValue !== b.nodeValue) old.nodeValue = b.nodeValue;
+    return;
+  }
+  if (old.nodeName === 'IMG' && old.getAttribute('src') !== b.getAttribute('src')) {
+    // A new preview: the one decoded ahead of time if there is one (no blank frame).
+    old.replaceWith(READY.get(b.getAttribute('src')) || b);
+    return;
+  }
+  for (const { name } of [...old.attributes]) {
+    if (!b.hasAttribute(name)) old.removeAttribute(name);
+  }
+  for (const { name, value } of [...b.attributes]) {
+    if (old.getAttribute(name) !== value) old.setAttribute(name, value);
+  }
+  if (old.classList.contains('i')) {
+    // Icon glyphs become SVG outside Windows (icons.js): compare the glyph, not the SVG.
+    const g = b.textContent;
+    if ((old._glyph ?? old.textContent) !== g) {
+      old.textContent = g;
+    }
+    old._glyph = g;
+    return;
+  }
+  morphChildren(old, b);
+  if (old !== document.activeElement) {
+    if ('checked' in old && old.type !== undefined && old.checked !== b.checked) old.checked = b.checked;
+    if (('value' in old) && (old.nodeName === 'INPUT' || old.nodeName === 'TEXTAREA' || old.nodeName === 'SELECT') && old.value !== b.value) {
+      old.value = old.nodeName === 'SELECT' ? (b.querySelector('option[selected]')?.value ?? old.value) : b.value;
+    }
+  }
+}
 
 function render() {
   renderNav();
@@ -768,18 +848,7 @@ function render() {
   const focusId = document.activeElement && document.activeElement.closest && document.activeElement.closest('[data-id]') && c.contains(document.activeElement) ? document.activeElement.closest('[data-id]').dataset.id : null;
   const scroll = c.scrollTop;
   const p = S.page;
-  // Previews already on screen are kept as they are: a fresh <img> is decoded again before
-  // it shows, so for a frame the placeholder behind it would flash through.
-  const shown = new Map([...c.querySelectorAll('img[data-thumb]')].map((i) => [i.getAttribute('src'), i]));
-  c.innerHTML = p === 'accounts' ? renderAccounts() : p === 'settings' ? renderSettings() : p === 'share' ? renderShare() : p === 'help' ? renderHelp() : p === 'nearby' ? renderNearby() : renderHosts();
-  for (const img of c.querySelectorAll('img[data-thumb]')) {
-    const src = img.getAttribute('src');
-    const old = shown.get(src) || READY.get(src);
-    if (old) {
-      img.replaceWith(old);
-      shown.delete(src);
-    }
-  }
+  morph(c, p === 'accounts' ? renderAccounts() : p === 'settings' ? renderSettings() : p === 'share' ? renderShare() : p === 'help' ? renderHelp() : p === 'nearby' ? renderNearby() : renderHosts());
   READY.clear();
   c.scrollTop = scroll;
   if (focusId) {
