@@ -104,7 +104,9 @@ impl Sender {
     }
 
     fn frame(&self, opcode: u8, data: &[u8]) -> io::Result<()> {
-        let mut hdr = vec![0x80 | opcode];
+        // Header and payload in one write: two small writes stall on Nagle + delayed ACK.
+        let mut hdr = Vec::with_capacity(10 + data.len());
+        hdr.push(0x80 | opcode);
         match data.len() {
             n if n < 126 => hdr.push(n as u8),
             n if n < 65536 => {
@@ -116,9 +118,8 @@ impl Sender {
                 hdr.extend_from_slice(&(n as u64).to_be_bytes());
             }
         }
-        let mut s = self.0.lock().unwrap();
-        s.write_all(&hdr)?;
-        s.write_all(data)
+        hdr.extend_from_slice(data);
+        self.0.lock().unwrap().write_all(&hdr)
     }
 
     pub fn binary(&self, data: &[u8]) -> io::Result<()> {
