@@ -256,7 +256,7 @@ Mac에서는 `scripts/macos-bundle.sh universal`로 `dist/Itda-macos-universal.z
 [MIT](LICENSE) © 2026 Jiun Bae.
 
 Itda는 다음을 바탕으로 만들었습니다:
-- [noVNC](https://github.com/novnc/noVNC) 1.7.0 (MPL-2.0, `web/viewer/novnc.min.js`에 수정 없이 포함)
+- [noVNC](https://github.com/novnc/noVNC) 1.7.0 (MPL-2.0, `web/viewer/novnc.min.js`에 포함, ZRLE 디코더만 더 빠른 것으로 교체; `web/viewer/NOVNC.md` 참고)
 - [IronRDP](https://github.com/Devolutions/IronRDP) (MIT/Apache-2.0)와 [rustls](https://github.com/rustls/rustls)
 - [wry](https://github.com/tauri-apps/wry)와 `Cargo.toml`의 Rust 크레이트들
 

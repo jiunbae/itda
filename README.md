@@ -257,7 +257,7 @@ Issues and PRs are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Report vulne
 [MIT](LICENSE) © 2026 Jiun Bae.
 
 Itda builds on:
-- [noVNC](https://github.com/novnc/noVNC) 1.7.0 (MPL-2.0, bundled unmodified in `web/viewer/novnc.min.js`)
+- [noVNC](https://github.com/novnc/noVNC) 1.7.0 (MPL-2.0, bundled in `web/viewer/novnc.min.js` with a faster ZRLE decoder; see `web/viewer/NOVNC.md`)
 - [IronRDP](https://github.com/Devolutions/IronRDP) (MIT/Apache-2.0) and [rustls](https://github.com/rustls/rustls)
 - [wry](https://github.com/tauri-apps/wry) and the Rust crates in `Cargo.toml`
 
