@@ -184,7 +184,9 @@ mod tests {
         assert!(out.room() && out.queued() == 0);
     }
 
-    /// A viewer that never reads is given up on at the hard limit, and its reader wakes.
+    /// A viewer that never reads is given up on at the hard limit, and a read blocked on the
+    /// same socket returns: at once on macOS and Linux; on Windows, where shutdown doesn't
+    /// interrupt a blocked recv, once the viewer's side closes on the FIN it got.
     #[test]
     fn stuck_viewer() {
         let (srv, viewer) = pair();
@@ -203,8 +205,12 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
         assert!(out.dead());
         assert!(out.send(vec![1]).is_err());
-        assert!(matches!(wait.recv_timeout(Duration::from_secs(2)), Ok(0 | 1)), "reader woke up (EOF or error)");
-        drop(viewer);
+        let mut woke = wait.recv_timeout(Duration::from_secs(2));
+        if cfg!(windows) && woke.is_err() {
+            drop(viewer);
+            woke = wait.recv_timeout(Duration::from_secs(2));
+        }
+        assert!(matches!(woke, Ok(0 | 1)), "reader woke up (EOF or error)");
     }
 
     /// Dropping the outbox ends the connection: the viewer sees EOF.
