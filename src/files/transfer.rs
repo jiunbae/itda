@@ -206,6 +206,9 @@ impl Context {
         }
         let mut to = to.to_string();
         let mut existing = dst.stat(&to)?;
+        if existing.is_some() && self.policy == "exclusive" {
+            return Err(error("대상에 같은 이름의 파일이 있습니다"));
+        }
         if existing.is_some() && self.policy == "skip" {
             return Ok(());
         }
@@ -401,6 +404,27 @@ impl Context {
         }
         result
     }
+}
+#[cfg(target_os = "macos")]
+pub(super) fn export_batch(files: &[super::export::File], targets: &[PathBuf], emit: Emit) -> io::Result<()> {
+    let file=files.first().ok_or_else(||error("파일을 선택하세요"))?;
+    if files.len()!=targets.len() || files.iter().any(|f|f.id!=file.id||f.remote!=file.remote){return Err(error("복사할 파일 위치를 확인하세요"));}
+    let control=Arc::new(Control::default());
+    let job=crate::store::new_id();
+    jobs().lock().unwrap().insert(job.clone(),(file.id.clone(),control.clone()));
+    emit(json!({"type":"files_job","id":file.id,"job":job,"state":"queued","file":file.name}));
+    let result: io::Result<()>=(|| {
+        let _slot=slot(&control)?;
+        let mut src=if file.remote { Endpoint::new(true,&*connection(&file.id)?,&control)? } else { Endpoint{sftp:None} };
+        let mut dst=Endpoint{sftp:None};
+        let mut cx=Context{control:control.clone(),emit:emit.clone(),id:file.id.clone(),job:job.clone(),
+            policy:"exclusive".into(),moving:false,modes:true,done:0,last:Instant::now()-Duration::from_secs(1)};
+        for(file,target)in files.iter().zip(targets){cx.copy(&mut src,&mut dst,&file.path()?.to_string_lossy(),&target.to_string_lossy(),0)?;}
+        Ok(())
+    })();
+    jobs().lock().unwrap().remove(&job);
+    emit(json!({"type":"files_job","id":file.id,"job":job,"state":if result.is_ok(){"completed"}else if control.cancel.load(Ordering::Relaxed){"cancelled"}else{"failed"},"error":result.as_ref().err().map(|e|e.to_string())}));
+    result
 }
 pub fn start(v: Value, host: Host, emit: Emit) {
     let id = host.id.clone();

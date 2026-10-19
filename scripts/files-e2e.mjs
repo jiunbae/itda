@@ -265,6 +265,41 @@ try {
     await page.locator(".files-layer").waitFor({ timeout: 30000 });
     if (platform.startsWith("Mac")) {
       await page.locator('[data-pane="remote"] th[data-sort="kind"]').waitFor();
+      // Real native clipboard IPC. The headless test reads back file URLs through
+      // the product's native Paste path; no textual path/HTML clipboard substitute.
+      await page.evaluate(()=>{const recv=itda.recv;window.nativeEvents=[];itda.recv=m=>{nativeEvents.push(m);recv(m);};window.itdaNativeFiles=true;});
+      await page.locator('[data-pane="remote"] tr[data-index]').filter({hasText:'한글 문서.txt'}).click();
+      await page.evaluate(()=>ItdaFiles.nativeEdit('copy'));
+      await page.waitForFunction(()=>nativeEvents.some(m=>m.type==='files_result'&&m.op==='native_copy'&&m.ok));
+      const exported=await page.evaluate(()=>nativeEvents.find(m=>m.type==='files_result'&&m.op==='native_copy'&&m.ok));
+      assert(exported.data.paths.length===1&&hash(exported.data.paths[0])===hash(path.join(remote,'한글 문서.txt')),'Native file clipboard changed remote bytes');
+      const nativeDestination=path.join(local,'Finder-paste');fs.mkdirSync(nativeDestination);
+      await page.evaluate(destination=>send('files_native_paste',{id:'files-fixture',stamp:-1,side:'local',path:destination}),nativeDestination);
+      await page.locator('.files-prompt').filter({hasText:'파일 복사'}).waitFor();await page.locator('[data-choice=ok]').click();
+      await page.waitForFunction(()=>nativeEvents.some(m=>m.type==='files_native_paste'&&m.paths?.length===1));
+      for(let i=0;!fs.existsSync(path.join(nativeDestination,'한글 문서.txt'));i++){assert(i<200,'Native file paste timed out');await delay(50);}
+      assert(hash(path.join(nativeDestination,'한글 문서.txt'))===hash(path.join(remote,'한글 문서.txt')),'Native clipboard URL paste changed bytes');
+      assert(fs.existsSync(path.join(remote,'한글 문서.txt')),'Native clipboard removed the remote source');
+      // A failed new selection clears old HTML/files rather than exporting stale data.
+      await page.evaluate(source=>send('files_native_copy',{id:'files-fixture',seq:999999,side:'local',path:source,items:[{name:'missing-native-copy.txt',dir:false}]}),local);
+      await page.waitForFunction(()=>nativeEvents.some(m=>m.op==='native_copy'&&m.seq===999999&&!m.ok));
+      await page.evaluate(()=>send('files_native_paste',{id:'files-fixture',stamp:-1,side:'local',path:'/'}));
+      await page.waitForFunction(()=>nativeEvents.some(m=>m.type==='files_native_paste'&&!m.internal&&m.paths?.length===0));
+      await page.evaluate(()=>{window.itdaNativeFiles=false;});
+      console.log('Native clipboard: real file URLs, Unicode bytes, import, source preservation and failed-copy stale-data prevention passed');
+
+      await page.evaluate(()=>{window.itdaNativeFiles=true;});
+      let nativeDrag;
+      await page.route('**/ipc',async route=>{const message=route.request().postDataJSON();if(message.cmd==='files_native_drag'){nativeDrag=message;await route.fulfill({status:200,body:'ok'});}else await route.continue();});
+      const handoffRow=await page.locator('[data-pane="remote"] tr[data-index]').filter({hasText:'한글 문서.txt'}).boundingBox();
+      await page.mouse.move(handoffRow.x+45,handoffRow.y+10);await page.mouse.down();await page.mouse.move(0,handoffRow.y+10,{steps:20});await page.mouse.up();
+      for(let i=0;!nativeDrag;i++){assert(i<100,'Drag did not hand off to the native Finder bridge');await delay(20);}
+      assert(nativeDrag.side==='remote'&&fs.realpathSync(nativeDrag.path)===fs.realpathSync(remote)&&nativeDrag.items.length===1&&nativeDrag.items[0].name==='한글 문서.txt','Native drag handoff lost its file selection: '+JSON.stringify(nativeDrag));
+      assert(await page.locator('.files-drag').count()===0,'Native drag handoff left a ghost');await page.unroute('**/ipc');
+      await page.evaluate(()=>{window.itdaNativeFiles=false;});
+      console.log('Native drag edge handoff preserves selection and clears the pointer ghost');
+
+
       assert(await page.locator('.files-tools').isHidden(), "Mac still has the extra command bar");
       assert(await page.locator('.files-locations').isHidden(), "Separate windows still look like tabs");
       await page.keyboard.press("Meta+t");

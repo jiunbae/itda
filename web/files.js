@@ -165,6 +165,14 @@
     };
   }
   const call = (op, data = {}) => send("files", { id: host.id, op, ...data });
+  const nativeFiles = () => MAC && window.itdaNativeFiles === true;
+  const exportItems = (side, names) => panes[side].entries.filter(e => names.includes(e.name)).map(e => ({name:e.name,dir:e.dir}));
+  function clearDrag() { drag=null; document.querySelector(".files-drag")?.remove(); layer?.querySelectorAll(".files-drop-target").forEach(el=>el.classList.remove("files-drop-target")); }
+  function importPaths(paths, side, destination) {
+    const groups=new Map();
+    for(const path of paths||[]) { const i=Math.max(path.lastIndexOf("/"),path.lastIndexOf("\\")); if(i<0)continue; const parent=path.slice(0,i)||"/",name=path.slice(i+1);if(!groups.has(parent))groups.set(parent,[]);groups.get(parent).push(name); }
+    for(const [source,names]of groups)transfer("local",source,names,side,destination,false);
+  }
   const bytes = (n) =>
     n < 1024
       ? `${n} B`
@@ -774,7 +782,7 @@
     layer.querySelector("[data-location]").textContent = p.path;
     layer.querySelector(".files-folder-title").textContent =
       p.path.split(/[\\/]/).filter(Boolean).pop() || p.path;
-    layer.querySelector('[data-action="paste"]').disabled = !clipboard;
+    layer.querySelector('[data-action="paste"]').disabled = !clipboard && !nativeFiles();
     for (const a of ["copy", "cut", "rename", "trash"])
       layer.querySelector(`[data-action="${a}"]`).disabled = !p.selected.size;
   }
@@ -1080,9 +1088,16 @@
             move: action === "cut",
           };
           status();
+          if(nativeFiles()) {
+            clipboard.seq=++sequence;
+            send("files_native_copy",{id:host.id,seq:clipboard.seq,side:active,path:p.path,items:exportItems(active,clipboard.names)});
+            toast("Finder에서 붙여넣을 파일을 준비하고 있습니다", "E8B7");
+          }
         }
         return;
       case "paste":
+        if(nativeFiles()) { send("files_native_paste",{id:host.id,stamp:clipboard?.nativeStamp,side:active,path:p.path}); return; }
+      case "paste-internal":
         if (clipboard)
           await transfer(
             clipboard.side,
@@ -1209,7 +1224,7 @@
     const menu = document.createElement("div"), p = panes[active];
     menu.className = "files-menu";
     menu.setAttribute("role", "menu");
-    const disabled = (a) => ["open", "copy", "cut", "trash"].includes(a) ? !p.selected.size : a === "rename" ? p.selected.size !== 1 : a === "paste" ? !clipboard : a === "undo" ? !undo.length : false;
+    const disabled = (a) => ["open", "copy", "cut", "trash"].includes(a) ? !p.selected.size : a === "rename" ? p.selected.size !== 1 : a === "paste" ? !clipboard && !nativeFiles() : a === "undo" ? !undo.length : false;
     menu.innerHTML = items.map((item) => item ? `<button class="btn subtle" role="menuitem" data-action="${item[0]}" ${disabled(item[0]) ? "disabled" : ""}>${esc(item[1])}</button>` : "<hr>").join("");
     menu.onclick = (e) => {
       const button = e.target.closest("button:not(:disabled)");
@@ -1440,7 +1455,7 @@
       names: panes[side].selected.has(entry.name)
         ? [...panes[side].selected]
         : [entry.name],
-      live: false,
+      live: false, capture:item, pointer:e.pointerId,
     };
   }
   document.addEventListener("pointermove", (e) => {
@@ -1453,6 +1468,13 @@
       const tag = document.createElement("div");
       tag.className = "files-drag";
       document.body.append(tag);
+    }
+    if (drag.live && nativeFiles() && (e.clientX<=1 || e.clientY<=1 || e.clientX>=innerWidth-1 || e.clientY>=innerHeight-1)) {
+      const d=drag,items=exportItems(d.side,d.names);
+      try{d.capture.releasePointerCapture(d.pointer);}catch{}
+      clearDrag(); suppressClick=true; setTimeout(()=>{suppressClick=false;},0);
+      send("files_native_drag",{id:host.id,side:d.side,path:d.path,items});
+      return;
     }
     if (drag.live) {
       const tag = document.querySelector(".files-drag");
@@ -1511,9 +1533,23 @@
   document.addEventListener("pointerup", finishDrag, true);
   // Some native WebKit input paths deliver a mouse-up without a matching pointer-up.
   document.addEventListener("mouseup", finishDrag, true);
-  document.addEventListener("pointercancel", () => { drag = null; document.querySelector(".files-drag")?.remove(); });
-  window.addEventListener("blur", () => { drag = null; document.querySelector(".files-drag")?.remove(); });
+  document.addEventListener("pointercancel", clearDrag);
+  window.addEventListener("blur", clearDrag);
   function message(m) {
+    if (m.type === "files_native_drag_end") { if(m.id===host?.id){clearDrag();if(m.error)fail(m.error);}return true; }
+    if (m.type === "files_native_paste") {
+      if(m.id!==host?.id)return true;
+      if(m.internal && clipboard)act("paste-internal");
+      else if(m.paths?.length)importPaths(m.paths,m.side,m.path);
+      else toast("클립보드에 붙여넣을 파일이 없습니다", "E8B7");
+      return true;
+    }
+    if(m.type==="files_result" && ["native_copy_started","native_copy"].includes(m.op)) {
+      if(m.id!==host?.id || m.seq!==clipboard?.seq)return true;
+      if(m.ok){clipboard.nativeStamp=m.data.stamp;if(m.op==="native_copy")toast("파일 복사 준비 완료 — Finder에서 붙여넣으세요", "E8B7");}
+      else fail(m.error||"파일 복사를 준비하지 못했습니다");
+      return true;
+    }
     if (m.type === "file_locations_result") {
       if (locationsPending) {
         locationsPending = false;
@@ -1570,17 +1606,9 @@
         toast("전송할 기기의 파일 창을 먼저 열어 주세요", "E8B7");
         return true;
       }
-      const groups = new Map();
-      for (const path of m.paths || []) {
-        const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-        if (i < 0) continue;
-        const parent = path.slice(0, i),
-          name = path.slice(i + 1);
-        if (!groups.has(parent)) groups.set(parent, []);
-        groups.get(parent).push(name);
-      }
-      for (const [source, names] of groups)
-        transfer("local", source, names, "remote", panes.remote.path, false);
+      let side=active,destination=panes[active].path;
+      if(m.position){const target=document.elementFromPoint(...m.position),pane=target?.closest("[data-pane]");if(pane){side=pane.dataset.pane;const item=target.closest("[data-index]"),entry=item?visible(side)[Number(item.dataset.index)]:null;destination=entry?.dir?child(panes[side].path,entry.name):panes[side].path;}}
+      importPaths(m.paths,side,destination);
       return true;
     }
     if (m.type !== "files_result") return false;
@@ -1654,7 +1682,14 @@
     localStorage.removeItem(e.key);
     newTab(e.newValue, "remote");
   });
+  function nativeEdit(action) {
+    const selection=window.getSelection();
+    const text=document.activeElement?.closest("input,textarea") || (!selection?.isCollapsed && selection?.anchorNode?.parentElement?.closest(".files-preview pre"));
+    if(!layer || networkMode || text || document.querySelector(".files-prompt") || topModal())send("files_system_edit",{action});
+    else act(action);
+  }
   window.ItdaFiles = {
+    nativeEdit,
     renderBrowser,
     browserSearch,
     open,
@@ -1664,6 +1699,12 @@
     network,
     refreshNetwork,
   };
+  for(const type of ["copy","cut","paste"])document.addEventListener(type,e=>{
+    if(!layer || networkMode || document.querySelector(".files-prompt,.files-menu") || topModal())return;
+    const selected=window.getSelection();
+    if(e.target.closest?.("input,textarea") || document.activeElement?.closest("input,textarea") || (!selected?.isCollapsed && selected?.anchorNode?.parentElement?.closest(".files-preview pre")))return;
+    e.preventDefault();e.stopPropagation();act(type);
+  },true);
   document.addEventListener("keydown", key, true);
   document.addEventListener("click", browserClick);
   document.addEventListener("dblclick", (e) => {
