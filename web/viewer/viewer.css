@@ -194,3 +194,16 @@ body.local .bar { padding-top: 10px; }
   box-shadow: 0 6px 22px rgba(0,0,0,.4); max-width: calc(100% - 32px);
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+.monitor-layout { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0; }
+.monitor-layout button { min-width:110px; border:1px solid #7777; border-radius:8px; padding:14px; }
+.monitor-layout button.on { border:2px solid #8f8aff; }
+.monitor-layout small { display:block; margin-top:5px; opacity:.7; }
+.monitor-options { display:flex; flex-direction:column; gap:12px; }
+.monitor-options label { display:flex; gap:8px; align-items:center; }
+.monitor-options select { max-width:240px; }
+body.mirror #screen { display:flex; align-items:center; justify-content:center; overflow:auto; }
+.monitor-canvas { flex:none; outline:none; touch-action:none; }
+body.mirror #tools button { width:auto; padding:8px 12px; }
+.monitor-layout { position:relative; width:min(420px,100%); display:block; }
+.monitor-layout button { position:absolute; min-width:0; min-height:0; margin:0; padding:7px; box-sizing:border-box; overflow:hidden; }
+.tools { width:max-content; }

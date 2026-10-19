@@ -9,7 +9,7 @@ use muda::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu
 use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::sync::{Condvar, Mutex, OnceLock};
 use tao::dpi::{LogicalSize, PhysicalSize};
@@ -17,10 +17,11 @@ use tao::event::{Event as TaoEvent, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
 use tao::platform::macos::WindowBuilderExtMacOS;
 use tao::window::{Fullscreen, Theme, Window, WindowBuilder};
-use wry::{http, WebView, WebViewBuilder};
+use wry::{http, WebView, WebViewBuilder, WebViewBuilderExtMacos, WebViewExtMacOS};
 
 pub const PLATFORM: &str = "mac";
 
+#[derive(Clone)]
 enum Wake {
     Drain,
     Menu(muda::MenuId),
@@ -43,15 +44,28 @@ pub fn wake() {
 }
 
 struct Pane {
-    window: Window,
+    // WebKit must release its native view before Tao closes the containing NSWindow.
     view: WebView,
+    window: Window,
 }
 
+impl Drop for Pane {
+    fn drop(&mut self) {
+        // Wry can retain the native WKWebView after detaching it. Stop its decoder/RAF
+        // explicitly rather than relying on WebKit garbage collection of opener links.
+        let _=self.view.evaluate_script("window.ItdaMirrorStop?.();window.ItdaMonitorOwner?.shutdown?.()");
+    }
+}
 thread_local! {
     static HOME_PANE: RefCell<Option<Pane>> = const { RefCell::new(None) };
     /// Connection windows by connection id.
     static FILE_PANES: RefCell<HashMap<String, Pane>> = RefCell::new(HashMap::new());
     static FILE_REQUESTS: RefCell<Vec<(String, bool)>> = const { RefCell::new(Vec::new()) };
+    static MONITOR_PANES: RefCell<HashMap<(String, u32), Pane>> = RefCell::new(HashMap::new());
+    static MONITOR_AUTO_FULL: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static HIDDEN_OWNERS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static MONITOR_CLOSE: RefCell<Vec<(String, Option<u32>)>> = const { RefCell::new(Vec::new()) };
+    static MONITOR_FULL: RefCell<Vec<(String, u32)>> = const { RefCell::new(Vec::new()) };
     static SESSIONS: RefCell<HashMap<String, Pane>> = RefCell::new(HashMap::new());
     /// Windows to open (id, URL, title, full screen) and to close, once the current event is handled.
     static TO_OPEN: RefCell<Vec<(String, String, String, bool)>> = const { RefCell::new(Vec::new()) };
@@ -69,6 +83,7 @@ pub struct Proc {
 impl Drop for Proc {
     fn drop(&mut self) {
         crate::gateway::set_typed(&self.id, None);
+        crate::gateway::close_local(&self.id);
         TO_CLOSE.with(|c| c.borrow_mut().push(self.id.clone()));
     }
 }
@@ -215,6 +230,8 @@ pub fn stop_session(p: &mut Proc) {
 pub fn focus_session(p: &Proc) {
     SESSIONS.with(|s| {
         if let Some(pane) = s.borrow().get(&p.id) {
+            pane.window.set_visible(true);
+            HIDDEN_OWNERS.with(|h| { h.borrow_mut().remove(&p.id); });
             pane.window.set_minimized(false);
             pane.window.set_focus();
         }
@@ -239,13 +256,40 @@ fn open_window(target: &EventLoopWindowTarget<Wake>, id: String, url: String, ti
         Err(e) => return super::post(Event::Session(id, json!({"ev": "error", "kind": "other", "msg": format!("창을 열 수 없습니다: {e}")}))),
     };
     let sid = id.clone();
+    let popup_id = id.clone();
+    let popup_target = (*target).clone();
+    let popup_origin = url.parse::<http::Uri>().ok().and_then(|u| u.authority().map(|a| a.to_string())).unwrap_or_default();
     let view = WebViewBuilder::new()
         .with_url(&url)
+        .with_accept_first_mouse(true)
         .with_devtools(std::env::var_os("ITDA_DEVTOOLS").is_some())
         .with_back_forward_navigation_gestures(false)
         .with_background_color((24, 24, 24, 255))
         .with_ipc_handler(move |req| {
             let Ok(v) = serde_json::from_str::<Value>(req.body()) else { return };
+            if v["ev"] == "monitor-close" || v["ev"] == "monitor-remove" {
+                let screen = if v["ev"] == "monitor-remove" { v["screen"].as_u64().and_then(|n| u32::try_from(n).ok()) } else { None };
+                let _ = MONITOR_CLOSE.try_with(|q| q.borrow_mut().push((sid.clone(), screen)));
+                return wake();
+            }
+            if v["ev"] == "monitor-window" {
+                if let Some(screen)=v["screen"].as_u64().and_then(|n|u32::try_from(n).ok()) {
+                    if v["action"] == "full" {MONITOR_FULL.with(|q|q.borrow_mut().push((sid.clone(),screen)));}
+                    if v["action"] == "close" {MONITOR_CLOSE.with(|q|q.borrow_mut().push((sid.clone(),Some(screen))));}
+                    wake();
+                }
+                return;
+            }
+            if v["ev"] == "monitor-state" {
+                let full=v["mode"]==2 && v["full"]==true && v["screens"].as_array().is_some_and(|s|s.len()>1);
+                SESSIONS.with(|all| {if let Some(p)=all.borrow().get(&sid) {
+                    if full && p.window.fullscreen().is_none() {
+                        MONITOR_AUTO_FULL.with(|f| {f.borrow_mut().insert(sid.clone());});
+                        p.window.set_fullscreen(Some(Fullscreen::Borderless(p.window.current_monitor())));
+                    } else if !full && MONITOR_AUTO_FULL.with(|f| f.borrow_mut().remove(&sid)) {p.window.set_fullscreen(None);}
+                }});
+                return;
+            }
             if v["ev"] == "fullscreen" {
                 TO_FULL.with(|f| f.borrow_mut().push(sid.clone()));
                 return wake();
@@ -260,18 +304,78 @@ fn open_window(target: &EventLoopWindowTarget<Wake>, id: String, url: String, ti
             super::post(Event::Session(sid.clone(), v));
         })
         .with_navigation_handler(|u| u.starts_with("http://127.0.0.1:") || u.starts_with("about:"))
-        .with_new_window_req_handler(|u, _| {
-            if u.starts_with("https://") {
-                open(&u);
+        .with_new_window_req_handler(move |u, features| {
+            if let Ok(uri) = u.parse::<http::Uri>() {
+                if uri.scheme_str() == Some("http") && uri.authority().is_some_and(|a| a.as_str() == popup_origin)
+                    && matches!(uri.path(), "/" | "/index.html") {
+                    let query = uri.query().unwrap_or("");
+                    let arg = |key: &str| query.split('&').find_map(|part| part.split_once('=').filter(|(k,_)| *k == key).map(|(_,v)| v));
+                    if arg("open") == Some(popup_id.as_str()) {
+                        if let Some(screen) = arg("mirror").and_then(|v| v.parse::<u32>().ok()) {
+                            let index = arg("mirror_index").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).min(15);
+                            return open_monitor_window(&popup_target, &popup_id, screen, index, arg("monitor_full")==Some("1"), arg("monitor_w").and_then(|v|v.parse::<u32>().ok()).unwrap_or(1100), arg("monitor_h").and_then(|v|v.parse::<u32>().ok()).unwrap_or(740), features);
+                        }
+                    }
+                }
             }
+            if u.starts_with("https://") { open(&u); }
             wry::NewWindowResponse::Deny
         })
         .build(&window);
     match view {
         Ok(view) => SESSIONS.with(|s| {
+            // Only the strict same-origin mirror handler above can create popups.
+            unsafe { view.webview().configuration().preferences().setJavaScriptCanOpenWindowsAutomatically(true); }
             s.borrow_mut().insert(id, Pane { window, view });
         }),
         Err(e) => super::post(Event::Session(id, json!({"ev": "error", "kind": "other", "msg": format!("화면을 만들 수 없습니다: {e}")}))),
+    }
+}
+
+fn open_monitor_window(target: &EventLoopWindowTarget<Wake>, owner: &str, screen: u32, index: usize, full: bool, remote_w: u32, remote_h: u32, features: wry::NewWindowFeatures) -> wry::NewWindowResponse {
+    let key = (owner.to_string(), screen);
+    if MONITOR_PANES.with(|p| p.borrow().contains_key(&key)) { return wry::NewWindowResponse::Deny; }
+    if MONITOR_PANES.with(|p| p.borrow().keys().filter(|(id,_)| id == owner).count()) >= 15 { return wry::NewWindowResponse::Deny; }
+    let local = SESSIONS.with(|all| {
+        let all = all.borrow(); let p = all.get(owner)?;
+        let current = p.window.current_monitor();
+        let others: Vec<_> = p.window.available_monitors().filter(|m| Some(m) != current.as_ref()).collect();
+        Some((others.get(index.saturating_sub(1)).cloned(), current))
+    });
+    let Some((other, current)) = local else { return wry::NewWindowResponse::Deny };
+    let monitor = other.clone().or(current);
+    let label = home(|m| m.hosts.iter().find(|h| h.id == owner).map(|h| h.label().to_string()).unwrap_or_else(|| crate::APP.into()));
+    let mut builder = WindowBuilder::new().with_title(format!("{label} — 모니터 {}", index+1))
+        .with_inner_size(LogicalSize::new(1100.0,740.0)).with_min_inner_size(LogicalSize::new(480.0,320.0));
+    if let Some(mon) = monitor.clone() {
+        let size = mon.size(); let pos = mon.position(); let scale = mon.scale_factor();
+        let rw=remote_w.clamp(320,16384) as f64;let rh=remote_h.clamp(200,16384) as f64;
+        let fit=(size.width as f64/scale*0.88/rw).min(size.height as f64/scale*0.82/rh).min(1.0);
+        builder = builder.with_inner_size(LogicalSize::new((rw*fit).max(480.0),(rh*fit).max(320.0)))
+            .with_position(tao::dpi::PhysicalPosition::new(pos.x+40+(if other.is_none(){index as i32*32}else{0}),pos.y+45+(if other.is_none(){index as i32*24}else{0})));
+        if full && other.is_some() { builder = builder.with_fullscreen(Some(Fullscreen::Borderless(Some(mon)))); }
+    }
+    let Ok(window) = builder.build(target) else { return wry::NewWindowResponse::Deny };
+    // The related configuration shares the owner's IPC controller. Never register a
+    // second handler with the same WebKit name (nor remove it when a mirror is dropped).
+    let view = WebViewBuilder::new().with_webview_configuration(features.opener.target_configuration)
+        .with_background_color((24,24,24,255)).with_accept_first_mouse(true).with_back_forward_navigation_gestures(false)
+        .with_navigation_handler(|u| u.starts_with("http://127.0.0.1:") || u == "about:blank")
+        .with_new_window_req_handler(|_,_| wry::NewWindowResponse::Deny).build(&window);
+    let Ok(view) = view else { return wry::NewWindowResponse::Deny };
+    let webview=view.webview().into_super();
+    MONITOR_PANES.with(|p| {p.borrow_mut().insert(key,Pane {window,view});});
+    wry::NewWindowResponse::Create { webview }
+}
+fn close_monitor(owner: &str, screen: u32) {
+    let removed=MONITOR_PANES.with(|p| p.borrow_mut().remove(&(owner.to_string(),screen)));
+    if removed.is_none() { return; }
+    SESSIONS.with(|s| {if let Some(p)=s.borrow().get(owner) {
+        let _=p.view.evaluate_script(&format!("window.ItdaMonitorOwner?.closed({screen})"));
+    }});
+    drop(removed);
+    if HIDDEN_OWNERS.with(|h| h.borrow().contains(owner)) && !MONITOR_PANES.with(|p| p.borrow().keys().any(|(id,_)| id==owner)) {
+        TO_CLOSE.with(|q| q.borrow_mut().push(owner.to_string()));
     }
 }
 
@@ -319,7 +423,22 @@ fn flush(target: &EventLoopWindowTarget<Wake>) {
         }
     }
     if files_changed { super::send_hosts(); }
+    for (owner, screen) in MONITOR_CLOSE.with(|q| std::mem::take(&mut *q.borrow_mut())) {
+        if let Some(screen)=screen { close_monitor(&owner,screen); }
+        else {
+            HIDDEN_OWNERS.with(|h| {h.borrow_mut().remove(&owner);});
+            SESSIONS.with(|s| {if let Some(p)=s.borrow().get(&owner) {p.window.set_visible(true);p.window.set_focus();}});
+            MONITOR_PANES.with(|p| p.borrow_mut().retain(|(id,_),_| id!=&owner));
+        }
+    }
+    for (owner,screen) in MONITOR_FULL.with(|q| std::mem::take(&mut *q.borrow_mut())) {
+        MONITOR_PANES.with(|p| {if let Some(p)=p.borrow().get(&(owner,screen)) {p.window.set_fullscreen(if p.window.fullscreen().is_some(){None}else{Some(Fullscreen::Borderless(p.window.current_monitor()))});}});
+    }
     for id in TO_CLOSE.with(|c| std::mem::take(&mut *c.borrow_mut())) {
+        crate::gateway::close_local(&id);
+        HIDDEN_OWNERS.with(|h| {h.borrow_mut().remove(&id);});
+        MONITOR_AUTO_FULL.with(|h| {h.borrow_mut().remove(&id);});
+        MONITOR_PANES.with(|p| p.borrow_mut().retain(|(owner,_),_| owner!=&id));
         if let Some(p) = SESSIONS.with(|s| s.borrow_mut().remove(&id)) {
             drop(p);
             super::post(Event::Exit(id));
@@ -512,12 +631,27 @@ pub fn run(quick: Option<String>) {
     apply_theme(dark);
     crate::log!("window up");
     super::started();
+    #[cfg(debug_assertions)]
+    if let Ok(url) = std::env::var("ITDA_NATIVE_VIEWER_TEST") {
+        if url.parse::<http::Uri>().ok().is_some_and(|u| u.scheme_str()==Some("http") && u.host()==Some("127.0.0.1")) {
+            open_window(&event_loop, "monitors-fixture".into(), url, "Itda monitor fixture".into(), false);
+        }
+    }
 
     event_loop.run(move |event, target, flow| {
         *flow = ControlFlow::Wait;
         let _ = &menu;
         match event {
-            TaoEvent::LoopDestroyed => crate::files::shutdown(),
+            TaoEvent::LoopDestroyed => {
+                crate::files::shutdown();
+                // Drop related views while all thread locals are still available.
+                SESSIONS.with(|p| {for id in p.borrow().keys(){crate::gateway::close_local(id);}});
+                let mirrors=MONITOR_PANES.with(|p| std::mem::take(&mut *p.borrow_mut()));drop(mirrors);
+                let sessions=SESSIONS.with(|p| std::mem::take(&mut *p.borrow_mut()));drop(sessions);
+                let files=FILE_PANES.with(|p| std::mem::take(&mut *p.borrow_mut()));drop(files);
+                let home=HOME_PANE.with(|p| p.borrow_mut().take());drop(home);
+                crate::log!("all native views released before thread-local teardown");
+            },
             TaoEvent::UserEvent(Wake::Drain) => drain(),
             TaoEvent::UserEvent(Wake::Menu(id)) => on_menu(&id),
             // Clicking the Dock icon brings the home back.
@@ -532,17 +666,23 @@ pub fn run(quick: Option<String>) {
             TaoEvent::WindowEvent { window_id, event, .. } => {
                 let is_home = HOME_PANE.with(|h| h.borrow().as_ref().is_some_and(|p| p.window.id() == window_id));
                 let fid = FILE_PANES.with(|s| s.borrow().iter().find(|(_, p)| p.window.id() == window_id).map(|(k, _)| k.clone()));
+                let mid = MONITOR_PANES.with(|s| s.borrow().iter().find(|(_,p)| p.window.id()==window_id).map(|(k,_)| k.clone()));
                 let sid = SESSIONS.with(|s| s.borrow().iter().find(|(_, p)| p.window.id() == window_id).map(|(k, _)| k.clone()));
                 match event {
                     // The home only hides: the web viewer and connections keep running.
                     WindowEvent::CloseRequested if is_home => with_home(|p| p.window.set_visible(false)),
                     WindowEvent::CloseRequested => {
                         if let Some(id) = fid { FILE_REQUESTS.with(|q| q.borrow_mut().push((id, true))); }
+                        if let Some((owner,screen))=mid { close_monitor(&owner,screen); }
                         if let Some(id) = sid {
-                            TO_CLOSE.with(|c| c.borrow_mut().push(id));
+                            if MONITOR_PANES.with(|p| p.borrow().keys().any(|(owner,_)| owner==&id)) {
+                                HIDDEN_OWNERS.with(|h| {h.borrow_mut().insert(id.clone());});
+                                SESSIONS.with(|s| {if let Some(p)=s.borrow().get(&id) {p.window.set_visible(false);}});
+                            } else {TO_CLOSE.with(|c| c.borrow_mut().push(id));}
                         }
                     }
                     WindowEvent::Focused(true) => {
+                        if let Some((ref owner,_))=mid { offer_clipboard(owner); }
                         if let Some(id) = sid {
                             offer_clipboard(&id);
                         }

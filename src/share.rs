@@ -7,7 +7,7 @@
 //! registration so nearby Itdas list this PC.
 
 use crate::demand::{self, Demand};
-use crate::enc::{Encoder, PixelFormat, Update, ENC_ZRLE};
+use crate::enc::{ext_desktop_size, screens_in, Encoder, PixelFormat, Screen, Update, ENC_EXT_DESKTOP_SIZE, ENC_ZRLE};
 use crate::outbox::Outbox;
 use crate::rfb::{vnc_response, PIXEL_FORMAT};
 use std::collections::HashMap;
@@ -159,6 +159,8 @@ enum Msg {
     Request { incremental: bool },
     /// EnableContinuousUpdates, Fence.
     Ext(demand::Ext),
+    /// SetDesktopSize: this PC's displays can't be resized from here; it gets an answer.
+    Resize,
 }
 
 fn rd<const N: usize>(r: &mut impl Read) -> io::Result<[u8; N]> {
@@ -337,10 +339,11 @@ fn read_client(mut r: BufReader<TcpStream>, tx: &Sender<Msg>, input: &mut Input)
                 }
             }
             251 => {
-                // SetDesktopSize: we can't resize the PC's screens; skip the payload.
+                // SetDesktopSize: we can't resize the PC's screens; the pump says so.
                 let b: [u8; 7] = rd(&mut r)?;
                 let mut d = vec![0u8; b[5] as usize * 16];
                 r.read_exact(&mut d)?;
+                let _ = tx.send(Msg::Resize);
             }
             t @ (demand::MSG_CONTINUOUS | demand::MSG_FENCE) => {
                 let _ = tx.send(Msg::Ext(demand::read(t, &mut r)?));
@@ -360,6 +363,12 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &mut Capture, stop: &AtomicBool) 
     let mut pf = PixelFormat::parse(&PIXEL_FORMAT);
     let mut encs: Vec<i32> = Vec::new();
     let mut demand = Demand::default();
+    // The displays the viewer was last told about (ExtendedDesktopSize), re-read every
+    // second; and an unanswered SetDesktopSize.
+    let mut told: Option<Vec<Screen>> = None;
+    let mut screens: Vec<Screen> = Vec::new();
+    let mut screens_read = Instant::now() - Duration::from_secs(10);
+    let mut refuse_resize = false;
     let mut last_capture = Instant::now() - FRAME;
     let mut prev: Vec<u32> = Vec::new();
     let mut enc = Encoder::new();
@@ -394,7 +403,9 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &mut Capture, stop: &AtomicBool) 
                 Msg::Encodings(e) => {
                     demand.encodings(&e, &mut reply);
                     encs = e;
+                    told = None; // (re)introduce the displays
                 }
+                Msg::Resize => refuse_resize = true,
                 Msg::Request { incremental } => demand.request(incremental),
                 Msg::Ext(m) => {
                     if demand.ext(m, cap.w, cap.h, &mut reply) {
@@ -429,9 +440,27 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &mut Capture, stop: &AtomicBool) 
         }
         last_capture = Instant::now();
         let (w0, h0) = (cap.w, cap.h);
+        cap.fit(); // (grab does too) the virtual desktop's corner, read before the frame borrows cap
+        let (ox, oy) = (cap.x, cap.y);
         let (w, h, frame) = cap.grab();
         u.start();
-        if (w, h) != (w0, h0) && encs.contains(&ENC_DESKTOP_SIZE) {
+        let ext = encs.contains(&ENC_EXT_DESKTOP_SIZE);
+        if ext && ((w, h) != (w0, h0) || screens_read.elapsed() >= Duration::from_secs(1)) {
+            screens_read = Instant::now();
+            screens = screens_in(ox, oy, w, h, &monitors());
+        }
+        if ext && (told.as_ref() != Some(&screens) || (w, h) != (w0, h0) || refuse_resize) {
+            // Each display of this PC, so the viewer can show one of them (or one window each).
+            // Reason 1 / status 1 answers a SetDesktopSize: resizing isn't allowed here.
+            let answer = u16::from(refuse_resize);
+            ext_desktop_size(&mut u.buf, answer, answer, w as u16, h as u16, &screens);
+            u.rects += 1;
+            told = Some(screens.clone());
+            refuse_resize = false;
+            if (w, h) != (w0, h0) {
+                prev.clear();
+            }
+        } else if (w, h) != (w0, h0) && encs.contains(&ENC_DESKTOP_SIZE) {
             u.buf.extend_from_slice(&[0, 0, 0, 0]);
             u.buf.extend_from_slice(&(w as u16).to_be_bytes());
             u.buf.extend_from_slice(&(h as u16).to_be_bytes());
@@ -452,6 +481,25 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &mut Capture, stop: &AtomicBool) 
 }
 
 // ---------------------------------------------------------------- capture
+
+/// This PC's displays in desktop coordinates: (id, left, top, right, bottom). The id is a
+/// hash of the display's device name, so it stays with the display when the layout changes.
+fn monitors() -> Vec<(u32, i32, i32, i32, i32)> {
+    unsafe extern "system" fn each(m: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> BOOL {
+        let list = &mut *(data as *mut Vec<(u32, i32, i32, i32, i32)>);
+        let mut info: MONITORINFOEXW = std::mem::zeroed();
+        info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+        if GetMonitorInfoW(m, &mut info as *mut MONITORINFOEXW as *mut MONITORINFO) != 0 {
+            let r = info.monitorInfo.rcMonitor;
+            let id = info.szDevice.iter().take_while(|&&c| c != 0).fold(0x811c_9dc5u32, |h, &c| (h ^ c as u32).wrapping_mul(0x0100_0193));
+            list.push((id, r.left, r.top, r.right, r.bottom));
+        }
+        1
+    }
+    let mut list: Vec<(u32, i32, i32, i32, i32)> = Vec::new();
+    unsafe { EnumDisplayMonitors(null_mut(), std::ptr::null(), Some(each), &mut list as *mut _ as LPARAM) };
+    list
+}
 
 struct Capture {
     x: i32,

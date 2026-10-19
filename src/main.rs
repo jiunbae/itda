@@ -79,8 +79,8 @@ fn main() {
         }
         return;
     }
-    log::init("");
-    std::panic::set_hook(Box::new(|p| crate::log!("PANIC: {p}")));
+    log::init(if cfg!(debug_assertions) && std::env::var_os("ITDA_NATIVE_VIEWER_TEST").is_some() { "monitor-test" } else { "" });
+    std::panic::set_hook(Box::new(|p| crate::log!("PANIC: {p}\n{}", std::backtrace::Backtrace::force_capture())));
     #[cfg(target_os = "macos")]
     home::run(None);
     #[cfg(not(target_os = "macos"))]

@@ -14,13 +14,14 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const INDEX: &str = include_str!("../web/viewer/index.html");
 const CSS: &str = include_str!("../web/viewer/viewer.css");
 const JS: &str = include_str!("../web/viewer/viewer.js");
+const MONITORS: &str = include_str!("../web/viewer/monitors.js");
 const NOVNC: &str = include_str!("../web/viewer/novnc.min.js");
 const ICON: &str = include_str!("../assets/itda.svg");
 const ICON_PNG: &[u8] = include_bytes!("../assets/itda-192.png");
@@ -46,6 +47,28 @@ static TOKENS: Mutex<Vec<(String, Instant, bool)>> = Mutex::new(Vec::new());
 static FAILS: Mutex<(u32, Option<Instant>)> = Mutex::new((0, None));
 /// Open browser sessions of the web viewer, closed when it stops.
 static LIVE: Mutex<Vec<TcpStream>> = Mutex::new(Vec::new());
+// Native monitor views share a relay; closing the final view must stop both sockets,
+// without waiting for WebKit to collect cross-window JavaScript references.
+static LOCAL_STREAMS: Mutex<Vec<(u64, String, TcpStream, TcpStream)>> = Mutex::new(Vec::new());
+static LOCAL_STREAM_ID: AtomicU64 = AtomicU64::new(1);
+struct LocalRelay(u64);
+impl LocalRelay {
+    fn track(id: &str, client: &TcpStream, remote: &TcpStream) -> io::Result<Self> {
+        let ticket=LOCAL_STREAM_ID.fetch_add(1,Relaxed);
+        LOCAL_STREAMS.lock().unwrap().push((ticket,id.into(),client.try_clone()?,remote.try_clone()?));
+        Ok(Self(ticket))
+    }
+}
+impl Drop for LocalRelay {
+    fn drop(&mut self) { LOCAL_STREAMS.lock().unwrap().retain(|(ticket,_,_,_)| *ticket!=self.0); }
+}
+#[cfg_attr(windows, allow(dead_code))]
+pub fn close_local(id: &str) {
+    LOCAL_STREAMS.lock().unwrap().retain(|(_,owner,client,remote)| {
+        if owner!=id {return true;}
+        let _=client.shutdown(Shutdown::Both);let _=remote.shutdown(Shutdown::Both);false
+    });
+}
 
 /// The local listener (the macOS app's connection windows): 127.0.0.1 only, signed in with
 /// this token instead of a PIN. Runs beside the web viewer and is never stopped.
@@ -569,6 +592,16 @@ fn edit(c: &mut TcpStream, req: &Req) -> io::Result<()> {
     let str_of = |k: &str| v.get(k).and_then(|x| x.as_str()).map(|s| s.trim().to_string());
     let id = str_of("id").unwrap_or_default();
     let cmd = match str_of("cmd").as_deref() {
+        Some("viewer_opts") => {
+            let Some(mut h) = store::load_hosts().into_iter().find(|h| h.id == id) else {
+                return json_resp(c, "404 Not Found", json!({"error":"연결을 찾을 수 없습니다"}));
+            };
+            let Ok(opts) = serde_json::from_value::<store::HostOpts>(v["opts"].clone()) else {
+                return json_resp(c, "400 Bad Request", json!({"error":"잘못된 보기 설정입니다"}));
+            };
+            h.opts = opts;
+            json!({"cmd":"save_host","host":h})
+        }
         Some("save_host") => {
             let mut h = store::load_hosts().into_iter().find(|h| !id.is_empty() && h.id == id).unwrap_or_default();
             // Only the fields the web editor shows; options stay as the PC set them.
@@ -635,6 +668,7 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
         ("GET", "/" | "/index.html") => asset(&mut c, &req, "text/html; charset=utf-8", INDEX.as_bytes()),
         ("GET", "/viewer.css") => asset(&mut c, &req, "text/css; charset=utf-8", CSS.as_bytes()),
         ("GET", "/viewer.js") => asset(&mut c, &req, "text/javascript; charset=utf-8", JS.as_bytes()),
+        ("GET", "/monitors.js") => asset(&mut c, &req, "text/javascript; charset=utf-8", MONITORS.as_bytes()),
         ("GET", "/novnc.min.js") => asset(&mut c, &req, "text/javascript; charset=utf-8", NOVNC.as_bytes()),
         ("GET", "/icon.svg") => asset(&mut c, &req, "image/svg+xml", ICON.as_bytes()),
         ("GET", "/icon-192.png") => asset(&mut c, &req, "image/png", ICON_PNG),
@@ -738,7 +772,7 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u3
     if id != THIS_PC {
         mark_used(id, &raw);
     }
-    relay(c, raw, tx, id, tunnel)
+    relay(c, raw, tx, id, tunnel, local)
 }
 
 fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mut Option<Arc<Tunnel>>, size: Option<(u32, u32)>) -> io::Result<rfb::Raw> {
@@ -766,8 +800,9 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
     }
 }
 
-fn relay(c: TcpStream, raw: rfb::Raw, tx: ws::Sender, id: &str, tunnel: Option<Arc<Tunnel>>) -> io::Result<()> {
+fn relay(c: TcpStream, raw: rfb::Raw, tx: ws::Sender, id: &str, tunnel: Option<Arc<Tunnel>>, local: bool) -> io::Result<()> {
     let rfb::Raw { reader, mut writer, server_init, .. } = raw;
+    let _local_relay=if local {Some(LocalRelay::track(id,&c,&writer)?)} else {None};
     // The handshake timeout must not cut a quiet (unchanging) screen.
     writer.set_read_timeout(None)?;
 
@@ -843,6 +878,23 @@ fn kind_code(kind: &str) -> u16 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn closing_native_owner_stops_both_streams() {
+        fn pair() -> (TcpStream, TcpStream) {
+            let l=TcpListener::bind(("127.0.0.1",0)).unwrap();
+            let a=TcpStream::connect(l.local_addr().unwrap()).unwrap();
+            let b=l.accept().unwrap().0;
+            b.set_read_timeout(Some(Duration::from_millis(100))).unwrap();(a,b)
+        }
+        use std::net::TcpListener;
+        let (client,mut browser)=pair();let (remote,mut server)=pair();
+        let (unrelated,mut other)=pair();let (unrelated_remote,_)=pair();
+        let _guard=LocalRelay::track("native-close-test",&client,&remote).unwrap();
+        let _other=LocalRelay::track("unrelated-close-test",&unrelated,&unrelated_remote).unwrap();
+        close_local("native-close-test");
+        let mut byte=[0];assert_eq!(browser.read(&mut byte).unwrap(),0);assert_eq!(server.read(&mut byte).unwrap(),0);
+        assert!(matches!(other.read(&mut byte).unwrap_err().kind(),io::ErrorKind::WouldBlock|io::ErrorKind::TimedOut));
+    }
     #[test]
     fn constant_time_eq() {
         assert!(eq_ct(b"123456", b"123456"));

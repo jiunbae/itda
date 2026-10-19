@@ -1071,6 +1071,9 @@ function openEdit(init = {}, mode = {}) {
     </div>`;
   const o = h.opts || {};
   const display = `<div data-pane="display" hidden>
+      <div class="field"><label>다중 모니터 표시</label><select class="input" data-opt-number="monitor_mode">${[[0,'한 창에서 모니터 선택'],[1,'전체 모니터 한눈에 보기'],[2,'모니터마다 별도 창']].map(([v,t])=>`<option value="${v}" ${v===(o.monitor_mode||0)?'selected':''}>${t}</option>`).join('')}</select></div>
+      <div class="field"><label>원격 화면 구성</label><select class="input" data-opt-number="monitor_layout">${[[0,'서버의 모니터 정보 사용'],[1,'수동: 가로 2영역'],[2,'수동: 세로 2영역'],[3,'수동: 가로 3영역'],[4,'수동: 2 × 2영역']].map(([v,t])=>`<option value="${v}" ${v===(o.monitor_layout||0)?'selected':''}>${t}</option>`).join('')}</select><span class="hint">서버가 모니터 배치를 제공하지 않을 때만 수동 분할을 선택하세요. RDP는 로그인 세션의 가상 화면을 보여줍니다.</span></div>
+      ${optRow('monitor_fullscreen', '분리한 창을 로컬 모니터에 전체 화면으로 배치', '로컬 모니터가 부족하면 남는 창은 겹치지 않게 배치합니다.', o.monitor_fullscreen)}
       ${optRow('actual', '실제 크기 (1:1)로 시작', '끄면 창 크기에 맞춰 축소해서 보여 줍니다', o.actual)}
       ${optRow('fullscreen', '전체 화면으로 시작', '', o.fullscreen)}
       ${optRow('resize', '창 크기에 맞춰 해상도 바꾸기 (원격 데스크톱)', MAC ? 'Windows 원격 데스크톱의 해상도가 연결 창 크기를 따라갑니다.' : '웹 뷰어(PC·Mac 브라우저)에서 Windows 원격 데스크톱의 해상도가 창 크기를 따라갑니다. 이 PC의 원격 데스크톱 앱은 원래 창 크기를 따라갑니다.', o.resize !== false)}
@@ -1146,6 +1149,7 @@ function openEdit(init = {}, mode = {}) {
     if (!k.user) host.user = '';
     host.ssh = { on: k.ssh && m.querySelector('#f-ssh').checked, user: v('#f-ssh-user') || '', port: parseInt(v('#f-ssh-port'), 10) || 0 };
     m.querySelectorAll('[data-opt]').forEach((c) => (host.opts[c.dataset.opt] = c.checked));
+    m.querySelectorAll('[data-opt-number]').forEach(c => host.opts[c.dataset.optNumber] = Number(c.value));
     return host;
   };
   const validate = (host) => {

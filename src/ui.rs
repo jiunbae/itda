@@ -58,6 +58,9 @@ const M_SCALE: usize = 0x1f0;
 const M_SCREEN_ALL: usize = 0x200;
 const M_SCREEN0: usize = 0x210; // + 0x10 per display, up to 16
 const MAX_SCREENS: usize = 16;
+const M_LAYOUT0: usize = 0x300; // + 0x10 per monitor_layout value 0..=4
+const M_WINDOWS: usize = 0x360;
+const M_GATHER: usize = 0x370;
 const M_KEY0: usize = 0x400; // + 0x10 per special key
 // Toolbar-only dropdowns.
 const TB_SCREENS: usize = 0x900;
@@ -177,7 +180,29 @@ impl Drop for Front {
     }
 }
 
+/// A window showing one display (or screen region) of the same session: no second
+/// connection, it paints from the same copy of the framebuffer and sends input to the same
+/// session. Owned by the session window; see open_windows.
+struct Child {
+    hwnd: HWND,
+    /// The region it shows, by Region::id: it stays on that display when displays are
+    /// reordered, and closes when that display goes.
+    region: u32,
+    view: View,
+    /// Style and placement before full screen.
+    saved: Option<(isize, WINDOWPLACEMENT)>,
+}
+
 thread_local! {
+    static CHILDREN: RefCell<Vec<Child>> = const { RefCell::new(Vec::new()) };
+    /// The view of a display window while CreateWindowExW is still sending it messages.
+    static CREATING: Cell<View> = Cell::new(View::default());
+    /// The session is closing: windows going away must not try to close it again.
+    static ENDING: Cell<bool> = const { Cell::new(false) };
+    /// The remembered monitor_mode was applied (once the displays were known).
+    static APPLIED: Cell<bool> = const { Cell::new(false) };
+    /// Region::id the session window is cropped to (None: everything).
+    static MAIN_REGION: Cell<Option<u32>> = const { Cell::new(None) };
     static FRONT: RefCell<Front> = const { RefCell::new(Front { hbm: null_mut(), bits: null_mut(), w: 0, h: 0 }) };
     static UI: RefCell<Ui> = RefCell::new(Ui::default());
     static VIEW: Cell<View> = Cell::new(View::default());
@@ -189,6 +214,15 @@ fn ui<R>(f: impl FnOnce(&mut Ui) -> R) -> R {
 }
 fn view() -> View {
     VIEW.with(|v| v.get())
+}
+
+/// The view of window `h`: the session window's, or a display window's own (fit, cropped).
+fn view_of(h: HWND) -> View {
+    if h as isize == sh().hwnd.load(Relaxed) {
+        return view();
+    }
+    CHILDREN.with(|c| c.try_borrow().ok().and_then(|c| c.iter().find(|w| w.hwnd == h).map(|w| w.view)))
+        .unwrap_or_else(|| CREATING.with(|c| c.get()))
 }
 fn set_view(v: View) {
     VIEW.with(|c| c.set(v))
@@ -254,6 +288,8 @@ pub fn run(c: Conn, l: Launch) {
             ..std::mem::zeroed()
         };
         RegisterClassExW(&wc);
+        let child_cls = wide(CHILD_CLASS);
+        RegisterClassExW(&WNDCLASSEXW { lpfnWndProc: Some(child_proc), lpszClassName: child_cls.as_ptr(), ..wc });
 
         // Client area = remote size, shrunk (aspect kept) to fit the work area.
         let style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
@@ -292,6 +328,7 @@ pub fn run(c: Conn, l: Launch) {
         if start_full {
             toggle_fullscreen(h);
         }
+        apply_monitor_mode(); // a manual split is known now; server displays come later
         session::emit(json!({"ev": "connected", "name": sess.name, "w": sess.width, "h": sess.height, "hwnd": h as isize}));
 
         net::spawn(sess.reader, dial, creds);
@@ -341,7 +378,8 @@ pub fn look(id: usize) -> Look {
     match id {
         M_FULL => lk(if full { '\u{E73F}' } else { '\u{E740}' }, false),
         M_SCALE => lk(if v.actual { '\u{E71E}' } else { '\u{E9A6}' }, v.actual),
-        TB_SCREENS => Look { enabled: sh().screens.lock().unwrap().len() > 1, ..lk('\u{E7F4}', v.crop.is_some()) },
+        // Always on: it also holds the manual split, for servers that don't report displays.
+        TB_SCREENS => Look { enabled: true, ..lk('\u{E7F4}', v.crop.is_some() || !child_hwnds().is_empty()) },
         TB_KEYS => lk('\u{E765}', false),
         M_CLIP => lk('\u{E77F}', opts.clipboard),
         M_VIEWONLY => lk('\u{E7B3}', VIEW_ONLY.load(Relaxed)),
@@ -401,7 +439,7 @@ unsafe fn client(h: HWND) -> (i32, i32) {
 
 unsafe fn layout(h: HWND, full_w: i32, full_h: i32) -> Layout {
     let (cw, ch) = client(h);
-    let v = view();
+    let v = view_of(h);
     let (cx, cy, fw, fh) = match v.crop {
         Some([x, y, w, hh]) if x + w <= full_w && y + hh <= full_h => (x, y, w, hh),
         _ => (0, 0, full_w, full_h),
@@ -504,6 +542,8 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
             rebuild_cursor(h);
             update_title(h);
             toolbar::refresh();
+            refit_children();
+            apply_monitor_mode();
         }
         WM_CLIP => {
             if let Some(t) = sh().clip_in.lock().unwrap().take() {
@@ -530,6 +570,10 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
         WM_STATUS => {
             update_title(h);
             InvalidateRect(h, null(), 0); // reconnect card appears / disappears
+            for c in child_hwnds() {
+                update_title(c);
+                InvalidateRect(c, null(), 0);
+            }
         }
         WM_TIMER if wp == TIMER_TICK => tick(h),
         WM_NETERR => {
@@ -541,7 +585,7 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
                 let t = wide(&format!("{e}\n\n로그: {}", crate::log::path().display()));
                 MessageBoxW(h, t.as_ptr(), wide(crate::APP).as_ptr(), MB_ICONERROR);
             }
-            close(h);
+            end_session(h);
         }
         WM_INITMENUPOPUP if (lp >> 16) & 0xffff != 0 => rebuild_system_menu(h),
         WM_SYSCOMMAND if command(h, wp & 0xfff0) => {}
@@ -558,6 +602,7 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
             }
         }
         WM_KILLFOCUS => release_all(),
+        WM_CAPTURECHANGED => release_buttons(),
         WM_DPICHANGED => {
             let dpi = ((wp >> 16) & 0xffff) as i32;
             let old = ui(|u| u.fonts.replace(make_fonts(dpi)));
@@ -623,10 +668,32 @@ unsafe fn test_snap(h: HWND, n: usize) {
     let _ = std::fs::write(std::path::Path::new(&dir).join(format!("snap-{n}.png")), img.png(6));
 }
 
-/// Leave the session: remember what the screen looked like, then close.
+/// A window was closed. A display window just goes; the session window hides while display
+/// windows remain (the session stays up for them) and ends the session when it's the last.
 unsafe fn close(h: HWND) {
+    if h as isize != sh().hwnd.load(Relaxed) {
+        DestroyWindow(h);
+        return;
+    }
     save_thumb();
-    DestroyWindow(h);
+    if child_hwnds().is_empty() {
+        ENDING.with(|e| e.set(true));
+        DestroyWindow(h);
+    } else {
+        release_all();
+        ShowWindow(h, SW_HIDE);
+    }
+}
+
+/// Leave the session from any window ("연결 끊기", lost link): every window closes.
+unsafe fn end_session(h: HWND) {
+    let _ = h;
+    if ENDING.with(|e| e.replace(true)) {
+        return;
+    }
+    save_thumb();
+    // Display windows are owned by the session window and go with it.
+    DestroyWindow(sh().hwnd.load(Relaxed) as HWND);
 }
 
 // ---------------------------------------------------------------- menus & commands
@@ -652,19 +719,25 @@ unsafe fn sub(m: HMENU, popup: HMENU, text: &str) {
 
 unsafe fn screens_menu() -> HMENU {
     let m = CreatePopupMenu();
-    let screens = sh().screens.lock().unwrap().clone();
+    let rs = regions();
     let crop = view().crop;
-    add(m, M_SCREEN_ALL, "모든 모니터", crop.is_none(), true);
-    if screens.len() <= 1 {
-        let note = if screens.is_empty() { "모니터 정보 없음 (Mac이 제공하지 않음)" } else { "모니터 1개" };
+    let layout = ui(|u| u.l.opts.monitor_layout);
+    add(m, M_SCREEN_ALL, "전체 화면 영역", crop.is_none(), true);
+    if rs.is_empty() {
+        let note = if sh().screens.lock().unwrap().is_empty() { "모니터 정보 없음 — 아래 ‘화면 나누기’로 나눌 수 있습니다" } else { "모니터 1개" };
         add(m, 0, note, false, false);
-        return m;
     }
-    for (i, sc) in screens.iter().take(MAX_SCREENS).enumerate() {
-        let r = [sc.x as i32, sc.y as i32, sc.w as i32, sc.h as i32];
-        let label = format!("모니터 {} — {}×{}", i + 1, sc.w, sc.h);
-        add(m, M_SCREEN0 + i * 0x10, &label, crop == Some(r), true);
+    for (i, r) in rs.iter().take(MAX_SCREENS).enumerate() {
+        add(m, M_SCREEN0 + i * 0x10, &region_name(r, i), crop == Some(r.rect), true);
     }
+    sep(m);
+    add(m, M_WINDOWS, "각 화면을 창으로 열기", false, rs.len() >= 2);
+    add(m, M_GATHER, "한 창으로 모으기", false, !child_hwnds().is_empty());
+    let split = CreatePopupMenu();
+    for (i, label) in LAYOUTS.iter().enumerate() {
+        add(split, M_LAYOUT0 + i * 0x10, label, layout as usize == i, true);
+    }
+    sub(m, split, "화면 나누기");
     m
 }
 
@@ -802,13 +875,28 @@ unsafe fn command(h: HWND, id: usize) -> bool {
         }
         M_SHOT => screenshot(h),
         M_INFO => info(h),
-        M_DISCONNECT => close(h),
+        M_DISCONNECT => end_session(h),
         M_PIN => {
             let mode = if toolbar::mode() == "pinned" { "auto" } else { "pinned" };
             toolbar::set_mode(mode);
             session::emit(json!({"ev": "toolbar", "mode": mode}));
         }
         M_SCREEN_ALL => select_screen(h, None),
+        M_WINDOWS => open_windows(),
+        M_GATHER => select_screen(h, None),
+        _ if (M_LAYOUT0..M_LAYOUT0 + 0x10 * LAYOUTS.len()).contains(&id) => {
+            let layout = ((id - M_LAYOUT0) / 0x10) as u8;
+            gather();
+            // A new division: the remembered display may not exist in it; start from the first.
+            ui(|u| {
+                u.l.opts.monitor_layout = layout;
+                u.l.opts.monitor_id = None;
+            });
+            emit_opts();
+            APPLIED.with(|a| a.set(false));
+            apply_monitor_mode();
+            toast(h, LAYOUTS[layout as usize]);
+        }
         _ if (M_SCREEN0..M_SCREEN0 + 0x10 * MAX_SCREENS).contains(&id) => select_screen(h, Some((id - M_SCREEN0) / 0x10)),
         _ if (M_KEY0..M_KEY0 + 0x10 * SPECIAL_KEYS.len()).contains(&id) => {
             if !VIEW_ONLY.load(Relaxed) {
@@ -831,6 +919,15 @@ unsafe fn update_title(h: HWND) {
     let mut t = if st.is_empty() { format!("{title} — {w}×{hh}") } else { format!("{title} — {st}") };
     if VIEW_ONLY.load(Relaxed) {
         t.push_str(" [보기 전용]");
+    }
+    if h as isize != sh().hwnd.load(Relaxed) {
+        let region = CHILDREN.with(|c| c.borrow().iter().find(|w| w.hwnd == h).map(|w| w.region));
+        if let Some(id) = region {
+            let rs = regions();
+            if let Some(i) = rs.iter().position(|r| r.id == id) {
+                t = format!("{} — {t}", region_name(&rs[i], i));
+            }
+        }
     }
     t.push_str(" — Itda");
     SetWindowTextW(h, wide(&t).as_ptr());
@@ -865,12 +962,281 @@ unsafe fn tick(h: HWND) {
     }
 }
 
-unsafe fn select_screen(h: HWND, i: Option<usize>) {
-    let sc = i.and_then(|i| sh().screens.lock().unwrap().get(i).copied());
-    let crop = sc.map(|s| [s.x as i32, s.y as i32, s.w as i32, s.h as i32]);
+/// The user picked region `i` (None: everything) for the session window: show it and
+/// remember it (monitor_mode 0 + monitor_id, or 1).
+unsafe fn select_screen(_from: HWND, i: Option<usize>) {
+    let id = i.and_then(|i| regions().get(i).map(|r| r.id));
+    if i.is_some() && id.is_none() {
+        return;
+    }
+    APPLIED.with(|a| a.set(true)); // the user's choice beats the remembered one arriving later
+    if !child_hwnds().is_empty() {
+        gather();
+    }
+    ui(|u| {
+        u.l.opts.monitor_mode = if id.is_some() { 0 } else { 1 };
+        if id.is_some() {
+            u.l.opts.monitor_id = id;
+        }
+    });
+    emit_opts();
+    crop_main(i);
+}
+
+/// Show region `i` (None: everything) in the session window.
+unsafe fn crop_main(i: Option<usize>) {
+    let r = i.and_then(|i| regions().get(i).copied());
+    MAIN_REGION.with(|m| m.set(r.map(|r| r.id)));
+    let crop = r.map(|r| r.rect);
+    let h = sh().hwnd.load(Relaxed) as HWND;
     set_view(View { crop, sx: 0, sy: 0, ..view() });
     update_scroll(h);
     rebuild_cursor(h);
+    InvalidateRect(h, null(), 0);
+}
+
+// ---------------------------------------------------------------- displays and their windows
+
+const CHILD_CLASS: &str = "itda_display";
+
+/// "화면 나누기" choices, by HostOpts::monitor_layout.
+const LAYOUTS: [&str; 5] = ["서버가 알려 준 모니터", "가로로 2개", "세로로 2개", "가로로 3개", "2×2"];
+
+/// A part of the framebuffer a view can show: a display the server reported, or a screen
+/// region from a manual split (named as such: it isn't a detected monitor).
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Region {
+    rect: [i32; 4],
+    manual: bool,
+    /// HostOpts::monitor_id of this region: the server's screen id, or the index of a manual one.
+    id: u32,
+}
+
+/// The regions to offer: the manual split if one is chosen, else the server's displays when
+/// it reports more than one. Never guessed from the picture's shape.
+fn regions() -> Vec<Region> {
+    let (w, h) = sh().size();
+    let layout = ui(|u| u.l.opts.monitor_layout);
+    if let Some(parts) = split(layout, w as i32, h as i32) {
+        return parts.into_iter().enumerate().map(|(i, rect)| Region { rect, manual: true, id: i as u32 }).collect();
+    }
+    let screens = sh().screens.lock().unwrap().clone();
+    if screens.len() < 2 {
+        return Vec::new();
+    }
+    screens.iter().map(|s| Region { rect: [s.x as i32, s.y as i32, s.w as i32, s.h as i32], manual: false, id: s.id }).collect()
+}
+
+/// A manual split of a w×h framebuffer (monitor_layout 1–4) into equal regions, left to
+/// right then top to bottom, covering it exactly; None for 0 (server displays).
+fn split(layout: u8, w: i32, h: i32) -> Option<Vec<[i32; 4]>> {
+    let (cols, rows) = match layout {
+        1 => (2, 1),
+        2 => (1, 2),
+        3 => (3, 1),
+        4 => (2, 2),
+        _ => return None,
+    };
+    if w < cols || h < rows {
+        return None;
+    }
+    Some((0..rows).flat_map(|r| (0..cols).map(move |c| {
+        let (x0, x1) = (w * c / cols, w * (c + 1) / cols);
+        let (y0, y1) = (h * r / rows, h * (r + 1) / rows);
+        [x0, y0, x1 - x0, y1 - y0]
+    })).collect())
+}
+
+fn region_name(r: &Region, i: usize) -> String {
+    if r.manual {
+        format!("화면 영역 {} — {}×{}", i + 1, r.rect[2], r.rect[3])
+    } else {
+        format!("모니터 {} — {}×{}", i + 1, r.rect[2], r.rect[3])
+    }
+}
+
+fn child_hwnds() -> Vec<HWND> {
+    CHILDREN.with(|c| c.borrow().iter().map(|w| w.hwnd).collect())
+}
+
+/// Work areas of this PC's monitors, left to right then top to bottom.
+unsafe fn local_work_areas() -> Vec<RECT> {
+    unsafe extern "system" fn each(m: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> BOOL {
+        let list = &mut *(data as *mut Vec<RECT>);
+        let mut mi: MONITORINFO = std::mem::zeroed();
+        mi.cbSize = size_of::<MONITORINFO>() as u32;
+        if GetMonitorInfoW(m, &mut mi) != 0 {
+            list.push(mi.rcWork);
+        }
+        1
+    }
+    let mut list: Vec<RECT> = Vec::new();
+    EnumDisplayMonitors(null_mut(), null(), Some(each), &mut list as *mut _ as LPARAM);
+    list.sort_by_key(|r| (r.left, r.top));
+    list
+}
+
+/// One window per region: the session window keeps the first, a display window opens for
+/// each other one, on the next monitor of this PC (cascaded when there are fewer).
+unsafe fn open_windows() {
+    let main = sh().hwnd.load(Relaxed) as HWND;
+    let rs = regions();
+    if rs.len() < 2 {
+        return toast(main, "나눌 화면이 없습니다 — ‘화면 나누기’에서 고를 수 있습니다");
+    }
+    APPLIED.with(|a| a.set(true));
+    gather();
+    crop_main(Some(0));
+    let full = ui(|u| {
+        u.l.opts.monitor_mode = 2;
+        u.l.opts.monitor_fullscreen
+    });
+    emit_opts();
+    let areas = local_work_areas();
+    let style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
+    let cls = wide(CHILD_CLASS);
+    let hinst = GetModuleHandleW(null());
+    for (i, r) in rs.iter().enumerate().skip(1).take(MAX_SCREENS - 1) {
+        let wa = areas.get(i).or(areas.last()).copied().unwrap_or(RECT { left: 0, top: 0, right: 1280, bottom: 800 });
+        let cascade = if i < areas.len() { 0 } else { 40 * (i - areas.len() + 1) as i32 };
+        let (fw, fh) = (r.rect[2].max(1), r.rect[3].max(1));
+        let mut rc = RECT { left: 0, top: 0, right: fw, bottom: fh };
+        AdjustWindowRectEx(&mut rc, style, 0, WS_EX_APPWINDOW);
+        let (bw, bh) = (rc.right - rc.left - fw, rc.bottom - rc.top - fh);
+        let s = (((wa.right - wa.left - bw - cascade) as f64 / fw as f64).min((wa.bottom - wa.top - bh - cascade) as f64 / fh as f64)).clamp(0.1, 1.0);
+        let (ww, wh) = ((fw as f64 * s) as i32 + bw, (fh as f64 * s) as i32 + bh);
+        let (wx, wy) = (wa.left + (wa.right - wa.left - ww) / 2 + cascade, wa.top + (wa.bottom - wa.top - wh) / 2 + cascade);
+        let view = View { crop: Some(r.rect), ..View::default() };
+        CREATING.with(|c| c.set(view));
+        // Owned by the session window: it closes with the session, has its own taskbar button.
+        let h = CreateWindowExW(WS_EX_APPWINDOW, cls.as_ptr(), wide(crate::APP).as_ptr(), style, wx, wy, ww, wh, main, null_mut(), hinst, null());
+        if h.is_null() {
+            continue;
+        }
+        let dark: BOOL = 1;
+        DwmSetWindowAttribute(h, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark as *const BOOL as _, 4);
+        ImmAssociateContext(h, null_mut());
+        CHILDREN.with(|c| c.borrow_mut().push(Child { hwnd: h, region: r.id, view, saved: None }));
+        update_title(h);
+        ShowWindow(h, SW_SHOWNOACTIVATE);
+        if full {
+            toggle_child_fullscreen(h);
+        }
+    }
+    toast(main, "화면마다 창을 열었습니다 — 닫으면 그 창만 닫힙니다");
+}
+
+/// Close the display windows; the session window shows everything again.
+unsafe fn gather() {
+    for h in child_hwnds() {
+        DestroyWindow(h);
+    }
+    let main = sh().hwnd.load(Relaxed) as HWND;
+    if !IsWindowVisible(main).is_positive() {
+        ShowWindow(main, SW_SHOW);
+    }
+    crop_main(None);
+}
+
+/// Apply the remembered monitor_mode once the displays (or a manual split) are known:
+/// one display by default (monitor_id, else the first), all, or one window each.
+unsafe fn apply_monitor_mode() {
+    if APPLIED.with(|a| a.get()) {
+        return;
+    }
+    let rs = regions();
+    if rs.len() < 2 {
+        return; // not known yet, or nothing to divide
+    }
+    APPLIED.with(|a| a.set(true));
+    let (mode, id) = ui(|u| (u.l.opts.monitor_mode, u.l.opts.monitor_id));
+    match mode {
+        1 => crop_main(None),
+        2 => open_windows(),
+        _ => crop_main(Some(id.and_then(|id| rs.iter().position(|r| r.id == id)).unwrap_or(0))),
+    }
+}
+
+/// The framebuffer or its displays changed. Every view follows its display by id, not by
+/// position in the list: a display window whose display is gone closes; the session window
+/// falls back to the preferred display (monitor_id), then the first, when its own is gone.
+unsafe fn refit_children() {
+    let rs = regions();
+    let find = |id: u32| rs.iter().find(|r| r.id == id);
+    if let Some(id) = MAIN_REGION.with(|m| m.get()) {
+        let preferred = ui(|u| u.l.opts.monitor_id);
+        let r = find(id).or_else(|| preferred.and_then(find)).or(rs.first());
+        MAIN_REGION.with(|m| m.set(r.map(|r| r.id)));
+        let crop = r.map(|r| r.rect);
+        if view().crop != crop {
+            let main = sh().hwnd.load(Relaxed) as HWND;
+            set_view(View { crop, sx: 0, sy: 0, ..view() });
+            update_scroll(main);
+            rebuild_cursor(main);
+            InvalidateRect(main, null(), 0);
+        }
+    }
+    let mut gone = Vec::new();
+    CHILDREN.with(|c| {
+        for w in c.borrow_mut().iter_mut() {
+            match find(w.region) {
+                Some(r) => w.view.crop = Some(r.rect),
+                None => gone.push(w.hwnd),
+            }
+        }
+    });
+    // (destroyed outside the borrow: WM_DESTROY takes CHILDREN again)
+    for h in gone {
+        DestroyWindow(h);
+    }
+    for h in child_hwnds() {
+        update_title(h);
+        InvalidateRect(h, null(), 0);
+    }
+}
+
+unsafe extern "system" fn child_proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    match m {
+        WM_PAINT => paint(h),
+        WM_ERASEBKGND => return 1,
+        WM_SIZE => {
+            InvalidateRect(h, null(), 0);
+            rebuild_cursor(h);
+        }
+        WM_SETCURSOR if (lp & 0xffff) as u32 == HTCLIENT => {
+            SetCursor(ui(|u| u.cursor).unwrap_or_else(|| LoadCursorW(null_mut(), IDC_ARROW)));
+            return 1;
+        }
+        WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_MBUTTONDOWN | WM_MBUTTONUP | WM_RBUTTONDOWN
+        | WM_RBUTTONUP => mouse(h, m, lp),
+        WM_MOUSEWHEEL | WM_MOUSEHWHEEL => wheel(m == WM_MOUSEHWHEEL, ((wp >> 16) & 0xffff) as i16 as i32),
+        WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP => {
+            if !key(h, m, wp, lp) {
+                return DefWindowProcW(h, m, wp, lp);
+            }
+        }
+        WM_KILLFOCUS => release_all(),
+        WM_CAPTURECHANGED => release_buttons(),
+        WM_DPICHANGED => {
+            let r = &*(lp as *const RECT);
+            SetWindowPos(h, null_mut(), r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        WM_CLOSE => close(h),
+        WM_DESTROY => {
+            if GetCapture() == h {
+                ReleaseCapture(); // (WM_CAPTURECHANGED lets the buttons go)
+            }
+            CHILDREN.with(|c| c.borrow_mut().retain(|w| w.hwnd != h));
+            // The session window was only hidden for this one: the last view ends the session.
+            let main = sh().hwnd.load(Relaxed) as HWND;
+            if child_hwnds().is_empty() && !ENDING.with(|e| e.get()) && !IsWindowVisible(main).is_positive() {
+                ENDING.with(|e| e.set(true));
+                DestroyWindow(main);
+            }
+        }
+        _ => return DefWindowProcW(h, m, wp, lp),
+    }
+    0
 }
 
 // ---------------------------------------------------------------- snapshots
@@ -1101,7 +1467,8 @@ unsafe fn paint(h: HWND) {
 }
 
 unsafe fn draw(h: HWND, hdc: HDC, clip: RECT) {
-    let pills = pills(h, hdc);
+    // Stats and toasts belong to the session window (its timer clears them).
+    let pills = if h as isize == sh().hwnd.load(Relaxed) { pills(h, hdc) } else { Vec::new() };
     let disconnected = !sh().status.lock().unwrap().is_empty();
     let saved = SaveDC(hdc);
     if !disconnected {
@@ -1295,27 +1662,39 @@ unsafe fn on_fb(h: HWND) {
         fb.dirty.clear();
         (fresh, changed, fw, fh)
     };
+    // The session window and every display window paint from the copy just made.
+    let windows: Vec<HWND> = std::iter::once(h).chain(child_hwnds()).collect();
     if fresh {
         // A new size (or the first frame): the layout moved, letterbox bars included.
-        InvalidateRect(h, null(), 0);
-        UpdateWindow(h);
+        for &w in &windows {
+            InvalidateRect(w, null(), 0);
+            UpdateWindow(w);
+        }
         return;
     }
     // Each changed rectangle on its own: a clock in one corner and the pointer in another
     // don't repaint everything between them. Laid out by the size just copied, which is
-    // what draw_front paints.
-    let l = layout(h, fw as i32, fh as i32);
-    for (x, y, w, hh) in changed {
-        let (x0, x1, y0, y1) = (x as i32 - l.cx, (x + w) as i32 - l.cx, y as i32 - l.cy, (y + hh) as i32 - l.cy);
-        let r = RECT {
-            left: l.ox + (x0 as f64 * l.s).floor() as i32 - 2,
-            top: l.oy + (y0 as f64 * l.s).floor() as i32 - 2,
-            right: l.ox + (x1 as f64 * l.s).ceil() as i32 + 2,
-            bottom: l.oy + (y1 as f64 * l.s).ceil() as i32 + 2,
-        };
-        InvalidateRect(h, &r, 0);
+    // what draw_front paints; a window whose display isn't touched isn't repainted.
+    for &win in &windows {
+        let l = layout(win, fw as i32, fh as i32);
+        let (cw, ch) = client(win);
+        for &(x, y, w, hh) in &changed {
+            let (x0, x1, y0, y1) = (x as i32 - l.cx, (x + w) as i32 - l.cx, y as i32 - l.cy, (y + hh) as i32 - l.cy);
+            if x1 <= 0 || y1 <= 0 || x0 >= l.fw || y0 >= l.fh {
+                continue; // outside this window's display
+            }
+            let r = RECT {
+                left: l.ox + (x0 as f64 * l.s).floor() as i32 - 2,
+                top: l.oy + (y0 as f64 * l.s).floor() as i32 - 2,
+                right: l.ox + (x1 as f64 * l.s).ceil() as i32 + 2,
+                bottom: l.oy + (y1 as f64 * l.s).ceil() as i32 + 2,
+            };
+            if r.right > 0 && r.bottom > 0 && r.left < cw && r.top < ch {
+                InvalidateRect(win, &r, 0);
+            }
+        }
+        UpdateWindow(win); // paint now rather than waiting for an idle queue
     }
-    UpdateWindow(h); // paint now rather than waiting for an idle queue
 }
 
 // ---------------------------------------------------------------- input
@@ -1328,14 +1707,14 @@ unsafe fn to_fb(h: HWND, x: i32, y: i32) -> (u16, u16) {
 
 unsafe fn mouse(h: HWND, m: u32, lp: LPARAM) {
     let (x, y) = ((lp & 0xffff) as i16 as i32, ((lp >> 16) & 0xffff) as i16 as i32);
-    if m == WM_MOUSEMOVE {
+    if m == WM_MOUSEMOVE && h as isize == sh().hwnd.load(Relaxed) {
         toolbar::parent_mouse(y);
     }
     if !sh().status.lock().unwrap().is_empty() {
         // Disconnected: only the card's close button is live.
         let [l, t, r, b] = ui(|u| u.close_btn);
         if m == WM_LBUTTONUP && x >= l && x < r && y >= t && y < b {
-            close(h);
+            end_session(h);
         }
         return;
     }
@@ -1494,7 +1873,9 @@ unsafe extern "system" fn kb_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT 
     if code == HC_ACTION as i32 && !VIEW_ONLY.load(Relaxed) {
         let k = &*(lp as *const KBDLLHOOKSTRUCT);
         let hwnd = sh().hwnd.load(Relaxed) as HWND;
-        if (k.vkCode == VK_LWIN as u32 || k.vkCode == VK_RWIN as u32) && GetForegroundWindow() == hwnd {
+        let fg = GetForegroundWindow();
+        let ours = fg == hwnd || CHILDREN.with(|c| c.try_borrow().is_ok_and(|c| c.iter().any(|w| w.hwnd == fg)));
+        if (k.vkCode == VK_LWIN as u32 || k.vkCode == VK_RWIN as u32) && ours {
             let press = wp as u32 == WM_KEYDOWN || wp as u32 == WM_SYSKEYDOWN;
             let sym = keys::win_sym(k.vkCode == VK_RWIN as u32, SWAP.load(Relaxed));
             let id = 0x20000 | k.vkCode;
@@ -1515,6 +1896,15 @@ unsafe extern "system" fn kb_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT 
 }
 
 /// Focus lost / mode change: release everything so no modifier stays stuck on the Mac.
+/// Mouse capture went away (window closed, another window took it) with a button still
+/// down: let it go on the remote too, or it stays held there. Keys are left alone.
+fn release_buttons() {
+    let (b, pos) = ui(|u| (std::mem::take(&mut u.buttons), u.pos));
+    if b != 0 {
+        sh().pointer(0, pos.0, pos.1);
+    }
+}
+
 fn release_all() {
     let (keys, b, pos) = ui(|u| {
         let b = u.buttons;
@@ -1530,6 +1920,9 @@ fn release_all() {
 }
 
 unsafe fn toggle_fullscreen(h: HWND) {
+    if h as isize != sh().hwnd.load(Relaxed) {
+        return toggle_child_fullscreen(h);
+    }
     if let Some((style, wp)) = ui(|u| u.saved.take()) {
         SetWindowLongPtrW(h, GWL_STYLE, style);
         SetWindowPlacement(h, &wp);
@@ -1550,6 +1943,42 @@ unsafe fn toggle_fullscreen(h: HWND) {
     let full = ui(|u| u.saved.is_some());
     ui(|u| u.l.opts.fullscreen = full);
     emit_opts();
+}
+
+/// A display window's full screen: its own placement, not saved in the host's options.
+unsafe fn toggle_child_fullscreen(h: HWND) {
+    let saved = CHILDREN.with(|c| c.borrow_mut().iter_mut().find(|w| w.hwnd == h).and_then(|w| w.saved.take()));
+    if let Some((style, wp)) = saved {
+        SetWindowLongPtrW(h, GWL_STYLE, style);
+        SetWindowPlacement(h, &wp);
+        SetWindowPos(h, null_mut(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+        remember_child_fullscreen();
+        return;
+    }
+    let style = GetWindowLongPtrW(h, GWL_STYLE);
+    let mut wp: WINDOWPLACEMENT = std::mem::zeroed();
+    wp.length = size_of::<WINDOWPLACEMENT>() as u32;
+    GetWindowPlacement(h, &mut wp);
+    let mut mi: MONITORINFO = std::mem::zeroed();
+    mi.cbSize = size_of::<MONITORINFO>() as u32;
+    GetMonitorInfoW(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mut mi);
+    CHILDREN.with(|c| {
+        if let Some(w) = c.borrow_mut().iter_mut().find(|w| w.hwnd == h) {
+            w.saved = Some((style, wp));
+        }
+    });
+    SetWindowLongPtrW(h, GWL_STYLE, style & !(WS_OVERLAPPEDWINDOW as isize));
+    let r = mi.rcMonitor;
+    SetWindowPos(h, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED);
+    remember_child_fullscreen();
+}
+
+/// monitor_fullscreen follows the display windows: on while any of them is full screen.
+fn remember_child_fullscreen() {
+    let any = CHILDREN.with(|c| c.borrow().iter().any(|w| w.saved.is_some()));
+    if ui(|u| std::mem::replace(&mut u.l.opts.monitor_fullscreen, any)) != any {
+        emit_opts();
+    }
 }
 
 // ---------------------------------------------------------------- cursor
@@ -1608,4 +2037,26 @@ unsafe fn make_hcursor(c: &Cursor, s: f64) -> HCURSOR {
     DeleteObject(color);
     DeleteObject(mask);
     hc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Manual splits cover the framebuffer exactly, in reading order, odd sizes included.
+    #[test]
+    fn manual_splits() {
+        assert_eq!(split(0, 1920, 1080), None);
+        assert_eq!(split(1, 3840, 1080).unwrap(), [[0, 0, 1920, 1080], [1920, 0, 1920, 1080]]);
+        assert_eq!(split(2, 1920, 2160).unwrap(), [[0, 0, 1920, 1080], [0, 1080, 1920, 1080]]);
+        assert_eq!(split(3, 5761, 1080).unwrap(), [[0, 0, 1920, 1080], [1920, 0, 1920, 1080], [3840, 0, 1921, 1080]]);
+        let q = split(4, 3841, 2161).unwrap();
+        assert_eq!(q.len(), 4);
+        assert_eq!(q[0], [0, 0, 1920, 1080]);
+        assert_eq!(q[3], [1920, 1080, 1921, 1081]);
+        let area: i32 = q.iter().map(|r| r[2] * r[3]).sum();
+        assert_eq!(area, 3841 * 2161);
+        assert_eq!(split(3, 2, 10), None, "too small to split");
+        assert_eq!(LAYOUTS.len(), 5);
+    }
 }

@@ -632,16 +632,7 @@ impl Bridge {
 
     /// One ExtendedDesktopSize rectangle: reason (0 server, 1 this client), status, one screen.
     fn ext_size(out: &mut Vec<u8>, reason: u16, status: u16, w: u16, h: u16) {
-        out.extend_from_slice(&reason.to_be_bytes());
-        out.extend_from_slice(&status.to_be_bytes());
-        out.extend_from_slice(&w.to_be_bytes());
-        out.extend_from_slice(&h.to_be_bytes());
-        out.extend_from_slice(&ENC_EXT_DESKTOP_SIZE.to_be_bytes());
-        out.extend_from_slice(&[1, 0, 0, 0]);
-        out.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]); // screen id 0 at 0,0
-        out.extend_from_slice(&w.to_be_bytes());
-        out.extend_from_slice(&h.to_be_bytes());
-        out.extend_from_slice(&[0, 0, 0, 0]);
+        crate::enc::ext_desktop_size(out, reason, status, w, h, &[crate::enc::Screen { id: 0, x: 0, y: 0, w, h }]);
     }
 
     fn pointer(&mut self, mask: u8, x: u16, y: u16) -> Vec<FastPathInputEvent> {

@@ -216,6 +216,57 @@ impl Update {
     }
 }
 
+pub const ENC_EXT_DESKTOP_SIZE: i32 = -308;
+
+/// One display inside the framebuffer, as ExtendedDesktopSize describes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Screen {
+    pub id: u32,
+    pub x: u16,
+    pub y: u16,
+    pub w: u16,
+    pub h: u16,
+}
+
+/// An ExtendedDesktopSize rectangle: `reason` 0 = the server changed, 1 = answer to this
+/// client's SetDesktopSize (with `status`: 0 done, 1 not allowed, …), the framebuffer size
+/// and its displays.
+pub fn ext_desktop_size(out: &mut Vec<u8>, reason: u16, status: u16, w: u16, h: u16, screens: &[Screen]) {
+    out.extend_from_slice(&reason.to_be_bytes());
+    out.extend_from_slice(&status.to_be_bytes());
+    out.extend_from_slice(&w.to_be_bytes());
+    out.extend_from_slice(&h.to_be_bytes());
+    out.extend_from_slice(&ENC_EXT_DESKTOP_SIZE.to_be_bytes());
+    out.extend_from_slice(&[screens.len().min(255) as u8, 0, 0, 0]);
+    for s in screens.iter().take(255) {
+        out.extend_from_slice(&s.id.to_be_bytes());
+        for v in [s.x, s.y, s.w, s.h] {
+            out.extend_from_slice(&v.to_be_bytes());
+        }
+        out.extend_from_slice(&0u32.to_be_bytes()); // flags
+    }
+}
+
+/// Displays given in desktop coordinates (id, left, top, right, bottom) placed in a w×h
+/// framebuffer whose top-left is the desktop point (ox, oy): clipped to it, empty ones
+/// dropped, ordered left to right, then top to bottom. None of them: one display, all of it.
+pub fn screens_in(ox: i32, oy: i32, w: usize, h: usize, monitors: &[(u32, i32, i32, i32, i32)]) -> Vec<Screen> {
+    let (w, h) = (w.min(u16::MAX as usize) as i32, h.min(u16::MAX as usize) as i32);
+    let mut out: Vec<Screen> = monitors
+        .iter()
+        .filter_map(|&(id, l, t, r, b)| {
+            let (x0, y0) = ((l - ox).clamp(0, w), (t - oy).clamp(0, h));
+            let (x1, y1) = ((r - ox).clamp(0, w), (b - oy).clamp(0, h));
+            (x1 > x0 && y1 > y0).then(|| Screen { id, x: x0 as u16, y: y0 as u16, w: (x1 - x0) as u16, h: (y1 - y0) as u16 })
+        })
+        .collect();
+    out.sort_by_key(|s| (s.x, s.y));
+    if out.is_empty() {
+        out.push(Screen { id: 0, x: 0, y: 0, w: w as u16, h: h as u16 });
+    }
+    out
+}
+
 /// The parts of a framebuffer changed since the last update: rectangles (x, y, w, h), or all
 /// of it. Past MAX_DAMAGE rectangles they merge into their bounding box.
 #[derive(Default)]
@@ -445,6 +496,33 @@ mod tests {
                 assert_eq!(out.len(), 12 + r.2 * r.3 * pf.bytes());
             }
         }
+    }
+
+    #[test]
+    fn ext_desktop_size_bytes() {
+        let mut out = Vec::new();
+        ext_desktop_size(&mut out, 1, 1, 3840, 1080, &[Screen { id: 7, x: 0, y: 0, w: 1920, h: 1080 }, Screen { id: 9, x: 1920, y: 0, w: 1920, h: 1080 }]);
+        assert_eq!(&out[..12], &[0, 1, 0, 1, 0x0f, 0, 0x04, 0x38, 0xff, 0xff, 0xfe, 0xcc]);
+        assert_eq!(&out[12..16], &[2, 0, 0, 0]);
+        assert_eq!(&out[16..32], &[0, 0, 0, 7, 0, 0, 0, 0, 0x07, 0x80, 0x04, 0x38, 0, 0, 0, 0]);
+        assert_eq!(&out[32..36], &[0, 0, 0, 9]);
+        assert_eq!(&out[36..38], &[0x07, 0x80]); // x = 1920
+        assert_eq!(out.len(), 16 + 2 * 16);
+    }
+
+    /// Windows desktop coordinates (the primary display at 0,0, others negative or beyond)
+    /// placed in a framebuffer that starts at the virtual desktop's corner.
+    #[test]
+    fn displays_in_the_framebuffer() {
+        // A second display to the left of the primary, lower down: virtual origin (-1280, 0).
+        let s = screens_in(-1280, 0, 3200, 1200, &[(1, 0, 0, 1920, 1080), (2, -1280, 200, 0, 1200)]);
+        assert_eq!(s, [Screen { id: 2, x: 0, y: 200, w: 1280, h: 1000 }, Screen { id: 1, x: 1280, y: 0, w: 1920, h: 1080 }]);
+        // Stacked: ordered left to right, then top to bottom.
+        let s = screens_in(0, -1080, 1920, 2160, &[(1, 0, 0, 1920, 1080), (2, 0, -1080, 1920, 0)]);
+        assert_eq!(s.iter().map(|s| (s.id, s.y)).collect::<Vec<_>>(), [(2, 0), (1, 1080)]);
+        // Clipped to the framebuffer; nothing known -> one display covering it.
+        assert_eq!(screens_in(0, 0, 100, 100, &[(1, -50, -50, 50, 50)]), [Screen { id: 1, x: 0, y: 0, w: 50, h: 50 }]);
+        assert_eq!(screens_in(0, 0, 800, 600, &[]), [Screen { id: 0, x: 0, y: 0, w: 800, h: 600 }]);
     }
 
     #[test]

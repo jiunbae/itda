@@ -93,6 +93,16 @@ Files inherit the device account by default. Selecting another saved account for
 
 Browsing and transfers have separate SSH connections. At most two transfer jobs run concurrently; each pipelines up to 64 SFTP requests of 32KiB. Ordinary SFTP copy reports unsupported symlinks instead of following them. Inline folder disclosure, full ACL/xattr preservation, rclone/WebDAV, an Itda-to-Itda file server, and native outbound virtual-file dragging for SFTP remain follow-up work; the workspace does not claim complete Finder/Explorer feature parity.
 
+## Multiple monitors
+
+Open the viewer's **Monitor** menu to select a display, see the whole desktop, or open one window per display. The default is one remembered display (the first when none is saved). Connection → Display remembers this mode, the preferred monitor, manual layout and whether separated windows should open full screen on local monitors. Extra windows share the connection and decoder; they do not create another remote login. Closing an extra view leaves the others connected; closing the owner hides it while other views remain, and closing the last view ends the session.
+
+The menu shows the server's screen positions and sizes. Itda's Windows sharing server now reports each monitor, including displays left/above the desktop origin. If a server omits topology, the UI shows one desktop and offers explicit horizontal/vertical/2×2 **manual regions**. These are not detected physical monitors. RDP currently exposes one virtual session desktop, not the remote PC's physical displays. Automatic resolution changes stop for multiple display/region views so selecting a window cannot collapse the remote layout.
+
+macOS sibling views draw the same decoded canvas directly; Windows views share the native framebuffer. Neither duplicates the network stream. Remote topology and reordered/removed monitors are matched by stable IDs. Native macOS split windows, pointer/keyboard routing and three quit sequences were checked with a synthetic two-monitor server; Windows unit tests/build run in CI, but the Windows multiple-monitor GUI still needs hardware runtime validation. Dragging between separate monitor windows is not continued across their boundary.
+
+The macOS quit path releases all WebViews and containing windows before Objective-C thread-local teardown, fixing an exit crash found during split-window testing.
+
 ## 🖼️ Screenshots
 
 | Share page: web viewer QR, PIN and this PC | Connection editor (Mac / Windows / RDP / Linux) |

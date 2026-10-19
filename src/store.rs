@@ -51,6 +51,19 @@ pub struct HostOpts {
     pub stats: bool,
     /// Remote Desktop (and VNC servers that allow it) follow the window's size.
     pub resize: bool,
+    /// How the remote screen is divided for one-display views and per-display windows:
+    /// 0 = the displays the server reports (one desktop if it reports none), or a manual
+    /// split of the framebuffer into screen regions — 1 = two side by side, 2 = two stacked,
+    /// 3 = three side by side, 4 = 2×2. Manual regions are not detected monitors.
+    pub monitor_layout: u8,
+    /// What a multi-display remote opens as: 0 = one display (monitor_id, else the first),
+    /// 1 = all of them in one window, 2 = one window per display.
+    pub monitor_mode: u8,
+    /// The display picked for mode 0: the server's screen id, or for a manual split the
+    /// region's index (0-based). None = the first.
+    pub monitor_id: Option<u32>,
+    /// Per-display windows (mode 2) open full screen, each on its monitor.
+    pub monitor_fullscreen: bool,
 }
 
 impl Default for HostOpts {
@@ -65,6 +78,10 @@ impl Default for HostOpts {
             reconnect: true,
             stats: false,
             resize: true,
+            monitor_layout: 0,
+            monitor_mode: 0,
+            monitor_id: None,
+            monitor_fullscreen: false,
         }
     }
 }

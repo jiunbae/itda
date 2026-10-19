@@ -2,7 +2,7 @@
 
 `novnc.min.js` is [noVNC](https://github.com/novnc/noVNC) 1.7.0 (MPL-2.0), bundled with
 esbuild by `scripts/build-novnc.sh`, with one file replaced: `core/decoders/zrle.js` by
-`novnc-src/zrle.js`.
+`novnc-src/zrle.js`. The checked `scripts/patch-novnc.py` transformation preserves all ExtendedDesktopSize screen records and emits geometry events. `novnc-src/itda.js` exposes the pinned viewport/absolute-pointer adapter, a frame version and Keyboard for sibling views; the viewer imports the bundle explicitly before it boots.
 
 ## Why
 
@@ -19,4 +19,4 @@ pixel-identical output; per 10 frames in node: text 851 → 75 ms, UI 553 → 32
 ## Updating noVNC
 
 Change `VERSION` in `scripts/build-novnc.sh`, compare upstream's `core/decoders/zrle.js`
-with the one this replaced (1.7.0) for changes worth carrying over, and run the script.
+with the one this replaced (1.7.0) for changes worth carrying over, review the checked patch and adapter against the new RFB/Display internals, and run the script. Then run `scripts/monitors-e2e.mjs` and the CU test fixture before shipping.

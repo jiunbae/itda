@@ -2,6 +2,8 @@
 // Mac or Windows PC through the gateway's WebSocket with noVNC (window.RFB from
 // novnc.min.js). Installable as an app (manifest + sw.js).
 'use strict';
+import './novnc.min.js';
+import { MonitorController, startMirror } from './monitors.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -45,8 +47,10 @@ const S = { hosts: [], accounts: [], rfb: null, ws: null, host: null, fit: true,
 // App window (Itda for Mac): this page shows one connection, chosen by the app, and reports
 // to the app's home instead of offering the list.
 const OPEN = new URLSearchParams(location.search).get('open');
+const MIRROR = new URLSearchParams(location.search).get('mirror');
 const APP = !!(OPEN && window.ipc);
 const post = (m) => { try { window.ipc.postMessage(JSON.stringify(m)); } catch (_) {} };
+const monitors = new MonitorController({S,app:APP,post,api,render:renderTools,toast,close:leave});
 const opt = (k, dflt) => (S.host && S.host.opts && k in S.host.opts ? S.host.opts[k] : dflt);
 // What to call the remote device in messages.
 const dev = () => (isWin(S.host) ? 'PC' : S.host && kindOf(S.host) === 'linux' ? '기기' : 'Mac');
@@ -77,6 +81,7 @@ async function api(path, body) {
 const vault = () => (S.local ? '이 Mac의 키체인' : 'PC의 Windows 자격 증명 관리자');
 
 async function boot() {
+  if (MIRROR !== null) { document.body.classList.add('mirror', ...(APP ? ['app'] : [])); return startMirror({S,app:APP,post},Number(MIRROR)); }
   const me = await api('/api/me');
   // Local mode: this page is the Mac app's own window (no PIN, nothing to install).
   S.local = !!(me.data && me.data.local);
@@ -442,7 +447,7 @@ function open(h) {
   status('busy', S.tries ? `${h.label}에 다시 연결하는 중 (${S.tries}/${RETRIES})` : `${h.label}에 연결하는 중`, h.ssh ? '암호화 연결(SSH)을 여는 중…' : h.kind === 'rdp' ? '원격 데스크톱에 로그인하는 중…' : '');
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   // Remote Desktop follows this window's size (not on phones: a desktop that small is no use).
-  const follow = h.kind === 'rdp' && opt('resize', true) && (APP || matchMedia('(pointer: fine)').matches);
+  const follow = h.kind === 'rdp' && opt('resize', true) && !opt('monitor_layout', 0) && opt('monitor_mode',0)!==2 && (APP || matchMedia('(pointer: fine)').matches);
   const scr = $('#screen');
   const size = follow && scr.clientWidth ? `?w=${Math.round(scr.clientWidth)}&h=${Math.round(scr.clientHeight)}` : '';
   const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}${size}`, ['binary']);
@@ -451,6 +456,7 @@ function open(h) {
   S.ws = ws;
   const rfb = new window.RFB($('#screen'), ws, { shared: true });
   S.rfb = rfb;
+  monitors.attach(rfb);
   rfb.scaleViewport = S.fit;
   rfb.clipViewport = !S.fit;
   rfb.resizeSession = follow;
@@ -587,7 +593,8 @@ for (const t of ['gesturestart', 'gesturemove', 'gestureend']) {
   }, true);
 }
 
-function close() {
+function close(notifyNative=true) {
+  monitors.disconnect(notifyNative);
   if (S.rfb) { const r = S.rfb; S.rfb = null; try { r.disconnect(); } catch (_) {} }
   S.mods.clear();
   $('#sheet').hidden = true;
@@ -608,6 +615,7 @@ function renderTools() {
     ['keys', 'command', `${isWin(S.host) ? 'Windows' : 'Mac'} 특수 키`],
     ...(APP ? [] : [['clip', 'clip', '클립보드']]),
     'sep',
+    ['monitors', 'monitor', '모니터 선택 및 창 배치'],
     ['scale', S.fit ? 'fit' : 'actual', S.fit ? '실제 크기로' : '화면에 맞춤'],
     ['viewonly', 'eye', '보기 전용', S.viewOnly],
     ['full', 'full', '전체 화면'],
@@ -630,15 +638,15 @@ $('#tools').addEventListener('click', (e) => {
     case 'back': return leave();
     case 'keyboard': return toggleKeyboard();
     case 'keys': return toggleSheet('keys');
+    case 'monitors': return toggleSheet('monitors');
     case 'clip': return toggleSheet('clip');
     case 'scale':
       S.fit = !S.fit;
-      if (r) { r.scaleViewport = S.fit; r.clipViewport = !S.fit; r.dragViewport = !S.fit; }
+      if (r) { r.scaleViewport = S.fit; r.clipViewport = !S.fit; r.dragViewport = !S.fit && !monitors.selected; monitors.apply(); }
       toast(S.fit ? '화면에 맞춤' : '실제 크기 — 끌어서 이동');
       return renderTools();
     case 'viewonly':
-      S.viewOnly = !S.viewOnly;
-      if (r) r.viewOnly = S.viewOnly;
+      monitors.option('view_only',!S.viewOnly);
       toast(S.viewOnly ? '보기 전용 켜짐' : '보기 전용 꺼짐');
       return renderTools();
     case 'full': {
@@ -693,7 +701,7 @@ function toggleSheet(kind) {
   const sh = $('#sheet');
   if (!sh.hidden && sh.dataset.kind === kind) { sh.hidden = true; return; }
   sh.dataset.kind = kind;
-  if (kind === 'keys') {
+  if (kind === 'monitors') { sh.innerHTML = monitors.menu(); monitors.bindMenu(sh); } else if (kind === 'keys') {
     const mod = (k, label) => `<button data-mod="${k}" class="${S.mods.has(k) ? 'on' : ''}">${label}</button>`;
     const mods = isWin(S.host)
       ? mod('ctrl', 'Ctrl') + mod('alt', 'Alt') + mod('shift', '⇧') + mod('win', '⊞')
@@ -781,5 +789,5 @@ kbd.addEventListener('keydown', (e) => {
   }
 });
 
-window.addEventListener('beforeunload', close);
+window.addEventListener('beforeunload', () => { if (MIRROR === null) close(false); });
 boot();
