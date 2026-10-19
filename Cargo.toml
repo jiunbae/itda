@@ -84,3 +84,7 @@ x509-cert = { opt-level = "z" }
 
 [build-dependencies]
 embed-resource = "3.0.12"
+
+# winscard (via ironrdp-connector → sspi) forces flate2 onto C zlib; this copy doesn't.
+[patch.crates-io]
+winscard = { path = "vendor/winscard" }
