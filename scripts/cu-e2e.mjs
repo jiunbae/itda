@@ -1,4 +1,4 @@
-// Drives src/cu_e2e.rs: the bundled noVNC in headless Chromium, classic then continuous.
+// Drives src/cu_e2e.rs: the bundled noVNC in headless Chromium (classic, continuous, slow link).
 //   cargo test --release cu_e2e -- --ignored --nocapture &   then   node scripts/cu-e2e.mjs
 // Needs Playwright (PLAYWRIGHT=/path/to/node_modules/playwright; CHROMIUM=browser binary).
 const pw = await import(process.env.PLAYWRIGHT ?? 'playwright');
@@ -15,7 +15,7 @@ for (let i = 0; ; i++) {
   }
 }
 try {
-  for (const mode of ['classic', 'cu']) {
+  for (const mode of ['classic', 'cu', 'slow']) {
     const page = await browser.newPage();
     page.on('console', (m) => m.type() === 'error' && console.log(`[${mode}] ${m.text()}`));
     await page.goto(`http://127.0.0.1:18790/?mode=${mode}`);

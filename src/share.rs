@@ -7,7 +7,8 @@
 //! registration so nearby Itdas list this PC.
 
 use crate::demand::{self, Demand};
-use crate::enc::{Encoder, PixelFormat, ENC_ZRLE, TILE};
+use crate::enc::{Encoder, PixelFormat, Update, ENC_ZRLE};
+use crate::outbox::Outbox;
 use crate::rfb::{vnc_response, PIXEL_FORMAT};
 use std::collections::HashMap;
 use std::io::{self, BufReader, Read, Write};
@@ -271,7 +272,7 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
         let _ = read_client(BufReader::new(reader), &tx, &mut input);
         input.release_all();
     });
-    let r = pump(&mut c, &rx, &mut cap, stop);
+    let r = Outbox::new(c.try_clone()?).and_then(|out| pump(&out, &rx, &mut cap, stop));
     let _ = c.shutdown(Shutdown::Both);
     VIEWERS.lock().unwrap().retain(|(i, _, _)| *i != id);
     changed();
@@ -355,24 +356,28 @@ const ENC_DESKTOP_SIZE: i32 = -223;
 const FRAME: Duration = Duration::from_millis(33);
 
 /// Server → client: capture, diff, encode, send.
-fn pump(c: &mut TcpStream, rx: &Receiver<Msg>, cap: &mut Capture, stop: &AtomicBool) -> io::Result<()> {
+fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &mut Capture, stop: &AtomicBool) -> io::Result<()> {
     let mut pf = PixelFormat::parse(&PIXEL_FORMAT);
     let mut encs: Vec<i32> = Vec::new();
     let mut demand = Demand::default();
     let mut last_capture = Instant::now() - FRAME;
     let mut prev: Vec<u32> = Vec::new();
     let mut enc = Encoder::new();
+    let mut u = Update::default();
     let mut clip_seq = unsafe { GetClipboardSequenceNumber() };
     let mut clip_check = Instant::now();
     loop {
         if stop.load(Relaxed) {
             return Ok(());
         }
+        if out.dead() {
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "viewer connection lost"));
+        }
         // Wake for the viewer's messages, the next capture when an update is due, or a
         // clipboard check. Captures stay FRAME apart also when the screen doesn't change.
         let wait = match demand.due() {
-            Some(_) => FRAME.saturating_sub(last_capture.elapsed()),
-            None => FRAME,
+            Some(_) if out.room() => FRAME.saturating_sub(last_capture.elapsed()),
+            _ => FRAME,
         };
         let mut next = match rx.recv_timeout(wait.max(Duration::from_millis(1))) {
             Ok(m) => Some(m),
@@ -399,9 +404,7 @@ fn pump(c: &mut TcpStream, rx: &Receiver<Msg>, cap: &mut Capture, stop: &AtomicB
             }
             next = rx.try_recv().ok();
         }
-        if !reply.is_empty() {
-            c.write_all(&reply)?;
-        }
+        out.send(reply)?;
         // Local clipboard changed → offer it to the viewer.
         if clip_check.elapsed() > Duration::from_millis(500) {
             clip_check = Instant::now();
@@ -413,7 +416,7 @@ fn pump(c: &mut TcpStream, rx: &Receiver<Msg>, cap: &mut Capture, stop: &AtomicB
                     let mut m = vec![3, 0, 0, 0];
                     m.extend_from_slice(&(b.len() as u32).to_be_bytes());
                     m.extend_from_slice(&b);
-                    c.write_all(&m)?;
+                    out.send(m)?;
                 }
             }
         }
@@ -421,60 +424,30 @@ fn pump(c: &mut TcpStream, rx: &Receiver<Msg>, cap: &mut Capture, stop: &AtomicB
             return Err(io::Error::new(io::ErrorKind::TimedOut, "viewer stopped acknowledging updates"));
         }
         let Some(incremental) = demand.due() else { continue };
-        if last_capture.elapsed() < FRAME {
-            continue;
+        if last_capture.elapsed() < FRAME || !out.room() {
+            continue; // (a viewer that's behind gets the changes together later)
         }
         last_capture = Instant::now();
         let (w0, h0) = (cap.w, cap.h);
         let (w, h, frame) = cap.grab();
-        let mut out = Vec::new();
-        let mut rects = 0u16;
+        u.start();
         if (w, h) != (w0, h0) && encs.contains(&ENC_DESKTOP_SIZE) {
-            out.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
-            out.extend_from_slice(&(w as u16).to_be_bytes());
-            out.extend_from_slice(&(h as u16).to_be_bytes());
-            out.extend_from_slice(&ENC_DESKTOP_SIZE.to_be_bytes());
-            rects += 1;
+            u.buf.extend_from_slice(&[0, 0, 0, 0]);
+            u.buf.extend_from_slice(&(w as u16).to_be_bytes());
+            u.buf.extend_from_slice(&(h as u16).to_be_bytes());
+            u.buf.extend_from_slice(&ENC_DESKTOP_SIZE.to_be_bytes());
+            u.rects += 1;
             prev.clear();
         }
         let full = !incremental || prev.len() != frame.len();
-        let zrle = encs.contains(&ENC_ZRLE);
-        // Changed tiles, merged into horizontal runs per tile row.
-        for ty in (0..h).step_by(TILE) {
-            let th = TILE.min(h - ty);
-            let mut tx = 0;
-            while tx < w {
-                let dirty = |x: usize| {
-                    let tw = TILE.min(w - x);
-                    demand.covers(x, ty, tw, th)
-                        && (full
-                            || (ty..ty + th).any(|y| {
-                                let a = y * w + x;
-                                frame[a..a + tw] != prev[a..a + tw]
-                            }))
-                };
-                if !dirty(tx) {
-                    tx += TILE;
-                    continue;
-                }
-                let start = tx;
-                while tx < w && dirty(tx) {
-                    tx += TILE;
-                }
-                let rw = tx.min(w) - start;
-                enc.rect(&mut out, &frame, w, start, ty, rw, th, &pf, zrle)?;
-                rects += 1;
-            }
-        }
-        if rects == 0 {
+        enc.changes(&mut u, frame, &prev, w, h, full, |x, y, tw, th| demand.covers(x, y, tw, th), &pf, encs.contains(&ENC_ZRLE))?;
+        if !u.finish() {
             continue; // nothing changed: keep the request pending
         }
-        let mut msg = vec![0u8, 0];
-        msg.extend_from_slice(&rects.to_be_bytes());
-        msg.extend_from_slice(&out);
-        demand.sent(msg.len(), &mut msg);
-        c.write_all(&msg)?;
-        prev = frame.to_vec();
+        demand.sent(u.buf.len(), &mut u.buf);
+        out.send(std::mem::replace(&mut u.buf, out.buffer()))?;
+        prev.clear();
+        prev.extend_from_slice(frame);
     }
 }
 

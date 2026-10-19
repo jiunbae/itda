@@ -15,7 +15,8 @@ use crate::rfb::{self, Raw, Rx, ENC_CURSOR, ENC_DESKTOP_SIZE, ENC_EXT_DESKTOP_SI
 use ironrdp_displaycontrol::client::DisplayControlClient;
 use ironrdp_dvc::DrdynvcClient;
 use crate::demand::{self, Demand};
-use crate::enc::{Encoder, PixelFormat, TILE};
+use crate::enc::{Damage, Encoder, PixelFormat, Update};
+use crate::outbox::Outbox;
 use ironrdp_blocking::Framed;
 use ironrdp_connector::sspi;
 use ironrdp_connector::connection_activation::{ConnectionActivationFactory, ConnectionActivationState};
@@ -364,13 +365,16 @@ struct Bridge {
     factory: ConnectionActivationFactory,
     image: DecodedImage,
     rx: Receiver<Msg>,
-    out: TcpStream,
+    /// Everything for the viewer goes through here, in order.
+    out: Outbox,
     /// RFB state
     pf: PixelFormat,
     encs: Vec<i32>,
     demand: Demand,
-    prev: Vec<u32>,
+    frames: Frames,
+    damage: Damage,
     enc: Encoder,
+    update: Update,
     resized: bool,
     /// ExtendedDesktopSize: told the viewer it may ask for sizes; a requested size waiting
     /// for its turn; the answer owed to the viewer (status: 0 = done, 1 = not allowed).
@@ -379,7 +383,6 @@ struct Bridge {
     last_resize: Instant,
     resize_reply: Option<u16>,
     cursor: Option<Cursor>,
-    dirty: bool,
     last_sent: Instant,
     /// Input state
     keys: Keys,
@@ -422,19 +425,20 @@ impl Bridge {
             factory: r.activation_factory,
             image,
             rx,
-            out: client,
+            out: Outbox::new(client)?,
             pf: PixelFormat::parse(&PIXEL_FORMAT),
             encs: Vec::new(),
             demand: Demand::default(),
-            prev: Vec::new(),
+            frames: Frames::default(),
+            damage: Damage::default(),
             enc: Encoder::new(),
+            update: Update::default(),
             resized: false,
             ext_told: false,
             pending_size: None,
             last_resize: Instant::now() - RESIZE_GAP,
             resize_reply: None,
             cursor: Some(Cursor::arrow()),
-            dirty: true,
             last_sent: Instant::now() - FRAME,
             keys: Keys::default(),
             buttons: 0,
@@ -457,6 +461,9 @@ impl Bridge {
 
     fn pump(&mut self) -> io::Result<()> {
         loop {
+            if self.out.dead() {
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "viewer connection lost"));
+            }
             // RDP → framebuffer
             match self.framed.read_pdu() {
                 Ok((action, payload)) => {
@@ -486,7 +493,11 @@ impl Bridge {
         for o in outs {
             match o {
                 ActiveStageOutput::ResponseFrame(f) => self.framed.write_all(&f)?,
-                ActiveStageOutput::GraphicsUpdate(_) => self.dirty = true,
+                ActiveStageOutput::GraphicsUpdate(r) => {
+                    let (w, h) = (self.image.width() as usize, self.image.height() as usize);
+                    let (x, y) = ((r.left as usize).min(w), (r.top as usize).min(h));
+                    self.damage.add(x, y, (r.right as usize + 1).min(w).saturating_sub(x), (r.bottom as usize + 1).min(h).saturating_sub(y));
+                }
                 ActiveStageOutput::PointerBitmap(p) => self.cursor = Some(Cursor::from_rdp(&p)),
                 ActiveStageOutput::PointerDefault => self.cursor = Some(Cursor::arrow()),
                 ActiveStageOutput::PointerHidden => self.cursor = Some(Cursor::hidden()),
@@ -512,9 +523,9 @@ impl Bridge {
                     crate::log!("rdp: desktop is now {}x{}", desktop_size.width, desktop_size.height);
                     self.image = DecodedImage::new(RdpPixelFormat::BgrX32, desktop_size.width, desktop_size.height);
                     self.resized = true;
-                    self.prev.clear();
+                    self.frames.prev.clear();
                 }
-                self.dirty = true;
+                self.damage.everything();
                 return Ok(());
             }
             buf.clear();
@@ -542,14 +553,15 @@ impl Bridge {
         let events = match m {
             Msg::Format(p) => {
                 self.pf = p;
-                self.prev.clear();
+                self.frames.prev.clear();
+                self.damage.everything();
                 return Ok(());
             }
             Msg::Encodings(e) => {
                 let mut reply = Vec::new();
                 self.demand.encodings(&e, &mut reply);
                 self.encs = e;
-                return self.out.write_all(&reply);
+                return self.out.send(reply);
             }
             Msg::Request { incremental } => {
                 self.demand.request(incremental);
@@ -559,10 +571,10 @@ impl Bridge {
                 let (w, h) = (self.image.width() as usize, self.image.height() as usize);
                 let mut reply = Vec::new();
                 if self.demand.ext(m, w, h, &mut reply) {
-                    self.prev.clear();
-                    self.dirty = true;
+                    self.frames.prev.clear();
+                    self.damage.everything();
                 }
-                return self.out.write_all(&reply);
+                return self.out.send(reply);
             }
             Msg::Resize { w, h } => {
                 let size = clamp_size(w as u32, h as u32);
@@ -671,75 +683,102 @@ impl Bridge {
             return Err(io::Error::new(io::ErrorKind::TimedOut, "viewer stopped acknowledging updates"));
         }
         let Some(incremental) = self.demand.due() else { return Ok(()) };
+        if !self.out.room() {
+            return Ok(()); // the viewer is behind: changes keep piling up as damage
+        }
         let cursor_due = self.cursor.is_some() && self.encs.contains(&ENC_CURSOR);
         let ext = self.encs.contains(&ENC_EXT_DESKTOP_SIZE);
         let ext_due = ext && (!self.ext_told || self.resize_reply.is_some());
-        if (incremental && !self.dirty && !cursor_due && !self.resized && !ext_due) || self.last_sent.elapsed() < FRAME {
+        if (incremental && self.damage.is_empty() && !cursor_due && !self.resized && !ext_due) || self.last_sent.elapsed() < FRAME {
             return Ok(());
         }
         let (w, h) = (self.image.width() as usize, self.image.height() as usize);
-        let frame: Vec<u32> = self.image.data().chunks_exact(4).map(|p| u32::from_le_bytes([p[0], p[1], p[2], 0])).collect();
-        let mut out = Vec::new();
-        let mut rects = 0u16;
+        let full = !incremental || self.frames.prev.len() != w * h;
+        let whole = self.frames.refresh(self.image.data(), w, h, &self.damage, full);
+        let u = &mut self.update;
+        u.start();
         if ext && (self.resized || ext_due) {
             // A new size we asked for is the answer to the viewer's request.
             let reason = if self.resized || self.resize_reply.is_some() { 1 } else { 0 };
-            Self::ext_size(&mut out, reason, self.resize_reply.take().unwrap_or(0), w as u16, h as u16);
+            Self::ext_size(&mut u.buf, reason, self.resize_reply.take().unwrap_or(0), w as u16, h as u16);
             self.ext_told = true;
-            rects += 1;
+            u.rects += 1;
         } else if self.resized && self.encs.contains(&ENC_DESKTOP_SIZE) {
-            out.extend_from_slice(&[0, 0, 0, 0]);
-            out.extend_from_slice(&(w as u16).to_be_bytes());
-            out.extend_from_slice(&(h as u16).to_be_bytes());
-            out.extend_from_slice(&ENC_DESKTOP_SIZE.to_be_bytes());
-            rects += 1;
+            u.buf.extend_from_slice(&[0, 0, 0, 0]);
+            u.buf.extend_from_slice(&(w as u16).to_be_bytes());
+            u.buf.extend_from_slice(&(h as u16).to_be_bytes());
+            u.buf.extend_from_slice(&ENC_DESKTOP_SIZE.to_be_bytes());
+            u.rects += 1;
         }
         self.resized = false;
         if cursor_due {
             if let Some(c) = self.cursor.take() {
-                c.encode(&mut out, &self.pf);
-                rects += 1;
+                c.encode(&mut u.buf, &self.pf);
+                u.rects += 1;
             }
         }
-        let full = !incremental || self.prev.len() != frame.len();
-        let zrle = self.encs.contains(&ENC_ZRLE);
-        for ty in (0..h).step_by(TILE) {
-            let th = TILE.min(h - ty);
-            let mut tx = 0;
-            while tx < w {
-                let dirty = |x: usize| {
-                    let tw = TILE.min(w - x);
-                    self.demand.covers(x, ty, tw, th)
-                        && (full
-                            || (ty..ty + th).any(|y| {
-                                let a = y * w + x;
-                                frame[a..a + tw] != self.prev[a..a + tw]
-                            }))
-                };
-                if !dirty(tx) {
-                    tx += TILE;
-                    continue;
-                }
-                let start = tx;
-                while tx < w && dirty(tx) {
-                    tx += TILE;
-                }
-                self.enc.rect(&mut out, &frame, w, start, ty, tx.min(w) - start, th, &self.pf, zrle)?;
-                rects += 1;
-            }
+        let (demand, damage) = (&self.demand, &self.damage);
+        let want = |x, y, tw, th| demand.covers(x, y, tw, th) && (whole || damage.hits(x, y, tw, th));
+        self.enc.changes(u, &self.frames.cur, &self.frames.prev, w, h, full, want, &self.pf, self.encs.contains(&ENC_ZRLE))?;
+        if !u.finish() {
+            self.damage.clear(); // nothing visible changed: keep the request pending
+            return Ok(());
         }
-        self.dirty = false;
-        if rects == 0 {
-            return Ok(()); // nothing visible changed: keep the request pending
-        }
-        let mut msg = vec![0u8, 0];
-        msg.extend_from_slice(&rects.to_be_bytes());
-        msg.extend_from_slice(&out);
-        self.demand.sent(msg.len(), &mut msg);
-        self.out.write_all(&msg)?;
-        self.prev = frame;
+        self.demand.sent(u.buf.len(), &mut u.buf);
+        self.out.send(std::mem::replace(&mut u.buf, self.out.buffer()))?;
+        self.frames.sent(w, &self.damage, whole);
+        self.damage.clear();
         self.last_sent = Instant::now();
         Ok(())
+    }
+}
+
+/// The framebuffer as last sent to the viewer and as it is now (0x00RRGGBB). `cur` is
+/// converted from the RDP image only where the host redrew it.
+#[derive(Default)]
+struct Frames {
+    prev: Vec<u32>,
+    cur: Vec<u32>,
+}
+
+impl Frames {
+    /// Bring `cur` up to date with the w×h BgrX32 `img`: everything when `full` (or when
+    /// damage can't say), otherwise the damaged rectangles. True when it was everything.
+    fn refresh(&mut self, img: &[u8], w: usize, h: usize, damage: &Damage, full: bool) -> bool {
+        let whole = full || damage.is_all() || self.cur.len() != w * h;
+        if whole {
+            self.cur.resize(w * h, 0);
+            to_rgb(img, w, &mut self.cur, (0, 0, w, h));
+        } else {
+            for &r in damage.rects() {
+                to_rgb(img, w, &mut self.cur, r);
+            }
+        }
+        whole
+    }
+
+    /// The update went out: what was sent is now `prev` too.
+    fn sent(&mut self, w: usize, damage: &Damage, whole: bool) {
+        if whole || self.prev.len() != self.cur.len() {
+            self.prev.clone_from(&self.cur);
+            return;
+        }
+        for &(x, y, rw, rh) in damage.rects() {
+            for row in y..y + rh {
+                let a = row * w + x;
+                self.prev[a..a + rw].copy_from_slice(&self.cur[a..a + rw]);
+            }
+        }
+    }
+}
+
+/// Rectangle (x, y, w, h) of a BgrX32 image `w` pixels wide into `cur` as 0x00RRGGBB.
+fn to_rgb(img: &[u8], w: usize, cur: &mut [u32], (x, y, rw, rh): (usize, usize, usize, usize)) {
+    for row in y..y + rh {
+        let a = row * w + x;
+        for (d, p) in cur[a..a + rw].iter_mut().zip(img[a * 4..(a + rw) * 4].chunks_exact(4)) {
+            *d = u32::from_le_bytes([p[0], p[1], p[2], 0]);
+        }
     }
 }
 
@@ -951,6 +990,58 @@ fn us_scancode(ch: char) -> Option<u8> {
 mod tests {
     use super::*;
 
+    /// Converting and comparing only damaged areas sends exactly what a full conversion and
+    /// full comparison would, over random redraws (some skipped updates included).
+    #[test]
+    fn damage_tracks_full_diff() {
+        let (w, h) = (200, 150);
+        let mut img = vec![0u8; w * h * 4];
+        let mut fr = Frames::default();
+        let mut dmg = Damage::default();
+        let mut seed = 9u64;
+        let mut rnd = |n: usize| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as usize % n
+        };
+        let pf = PixelFormat::parse(&PIXEL_FORMAT);
+        let (mut a, mut b) = (Encoder::new(), Encoder::new());
+        let (mut ua, mut ub) = (Update::default(), Update::default());
+        let mut reference: Vec<u32> = Vec::new(); // what a full-frame bridge would have sent
+        for step in 0..300 {
+            for _ in 0..rnd(4) {
+                let (x, y) = (rnd(w), rnd(h));
+                let (rw, rh) = (1 + rnd(w - x), 1 + rnd(h - y));
+                let c = rnd(5) as u8 * 50;
+                for row in y..y + rh {
+                    for p in img[(row * w + x) * 4..(row * w + x + rw) * 4].chunks_exact_mut(4) {
+                        p.copy_from_slice(&[c, c / 2, 255 - c, 0x5a]);
+                    }
+                }
+                dmg.add(x, y, rw, rh);
+            }
+            if step % 7 == 3 {
+                continue; // window full: damage piles up
+            }
+            let full = fr.prev.len() != w * h || step % 50 == 0;
+            let whole = fr.refresh(&img, w, h, &dmg, full);
+            ua.start();
+            a.changes(&mut ua, &fr.cur, &fr.prev, w, h, full, |x, y, tw, th| whole || dmg.hits(x, y, tw, th), &pf, false).unwrap();
+            ua.finish();
+            let mut now = vec![0u32; w * h];
+            to_rgb(&img, w, &mut now, (0, 0, w, h));
+            assert_eq!(fr.cur, now, "step {step}: cur mirrors the image");
+            ub.start();
+            let rfull = full || reference.len() != now.len();
+            b.changes(&mut ub, &now, &reference, w, h, rfull, |_, _, _, _| true, &pf, false).unwrap();
+            ub.finish();
+            assert_eq!(ua.buf, ub.buf, "step {step}: same update as a full diff");
+            fr.sent(w, &dmg, whole);
+            dmg.clear();
+            reference = now;
+            assert_eq!(fr.prev, reference, "step {step}");
+        }
+    }
+
     /// End-to-end against a test RDP server: ITDA_RDP_TEST="host:port|user|pass".
     /// The server draws R = x & 255, G = y & 255, B = 0x80 on an 800x600 desktop.
     #[test]
@@ -1054,7 +1145,7 @@ mod tests {
         w.write_all(&m).unwrap();
         // Read updates until an ExtendedDesktopSize arrives: (reason, status, w, h).
         let mut size = (w0, h0);
-        let mut next_ext = |w: &mut TcpStream, r: &mut BufReader<Rx>, size: &mut (usize, usize)| -> (u16, u16, usize, usize) {
+        let next_ext = |w: &mut TcpStream, r: &mut BufReader<Rx>, size: &mut (usize, usize)| -> (u16, u16, usize, usize) {
             let deadline = Instant::now() + Duration::from_secs(20);
             loop {
                 assert!(Instant::now() < deadline, "no ExtendedDesktopSize");

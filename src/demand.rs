@@ -156,7 +156,9 @@ impl Demand {
         self.region.is_some()
     }
 
-    /// An update of `bytes` was written. While continuous, follow it with a fence to count it.
+    /// An update of `bytes` is about to be queued, in order, for the viewer (from then on it
+    /// is part of the stream). While continuous, follow it with a fence to count it; the ack
+    /// timeout runs from here, so it includes time spent in the send queue.
     pub fn sent(&mut self, bytes: usize, out: &mut Vec<u8>) {
         self.want = None;
         if self.region.is_some() {

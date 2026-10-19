@@ -166,6 +166,110 @@ impl Encoder {
     }
 }
 
+impl Encoder {
+    /// Encode into `u` the tiles of `frame` (w×h) that `want(x, y, w, h)` admits and that
+    /// differ from `prev` (all of them when `full`), merged into horizontal runs per tile row.
+    #[allow(clippy::too_many_arguments)]
+    pub fn changes(&mut self, u: &mut Update, frame: &[u32], prev: &[u32], w: usize, h: usize, full: bool, want: impl Fn(usize, usize, usize, usize) -> bool, pf: &PixelFormat, zrle: bool) -> io::Result<()> {
+        for ty in (0..h).step_by(TILE) {
+            let th = TILE.min(h - ty);
+            let mut run: Option<usize> = None;
+            for tx in (0..w).step_by(TILE).chain([w]) {
+                let dirty = tx < w && {
+                    let tw = TILE.min(w - tx);
+                    want(tx, ty, tw, th) && (full || (ty..ty + th).any(|y| frame[y * w + tx..y * w + tx + tw] != prev[y * w + tx..y * w + tx + tw]))
+                };
+                match (dirty, run) {
+                    (true, None) => run = Some(tx),
+                    (false, Some(start)) => {
+                        self.rect(&mut u.buf, frame, w, start, ty, tx - start, th, pf, zrle)?;
+                        u.rects += 1;
+                        run = None;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A FramebufferUpdate built in one reused buffer: the header goes first, its rectangle
+/// count is filled in at the end.
+#[derive(Default)]
+pub struct Update {
+    pub buf: Vec<u8>,
+    pub rects: u16,
+}
+
+impl Update {
+    pub fn start(&mut self) {
+        self.buf.clear();
+        self.buf.extend_from_slice(&[0, 0, 0, 0]);
+        self.rects = 0;
+    }
+
+    /// Fill in the rectangle count; false when there is nothing to send.
+    pub fn finish(&mut self) -> bool {
+        self.buf[2..4].copy_from_slice(&self.rects.to_be_bytes());
+        self.rects > 0
+    }
+}
+
+/// The parts of a framebuffer changed since the last update: rectangles (x, y, w, h), or all
+/// of it. Past MAX_DAMAGE rectangles they merge into their bounding box.
+#[derive(Default)]
+pub struct Damage {
+    rects: Vec<(usize, usize, usize, usize)>,
+    all: bool,
+}
+
+const MAX_DAMAGE: usize = 32;
+
+impl Damage {
+    pub fn add(&mut self, x: usize, y: usize, w: usize, h: usize) {
+        if self.all || w == 0 || h == 0 {
+            return;
+        }
+        if self.rects.len() >= MAX_DAMAGE {
+            let (mut x0, mut y0, mut x1, mut y1) = (x, y, x + w, y + h);
+            for &(rx, ry, rw, rh) in &self.rects {
+                (x0, y0, x1, y1) = (x0.min(rx), y0.min(ry), x1.max(rx + rw), y1.max(ry + rh));
+            }
+            self.rects.clear();
+            self.rects.push((x0, y0, x1 - x0, y1 - y0));
+            return;
+        }
+        self.rects.push((x, y, w, h));
+    }
+
+    pub fn everything(&mut self) {
+        self.all = true;
+        self.rects.clear();
+    }
+
+    pub fn clear(&mut self) {
+        self.all = false;
+        self.rects.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        !self.all && self.rects.is_empty()
+    }
+
+    pub fn is_all(&self) -> bool {
+        self.all
+    }
+
+    pub fn rects(&self) -> &[(usize, usize, usize, usize)] {
+        &self.rects
+    }
+
+    pub fn hits(&self, x: usize, y: usize, w: usize, h: usize) -> bool {
+        self.all || self.rects.iter().any(|&(rx, ry, rw, rh)| x < rx + rw && rx < x + w && y < ry + rh && ry < y + h)
+    }
+}
+
 /// The tile's distinct colours into `pal`: their count, or 17 once there are more than 16.
 fn colours<'a>(rows: impl Iterator<Item = &'a [u32]>, pal: &mut [u32; 16]) -> usize {
     let mut k = 0;
@@ -341,6 +445,60 @@ mod tests {
                 assert_eq!(out.len(), 12 + r.2 * r.3 * pf.bytes());
             }
         }
+    }
+
+    #[test]
+    fn damage() {
+        let mut d = Damage::default();
+        assert!(d.is_empty() && !d.hits(0, 0, 64, 64));
+        d.add(100, 10, 5, 5);
+        d.add(0, 0, 0, 9); // empty: ignored
+        assert!(d.hits(64, 0, 64, 64) && !d.hits(0, 0, 64, 64) && !d.hits(128, 0, 64, 64));
+        for i in 0..MAX_DAMAGE {
+            d.add(i * 10, 300, 1, 1);
+        }
+        assert_eq!(d.rects(), [(0, 10, 311, 291)], "merged into the bounding box");
+        d.everything();
+        assert!(d.is_all() && d.hits(9999, 9999, 1, 1));
+        d.clear();
+        assert!(d.is_empty());
+    }
+
+    /// Only changed tiles go out, neighbours merged into one rectangle per tile row.
+    #[test]
+    fn changed_runs() {
+        let (w, h) = (300, 130);
+        let prev = vec![0x101010u32; w * h];
+        let mut f = prev.clone();
+        for x in [5, 70, 140, 299] {
+            f[3 * w + x] = 0xffffff; // tiles 0, 1, 2 and 4 of row 0
+        }
+        f[129 * w] = 0xffffff; // tile 0 of row 2
+        let pf = PixelFormat::parse(&PIXEL_FORMAT);
+        let mut e = Encoder::new();
+        let mut u = Update::default();
+        let rects = |u: &Update| {
+            let mut v = Vec::new();
+            let mut i = 4;
+            while i < u.buf.len() {
+                let at = |j: usize| u16::from_be_bytes([u.buf[i + j], u.buf[i + j + 1]]) as usize;
+                v.push((at(0), at(2), at(4), at(6)));
+                i += 16 + u32::from_be_bytes(u.buf[i + 12..i + 16].try_into().unwrap()) as usize;
+            }
+            v
+        };
+        u.start();
+        e.changes(&mut u, &f, &prev, w, h, false, |_, _, _, _| true, &pf, true).unwrap();
+        assert!(u.finish());
+        assert_eq!(u16::from_be_bytes([u.buf[2], u.buf[3]]), 3);
+        assert_eq!(rects(&u), [(0, 0, 192, 64), (256, 0, 44, 64), (0, 128, 64, 2)]);
+        // `want` can leave tiles out; `full` sends every admitted one.
+        u.start();
+        e.changes(&mut u, &f, &prev, w, h, true, |x, y, _, _| x < 128 && y < 64, &pf, true).unwrap();
+        assert_eq!(rects(&u), [(0, 0, 128, 64)]);
+        u.start();
+        e.changes(&mut u, &prev, &prev, w, h, false, |_, _, _, _| true, &pf, true).unwrap();
+        assert!(!u.finish(), "nothing changed");
     }
 
     /// A palette that costs more than the raw pixels is not used (8-bit pixels, 2×1 tile).

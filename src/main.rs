@@ -11,6 +11,7 @@ mod cu_e2e;
 mod demand;
 mod enc;
 mod gateway;
+mod outbox;
 mod img;
 mod log;
 mod mdns;

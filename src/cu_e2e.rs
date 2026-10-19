@@ -1,14 +1,17 @@
 //! Continuous Updates against the bundled noVNC in a real browser, over a slow link.
 //!
 //! `cargo test --release cu_e2e -- --ignored --nocapture` serves http://127.0.0.1:18790/ and
-//! exits after two viewer sessions; `scripts/cu-e2e.mjs` opens them (classic, then
-//! continuous) in headless Chromium. Each session runs `Demand` + `Encoder` like the servers
-//! do, with SERVER_DELAY added to everything the server sends, and prints how many updates
-//! the viewer acknowledged (asked again, or answered the fence after them) while the square
-//! moved, and how often it captured once the screen stood still.
+//! exits after three viewer sessions; `scripts/cu-e2e.mjs` opens them in headless Chromium:
+//! classic request/answer, continuous, and continuous over a slow link with a noisy square.
+//! Each session runs `Demand` + `Encoder::changes` + `Outbox` like the servers do. The link
+//! adds SERVER_DELAY to everything the server sends (and in slow mode reads only SLOW_RATE
+//! bytes a second, so TCP pushes back on the Outbox). It prints how many updates the viewer
+//! acknowledged (asked again, or answered the fence after them) while the square moved, how
+//! long acknowledgements took, and how often it captured once the screen stood still.
 
 use crate::demand::{self, Demand, ENC_CONTINUOUS};
-use crate::enc::{Encoder, PixelFormat, ENC_ZRLE, TILE};
+use crate::enc::{Encoder, PixelFormat, Update, ENC_ZRLE};
+use crate::outbox::Outbox;
 use crate::rfb::PIXEL_FORMAT;
 use crate::ws;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -20,6 +23,14 @@ const W: usize = 640;
 const H: usize = 360;
 const FRAME: Duration = Duration::from_millis(33);
 const SERVER_DELAY: Duration = Duration::from_millis(100);
+const SLOW_RATE: usize = 100_000;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Mode {
+    Classic,
+    Continuous,
+    Slow,
+}
 /// The square moves for MOVING, then the screen stands still until SESSION.
 const MOVING: Duration = Duration::from_secs(5);
 const SESSION: Duration = Duration::from_secs(8);
@@ -44,17 +55,22 @@ setTimeout(async () => {
 }, 4500);
 </script>"#;
 
-/// Panels in three colours (packed-palette tiles) above, a moving square below y = 150.
-fn frame(t: Duration, f: &mut [u32]) {
+/// Panels in three colours (packed-palette tiles) above, a moving square below y = 150:
+/// red, or noise that changes every frame (incompressible).
+fn frame(t: Duration, f: &mut [u32], noisy: bool) {
     for y in 0..H {
         for x in 0..W {
             f[y * W + x] = still(x, y);
         }
     }
     let sx = (t.as_millis() as usize / 4) % (W - 60);
+    let mut seed = t.as_nanos() as u64 | 1;
     for y in 150..210 {
         for p in &mut f[y * W + sx..y * W + sx + 60] {
-            *p = 0xff4040;
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            *p = if noisy { seed as u32 & 0xffffff } else { 0xff4040 };
         }
     }
 }
@@ -71,6 +87,9 @@ struct Stats {
     bytes: usize,
     idle_captures: usize,
     continuous: bool,
+    /// Longest time from queueing an update to its fence coming back, and the fullest queue.
+    max_ack_ms: u128,
+    max_queued: usize,
 }
 
 enum In {
@@ -141,8 +160,12 @@ fn read_client(mut r: WsRead, tx: Sender<In>) -> io::Result<()> {
     }
 }
 
-/// Everything the server writes reaches the browser SERVER_DELAY later, in order.
-fn delayed(ws: ws::Sender) -> Sender<Vec<u8>> {
+/// The server's side of a link to the browser: what's written to it arrives SERVER_DELAY
+/// later, at most `rate` bytes a second when given (read that slowly, so TCP pushes back).
+fn link(ws: ws::Sender, rate: Option<usize>) -> io::Result<TcpStream> {
+    let l = TcpListener::bind("127.0.0.1:0")?;
+    let server = TcpStream::connect(l.local_addr()?)?;
+    let (mut far, _) = l.accept()?;
     let (tx, rx) = channel::<(Instant, Vec<u8>)>();
     std::thread::spawn(move || {
         while let Ok((at, b)) = rx.recv() {
@@ -152,22 +175,27 @@ fn delayed(ws: ws::Sender) -> Sender<Vec<u8>> {
             }
         }
     });
-    let (out, inp) = channel::<Vec<u8>>();
     std::thread::spawn(move || {
-        while let Ok(b) = inp.recv() {
-            if tx.send((Instant::now() + SERVER_DELAY, b)).is_err() {
+        let mut buf = vec![0u8; 4096];
+        while let Ok(n @ 1..) = far.read(&mut buf) {
+            if let Some(rate) = rate {
+                std::thread::sleep(Duration::from_secs_f64(n as f64 / rate as f64));
+            }
+            if tx.send((Instant::now() + SERVER_DELAY, buf[..n].to_vec())).is_err() {
                 return;
             }
         }
     });
-    out
+    Ok(server)
 }
 
-fn session(s: TcpStream, continuous: bool) -> io::Result<Stats> {
+fn session(s: TcpStream, mode: Mode) -> io::Result<Stats> {
+    let continuous = mode != Mode::Classic;
     let tx = ws::Sender::new(s.try_clone()?);
     let mut r = WsRead { rx: ws::Receiver::new(s.try_clone()?, tx.clone()), buf: Vec::new(), pos: 0 };
-    let out = delayed(tx);
-    let send = |b: Vec<u8>| out.send(b).map_err(|_| io::Error::other("closed"));
+    let out = Outbox::new(link(tx, (mode == Mode::Slow).then_some(SLOW_RATE))?)?;
+    let send = |b: Vec<u8>| out.send(b);
+    let mut queued_at: Vec<Instant> = Vec::new(); // per fenced update, by sequence - 1
     // RFB 3.8, security None.
     send(b"RFB 003.008\n".to_vec())?;
     r.read_exact(&mut [0u8; 12])?;
@@ -189,6 +217,7 @@ fn session(s: TcpStream, continuous: bool) -> io::Result<Stats> {
     let mut zrle = false;
     let mut demand = Demand::default();
     let mut enc = Encoder::new();
+    let mut u = Update::default();
     let mut prev: Vec<u32> = Vec::new();
     let mut f = vec![0u32; W * H];
     let mut st = Stats::default();
@@ -196,8 +225,8 @@ fn session(s: TcpStream, continuous: bool) -> io::Result<Stats> {
     let moving = || start.elapsed() < MOVING;
     while start.elapsed() < SESSION {
         let wait = match demand.due() {
-            Some(_) => FRAME.saturating_sub(last_capture.elapsed()),
-            None => FRAME,
+            Some(_) if out.room() => FRAME.saturating_sub(last_capture.elapsed()),
+            _ => FRAME,
         };
         let mut next = match irx.recv_timeout(wait.max(Duration::from_millis(1))) {
             Ok(m) => Some(m),
@@ -226,8 +255,14 @@ fn session(s: TcpStream, continuous: bool) -> io::Result<Stats> {
                     demand.request(incremental);
                 }
                 In::Ext(m) => {
-                    match m {
-                        demand::Ext::Fence { flags: 0, .. } if moving() => st.acked += 1,
+                    match &m {
+                        demand::Ext::Fence { flags: 0, payload } => {
+                            if moving() {
+                                st.acked += 1;
+                            }
+                            let seq = u32::from_be_bytes(payload[..4].try_into().unwrap()) as usize;
+                            st.max_ack_ms = st.max_ack_ms.max(queued_at[seq - 1].elapsed().as_millis());
+                        }
                         demand::Ext::Continuous { on: true, .. } => st.continuous = true,
                         _ => {}
                     }
@@ -238,52 +273,31 @@ fn session(s: TcpStream, continuous: bool) -> io::Result<Stats> {
             }
             next = irx.try_recv().ok();
         }
-        if !reply.is_empty() {
-            send(reply)?;
-        }
-        assert!(!demand.stalled());
+        send(reply)?;
+        assert!(!demand.stalled() && !out.dead());
         let Some(incremental) = demand.due() else { continue };
-        if last_capture.elapsed() < FRAME {
+        if last_capture.elapsed() < FRAME || !out.room() {
             continue;
         }
         last_capture = Instant::now();
         if !moving() {
             st.idle_captures += 1;
         }
-        frame(start.elapsed().min(MOVING), &mut f);
+        frame(start.elapsed().min(MOVING), &mut f, mode == Mode::Slow);
         let full = !incremental || prev.len() != f.len();
-        let mut body = Vec::new();
-        let mut rects = 0u16;
-        for ty in (0..H).step_by(TILE) {
-            let th = TILE.min(H - ty);
-            let mut tx = 0;
-            while tx < W {
-                let dirty = |x: usize| {
-                    let tw = TILE.min(W - x);
-                    demand.covers(x, ty, tw, th) && (full || (ty..ty + th).any(|y| f[y * W + x..y * W + x + tw] != prev[y * W + x..y * W + x + tw]))
-                };
-                if !dirty(tx) {
-                    tx += TILE;
-                    continue;
-                }
-                let s = tx;
-                while tx < W && dirty(tx) {
-                    tx += TILE;
-                }
-                enc.rect(&mut body, &f, W, s, ty, tx.min(W) - s, th, &pf, zrle)?;
-                rects += 1;
-            }
-        }
-        if rects == 0 {
+        u.start();
+        enc.changes(&mut u, &f, &prev, W, H, full, |x, y, w, h| demand.covers(x, y, w, h), &pf, zrle)?;
+        if !u.finish() {
             continue;
         }
-        let mut msg = vec![0u8, 0];
-        msg.extend_from_slice(&rects.to_be_bytes());
-        msg.extend_from_slice(&body);
-        demand.sent(msg.len(), &mut msg);
-        st.bytes += msg.len();
+        demand.sent(u.buf.len(), &mut u.buf);
+        st.bytes += u.buf.len();
         st.sent += 1;
-        send(msg)?;
+        if continuous {
+            queued_at.push(Instant::now());
+        }
+        send(std::mem::replace(&mut u.buf, out.buffer()))?;
+        st.max_queued = st.max_queued.max(out.queued());
         prev.clone_from(&f);
     }
     Ok(st)
@@ -321,12 +335,18 @@ fn cu_e2e() {
             let _ = c.write_all(body);
         };
         if path.starts_with("/ws") {
-            let continuous = path.contains("mode=cu");
+            let mode = if path.contains("mode=slow") {
+                Mode::Slow
+            } else if path.contains("mode=cu") {
+                Mode::Continuous
+            } else {
+                Mode::Classic
+            };
             write!(c, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n", ws::accept_key(&key)).unwrap();
             c.set_nodelay(true).unwrap();
-            let st = session(c, continuous).unwrap();
-            println!("session {}: {st:?}", if continuous { "continuous" } else { "classic" });
-            stats.push((continuous, st));
+            let st = session(c, mode).unwrap();
+            println!("session {mode:?}: {st:?}");
+            stats.push((mode, st));
         } else if path == "/report" {
             let mut body = vec![0u8; len];
             r.read_exact(&mut body).unwrap();
@@ -339,10 +359,10 @@ fn cu_e2e() {
                 .collect();
             println!("report {}: viewer continuous={} canvas {}x{}, {} samples, {} wrong {:?}", v["mode"], v["continuous"], v["w"], v["h"], v["samples"].as_array().unwrap().len(), bad.len(), &bad[..bad.len().min(5)]);
             assert!(bad.is_empty(), "pixels drawn wrong");
-            assert_eq!(v["continuous"].as_bool(), Some(v["mode"] == "cu"));
+            assert_eq!(v["continuous"].as_bool(), Some(v["mode"] != "classic"));
             reply(&mut c, "text/plain", b"ok");
             sessions += 1;
-            if sessions == 2 {
+            if sessions == 3 {
                 break;
             }
         } else if path.starts_with("/novnc.min.js") {
@@ -352,12 +372,23 @@ fn cu_e2e() {
         }
     }
     let still = (SESSION - MOVING).as_secs_f64();
-    for (continuous, st) in &stats {
+    for (mode, st) in &stats {
         let fps = st.acked as f64 / MOVING.as_secs_f64();
         let cps = st.idle_captures as f64 / still;
-        println!("{:>10}: {fps:.1} updates/s acknowledged while moving, {} sent, {} KB; {cps:.1} captures/s while still", if *continuous { "continuous" } else { "classic" }, st.sent, st.bytes / 1024);
+        println!(
+            "{:>10}: {fps:.1} updates/s acknowledged while moving, {} sent, {} KB, acks within {} ms, queue at most {} KB; {cps:.1} captures/s while still",
+            format!("{mode:?}"),
+            st.sent,
+            st.bytes / 1024,
+            st.max_ack_ms,
+            st.max_queued / 1024
+        );
         assert!(cps < 1.2 / FRAME.as_secs_f64(), "a still screen must be captured at most once a FRAME");
     }
-    let fps = |c: bool| stats.iter().find(|s| s.0 == c).map_or(0.0, |s| s.1.acked as f64);
-    assert!(fps(true) > fps(false) * 1.5, "continuous updates should beat request/answer over a {SERVER_DELAY:?} link");
+    let get = |m: Mode| &stats.iter().find(|s| s.0 == m).unwrap().1;
+    assert!(get(Mode::Continuous).acked as f64 > get(Mode::Classic).acked as f64 * 1.5, "continuous updates should beat request/answer over a {SERVER_DELAY:?} link");
+    // A link slower than the screen changes: updates keep coming, and none waits long.
+    let slow = get(Mode::Slow);
+    assert!(slow.acked >= 5, "updates still get through a slow link");
+    assert!(slow.max_ack_ms < 2000, "the fence window keeps a slow link's lag bounded");
 }
