@@ -308,7 +308,7 @@ function renderTop() {
   const listy = !['settings', 'help', 'nearby', 'accounts', 'share'].includes(page);
   $('.search').style.visibility = listy ? '' : 'hidden';
   $('#viewToggle').style.visibility = listy && page !== 'files' ? '' : 'hidden';
-  $('#search').placeholder = page === 'files' ? '파일을 볼 기기 이름이나 주소 검색' : '검색하거나 주소를 입력해 바로 연결';
+  $('#search').placeholder = page === 'files' ? '폴더 또는 위치 검색' : '검색하거나 주소를 입력해 바로 연결';
   $('#newBtn .label-text').textContent = page === 'files' ? '새 기기' : '새 연결';
   $$('#viewToggle button').forEach((b) => b.classList.toggle('on', b.dataset.view === (S.settings.view || 'grid')));
 }

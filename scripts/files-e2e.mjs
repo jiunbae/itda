@@ -91,6 +91,10 @@ try {
   ])
     fs.mkdirSync(p, { recursive: true });
   fs.writeFileSync(path.join(remote, "한글 문서.txt"), "remote document");
+  fs.writeFileSync(path.join(remote, "inert.txt"), '<script>window.previewExecuted = true</script>');
+  fs.writeFileSync(path.join(remote, "Preview.pdf"), Buffer.from("JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAzMDAgMjAwXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA0IDAgUiA+PiA+PiAvQ29udGVudHMgNSAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggNDcgPj4Kc3RyZWFtCkJUIC9GMSAxOCBUZiAzMCAxMDAgVGQgKEl0ZGEgUERGIHByZXZpZXcpIFRqIEVUCmVuZHN0cmVhbQplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAowMDAwMDAwMjQxIDAwMDAwIG4gCjAwMDAwMDAzMTEgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo0MDgKJSVFT0YK", "base64"));
+  fs.writeFileSync(path.join(remote, "unsafe.html"), '<script>window.previewExecuted = true</script>');
+  fs.writeFileSync(path.join(remote, "pixel.png"), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64'));
   fs.writeFileSync(path.join(remote, "Folder", "nested.txt"), "nested");
   fs.writeFileSync(path.join(local, "upload.txt"), "local upload");
   fs.writeFileSync(path.join(local, "drag.txt"), "drag me");
@@ -210,11 +214,13 @@ try {
       await page.locator('.card[data-id="files-fixture"]').waitFor();
       assert((await page.locator('.card [data-act="files"]').count()) === 0, "Screen cards still have file buttons");
       await page.locator('.nav-item[data-page="files"]').click();
-      await page.locator(".files-home .files-network").waitFor();
+      await page.locator(".files-home.files-start").waitFor();
+      assert(await page.locator('.files-home [data-device-card]').count() === 0, "File home still shows machine cards");
+      assert(await page.locator('.files-home section h2').innerText() === "최근 폴더", "File home is not folder oriented");
       assert(await page.locator('.nav-item[data-page="files"].active').count(), "File browser nav is not selected");
-      await page.locator('[data-device-card="files-second"]').waitFor();
+      await page.locator('.files-home [data-device="files-second"]').waitFor();
       assert(
-        (await page.locator("[data-device-card]").count()) === 2,
+        (await page.locator(".files-home aside [data-device]").count()) === 2,
         "Saved network devices are missing",
       );
       await page.locator('.files-home [data-device="files-second"]').first().focus();
@@ -229,7 +235,7 @@ try {
       assert(await page.locator('.files-view-switch').isHidden(), "Network shows view controls with no alternate view");
       await page.locator("#search").fill("Travel");
       assert(
-        (await page.locator("[data-device-card]").count()) === 1,
+        (await page.locator(".files-home aside [data-device]").count()) === 1,
         "Network search did not filter devices",
       );
       await page.locator('#search').press('Enter');
@@ -245,13 +251,13 @@ try {
       await page.locator('#modals [data-key="edit"] #f-name').fill("Not saved");
       await page.keyboard.press("Escape");
       await page.locator('#modals [data-key="edit"]').waitFor({ state: "detached" });
-      assert((await page.locator('[data-device-card]').count()) === 2, "Cancelled editor changed the device list");
+      assert((await page.locator('.files-home aside [data-device]').count()) === 2, "Cancelled editor changed the device list");
       if (process.env.SCREENSHOT_DIR) {
         fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
         await page.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, 'files-browser-mac.png') });
       }
       await page
-        .locator('[data-device-card="files-fixture"] [data-device]')
+        .locator('.files-home [data-device="files-fixture"]')
         .first()
         .click();
       await page.locator("[data-connect]").click();
@@ -261,6 +267,72 @@ try {
       await page.locator('[data-pane="remote"] th[data-sort="kind"]').waitFor();
       assert(await page.locator('.files-tools').isHidden(), "Mac still has the extra command bar");
       assert(await page.locator('.files-locations').isHidden(), "Separate windows still look like tabs");
+      await page.keyboard.press("Meta+t");
+      assert(await page.locator('.files-tab').count() === 2, "New file tab missing");
+      await page.locator('[data-pane="remote"] tr[data-index]').filter({ hasText: 'Folder' }).dblclick();
+      await page.locator('[data-pane="remote"] tr[data-index]').filter({ hasText: 'nested.txt' }).waitFor();
+      await page.keyboard.press('Control+Shift+Tab');
+      await page.locator('[data-pane="remote"] tr[data-index]').filter({ hasText: '한글 문서.txt' }).waitFor();
+      const dragSource = await page.locator('[data-pane="remote"] tr[data-index]').filter({ hasText: 'pixel.png' }).boundingBox();
+      const dragTab = await page.locator('.files-tab').last().boundingBox();
+      await page.mouse.move(dragSource.x + 55, dragSource.y + 11);
+      await page.mouse.down();
+      await page.mouse.move(dragTab.x + 45, dragTab.y + 14, { steps: 12 });
+      assert(await page.evaluate(() => !window.getSelection()?.toString()), "Dragging a file selected text");
+      await page.mouse.up();
+      await page.locator('.files-prompt').filter({ hasText: '파일 복사' }).waitFor();
+      assert((await page.locator('.files-prompt').innerText()).includes(path.join(remote, 'Folder')), "Tab drop has the wrong destination");
+      await page.locator('[data-choice="ok"]').click();
+      await page.locator('.files-job').filter({ hasText: 'pixel.png' }).filter({ hasText: '완료' }).waitFor();
+      assert(hash(path.join(remote,'pixel.png')) === hash(path.join(remote,'Folder','pixel.png')), "Tab drop changed file content");
+      await page.keyboard.press('Control+Tab');
+      await page.locator('[data-pane="remote"] tr[data-index]').filter({ hasText: 'nested.txt' }).waitFor();
+      await page.keyboard.press("Meta+w");
+      await page.locator('[data-pane="remote"] tr[data-index]').filter({ hasText: '한글 문서.txt' }).waitFor();
+      assert(await page.locator('.files-tab').count() === 1, "Close tab closed the window");
+      const documentRow = page.locator('[data-pane="remote"] tr[data-index]').filter({ hasText: "한글 문서.txt" });
+      await documentRow.click();
+      await page.keyboard.press('Space');
+      await page.locator('.files-preview.quick-look pre').filter({ hasText: 'remote document' }).waitFor();
+      if (process.env.SCREENSHOT_DIR) await page.screenshot({path: path.join(process.env.SCREENSHOT_DIR, 'files-quick-look.png')});
+      await page.keyboard.press('Escape');
+      assert(await page.locator('.files-preview').isHidden(), "Quick Look did not close");
+      await page.locator('[data-pane="remote"] tr[data-index]').filter({ hasText: 'inert.txt' }).click();
+      await page.keyboard.press('Space');
+      await page.locator('.files-preview pre').filter({ hasText: '<script>' }).waitFor();
+      assert(!await page.evaluate(() => window.previewExecuted), "Text preview executed markup");
+      await page.keyboard.press('Escape');
+      await page.locator('[data-pane="remote"] tr[data-index]').filter({ hasText: 'unsafe.html' }).click();
+      await page.keyboard.press('Space');
+      await page.locator('.files-preview small').filter({ hasText: '이 형식은' }).waitFor();
+      assert(!await page.evaluate(() => window.previewExecuted), "HTML preview executed markup");
+      await page.keyboard.press('Escape');
+      await page.locator('[data-pane="remote"] tr[data-index]').filter({ hasText: 'pixel.png' }).click();
+      await page.keyboard.press('Space');
+      await page.locator('.files-preview img').waitFor();
+      await page.waitForFunction(() => document.querySelector('.files-preview img')?.naturalWidth === 1);
+      await page.keyboard.press('Escape');
+      await page.locator('[data-pane="remote"] tr[data-index]').filter({ hasText: 'Preview.pdf' }).click();
+      await page.keyboard.press('Space');
+      await page.locator('.files-preview img').waitFor();
+      await page.waitForFunction(() => document.querySelector('.files-preview img')?.naturalWidth > 1);
+      await page.locator('.files-preview footer').filter({ hasText: '첫 페이지' }).waitFor();
+      if (process.env.SCREENSHOT_DIR) await page.screenshot({path: path.join(process.env.SCREENSHOT_DIR, 'files-pdf.png')});
+      await page.keyboard.press('Escape');
+      await documentRow.click();
+      await page.keyboard.press('Meta+4');
+      await page.locator('.files-gallery-strip').waitFor();
+      await page.locator('.files-preview pre').filter({ hasText: 'remote document' }).waitFor();
+      if (process.env.SCREENSHOT_DIR) await page.screenshot({path: path.join(process.env.SCREENSHOT_DIR, 'files-gallery.png')});
+      await page.keyboard.press('Meta+3');
+      await page.locator('.files-columns').waitFor();
+      await page.locator('.files-column:last-child [data-index]').filter({ hasText: 'Folder' }).click();
+      await page.locator('.files-column:last-child [data-index]').filter({ hasText: 'nested.txt' }).waitFor();
+      if (process.env.SCREENSHOT_DIR) await page.screenshot({path: path.join(process.env.SCREENSHOT_DIR, 'files-columns.png')});
+      await page.keyboard.press('Meta+[');
+      await page.locator('.files-column:last-child [data-index]').filter({ hasText: '한글 문서.txt' }).waitFor();
+      await page.keyboard.press('Meta+2');
+      assert(await page.locator('[data-pane="remote"] .files-list').evaluate(el => getComputedStyle(el).userSelect === 'none'), "File rows permit text selection");
       const row = page.locator('[data-pane="remote"] tr[data-index]').first();
       assert(Math.abs((await row.boundingBox()).height - 22) < 1, "Mac list density differs from virtual scrolling");
       const handle = page.locator('[data-pane="remote"] [data-resize-column="0"]');
@@ -317,6 +389,7 @@ try {
       await page.locator('[data-choice="ok"]').click();
       await page
         .locator(".files-job")
+        .filter({ hasText: "upload.txt" })
         .filter({ hasText: "완료" })
         .waitFor({ timeout: 30000 });
       assert(

@@ -64,7 +64,7 @@ Under the hood each connection window is the web viewer (noVNC) against a privat
 
 ## 📁 Files without a screen connection
 
-The left sidebar's **파일 브라우저 (File browser)** opens a Network page with saved devices, nearby Itda devices, and Tailscale peers. Search for a device and press Enter, or select its file action, to open an independent file window. Screen connection cards stay focused on screens; their More menu retains an Open files shortcut. Screen connection state and open file-window state are shown separately.
+The left sidebar's **파일 브라우저 (File browser)** opens a folder-oriented home: recent remote folders in the content area and friendly device names under Locations. Raw host addresses and machine cards stay out of the file home. Choose a location to open its independent file window using the saved account, or reopen a recent folder. Screen connection cards retain an Open files shortcut in More.
 
 On macOS, **Finder connection folder** creates `.inetloc` shortcuts in `…/Itda/Locations/Itda` and opens the folder in Finder. Each link opens the saved device through `itda://files/<device ID>` without embedding passwords, keys, or remote paths. The folder can be added to Finder's sidebar. This is a connection folder, not a mounted remote volume or File Provider; direct SSH browsing/editing inside Finder remains unimplemented. The Finder button opens actual SMB shares. Export from the CLI with `Itda.app/Contents/MacOS/itda --export-file-locations`.
 
@@ -76,7 +76,10 @@ Choose **파일 열기 (Open files)** inside File browser to open an independent
 
 _File workspace in the isolated SSH test fixture._
 
-The macOS file window uses a single command bar, a resizable sidebar, a bottom path bar, and a compact list with resizable Name/Date/Size/Kind columns and file-type icons. Use Command+1/2 for icon/list view, Command+[/] for history, Command+Shift+G to go to a folder, and Command+Shift+. to show hidden files. The action popover keeps transfer history, split view and connection settings available without an extra command bar.
+The macOS file window uses a single command bar, a resizable sidebar, a bottom path bar, and a compact list with resizable Name/Date/Size/Kind columns and file-type icons. Use Command+1/2/3/4 for icon/list/column/gallery views, Command+[/] for history, Command+Shift+G to go to a folder, and Command+Shift+. to show hidden files. Folder tabs support Command+T/W and Control+Tab; each tab keeps its path, history, selection and view. The preview panel and Space quick preview display bounded text, images, the first PDF page on macOS, and browser-supported audio/video without opening an external app (text up to 512 KiB, media up to 16 MiB). Unsupported formats show metadata and an explicit Open action. HTML/SVG are never rendered as active content. Pointer drag suppresses browser text selection and supports folders, favorites and folder tabs as destinations. The action popover keeps transfer history, split view and connection settings available without an extra command bar.
+
+<img src="web/help/itda-files-columns.png" width="860" alt="Itda column view">
+<img src="web/help/itda-files-gallery.png" width="860" alt="Itda gallery view with inline preview">
 
 Files inherit the device account by default. Selecting another saved account for files leaves the screen account unchanged. Transport settings are collapsed under connection settings. Auto mode opens a configured SMB share, otherwise attempts SFTP; unavailable SSH can hand off to Finder/Explorer when an SMB service is reachable. Authentication failures require correcting the account. SMB authentication belongs to the OS and may still require its own login prompt.
 
@@ -88,7 +91,7 @@ Files inherit the device account by default. Selecting another saved account for
 
 **Delta copies:** Auto mode probes local/remote rsync and a compatible remote shell for replace-mode folder copies or files of at least 8MiB. It uses rsync over SSH when available and SFTP otherwise. Windows local rsync must include a compatible `cygpath.exe`. Normal mode never runs rsync. Rsync partial files remain in `.itda-partial` for reuse; SFTP block deltas and partial-file resume are not implemented. No default copy uses mirror/delete semantics.
 
-Browsing and transfers have separate SSH connections. At most two transfer jobs run concurrently; each pipelines up to 64 SFTP requests of 32KiB. Ordinary SFTP copy reports unsupported symlinks instead of following them. Column/gallery views, Quick Look, inline folder disclosure, full ACL/xattr preservation, rclone/WebDAV, an Itda-to-Itda file server, and native outbound virtual-file dragging for SFTP remain follow-up work; the workspace does not claim complete Finder/Explorer feature parity.
+Browsing and transfers have separate SSH connections. At most two transfer jobs run concurrently; each pipelines up to 64 SFTP requests of 32KiB. Ordinary SFTP copy reports unsupported symlinks instead of following them. Inline folder disclosure, full ACL/xattr preservation, rclone/WebDAV, an Itda-to-Itda file server, and native outbound virtual-file dragging for SFTP remain follow-up work; the workspace does not claim complete Finder/Explorer feature parity.
 
 ## 🖼️ Screenshots
 

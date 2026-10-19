@@ -409,6 +409,72 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                         json!({"path":root,"entries":entries,"local_path":local,"local_entries":local_list(&local)?,"rsync":transfer::rsync_available()}),
                     )
                 }
+                "preview" => {
+                    // Return bounded inert content; never launch an application or render HTML/SVG.
+                    let p = get(&v, "path");
+                    let ext = Path::new(&p)
+                        .extension()
+                        .and_then(|x| x.to_str())
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    let mime = match ext.as_str() {
+                        "txt" | "md" | "csv" | "tsv" | "log" | "json" => "text/plain",
+                        "png" => "image/png",
+                        "jpg" | "jpeg" => "image/jpeg",
+                        "gif" => "image/gif",
+                        "webp" => "image/webp",
+                        "bmp" => "image/bmp",
+                        "avif" => "image/avif",
+                        "pdf" if cfg!(target_os = "macos") => "application/pdf",
+                        "mp4" | "m4v" => "video/mp4",
+                        "webm" => "video/webm",
+                        "mp3" => "audio/mpeg",
+                        "wav" => "audio/wav",
+                        "ogg" => "audio/ogg",
+                        _ => return Ok(json!({"unsupported":true})),
+                    };
+                    let limit = if mime == "text/plain" {
+                        512 * 1024
+                    } else {
+                        16 * 1024 * 1024
+                    };
+                    let bytes = if v["side"] == "local" {
+                        use std::io::Read;
+                        let mut file = std::fs::File::open(&p)?;
+                        if !file.metadata()?.is_file() {
+                            return Err(error("일반 파일을 선택하세요"));
+                        }
+                        let mut bytes = Vec::new();
+                        file.by_ref().take(limit + 1).read_to_end(&mut bytes)?;
+                        bytes
+                    } else {
+                        let c = connection(&id)?;
+                        let control = Control::default();
+                        let mut s = Sftp::connect(&c.cfg, &control)?;
+                        let entry = s.stat(&p)?.ok_or_else(|| error("파일이 없습니다"))?;
+                        if entry.dir || entry.link {
+                            return Err(error("일반 파일을 선택하세요"));
+                        }
+                        if entry.size > limit {
+                            return Ok(json!({"too_large":true}));
+                        }
+                        let mut bytes = Vec::new();
+                        s.download(&p, entry.size, &mut bytes, &control, |_| {})?;
+                        bytes
+                    };
+                    if bytes.len() as u64 > limit {
+                        return Ok(json!({"too_large":true}));
+                    }
+                    #[cfg(target_os = "macos")]
+                    if mime == "application/pdf" {
+                        return pdf_preview(&bytes);
+                    }
+                    if mime == "text/plain" {
+                        Ok(json!({"mime":mime,"text":String::from_utf8_lossy(&bytes)}))
+                    } else {
+                        Ok(json!({"mime":mime,"base64":crate::ws::base64(&bytes)}))
+                    }
+                }
                 "open" => {
                     let p = get(&v, "path");
                     if v["side"] == "local" {
@@ -588,6 +654,41 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
             json!({"type":"files_result","id":id,"op":op,"seq":v["seq"],"side":v["side"],"ok":result.is_ok(),"data":result.as_ref().ok(),"error":result.err().map(|e|e.to_string())}),
         );
     });
+}
+/// Render only the first PDF page to inert pixels; PDF plugins in sandboxed frames are
+/// unavailable in WebKit/WebView2. Keep the source private and remove both files afterward.
+#[cfg(target_os = "macos")]
+fn pdf_preview(bytes: &[u8]) -> io::Result<Value> {
+    use std::{process::{Command, Stdio}, time::{Duration, Instant}};
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::io::Write;
+    let root = crate::store::dir().join("file-previews").join(crate::store::new_id());
+    std::fs::create_dir_all(&root)?;
+    let result = (|| {
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
+        let input = root.join("preview.pdf");
+        let output = root.join("preview.png");
+        std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&input)?.write_all(bytes)?;
+        let mut child = Command::new("/usr/bin/sips").args(["-s", "format", "png", "-Z", "1600"])
+            .arg(&input).arg("--out").arg(&output).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+        let started = Instant::now();
+        loop {
+            if let Some(status) = child.try_wait()? {
+                if !status.success() { return Ok(json!({"unsupported":true})); }
+                break;
+            }
+            if started.elapsed() > Duration::from_secs(8) {
+                let _ = child.kill(); let _ = child.wait();
+                return Ok(json!({"unsupported":true}));
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let png = std::fs::read(output)?;
+        if png.len() > 16 * 1024 * 1024 { return Ok(json!({"too_large":true})); }
+        Ok(json!({"mime":"image/png","base64":crate::ws::base64(&png),"first_page":true}))
+    })();
+    let _ = std::fs::remove_dir_all(root);
+    result
 }
 fn connection(id: &str) -> io::Result<Arc<Connection>> {
     connections()
