@@ -6,8 +6,13 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 // Portable core: protocols, storage, discovery, the web gateway.
+#[cfg(test)]
+mod cu_e2e;
+mod demand;
 mod enc;
+mod files;
 mod gateway;
+mod outbox;
 mod img;
 mod log;
 mod mdns;
@@ -65,6 +70,15 @@ fn askpass_mode() {
 #[cfg(not(windows))]
 fn main() {
     askpass_mode();
+    #[cfg(target_os = "macos")]
+    if std::env::args().nth(1).as_deref() == Some("--export-file-locations") {
+        let root = files::locations::folder();
+        match files::locations::write(&store::load_hosts(), &root) {
+            Ok(()) => println!("{}", root.display()),
+            Err(e) => { eprintln!("{e}"); std::process::exit(1); }
+        }
+        return;
+    }
     log::init("");
     std::panic::set_hook(Box::new(|p| crate::log!("PANIC: {p}")));
     #[cfg(target_os = "macos")]

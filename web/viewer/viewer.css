@@ -61,7 +61,18 @@ svg.ic { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-wid
 div.host { position: relative; }
 .host .open { all: unset; display: flex; flex-direction: column; cursor: pointer; min-width: 0; }
 .host .open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius); }
-.host .th.win { background: linear-gradient(140deg, #2b7bd8, #173f78); }
+.host .th.windows { background: linear-gradient(140deg, #2b7bd8, #173f78); }
+.host .th.mac { background: linear-gradient(140deg, #5d5d66, #26262c); }
+.host .th.linux { background: linear-gradient(140deg, #c79a12, #5f4708); }
+/* OS marks are filled; the penguin's belly and eyes are cut-outs in the tile's colour. */
+svg.ic.osm { fill: currentColor; stroke: none; }
+svg.ic.osm .cut { fill: var(--os-cut, #fff); }
+.host .th.mac { --os-cut: #3d3d44; }
+.host .th.linux { --os-cut: #8f6c0d; }
+.chip.windows svg.ic { color: #0078d4; }
+.chip.mac svg.ic { color: var(--fg, currentColor); }
+.chip.linux svg.ic { color: #c79a12; }
+.chip svg.ic.osm .cut { fill: var(--bg); }
 .host .more { position: absolute; top: 8px; right: 8px; width: 34px; height: 34px; border-radius: 10px; border: 0; display: grid; place-items: center;
   background: rgba(20, 19, 38, .55); color: #fff; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .host .more svg.ic { width: 17px; height: 17px; }

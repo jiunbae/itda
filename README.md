@@ -62,6 +62,32 @@ Under the hood each connection window is the web viewer (noVNC) against a privat
 
 > Itda's interface is in Korean. The [website](https://jiun.dev/itda/) has an English version of the guide, and there is a [Korean README](README.ko.md).
 
+## 📁 Files without a screen connection
+
+The address book's **Files** button opens a network window with saved devices, nearby Itda devices, and Tailscale peers. Open files and screens independently. Saved devices appear in the sidebar, with an indicator for open file windows. Each device opens in its own window. Screen connection state and open file-window state are shown separately.
+
+On macOS, **Finder connection folder** creates `.inetloc` shortcuts in `…/Itda/Locations/Itda` and opens the folder in Finder. Each link opens the saved device through `itda://files/<device ID>` without embedding passwords, keys, or remote paths. The folder can be added to Finder's sidebar. This is a connection folder, not a mounted remote volume or File Provider; direct SSH browsing/editing inside Finder remains unimplemented. The Finder button opens actual SMB shares. Export from the CLI with `Itda.app/Contents/MacOS/itda --export-file-locations`.
+
+Choose **파일 열기 (Open files)** to open an independent native window for a device. Opening the same device again focuses its existing window. Screen sessions are independent; closing a file window leaves ongoing transfers running, and reopening reuses a live connection.
+
+<img src="web/help/itda-files.png" width="860" alt="macOS-style file workspace, showing transfers between two folders in the isolated SSH test fixture">
+
+_File workspace in the isolated SSH test fixture._
+
+The macOS file window uses a single command bar, a resizable sidebar, a bottom path bar, and a compact list with resizable Name/Date/Size/Kind columns and file-type icons. Use Command+1/2 for icon/list view, Command+[/] for history, Command+Shift+G to go to a folder, and Command+Shift+. to show hidden files. The action popover keeps transfer history, split view and connection settings available without an extra command bar.
+
+Files inherit the device account by default. Selecting another saved account for files leaves the screen account unchanged. Transport settings are collapsed under connection settings. Auto mode opens a configured SMB share, otherwise attempts SFTP; unavailable SSH can hand off to Finder/Explorer when an SMB service is reachable. Authentication failures require correcting the account. SMB authentication belongs to the OS and may still require its own login prompt.
+
+- **SSH/SFTP:** browse a Mac with Remote Login, Linux/OpenSSH or Windows OpenSSH server. Reuse a saved account/key, or store a separate file password in the OS credential vault.
+- **SMB:** open `smb://server/share` or a UNC share in the actual Finder/File Explorer. The remote device must enable file sharing and grant access. LAN and Tailscale addresses work independently of VNC/RDP ports.
+- The SFTP workspace follows the local OS style and provides list/icon views, search, sorting, multiselection, history, parent navigation, folders, rename, copy/cut/paste, split-pane drag transfers, and native incoming file drops. Conflicts offer keep both, replace changed files, or skip. Identical-file detection uses size and modification time (SFTP v3 timestamps have one-second precision).
+- Writes stage to a temporary destination before renaming. Cross-device moves verify SHA-256 and recheck source metadata before removing it. Same-filesystem moves try rename first. Jobs can be cancelled without removing untransferred sources or replacing existing destinations with partial files.
+- **Archive** moves entries into `.itda-trash` within the file connection, not the system Trash/Recycle Bin. Rename/archive support Undo. Opening a remote file creates a local **read-only preview copy**; edits are not uploaded automatically. Only supported document/media formats open directly; other types must first be copied locally. Preview downloads carry the operating system download marker. Ordinary Unix rwx permissions are retained for SFTP copies where supported, without special permission bits; existing merged directory permissions are kept.
+
+**Delta copies:** Auto mode probes local/remote rsync and a compatible remote shell for replace-mode folder copies or files of at least 8MiB. It uses rsync over SSH when available and SFTP otherwise. Windows local rsync must include a compatible `cygpath.exe`. Normal mode never runs rsync. Rsync partial files remain in `.itda-partial` for reuse; SFTP block deltas and partial-file resume are not implemented. No default copy uses mirror/delete semantics.
+
+Browsing and transfers have separate SSH connections. At most two transfer jobs run concurrently; each pipelines up to 64 SFTP requests of 32KiB. Ordinary SFTP copy reports unsupported symlinks instead of following them. Column/gallery views, Quick Look, inline folder disclosure, full ACL/xattr preservation, rclone/WebDAV, an Itda-to-Itda file server, and native outbound virtual-file dragging for SFTP remain follow-up work; the workspace does not claim complete Finder/Explorer feature parity.
+
 ## 🖼️ Screenshots
 
 | Share page: web viewer QR, PIN and this PC | Connection editor (Mac / Windows / RDP / Linux) |
@@ -213,6 +239,8 @@ cargo test --release
 
 Release builds go through `scripts/windows-release.ps1` (Windows) and `scripts/macos-bundle.sh universal` (Mac → `dist/Itda-macos-universal.zip`). Both keep the build machine's paths out of the binary.
 
+Run `cargo test files::` for file operation tests. On macOS, after `cargo build`, run `node scripts/files-e2e.mjs` with Playwright installed for UI and transfer integration tests against a temporary SSH server. The fixture does not change system SSH settings or user files.
+
 <details>
 <summary><b>Project layout</b></summary>
 
@@ -257,7 +285,7 @@ Issues and PRs are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Report vulne
 [MIT](LICENSE) © 2026 Jiun Bae.
 
 Itda builds on:
-- [noVNC](https://github.com/novnc/noVNC) 1.7.0 (MPL-2.0, bundled unmodified in `web/viewer/novnc.min.js`)
+- [noVNC](https://github.com/novnc/noVNC) 1.7.0 (MPL-2.0, bundled in `web/viewer/novnc.min.js` with a faster ZRLE decoder; see `web/viewer/NOVNC.md`)
 - [IronRDP](https://github.com/Devolutions/IronRDP) (MIT/Apache-2.0) and [rustls](https://github.com/rustls/rustls)
 - [wry](https://github.com/tauri-apps/wry) and the Rust crates in `Cargo.toml`
 

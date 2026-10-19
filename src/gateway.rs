@@ -65,6 +65,7 @@ pub fn start(port: u16) -> io::Result<()> {
     }
     stop();
     let l = TcpListener::bind(("0.0.0.0", port)).map_err(|e| io::Error::new(e.kind(), format!("포트 {port}을(를) 열 수 없습니다: {e}")))?;
+    let port = l.local_addr()?.port(); // the real one, also when asked for 0
     let stop = Arc::new(AtomicBool::new(false));
     let thread = serve(l, false, stop.clone())?;
     crate::log!("web viewer on port {port}");
@@ -109,20 +110,21 @@ fn random_token() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// Blocking accept, so a new connection is served at once; `stop()` wakes it with a connect.
 fn serve(l: TcpListener, local: bool, stop: Arc<AtomicBool>) -> io::Result<std::thread::JoinHandle<()>> {
-    l.set_nonblocking(true)?;
     Ok(std::thread::spawn(move || {
         while !stop.load(Relaxed) {
             match l.accept() {
+                Ok(_) if stop.load(Relaxed) => break,
                 Ok((c, peer)) => {
-                    let _ = c.set_nonblocking(false);
+                    // Small frames (cursor, one tile) must not wait for Nagle + delayed ACK.
+                    let _ = c.set_nodelay(true);
                     std::thread::spawn(move || {
                         if let Err(e) = handle(c, peer, local) {
                             crate::log!("web {peer}: {e}");
                         }
                     });
                 }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(150)),
                 Err(e) => {
                     crate::log!("web accept: {e}");
                     std::thread::sleep(Duration::from_millis(500));
@@ -137,7 +139,13 @@ pub fn stop() {
     let r = RUNNING.lock().unwrap().take();
     if let Some(r) = r {
         r.stop.store(true, Relaxed);
-        let _ = r.thread.join();
+        // Wake the blocked accept; if that fails the thread can't be joined, so leave it.
+        match TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], r.port)), Duration::from_secs(1)) {
+            Ok(_) => {
+                let _ = r.thread.join();
+            }
+            Err(e) => crate::log!("web viewer stop: accept not woken: {e}"),
+        }
     }
     for s in LIVE.lock().unwrap().drain(..) {
         let _ = s.shutdown(Shutdown::Both);
@@ -235,13 +243,53 @@ fn read_req(r: &mut BufReader<TcpStream>) -> io::Result<Req> {
 }
 
 fn respond(c: &mut TcpStream, status: &str, mime: &str, extra: &str, body: &[u8]) -> io::Result<()> {
+    send(c, status, mime, "no-store", extra, body)
+}
+
+/// A built-in file: cached, but revalidated by its content hash, so an update shows at once
+/// while an unchanged noVNC (189 KB) is a 304 instead of a fresh download per window.
+fn asset(c: &mut impl Write, req: &Req, mime: &str, body: &'static [u8]) -> io::Result<()> {
+    let etag = etag(body);
+    let extra = format!("ETag: {etag}\r\n");
+    if req.headers.get("if-none-match").is_some_and(|v| matches_etag(v, &etag)) {
+        // The head a 200 would have, Content-Length included (RFC 9110 §8.6), and no body.
+        return send_head(c, "304 Not Modified", mime, "no-cache", &extra, body.len(), b"");
+    }
+    send(c, "200 OK", mime, "no-cache", &extra, body)
+}
+
+/// The strong ETag of a built-in file: its FNV-1a hash, worked out once per file.
+fn etag(body: &'static [u8]) -> String {
+    static TAGS: Mutex<Vec<(usize, String)>> = Mutex::new(Vec::new());
+    let mut tags = TAGS.lock().unwrap();
+    let key = body.as_ptr() as usize;
+    if let Some((_, t)) = tags.iter().find(|(k, _)| *k == key) {
+        return t.clone();
+    }
+    let h = body.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+    let t = format!("\"{h:016x}\"");
+    tags.push((key, t.clone()));
+    t
+}
+
+/// If-None-Match: "*" or any listed tag, compared weakly (W/ prefixes ignored).
+fn matches_etag(header: &str, etag: &str) -> bool {
+    let bare = |t: &str| t.trim().trim_start_matches("W/").to_string();
+    header.split(',').any(|t| t.trim() == "*" || bare(t) == bare(etag))
+}
+
+fn send(c: &mut impl Write, status: &str, mime: &str, cache: &str, extra: &str, body: &[u8]) -> io::Result<()> {
+    send_head(c, status, mime, cache, extra, body.len(), body)
+}
+
+/// Head with Content-Length `len`, then `body` (empty for a 304's head-only answer).
+fn send_head(c: &mut impl Write, status: &str, mime: &str, cache: &str, extra: &str, len: usize, body: &[u8]) -> io::Result<()> {
     // One write for the head: some clients read the status line in a single recv.
     let head = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n\
+        "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {len}\r\nCache-Control: {cache}\r\n\
          X-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\n\
          Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:\r\n\
-         {extra}Connection: close\r\n\r\n",
-        body.len()
+         {extra}Connection: close\r\n\r\n"
     );
     let mut out = head.into_bytes();
     out.extend_from_slice(body);
@@ -354,7 +402,11 @@ fn hosts_json() -> serde_json::Value {
                 "remote_name": h.remote_name,
                 "opts": h.opts,
                 "last_used": h.last_used,
-                "thumb": std::fs::metadata(store::thumb_path(&h.id)).is_ok(),
+                // The preview's version (its time), 0 = none: part of its URL, so it's cached
+                // until it changes.
+                "thumb": std::fs::metadata(store::thumb_path(&h.id))
+                    .and_then(|m| m.modified())
+                    .map_or(0, |t| t.duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_secs().max(1))),
             })
         })
         .collect();
@@ -580,14 +632,14 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
     let ok = authed(&req, local);
     let p = req.path.as_str();
     match (req.method.as_str(), p) {
-        ("GET", "/" | "/index.html") => respond(&mut c, "200 OK", "text/html; charset=utf-8", "", INDEX.as_bytes()),
-        ("GET", "/viewer.css") => respond(&mut c, "200 OK", "text/css; charset=utf-8", "", CSS.as_bytes()),
-        ("GET", "/viewer.js") => respond(&mut c, "200 OK", "text/javascript; charset=utf-8", "", JS.as_bytes()),
-        ("GET", "/novnc.min.js") => respond(&mut c, "200 OK", "text/javascript; charset=utf-8", "", NOVNC.as_bytes()),
-        ("GET", "/icon.svg") => respond(&mut c, "200 OK", "image/svg+xml", "", ICON.as_bytes()),
-        ("GET", "/icon-192.png") => respond(&mut c, "200 OK", "image/png", "", ICON_PNG),
-        ("GET", "/manifest.webmanifest") => respond(&mut c, "200 OK", "application/manifest+json", "", MANIFEST.as_bytes()),
-        ("GET", "/icon-512.png") => respond(&mut c, "200 OK", "image/png", "", ICON_PNG_512),
+        ("GET", "/" | "/index.html") => asset(&mut c, &req, "text/html; charset=utf-8", INDEX.as_bytes()),
+        ("GET", "/viewer.css") => asset(&mut c, &req, "text/css; charset=utf-8", CSS.as_bytes()),
+        ("GET", "/viewer.js") => asset(&mut c, &req, "text/javascript; charset=utf-8", JS.as_bytes()),
+        ("GET", "/novnc.min.js") => asset(&mut c, &req, "text/javascript; charset=utf-8", NOVNC.as_bytes()),
+        ("GET", "/icon.svg") => asset(&mut c, &req, "image/svg+xml", ICON.as_bytes()),
+        ("GET", "/icon-192.png") => asset(&mut c, &req, "image/png", ICON_PNG),
+        ("GET", "/manifest.webmanifest") => asset(&mut c, &req, "application/manifest+json", MANIFEST.as_bytes()),
+        ("GET", "/icon-512.png") => asset(&mut c, &req, "image/png", ICON_PNG_512),
         ("GET", "/sw.js") => respond(&mut c, "200 OK", "text/javascript; charset=utf-8", "", SW.as_bytes()),
         ("GET", "/auth") if local => local_auth(&mut c, &req),
         ("POST", "/api/login") if same_origin(&req) && !local => login(&mut c, &req),
@@ -597,7 +649,14 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             }
             respond(&mut c, "200 OK", "application/json", "Set-Cookie: itda=; Path=/; Max-Age=0\r\n", b"{}")
         }
-        (_, "/api/me") => json_resp(&mut c, if ok { "200 OK" } else { "401 Unauthorized" }, json!({"ok": ok, "local": local})),
+        (_, "/api/me") => {
+            // The viewer's wheel follows the app's Mac scroll setting.
+            let scroll = ok.then(|| {
+                let st = store::load_settings();
+                json!({"mac": st.mac_scroll})
+            });
+            json_resp(&mut c, if ok { "200 OK" } else { "401 Unauthorized" }, json!({"ok": ok, "local": local, "scroll": scroll}))
+        }
         (_, "/api/hosts") if ok => json_resp(&mut c, "200 OK", hosts_json()),
         ("GET", "/api/nearby") if ok => json_resp(&mut c, "200 OK", nearby_json()),
         ("GET", "/api/accounts") if ok => json_resp(&mut c, "200 OK", accounts_json()),
@@ -605,7 +664,8 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
         ("GET", _) if ok && p.starts_with("/thumb/") => {
             let id = p.trim_start_matches("/thumb/").trim_end_matches(".png");
             match std::fs::read(store::thumb_path(id)).ok().filter(|_| id.chars().all(|c| c.is_ascii_hexdigit())) {
-                Some(b) => respond(&mut c, "200 OK", "image/png", "", &b),
+                // Asked for by version (?v=), so the browser may keep it.
+                Some(b) => send(&mut c, "200 OK", "image/png", "private, max-age=86400", "", &b),
                 None => respond(&mut c, "404 Not Found", "text/plain", "", b"not found"),
             }
         }
@@ -728,17 +788,20 @@ fn relay(c: TcpStream, raw: rfb::Raw, tx: ws::Sender, id: &str, tunnel: Option<A
     let down = tx.clone();
     let mac_sock = writer.try_clone()?;
     let mut reader = reader;
+    // Whatever the 1 MB read buffer holds goes out as one message: no copy into a smaller
+    // buffer first, and fewer, larger messages for the browser to handle.
     let pump = std::thread::spawn(move || {
-        let mut buf = vec![0u8; 1 << 16];
         loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if down.binary(&buf[..n]).is_err() {
+            let n = match reader.fill_buf() {
+                Ok([]) | Err(_) => break,
+                Ok(b) => {
+                    if down.binary(b).is_err() {
                         break;
                     }
+                    b.len()
                 }
-            }
+            };
+            reader.consume(n);
         }
         down.close(1000, "원격 기기와의 연결이 끊겼습니다");
     });
@@ -785,5 +848,33 @@ mod tests {
         assert!(eq_ct(b"123456", b"123456"));
         assert!(!eq_ct(b"123456", b"123457"));
         assert!(!eq_ct(b"12345", b"123456"));
+    }
+
+    fn get(inm: Option<&str>) -> String {
+        let mut headers = HashMap::new();
+        if let Some(v) = inm {
+            headers.insert("if-none-match".to_string(), v.to_string());
+        }
+        let req = Req { method: "GET".into(), path: "/novnc.min.js".into(), query: String::new(), headers, body: Vec::new() };
+        let mut out = Vec::new();
+        asset(&mut out, &req, "text/javascript", NOVNC.as_bytes()).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn conditional_get() {
+        let full = get(None);
+        assert!(full.starts_with("HTTP/1.1 200 OK\r\n") && full.ends_with(NOVNC));
+        let len = format!("Content-Length: {}\r\n", NOVNC.len());
+        assert!(full.contains(&len));
+        let tag = full.lines().find_map(|l| l.strip_prefix("ETag: ")).unwrap().to_string();
+        assert_eq!(tag, etag(NOVNC.as_bytes()), "cached tag is stable");
+        for inm in [tag.clone(), format!("W/{tag}"), format!("\"x\", {tag}"), "*".into()] {
+            let r = get(Some(&inm));
+            assert!(r.starts_with("HTTP/1.1 304 Not Modified\r\n"), "{inm}");
+            assert!(r.contains(&len), "304 carries the 200's Content-Length");
+            assert!(r.ends_with("\r\n\r\n"), "and no body");
+        }
+        assert!(get(Some("\"stale\"")).starts_with("HTTP/1.1 200 OK"));
     }
 }

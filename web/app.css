@@ -296,7 +296,20 @@ kbd {
   overflow: hidden;
 }
 .thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-.thumb .ph { color: rgba(255,255,255,.92); font-size: 34px; text-shadow: 0 2px 10px rgba(0,0,0,.25); }
+.thumb .ph { color: rgba(255,255,255,.92); font-size: 34px; text-shadow: 0 2px 10px rgba(0,0,0,.25); display: grid; }
+.thumb .ph .osm svg { width: 38px; height: 38px; filter: drop-shadow(0 2px 6px rgba(0,0,0,.25)); }
+.list-row .thumb .ph .osm svg { width: 20px; height: 20px; }
+/* OS marks: filled, with cut-outs (the penguin's belly and eyes) in the tile's colour. */
+.osm { display: inline-grid; place-items: center; line-height: 0; }
+.osm svg { width: 20px; height: 20px; fill: currentColor; }
+.osm svg .cut { fill: var(--os-cut, #fff); }
+.thumb .osm { --os-cut: hsl(var(--h) 35% 45%); }
+.found .ico:has(.osm-mac) { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
+.found .ico:has(.osm-windows) { color: #0078d4; background: rgba(0, 120, 212, .12); }
+.found .ico:has(.osm-linux) { color: #1f1f1f; background: rgba(245, 197, 24, .28); --os-cut: #fff; }
+[data-theme="dark"] .found .ico:has(.osm-windows) { color: #4cc2ff; }
+[data-theme="dark"] .found .ico:has(.osm-linux) { color: #f5c518; --os-cut: #2b2b2b; }
+.found .ico .osm svg { width: 22px; height: 22px; }
 .thumb .ph-initial {
   position: absolute; left: 14px; bottom: 10px; font-size: 13px; font-weight: 600; color: rgba(255,255,255,.95);
   text-shadow: 0 1px 4px rgba(0,0,0,.35);

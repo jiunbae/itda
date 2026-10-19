@@ -15,6 +15,7 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use tao::dpi::{LogicalSize, PhysicalSize};
 use tao::event::{Event as TaoEvent, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
+use tao::platform::macos::WindowBuilderExtMacOS;
 use tao::window::{Fullscreen, Theme, Window, WindowBuilder};
 use wry::{http, WebView, WebViewBuilder};
 
@@ -49,6 +50,8 @@ struct Pane {
 thread_local! {
     static HOME_PANE: RefCell<Option<Pane>> = const { RefCell::new(None) };
     /// Connection windows by connection id.
+    static FILE_PANES: RefCell<HashMap<String, Pane>> = RefCell::new(HashMap::new());
+    static FILE_REQUESTS: RefCell<Vec<(String, bool)>> = const { RefCell::new(Vec::new()) };
     static SESSIONS: RefCell<HashMap<String, Pane>> = RefCell::new(HashMap::new());
     /// Windows to open (id, URL, title, full screen) and to close, once the current event is handled.
     static TO_OPEN: RefCell<Vec<(String, String, String, bool)>> = const { RefCell::new(Vec::new()) };
@@ -107,7 +110,17 @@ fn with_home(f: impl FnOnce(&Pane)) {
     });
 }
 
+pub fn file_windows() -> Vec<String> {
+    FILE_PANES.with(|p| p.borrow().keys().cloned().collect())
+}
+
+pub fn files_window(id: &str, close: bool) {
+    FILE_REQUESTS.with(|q| q.borrow_mut().push((id.into(), close)));
+    wake();
+}
+
 pub fn eval(js: &str) {
+    FILE_PANES.with(|all| { for p in all.borrow().values() { let _ = p.view.evaluate_script(js); } });
     with_home(|p| {
         let _ = p.view.evaluate_script(js);
     });
@@ -288,6 +301,24 @@ fn offer_clipboard(id: &str) {
 
 /// Open and close the windows asked for while handling the last event.
 fn flush(target: &EventLoopWindowTarget<Wake>) {
+    let file_requests = FILE_REQUESTS.with(|q| std::mem::take(&mut *q.borrow_mut()));
+    let files_changed = !file_requests.is_empty();
+    for (id, close) in file_requests {
+        if close { FILE_PANES.with(|p| { p.borrow_mut().remove(&id); }); continue; }
+        let exists = FILE_PANES.with(|p| {
+            if let Some(p) = p.borrow().get(&id) { p.window.set_minimized(false); p.window.set_focus(); true } else { false }
+        });
+        if exists { continue; }
+        let title = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| format!("{} — 파일", h.label())).unwrap_or_else(|| "네트워크 — Itda".into()));
+        match WindowBuilder::new().with_title(title).with_titlebar_transparent(true).with_title_hidden(true).with_fullsize_content_view(true).with_inner_size(LogicalSize::new(1000.0, 700.0)).with_min_inner_size(LogicalSize::new(720.0, 480.0)).build(target) {
+            Ok(window) => match home_view(&window, home(|m| is_dark(&m.settings)), Some(&id)) {
+                Ok(view) => { crate::log!("file window up: {id}"); FILE_PANES.with(|p| { p.borrow_mut().insert(id, Pane { window, view }); }); }
+                Err(e) => crate::log!("files webview: {e}"),
+            },
+            Err(e) => crate::log!("files window: {e}"),
+        }
+    }
+    if files_changed { super::send_hosts(); }
     for id in TO_CLOSE.with(|c| std::mem::take(&mut *c.borrow_mut())) {
         if let Some(p) = SESSIONS.with(|s| s.borrow_mut().remove(&id)) {
             drop(p);
@@ -382,8 +413,10 @@ fn on_menu(id: &muda::MenuId) {
     }
 }
 
-fn home_view(window: &Window, dark: bool) -> wry::Result<WebView> {
+fn home_view(window: &Window, dark: bool, file: Option<&str>) -> wry::Result<WebView> {
     let bg = if dark { (32, 32, 32, 255) } else { (243, 243, 243, 255) };
+    let drop_id = file.map(str::to_string);
+    let drag_id = file.map(str::to_string);
     WebViewBuilder::new()
         .with_custom_protocol("itda".into(), |_id, req| {
             let resp = match super::asset(req.uri().path()) {
@@ -392,9 +425,21 @@ fn home_view(window: &Window, dark: bool) -> wry::Result<WebView> {
             };
             resp.unwrap_or_else(|_| http::Response::new(Cow::Borrowed(&b""[..])))
         })
-        .with_ipc_handler(|req| match serde_json::from_str::<Value>(req.body()) {
+        .with_drag_drop_handler(move |event| {
+            if let wry::DragDropEvent::Drop { paths, .. } = event {
+                super::post(Event::Page(json!({"type":"files_drop","id":drop_id,"paths":paths})));
+            }
+            true
+        })
+        .with_ipc_handler(move |req| match serde_json::from_str::<Value>(req.body()) {
             // Handled after this callback returns, like every other event.
             Ok(v) => {
+                if v["cmd"] == "files_drag" {
+                    if let Some(id) = &drag_id {
+                        FILE_PANES.with(|panes| { if let Some(p) = panes.borrow().get(id) { let _ = p.window.drag_window(); } });
+                    }
+                    return;
+                }
                 QUEUE.lock().unwrap().push(Event::Session("__ipc".into(), v));
                 wake();
             }
@@ -411,7 +456,7 @@ fn home_view(window: &Window, dark: bool) -> wry::Result<WebView> {
             false
         })
         .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
-        .with_url("itda://localhost/index.html")
+        .with_url(format!("itda://localhost/index.html{}", file.map(|id| format!("?files={}", id.bytes().map(|b| format!("%{b:02X}")).collect::<String>())).unwrap_or_default()))
         .with_background_color(bg)
         .with_devtools(std::env::var_os("ITDA_DEVTOOLS").is_some())
         .with_back_forward_navigation_gestures(false)
@@ -456,7 +501,7 @@ pub fn run(quick: Option<String>) {
         .with_min_inner_size(LogicalSize::new(720.0, 500.0))
         .build(&event_loop)
         .expect("window");
-    let view = match home_view(&window, dark) {
+    let view = match home_view(&window, dark, None) {
         Ok(v) => v,
         Err(e) => {
             crate::log!("webview: {e}");
@@ -472,17 +517,27 @@ pub fn run(quick: Option<String>) {
         *flow = ControlFlow::Wait;
         let _ = &menu;
         match event {
+            TaoEvent::LoopDestroyed => crate::files::shutdown(),
             TaoEvent::UserEvent(Wake::Drain) => drain(),
             TaoEvent::UserEvent(Wake::Menu(id)) => on_menu(&id),
             // Clicking the Dock icon brings the home back.
             TaoEvent::Reopen { .. } => show_home(),
+            TaoEvent::Opened { urls } => {
+                for url in urls {
+                    if let Some(id) = crate::files::locations::device_from_url(url.as_str()) {
+                        if id == crate::files::locations::NETWORK || home(|m| m.hosts.iter().any(|h| h.id == id)) { files_window(&id, false); }
+                    }
+                }
+            }
             TaoEvent::WindowEvent { window_id, event, .. } => {
                 let is_home = HOME_PANE.with(|h| h.borrow().as_ref().is_some_and(|p| p.window.id() == window_id));
+                let fid = FILE_PANES.with(|s| s.borrow().iter().find(|(_, p)| p.window.id() == window_id).map(|(k, _)| k.clone()));
                 let sid = SESSIONS.with(|s| s.borrow().iter().find(|(_, p)| p.window.id() == window_id).map(|(k, _)| k.clone()));
                 match event {
                     // The home only hides: the web viewer and connections keep running.
                     WindowEvent::CloseRequested if is_home => with_home(|p| p.window.set_visible(false)),
                     WindowEvent::CloseRequested => {
+                        if let Some(id) = fid { FILE_REQUESTS.with(|q| q.borrow_mut().push((id, true))); }
                         if let Some(id) = sid {
                             TO_CLOSE.with(|c| c.borrow_mut().push(id));
                         }

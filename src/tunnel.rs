@@ -73,6 +73,33 @@ fn quiet(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
+/// Common SSH authentication for screen tunnels, SFTP and rsync. File workers use their
+/// own connection so a bulk transfer cannot block screen/input bytes on one SSH stream.
+/// The destination argument: the host alone. The account goes separately as `-l` (see
+/// ssh_command), so names with '@' (Microsoft accounts, UPNs: me@outlook.com) work.
+pub fn ssh_target(c: &SshCfg) -> io::Result<String> {
+    if c.host.is_empty() || c.host.starts_with('-') || c.host.chars().any(|v| v.is_control() || v.is_whitespace() || v == '@') || c.user.starts_with('-') || c.user.chars().any(|v| v.is_control()) {
+        return Err(err(io::ErrorKind::InvalidInput, "SSH 기기 주소와 계정 이름을 확인하세요"));
+    }
+    Ok(c.host.clone())
+}
+
+pub fn ssh_command(c: &SshCfg) -> io::Result<Command> {
+    ssh_target(c)?;
+    let exe = ssh_exe().ok_or_else(|| err(io::ErrorKind::NotFound, "OpenSSH 클라이언트를 찾을 수 없습니다"))?;
+    let mut cmd = Command::new(exe);
+    cmd.arg("-T").args(["-o", "StrictHostKeyChecking=accept-new", "-o"])
+        .arg(format!("UserKnownHostsFile={}", known_hosts().display()))
+        .args(["-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3", "-o", "ConnectTimeout=10", "-o", "NumberOfPasswordPrompts=1", "-o", "BatchMode=no"])
+        .arg("-p").arg(c.port.to_string())
+        .args(if c.user.is_empty() { None } else { Some(["-l", c.user.as_str()]) }.into_iter().flatten())
+        .env("SSH_ASKPASS", std::env::current_exe()?).env("SSH_ASKPASS_REQUIRE", "force")
+        .env(ENV_SECRET, &c.pass).env(ENV_KEYPASS, &c.key_pass);
+    if !c.key.is_empty() { cmd.arg("-i").arg(&c.key).args(["-o", "IdentitiesOnly=yes"]); }
+    quiet(&mut cmd);
+    Ok(cmd)
+}
+
 pub fn known_hosts() -> PathBuf {
     crate::store::dir().join("known_hosts")
 }
@@ -95,13 +122,13 @@ fn err(kind: io::ErrorKind, msg: &str) -> io::Error {
 }
 
 /// Turn ssh's log into the error a person should see.
-fn classify(log: &str) -> io::Error {
+pub(crate) fn classify(log: &str) -> io::Error {
     use io::ErrorKind::*;
     let has = |s: &str| log.contains(s);
     if has("REMOTE HOST IDENTIFICATION HAS CHANGED") || has("Host key verification failed") {
         err(PermissionDenied, "SSH 호스트 키가 바뀌었습니다 — 이전에 접속한 Mac과 다른 기기일 수 있습니다")
     } else if has("Permission denied") || has("Too many authentication failures") {
-        err(PermissionDenied, "SSH 로그인 실패 — Mac 계정 이름/암호를 확인하세요")
+        err(PermissionDenied, "SSH 로그인 실패 — 기기 계정 이름/암호를 확인하세요")
     } else if has("Could not resolve hostname") {
         err(NotFound, "호스트를 찾을 수 없습니다")
     } else if has("Connection refused") {
@@ -128,6 +155,17 @@ fn job() -> isize {
     }
 }
 
+/// Keep file transport subprocesses in a kill-on-close job on Windows, including their
+/// descendants. macOS transports exit when their pipes close and are reaped on disconnect.
+pub fn register_child(child: &Child) {
+    #[cfg(windows)] unsafe {
+        static FILE_JOB: std::sync::OnceLock<isize> = std::sync::OnceLock::new();
+        let handle = FILE_JOB.get_or_init(job);
+        AssignProcessToJobObject(*handle as _, child.as_raw_handle() as _);
+    }
+    #[cfg(not(windows))] let _ = child;
+}
+
 impl Tunnel {
     pub fn open(cfg: SshCfg) -> io::Result<Arc<Tunnel>> {
         let t = Arc::new(Tunnel {
@@ -143,35 +181,17 @@ impl Tunnel {
     }
 
     fn start(&self) -> io::Result<()> {
-        let exe = ssh_exe().ok_or_else(|| err(io::ErrorKind::NotFound, if cfg!(windows) { "ssh.exe 없음 — Windows 'OpenSSH 클라이언트' 기능이 필요합니다" } else { "ssh를 찾을 수 없습니다" }))?;
-        // A free local port for the forward (tiny race with other apps; ExitOnForwardFailure catches it).
-        let lport = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
+        let lport = TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port();
         let c = &self.cfg;
-        let target = if c.user.is_empty() { c.host.clone() } else { format!("{}@{}", c.user, c.host) };
-        let me = std::env::current_exe()?;
-        let mut cmd = Command::new(exe);
-        cmd.args(["-v", "-N", "-T"])
-            .args(["-o", "ExitOnForwardFailure=yes"])
-            .args(["-o", "StrictHostKeyChecking=accept-new"])
-            .arg("-o")
-            .arg(format!("UserKnownHostsFile={}", known_hosts().display()))
-            .args(["-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3"])
-            .args(["-o", "ConnectTimeout=10", "-o", "NumberOfPasswordPrompts=1"])
-            .args(["-o", "BatchMode=no"])
-            .arg("-p")
-            .arg(c.port.to_string())
-            .arg("-L")
+        let target = ssh_target(c)?;
+        let mut cmd = ssh_command(c)?;
+        // A screen tunnel carries input and frames: mark it low-delay. Without a session ssh
+        // treats it as bulk, and older OpenSSH (Windows' own) sends bulk as background
+        // traffic (DSCP CS1), the lowest Wi-Fi queue. (File transfers stay bulk.)
+        cmd.args(["-v", "-N", "-o", "IPQoS=lowdelay", "-o", "ExitOnForwardFailure=yes", "-L"])
             .arg(format!("127.0.0.1:{lport}:localhost:{}", c.vnc_port))
-            .args(if c.key.is_empty() { vec![] } else { vec!["-i".to_string(), c.key.clone(), "-o".into(), "IdentitiesOnly=yes".into()] })
             .arg(&target)
-            .env(ENV_KEYPASS, &c.key_pass)
-            .env("SSH_ASKPASS", me)
-            .env("SSH_ASKPASS_REQUIRE", "force")
-            .env(ENV_SECRET, &c.pass)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped());
-        quiet(&mut cmd);
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
         crate::log!("ssh tunnel -> {target}:{} forwarding 127.0.0.1:{lport} -> localhost:{}", c.port, c.vnc_port);
         let mut child = cmd.spawn()?;
         #[cfg(windows)]
@@ -270,6 +290,28 @@ mod tests {
         assert_eq!(split_host("10.0.0.2:5901", 5900), ("10.0.0.2".into(), 5901));
         assert_eq!(split_host("[fe80::1]:22", 5900), ("fe80::1".into(), 22));
         assert_eq!(split_host("fe80::1", 5900), ("fe80::1".into(), 5900));
+    }
+
+    fn cfg(user: &str, host: &str) -> SshCfg {
+        SshCfg { host: host.into(), port: 22, user: user.into(), pass: String::new(), vnc_port: 5900, key: String::new(), key_pass: String::new() }
+    }
+
+    /// The account is its own argument: '@' in it (me@outlook.com) is fine, and the
+    /// destination is the host alone, as it was before the file-transfer refactor accepted it.
+    #[test]
+    fn account_with_at_sign() {
+        let c = cfg("me@outlook.com", "pc.local");
+        assert_eq!(ssh_target(&c).unwrap(), "pc.local");
+        if let Ok(cmd) = ssh_command(&c) {
+            let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            let at = args.iter().position(|a| a == "-l").expect("-l");
+            assert_eq!(args[at + 1], "me@outlook.com");
+            assert!(!args.iter().any(|a| a.contains("@pc.local")));
+        }
+        assert!(ssh_command(&cfg("", "pc.local")).map_or(true, |c| !c.get_args().any(|a| a == "-l")));
+        for (u, h) in [("-oProxyCommand=x", "pc"), ("me", "-oProxyCommand=x"), ("me", "a@b"), ("me", "pc host"), ("me\n", "pc"), ("me", "")] {
+            assert!(ssh_target(&cfg(u, h)).is_err(), "{u:?} {h:?}");
+        }
     }
 
     #[test]

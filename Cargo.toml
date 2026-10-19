@@ -1,6 +1,6 @@
 [package]
 name = "itda"
-version = "0.6.5"
+version = "0.7.0"
 edition = "2021"
 description = "Itda (잇다): lightweight remote desktop for Windows. Opens Macs (Screen Sharing), Windows PCs and VNC servers, and shows them in any browser."
 license = "MIT"
@@ -16,6 +16,7 @@ num-bigint = "0.4"
 getrandom = { version = "0.2", features = ["std"] }
 wry = "0.57.0"
 serde_json = "1.0.154"
+sha2 = "0.10"
 serde = { version = "1.0.229", features = ["derive"] }
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 ironrdp-blocking = "0.10"
@@ -45,6 +46,7 @@ features = [
   "Win32_System_Com",
   "Win32_System_DataExchange",
   "Win32_System_IO",
+  "Win32_Storage_FileSystem",
   "Win32_System_JobObjects",
   "Win32_System_LibraryLoader",
   "Win32_System_Memory",
@@ -84,3 +86,7 @@ x509-cert = { opt-level = "z" }
 
 [build-dependencies]
 embed-resource = "3.0.12"
+
+# winscard (via ironrdp-connector → sspi) forces flate2 onto C zlib; this copy doesn't.
+[patch.crates-io]
+winscard = { path = "vendor/winscard" }

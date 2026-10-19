@@ -1,0 +1,513 @@
+//! SFTP v3 over the system OpenSSH transport. No remote shell quoting or text listings.
+use super::{Control, Entry};
+use crate::tunnel::SshCfg;
+use std::io::{self, Read, Write};
+use std::process::{Child, ChildStdin, ChildStdout, Stdio};
+use std::sync::{Arc, Mutex};
+const MAX_PACKET: usize = 4 << 20;
+const CHUNK: usize = 32 << 10;
+const WINDOW: usize = 64;
+fn err(s: impl Into<String>) -> io::Error {
+    io::Error::other(s.into())
+}
+fn string(out: &mut Vec<u8>, s: &[u8]) {
+    out.extend_from_slice(&(s.len() as u32).to_be_bytes());
+    out.extend_from_slice(s);
+}
+fn path(out: &mut Vec<u8>, s: &str) {
+    string(out, s.as_bytes());
+}
+struct Packet {
+    t: u8,
+    id: u32,
+    b: Vec<u8>,
+    at: usize,
+}
+impl Packet {
+    fn u32(&mut self) -> io::Result<u32> {
+        Ok(u32::from_be_bytes(self.take(4)?.try_into().unwrap()))
+    }
+    fn u64(&mut self) -> io::Result<u64> {
+        Ok(u64::from_be_bytes(self.take(8)?.try_into().unwrap()))
+    }
+    fn take(&mut self, n: usize) -> io::Result<&[u8]> {
+        let end = self
+            .at
+            .checked_add(n)
+            .filter(|&e| e <= self.b.len())
+            .ok_or_else(|| err("잘못된 SFTP 응답"))?;
+        let start = self.at;
+        self.at = end;
+        Ok(&self.b[start..end])
+    }
+    fn bytes(&mut self) -> io::Result<Vec<u8>> {
+        let n = self.u32()? as usize;
+        Ok(self.take(n)?.to_vec())
+    }
+    fn text(&mut self) -> io::Result<String> {
+        String::from_utf8(self.bytes()?).map_err(|_| err("UTF-8로 표시할 수 없는 파일 이름입니다"))
+    }
+    fn status(&mut self) -> io::Result<u32> {
+        if self.t != 101 {
+            return Err(err("SFTP 상태 응답이 아닙니다"));
+        }
+        let code = self.u32()?;
+        if code == 0 || code == 1 || code == 2 {
+            return Ok(code);
+        }
+        let text = self.text().unwrap_or_default();
+        Err(err(format!("SFTP: {text} (코드 {code})")))
+    }
+    fn attrs(&mut self, name: String) -> io::Result<Entry> {
+        let f = self.u32()?;
+        let size = if f & 1 != 0 { self.u64()? } else { 0 };
+        if f & 2 != 0 {
+            self.take(8)?;
+        }
+        let mode = if f & 4 != 0 { self.u32()? } else { 0 };
+        let modified = if f & 8 != 0 {
+            self.u32()?;
+            self.u32()? as u64
+        } else {
+            0
+        };
+        if f & 0x80000000 != 0 {
+            let n = self.u32()?;
+            for _ in 0..n {
+                self.bytes()?;
+                self.bytes()?;
+            }
+        }
+        Ok(Entry {
+            name,
+            size,
+            modified,
+            dir: mode & 0xf000 == 0x4000,
+            link: mode & 0xf000 == 0xa000,
+            mode: (f & 4 != 0).then_some(mode & 0o777),
+        })
+    }
+}
+pub struct Sftp {
+    child: Arc<Mutex<Child>>,
+    input: ChildStdin,
+    output: ChildStdout,
+    next: u32,
+    diagnostics: Arc<Mutex<String>>,
+}
+impl Drop for Sftp {
+    fn drop(&mut self) {
+        if let Ok(mut c) = self.child.lock() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+impl Sftp {
+    pub fn connect(cfg: &SshCfg, control: &Control) -> io::Result<Self> {
+        let mut cmd = crate::tunnel::ssh_command(cfg)?;
+        cmd.args(["-o", "ControlMaster=no", "-o", "ControlPath=none"]);
+        cmd.arg("-s")
+            .arg(crate::tunnel::ssh_target(cfg)?)
+            .arg("sftp");
+        let child = cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        Self::start(child, control)
+    }
+    pub(super) fn start(mut child: Child, control: &Control) -> io::Result<Self> {
+        crate::tunnel::register_child(&child);
+        let input = child.stdin.take().ok_or_else(|| err("SSH 입력 없음"))?;
+        let output = child.stdout.take().ok_or_else(|| err("SSH 출력 없음"))?;
+        let diagnostics = Arc::new(Mutex::new(String::new()));
+        if let Some(pipe) = child.stderr.take() {
+            let log = diagnostics.clone();
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                for line in std::io::BufReader::new(pipe).lines().map_while(Result::ok) {
+                    let mut log = log.lock().unwrap();
+                    log.push_str(&line);
+                    log.push('\n');
+                    if log.len() > 8192 {
+                        let at = log
+                            .char_indices()
+                            .find(|(i, _)| *i >= 4096)
+                            .map_or(0, |(i, _)| i);
+                        log.drain(..at);
+                    }
+                }
+            });
+        }
+        let child = Arc::new(Mutex::new(child));
+        control.attach(child.clone())?;
+        let mut s = Self {
+            child,
+            input,
+            output,
+            next: 0,
+            diagnostics,
+        };
+        s.write_packet(&[1, 0, 0, 0, 3])?;
+        let p = s.packet()?;
+        if p.t != 2 || p.id != 3 {
+            return Err(err("SFTP v3를 지원하지 않는 서버입니다"));
+        }
+        Ok(s)
+    }
+    fn write_packet(&mut self, b: &[u8]) -> io::Result<()> {
+        self.input.write_all(&(b.len() as u32).to_be_bytes())?;
+        self.input.write_all(b)?;
+        self.input.flush()
+    }
+    fn packet(&mut self) -> io::Result<Packet> {
+        let mut len = [0; 4];
+        self.output.read_exact(&mut len).map_err(|_| {
+            let log = self.diagnostics.lock().unwrap();
+            if log.is_empty() {
+                err("파일 연결이 끊겼습니다. SSH 로그인과 원격 로그인 설정을 확인하세요")
+            } else {
+                crate::tunnel::classify(&log)
+            }
+        })?;
+        let n = u32::from_be_bytes(len) as usize;
+        if !(5..=MAX_PACKET).contains(&n) {
+            return Err(err("SFTP 응답 크기가 잘못되었습니다"));
+        }
+        let mut b = vec![0; n];
+        self.output.read_exact(&mut b)?;
+        Ok(Packet {
+            t: b[0],
+            id: u32::from_be_bytes(b[1..5].try_into().unwrap()),
+            b: b[5..].to_vec(),
+            at: 0,
+        })
+    }
+    fn send(&mut self, t: u8, b: &[u8]) -> io::Result<u32> {
+        self.next = self.next.wrapping_add(1);
+        let mut out = vec![t];
+        out.extend_from_slice(&self.next.to_be_bytes());
+        out.extend_from_slice(b);
+        self.write_packet(&out)?;
+        Ok(self.next)
+    }
+    fn request(&mut self, t: u8, b: &[u8]) -> io::Result<Packet> {
+        let id = self.send(t, b)?;
+        let p = self.packet()?;
+        if p.id != id {
+            return Err(err("SFTP 요청 순서 불일치"));
+        }
+        Ok(p)
+    }
+    fn status_request(&mut self, t: u8, b: &[u8]) -> io::Result<()> {
+        let mut p = self.request(t, b)?;
+        if p.status()? != 0 {
+            return Err(err("파일 또는 폴더가 없습니다"));
+        }
+        Ok(())
+    }
+    fn handle(&mut self, t: u8, b: &[u8]) -> io::Result<Vec<u8>> {
+        let mut p = self.request(t, b)?;
+        if p.t == 101 {
+            p.status()?;
+            return Err(err("파일을 열 수 없습니다"));
+        }
+        if p.t != 102 {
+            return Err(err("SFTP 핸들 응답 오류"));
+        }
+        p.bytes()
+    }
+    fn close(&mut self, h: &[u8]) -> io::Result<()> {
+        let mut b = Vec::new();
+        string(&mut b, h);
+        self.status_request(4, &b)
+    }
+    pub fn realpath(&mut self, p: &str) -> io::Result<String> {
+        let mut b = Vec::new();
+        path(&mut b, p);
+        let mut r = self.request(16, &b)?;
+        if r.t == 101 {
+            r.status()?;
+            return Err(err("폴더를 찾을 수 없습니다"));
+        }
+        if r.t != 104 || r.u32()? != 1 {
+            return Err(err("SFTP 경로 응답 오류"));
+        }
+        r.text()
+    }
+    pub fn stat(&mut self, p: &str) -> io::Result<Option<Entry>> {
+        let mut b = Vec::new();
+        path(&mut b, p);
+        let mut r = self.request(7, &b)?;
+        if r.t == 101 {
+            let code = r.status()?;
+            return if code == 2 {
+                Ok(None)
+            } else {
+                Err(err("파일 정보를 읽을 수 없습니다"))
+            };
+        }
+        if r.t != 105 {
+            return Err(err("SFTP 속성 응답 오류"));
+        }
+        Ok(Some(r.attrs(p.rsplit('/').next().unwrap_or(p).into())?))
+    }
+    pub fn list(&mut self, p: &str) -> io::Result<Vec<Entry>> {
+        let mut b = Vec::new();
+        path(&mut b, p);
+        let h = self.handle(11, &b)?;
+        let mut out = Vec::new();
+        let mut b = Vec::new();
+        string(&mut b, &h);
+        loop {
+            let mut r = self.request(12, &b)?;
+            if r.t == 101 {
+                if r.status()? == 1 {
+                    break;
+                }
+                return Err(err("폴더 목록을 읽을 수 없습니다"));
+            }
+            if r.t != 104 {
+                return Err(err("SFTP 목록 응답 오류"));
+            }
+            let n = r.u32()?;
+            for _ in 0..n {
+                // Every field is read (the reply stays in step); an entry whose name isn't
+                // UTF-8 or that name() refuses (macOS "Icon\r", ':' for a Windows client) is
+                // left out instead of failing the whole folder.
+                let name = String::from_utf8(r.bytes()?).ok();
+                r.bytes()?;
+                let entry = r.attrs(name.clone().unwrap_or_default())?;
+                if name.is_some_and(|n| n != "." && n != ".." && super::name(&n).is_ok()) {
+                    out.push(entry);
+                }
+            }
+            if out.len() > 200_000 {
+                return Err(err("폴더가 너무 큽니다. 하위 폴더로 이동하세요"));
+            }
+        }
+        self.close(&h)?;
+        Ok(out)
+    }
+    pub fn mkdir(&mut self, p: &str) -> io::Result<()> {
+        let mut b = Vec::new();
+        path(&mut b, p);
+        b.extend_from_slice(&0u32.to_be_bytes());
+        self.status_request(14, &b)
+    }
+    pub fn rename(&mut self, from: &str, to: &str, replace: bool) -> io::Result<()> {
+        let mut b = Vec::new();
+        if replace {
+            path(&mut b, "posix-rename@openssh.com");
+        }
+        path(&mut b, from);
+        path(&mut b, to);
+        self.status_request(if replace { 200 } else { 18 }, &b)
+    }
+    pub fn remove(&mut self, p: &str, dir: bool) -> io::Result<()> {
+        let mut b = Vec::new();
+        path(&mut b, p);
+        self.status_request(if dir { 15 } else { 13 }, &b)
+    }
+    fn open(&mut self, p: &str, flags: u32) -> io::Result<Vec<u8>> {
+        let mut b = Vec::new();
+        path(&mut b, p);
+        b.extend_from_slice(&flags.to_be_bytes());
+        b.extend_from_slice(&0u32.to_be_bytes());
+        self.handle(3, &b)
+    }
+    /// Pipeline up to 2MiB so throughput isn't limited to one 32KiB packet per RTT.
+    pub fn download(
+        &mut self,
+        p: &str,
+        size: u64,
+        out: &mut impl Write,
+        control: &Control,
+        mut progress: impl FnMut(u64),
+    ) -> io::Result<()> {
+        let h = self.open(p, 1)?;
+        let mut offset = 0;
+        let mut done = 0;
+        while offset < size {
+            control.check()?;
+            let mut pending = Vec::new();
+            for _ in 0..WINDOW {
+                if offset >= size {
+                    break;
+                }
+                let n = (size - offset).min(CHUNK as u64) as u32;
+                let mut b = Vec::new();
+                string(&mut b, &h);
+                b.extend_from_slice(&offset.to_be_bytes());
+                b.extend_from_slice(&n.to_be_bytes());
+                pending.push((self.send(5, &b)?, offset, n));
+                offset += n as u64;
+            }
+            let mut chunks = std::collections::HashMap::new();
+            for _ in 0..pending.len() {
+                let mut r = self.packet()?;
+                if r.t != 103 {
+                    if r.t == 101 {
+                        r.status()?;
+                    }
+                    return Err(err("파일이 전송 중 바뀌었거나 읽을 수 없습니다"));
+                }
+                let id = r.id;
+                if chunks.insert(id, r.bytes()?).is_some() {
+                    return Err(err("중복 SFTP 응답"));
+                }
+            }
+            for (id, at, n) in pending {
+                let mut data = chunks.remove(&id).ok_or_else(|| err("SFTP 응답 누락"))?;
+                let mut consumed = 0;
+                loop {
+                    if data.is_empty() || data.len() > n as usize - consumed {
+                        return Err(err(
+                            "SFTP 읽기 크기 오류: 전송 중 파일이 바뀌었을 수 있습니다",
+                        ));
+                    }
+                    out.write_all(&data)?;
+                    consumed += data.len();
+                    done += data.len() as u64;
+                    progress(done);
+                    if consumed == n as usize {
+                        break;
+                    }
+                    control.check()?;
+                    let mut b = Vec::new();
+                    string(&mut b, &h);
+                    b.extend_from_slice(&(at + consumed as u64).to_be_bytes());
+                    b.extend_from_slice(&(n - consumed as u32).to_be_bytes());
+                    let mut r = self.request(5, &b)?;
+                    if r.t != 103 {
+                        return Err(err("전송 중 파일이 바뀌었습니다"));
+                    }
+                    data = r.bytes()?;
+                }
+            }
+        }
+        self.close(&h)
+    }
+    pub fn upload(
+        &mut self,
+        p: &str,
+        input: &mut impl Read,
+        control: &Control,
+        mut progress: impl FnMut(u64),
+    ) -> io::Result<u64> {
+        let h = self.open(p, 2 | 8 | 16 | 32)?;
+        let mut offset = 0u64;
+        let mut eof = false;
+        while !eof {
+            control.check()?;
+            let mut pending = Vec::new();
+            for _ in 0..WINDOW {
+                let mut data = vec![0; CHUNK];
+                let mut n = 0;
+                while n < data.len() {
+                    let got = input.read(&mut data[n..])?;
+                    if got == 0 {
+                        eof = true;
+                        break;
+                    }
+                    n += got;
+                }
+                if n == 0 {
+                    break;
+                }
+                data.truncate(n);
+                let mut b = Vec::new();
+                string(&mut b, &h);
+                b.extend_from_slice(&offset.to_be_bytes());
+                string(&mut b, &data);
+                pending.push(self.send(6, &b)?);
+                offset += n as u64;
+            }
+            for _ in 0..pending.len() {
+                let mut r = self.packet()?;
+                let i = pending
+                    .iter()
+                    .position(|&id| id == r.id)
+                    .ok_or_else(|| err("SFTP 쓰기 응답 오류"))?;
+                pending.remove(i);
+                if r.status()? != 0 {
+                    return Err(err("파일 쓰기 실패"));
+                }
+            }
+            progress(offset);
+        }
+        self.close(&h)?;
+        Ok(offset)
+    }
+    /// SETSTAT with permissions only (bits & 0o777: no setuid, setgid or sticky).
+    pub fn set_mode(&mut self, p: &str, mode: u32) -> io::Result<()> {
+        let mut b = Vec::new();
+        path(&mut b, p);
+        b.extend_from_slice(&4u32.to_be_bytes());
+        b.extend_from_slice(&(mode & 0o777).to_be_bytes());
+        self.status_request(9, &b)
+    }
+    pub fn set_time(&mut self, p: &str, modified: u64) -> io::Result<()> {
+        let mut b = Vec::new();
+        path(&mut b, p);
+        b.extend_from_slice(&8u32.to_be_bytes());
+        b.extend_from_slice(&(modified as u32).to_be_bytes());
+        b.extend_from_slice(&(modified as u32).to_be_bytes());
+        self.status_request(9, &b)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn real_server_roundtrip() {
+        let server = std::env::var_os("ITDA_SFTP_SERVER")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| "/usr/libexec/sftp-server".into());
+        if !server.is_file() {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("itda-sftp-{}", crate::store::new_id()));
+        std::fs::create_dir(&root).unwrap();
+        let control = Control::default();
+        let child = std::process::Command::new(server)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut s = Sftp::start(child, &control).unwrap();
+        let p = root.join("한글 \"이름\".bin").to_str().unwrap().to_string();
+        let bytes: Vec<u8> = (0..(2 << 20)).map(|i| (i % 251) as u8).collect();
+        assert_eq!(
+            s.upload(&p, &mut &bytes[..], &control, |_| {}).unwrap(),
+            bytes.len() as u64
+        );
+        let attrs = s.stat(&p).unwrap().unwrap();
+        let mut got = Vec::new();
+        s.download(&p, attrs.size, &mut got, &control, |_| {})
+            .unwrap();
+        assert_eq!(got, bytes);
+        assert_eq!(s.list(root.to_str().unwrap()).unwrap().len(), 1);
+        let to = format!("{p}.renamed");
+        s.rename(&p, &to, false).unwrap();
+        assert!(s.stat(&p).unwrap().is_none());
+        // Permissions: ordinary bits set and reported back, special bits never.
+        std::fs::write(root.join("tool.sh"), b"#!/bin/sh\n").unwrap();
+        let tool = root.join("tool.sh").to_str().unwrap().to_string();
+        s.set_mode(&tool, 0o4755).unwrap();
+        assert_eq!(s.stat(&tool).unwrap().unwrap().mode, Some(0o755));
+        std::fs::remove_file(&tool).unwrap();
+        s.remove(&to, false).unwrap();
+        // One name the client can't use ("Icon\r") is left out, the rest still listed.
+        std::fs::write(root.join("ok.txt"), b"x").unwrap();
+        std::fs::write(root.join("Icon\r"), b"").unwrap();
+        let names: Vec<String> = s.list(root.to_str().unwrap()).unwrap().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["ok.txt"]);
+        std::fs::remove_file(root.join("ok.txt")).unwrap();
+        std::fs::remove_file(root.join("Icon\r")).unwrap();
+        drop(s);
+        std::fs::remove_dir(root).unwrap();
+    }
+}

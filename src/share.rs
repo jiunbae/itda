@@ -6,9 +6,10 @@
 //! ways, VNC-password auth plus an on-screen "allow?" prompt, and DNS-SD (Bonjour)
 //! registration so nearby Itdas list this PC.
 
-use crate::enc::{encode_rect, PixelFormat, ENC_ZRLE, TILE};
+use crate::demand::{self, Demand};
+use crate::enc::{Encoder, PixelFormat, Update, ENC_ZRLE};
+use crate::outbox::Outbox;
 use crate::rfb::{vnc_response, PIXEL_FORMAT};
-use flate2::{Compress, Compression};
 use std::collections::HashMap;
 use std::io::{self, BufReader, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
@@ -79,17 +80,17 @@ pub fn kick_all() {
 pub fn start(cfg: Config) -> io::Result<()> {
     stop();
     let l = TcpListener::bind(("0.0.0.0", cfg.port)).map_err(|e| io::Error::new(e.kind(), format!("포트 {}을(를) 열 수 없습니다: {e}", cfg.port)))?;
-    l.set_nonblocking(true)?;
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
     let cfg = Arc::new(cfg);
-    let port = cfg.port;
+    let port = l.local_addr()?.port(); // the real one, also when cfg.port is 0
     let c2 = cfg.clone();
+    // Blocking accept, so a viewer is served at once; `stop()` wakes it with a connect.
     let thread = std::thread::spawn(move || {
         while !flag.load(Relaxed) {
             match l.accept() {
+                Ok(_) if flag.load(Relaxed) => break,
                 Ok((s, peer)) => {
-                    let _ = s.set_nonblocking(false);
                     let (cfg, flag) = (c2.clone(), flag.clone());
                     std::thread::spawn(move || {
                         if let Err(e) = serve(s, peer, &cfg, &flag) {
@@ -97,7 +98,6 @@ pub fn start(cfg: Config) -> io::Result<()> {
                         }
                     });
                 }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(150)),
                 Err(e) => {
                     crate::log!("share accept: {e}");
                     std::thread::sleep(Duration::from_millis(500));
@@ -137,7 +137,14 @@ pub fn stop() {
     let r = RUNNING.lock().unwrap().take();
     if let Some(r) = r {
         r.stop.store(true, Relaxed);
-        let _ = r.thread.join();
+        // Wake the blocked accept; if that fails the thread can't be joined, so leave it.
+        let woke = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], r.port)), Duration::from_secs(1));
+        match woke {
+            Ok(_) => {
+                let _ = r.thread.join();
+            }
+            Err(e) => crate::log!("share stop: accept not woken: {e}"),
+        }
         drop(r.mdns);
         kick_all();
         crate::log!("sharing stopped");
@@ -150,6 +157,8 @@ enum Msg {
     Format(PixelFormat),
     Encodings(Vec<i32>),
     Request { incremental: bool },
+    /// EnableContinuousUpdates, Fence.
+    Ext(demand::Ext),
 }
 
 fn rd<const N: usize>(r: &mut impl Read) -> io::Result<[u8; N]> {
@@ -263,7 +272,7 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
         let _ = read_client(BufReader::new(reader), &tx, &mut input);
         input.release_all();
     });
-    let r = pump(&mut c, &rx, &mut cap, stop);
+    let r = Outbox::new(c.try_clone()?).and_then(|out| pump(&out, &rx, &mut cap, stop));
     let _ = c.shutdown(Shutdown::Both);
     VIEWERS.lock().unwrap().retain(|(i, _, _)| *i != id);
     changed();
@@ -333,6 +342,9 @@ fn read_client(mut r: BufReader<TcpStream>, tx: &Sender<Msg>, input: &mut Input)
                 let mut d = vec![0u8; b[5] as usize * 16];
                 r.read_exact(&mut d)?;
             }
+            t @ (demand::MSG_CONTINUOUS | demand::MSG_FENCE) => {
+                let _ = tx.send(Msg::Ext(demand::read(t, &mut r)?));
+            }
             other => return Err(io::Error::other(format!("unknown client message {other}"))),
         }
     }
@@ -340,43 +352,59 @@ fn read_client(mut r: BufReader<TcpStream>, tx: &Sender<Msg>, input: &mut Input)
 
 const ENC_DESKTOP_SIZE: i32 = -223;
 
-/// Server → client: capture, diff, encode, send. ~30 fps at most.
-fn pump(c: &mut TcpStream, rx: &Receiver<Msg>, cap: &mut Capture, stop: &AtomicBool) -> io::Result<()> {
+/// Shortest time between two updates (~30 fps).
+const FRAME: Duration = Duration::from_millis(33);
+
+/// Server → client: capture, diff, encode, send.
+fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &mut Capture, stop: &AtomicBool) -> io::Result<()> {
     let mut pf = PixelFormat::parse(&PIXEL_FORMAT);
     let mut encs: Vec<i32> = Vec::new();
-    let mut want: Option<bool> = None; // pending request: Some(incremental)
+    let mut demand = Demand::default();
+    let mut last_capture = Instant::now() - FRAME;
     let mut prev: Vec<u32> = Vec::new();
-    let mut z = Compress::new(Compression::new(5), true);
+    let mut enc = Encoder::new();
+    let mut u = Update::default();
     let mut clip_seq = unsafe { GetClipboardSequenceNumber() };
     let mut clip_check = Instant::now();
     loop {
         if stop.load(Relaxed) {
             return Ok(());
         }
-        match rx.recv_timeout(Duration::from_millis(33)) {
-            Ok(m) => {
-                match m {
-                    Msg::Format(p) => {
-                        pf = p;
-                        prev.clear();
-                    }
-                    Msg::Encodings(e) => encs = e,
-                    Msg::Request { incremental } => want = Some(want.unwrap_or(true) && incremental),
+        if out.dead() {
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "viewer connection lost"));
+        }
+        // Wake for the viewer's messages, the next capture when an update is due, or a
+        // clipboard check. Captures stay FRAME apart also when the screen doesn't change.
+        let wait = match demand.due() {
+            Some(_) if out.room() => FRAME.saturating_sub(last_capture.elapsed()),
+            _ => FRAME,
+        };
+        let mut next = match rx.recv_timeout(wait.max(Duration::from_millis(1))) {
+            Ok(m) => Some(m),
+            Err(RecvTimeoutError::Timeout) => None,
+            Err(RecvTimeoutError::Disconnected) => return Ok(()),
+        };
+        let mut reply = Vec::new();
+        while let Some(m) = next {
+            match m {
+                Msg::Format(p) => {
+                    pf = p;
+                    prev.clear();
                 }
-                while let Ok(m) = rx.try_recv() {
-                    match m {
-                        Msg::Format(p) => {
-                            pf = p;
-                            prev.clear();
-                        }
-                        Msg::Encodings(e) => encs = e,
-                        Msg::Request { incremental } => want = Some(want.unwrap_or(true) && incremental),
+                Msg::Encodings(e) => {
+                    demand.encodings(&e, &mut reply);
+                    encs = e;
+                }
+                Msg::Request { incremental } => demand.request(incremental),
+                Msg::Ext(m) => {
+                    if demand.ext(m, cap.w, cap.h, &mut reply) {
+                        prev.clear();
                     }
                 }
             }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => return Ok(()),
+            next = rx.try_recv().ok();
         }
+        out.send(reply)?;
         // Local clipboard changed → offer it to the viewer.
         if clip_check.elapsed() > Duration::from_millis(500) {
             clip_check = Instant::now();
@@ -388,59 +416,38 @@ fn pump(c: &mut TcpStream, rx: &Receiver<Msg>, cap: &mut Capture, stop: &AtomicB
                     let mut m = vec![3, 0, 0, 0];
                     m.extend_from_slice(&(b.len() as u32).to_be_bytes());
                     m.extend_from_slice(&b);
-                    c.write_all(&m)?;
+                    out.send(m)?;
                 }
             }
         }
-        let Some(incremental) = want else { continue };
+        if demand.stalled() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "viewer stopped acknowledging updates"));
+        }
+        let Some(incremental) = demand.due() else { continue };
+        if last_capture.elapsed() < FRAME || !out.room() {
+            continue; // (a viewer that's behind gets the changes together later)
+        }
+        last_capture = Instant::now();
         let (w0, h0) = (cap.w, cap.h);
         let (w, h, frame) = cap.grab();
-        let mut out = Vec::new();
-        let mut rects = 0u16;
+        u.start();
         if (w, h) != (w0, h0) && encs.contains(&ENC_DESKTOP_SIZE) {
-            out.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
-            out.extend_from_slice(&(w as u16).to_be_bytes());
-            out.extend_from_slice(&(h as u16).to_be_bytes());
-            out.extend_from_slice(&ENC_DESKTOP_SIZE.to_be_bytes());
-            rects += 1;
+            u.buf.extend_from_slice(&[0, 0, 0, 0]);
+            u.buf.extend_from_slice(&(w as u16).to_be_bytes());
+            u.buf.extend_from_slice(&(h as u16).to_be_bytes());
+            u.buf.extend_from_slice(&ENC_DESKTOP_SIZE.to_be_bytes());
+            u.rects += 1;
             prev.clear();
         }
         let full = !incremental || prev.len() != frame.len();
-        let zrle = encs.contains(&ENC_ZRLE);
-        // Changed tiles, merged into horizontal runs per tile row.
-        for ty in (0..h).step_by(TILE) {
-            let th = TILE.min(h - ty);
-            let mut tx = 0;
-            while tx < w {
-                let dirty = |x: usize| {
-                    full || (ty..ty + th).any(|y| {
-                        let a = y * w + x;
-                        let tw = TILE.min(w - x);
-                        frame[a..a + tw] != prev[a..a + tw]
-                    })
-                };
-                if !dirty(tx) {
-                    tx += TILE;
-                    continue;
-                }
-                let start = tx;
-                while tx < w && dirty(tx) {
-                    tx += TILE;
-                }
-                let rw = tx.min(w) - start;
-                encode_rect(&mut out, &frame, w, start, ty, rw, th, &pf, zrle, &mut z)?;
-                rects += 1;
-            }
-        }
-        if rects == 0 {
+        enc.changes(&mut u, frame, &prev, w, h, full, |x, y, tw, th| demand.covers(x, y, tw, th), &pf, encs.contains(&ENC_ZRLE))?;
+        if !u.finish() {
             continue; // nothing changed: keep the request pending
         }
-        let mut msg = vec![0u8, 0];
-        msg.extend_from_slice(&rects.to_be_bytes());
-        msg.extend_from_slice(&out);
-        c.write_all(&msg)?;
-        prev = frame.to_vec();
-        want = None;
+        demand.sent(u.buf.len(), &mut u.buf);
+        out.send(std::mem::replace(&mut u.buf, out.buffer()))?;
+        prev.clear();
+        prev.extend_from_slice(frame);
     }
 }
 

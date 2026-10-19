@@ -8,8 +8,8 @@ pub struct Fb {
     pub h: usize,
     pub hbm: HBITMAP,
     bits: *mut u32,
-    /// Union of changed pixels since the UI last looked: [x0, y0, x1, y1].
-    pub dirty: Option<[i32; 4]>,
+    /// What changed since the UI last copied it out.
+    pub dirty: crate::enc::Damage,
 }
 
 // The DIB memory is only touched while holding the Fb mutex.
@@ -27,7 +27,7 @@ pub fn dib_info(w: i32, h: i32) -> BITMAPINFO {
 
 impl Fb {
     pub fn new(w: usize, h: usize) -> Fb {
-        let mut fb = Fb { w: 0, h: 0, hbm: null_mut(), bits: null_mut(), dirty: None };
+        let mut fb = Fb { w: 0, h: 0, hbm: null_mut(), bits: null_mut(), dirty: crate::enc::Damage::default() };
         fb.resize(w, h);
         fb
     }
@@ -45,7 +45,7 @@ impl Fb {
         }
         self.w = w;
         self.h = h;
-        self.dirty = Some([0, 0, w as i32, h as i32]);
+        self.dirty.everything();
     }
 
     #[inline]
@@ -70,11 +70,11 @@ impl Fb {
     }
 
     pub fn mark(&mut self, x: usize, y: usize, w: usize, h: usize) {
-        let r = [x as i32, y as i32, (x + w) as i32, (y + h) as i32];
-        self.dirty = Some(match self.dirty {
-            None => r,
-            Some(d) => [d[0].min(r[0]), d[1].min(r[1]), d[2].max(r[2]), d[3].max(r[3])],
-        });
+        self.dirty.add(x, y, w, h);
+    }
+
+    pub fn pixels(&self) -> &[u32] {
+        unsafe { std::slice::from_raw_parts(self.bits, self.w * self.h) }
     }
 
     pub fn raw(&mut self, x: usize, y: usize, w: usize, h: usize, data: &[u8]) {

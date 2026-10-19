@@ -6,6 +6,7 @@ const S = {
   accounts: [],
   settings: { theme: 'system', view: 'grid', toolbar: 'auto', hotkey: 'ctrl_alt', mac_scroll: 'fast', scroll_accel: true, tray: true, notify: true, thumbnails: true, defaults: {} },
   sessions: {},
+  fileWindows: [],
   online: {},
   found: [],
   version: '',
@@ -20,6 +21,28 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const I = (code) => `<span class="i">&#x${code};</span>`;
+
+// Operating system marks (Segoe Fluent has no logos, so these are SVG everywhere).
+const OS_SVG = {
+  mac: '<path d="M16.37 12.73c-.02-2.1 1.72-3.12 1.8-3.17-.98-1.43-2.5-1.63-3.05-1.65-1.3-.13-2.53.76-3.19.76-.66 0-1.67-.74-2.75-.72-1.41.02-2.72.82-3.44 2.09-1.47 2.55-.38 6.32 1.05 8.39.7 1.01 1.53 2.15 2.62 2.11 1.05-.04 1.45-.68 2.72-.68s1.63.68 2.74.66c1.13-.02 1.85-1.03 2.54-2.05.8-1.17 1.13-2.31 1.15-2.37-.03-.01-2.2-.85-2.22-3.37zM14.29 6.55c.58-.7.97-1.68.86-2.65-.83.03-1.84.55-2.44 1.25-.53.62-1 1.61-.88 2.56.93.07 1.88-.47 2.46-1.16z"/>',
+  windows: '<path d="M3.5 5.6l7-1v6.9h-7zM11.5 4.5l9-1.3v8.3h-9zM3.5 12.5h7v6.9l-7-1zM11.5 12.5h9v8.3l-9-1.3z"/>',
+  linux: '<path d="M12 2.6c-2.3 0-3.6 1.9-3.6 4.4 0 1.3.3 2.2-.6 3.6-1.2 1.8-2.9 3.9-2.9 6.6 0 .6.1 1.1.3 1.6-.8.4-1.5.9-1.4 1.5.2.9 2.1.6 3.4 1.1 1.1.4 2 .6 2.6-.2.5-.1 1.4-.2 2.2-.2s1.7.1 2.2.2c.6.8 1.5.6 2.6.2 1.3-.5 3.2-.2 3.4-1.1.1-.6-.6-1.1-1.4-1.5.2-.5.3-1 .3-1.6 0-2.7-1.7-4.8-2.9-6.6-.9-1.4-.6-2.3-.6-3.6 0-2.5-1.3-4.4-3.6-4.4z"/><path class="cut" d="M12 10.2c-1.9 0-3.2 2.6-3.2 5.6 0 1.7.6 3.2 1.3 4h3.8c.7-.8 1.3-2.3 1.3-4 0-3-1.3-5.6-3.2-5.6z"/><circle class="cut" cx="10.6" cy="6.6" r=".9"/><circle class="cut" cx="13.4" cy="6.6" r=".9"/><path class="cut" d="M10.9 8.4h2.2L12 9.6z"/>',
+};
+
+// 'mac' | 'windows' | 'linux' | '' for a host in the book, a Bonjour find or a tailnet peer.
+function osOf(x) {
+  const o = String(x.os || '').toLowerCase();
+  if (o === 'mac' || o === 'macos') return 'mac';
+  if (o === 'windows') return 'windows';
+  if (o === 'linux') return 'linux';
+  return x.kind === 'rdp' || x.this ? 'windows' : '';
+}
+
+// The device's OS mark, or the generic screen when unknown.
+function osIcon(x) {
+  const os = osOf(x);
+  return OS_SVG[os] ? `<span class="osm osm-${os}"><svg viewBox="0 0 24 24" aria-hidden="true">${OS_SVG[os]}</svg></span>` : I('E7F4');
+}
 
 // Itda for Mac shows this same home; the words and a few controls follow the platform.
 const MAC = /Macintosh|Mac OS X/.test(navigator.userAgent) && !/Windows/.test(navigator.userAgent);
@@ -112,16 +135,21 @@ document.addEventListener('wheel', (e) => {
 // ---------------------------------------------------------------- messages from Rust
 
 function onMessage(m) {
+  if (['state','hosts','session','online','found','tailnet'].includes(m.type)) queueMicrotask(() => window.ItdaFiles?.refreshNetwork());
+  if (window.ItdaFiles && window.ItdaFiles.message(m)) return;
   switch (m.type) {
     case 'state':
-      Object.assign(S, { accounts: m.accounts || [], hosts: m.hosts, settings: m.settings, sessions: m.sessions || {}, online: m.online || {}, found: m.found || [], version: m.version, sysDark: !!m.dark, sshOk: m.ssh_ok, tailnet: m.tailnet });
+      Object.assign(S, { accounts: m.accounts || [], hosts: m.hosts, settings: m.settings, sessions: m.sessions || {}, fileWindows: m.file_windows || [], online: m.online || {}, found: m.found || [], version: m.version, sysDark: !!m.dark, sshOk: m.ssh_ok, tailnet: m.tailnet });
       applyTheme();
       render();
+      window.ItdaFiles?.boot();
+      if (window.ITDA_FILE_HOST) break;
       if (m.quick) quickConnect(m.quick);
       else if (!S.settings.onboarded && !S.hosts.length && !topModal()) showOnboarding();
       break;
     case 'hosts':
       S.hosts = m.hosts;
+      if (m.file_windows) S.fileWindows = m.file_windows;
       if (m.accounts) S.accounts = m.accounts;
       render();
       break;
@@ -138,6 +166,7 @@ function onMessage(m) {
       break;
     }
     case 'online':
+      if (JSON.stringify(m.online) === JSON.stringify(S.online)) break;
       S.online = m.online;
       render();
       break;
@@ -167,14 +196,19 @@ function onMessage(m) {
       toast(m.text, 'E73E');
       break;
     case 'tailnet':
+      // Asked every 30 s: draw again only when something changed.
+      if (JSON.stringify(m.tailnet) === JSON.stringify(S.tailnet)) break;
       S.tailnet = m.tailnet;
       render();
       break;
-    case 'found':
+    case 'found': {
+      const same = JSON.stringify(m.found) === JSON.stringify(S.found);
+      const was = S.scanning;
       S.found = m.found;
       S.scanning = false;
-      render();
+      if (!same || was) render();
       break;
+    }
     case 'error':
       closeModal('connecting');
       showError(m.id, m.kind, m.msg);
@@ -184,8 +218,21 @@ function onMessage(m) {
       showPassword(m.id);
       break;
     case 'thumb': {
+      // Load and decode the new preview first, then swap it in: the old one stays until then.
       const h = hostById(m.id);
-      if (h) { h.thumb = m.v; render(); }
+      if (!h) break;
+      const src = `thumb/${h.id}.png?v=${m.v}`;
+      const img = new Image();
+      img.alt = '';
+      img.dataset.thumb = '';
+      img.setAttribute('onerror', 'this.remove()');
+      img.src = src;
+      img.decode().catch(() => {}).then(() => {
+        if (hostById(m.id) !== h) return;
+        READY.set(src, img);
+        h.thumb = m.v;
+        render();
+      });
       break;
     }
     case 'settings':
@@ -238,7 +285,9 @@ function renderNav() {
   html += navItem('recent', 'E81C', '최근 사용', null);
   html += navItem('accounts', 'E77B', '계정', S.accounts.length || null);
   if (live) html += navItem('live', 'E703', '연결 중', live);
-  html += navItem('nearby', 'E701', '주변 기기', S.found.length + tailPeers().filter((p) => p.online).length || null);
+  // Only devices that could still be added: the rest are in the book already.
+  const addable = S.found.filter((f) => !inBook(f)).length + tailPeers().filter((p) => p.online && !peerInBook(p)).length;
+  html += navItem('nearby', 'E701', '주변 기기', addable || null);
   const sharing = (S.settings.web || {}).on || (S.settings.share || {}).on;
   html += navItem('share', 'E72D', '공유', null).replace('</button>', sharing ? '<span class="dot-on" title="켜짐"></span></button>' : '</button>');
   const gs = groups();
@@ -246,7 +295,7 @@ function renderNav() {
     html += `<div class="nav-section">그룹</div>`;
     for (const g of gs) html += navItem(`group:${g}`, 'E8B7', g, S.hosts.filter((h) => h.group === g).length);
   }
-  $('#nav').innerHTML = html;
+  morph($('#nav'), html);
   $$('.nav-bottom .nav-item').forEach((b) => b.classList.toggle('active', b.dataset.page === S.page));
 }
 
@@ -293,15 +342,15 @@ function dot(h) {
 }
 
 function thumb(h) {
-  const img = h.thumb ? `<img src="thumb/${esc(h.id)}.png?v=${h.thumb}" alt="" loading="lazy" onerror="this.remove()">` : '';
+  const img = h.thumb ? `<img data-thumb src="thumb/${esc(h.id)}.png?v=${h.thumb}" alt="" loading="lazy" onerror="this.remove()">` : '';
   const initial = esc((label(h)[0] || '?').toUpperCase());
   return `<div class="thumb" style="--h:${hue(h.id)}">
-    <span class="ph i">&#xE7F4;</span><span class="ph-initial">${initial}</span>${img}`;
+    <span class="ph">${osIcon(h)}</span><span class="ph-initial">${initial}</span>${img}`;
 }
 
 function primaryAction(h) {
   const s = S.sessions[h.id];
-  if (!s) return `<button class="btn primary" data-act="connect" data-id="${esc(h.id)}">${I('E768')}연결</button>`;
+  if (!s) return `<button class="btn primary" data-act="connect" data-id="${esc(h.id)}">${I('E768')}화면 연결</button>`;
   if (s.state === 'connecting') return `<button class="btn" data-act="cancel" data-id="${esc(h.id)}">${I('E711')}취소</button>`;
   return `<button class="btn primary" data-act="focus" data-id="${esc(h.id)}">${I('E8A7')}창으로 이동</button>`;
 }
@@ -322,6 +371,7 @@ function card(h) {
         <button class="more i" data-act="more" data-id="${esc(h.id)}" title="더보기">&#xE712;</button></div>
       <div class="sub">${who}</div>
       <div class="sub2">${extra}</div>
+      <button class="btn sm file-open" data-act="files" data-id="${esc(h.id)}">${I('E8B7')}파일 열기</button>
     </div>
   </div>`;
 }
@@ -345,7 +395,7 @@ function row(h) {
     <span class="col c-user">${h.user ? esc(h.user) : '<span style="color:var(--text-3)">VNC 암호</span>'}</span>
     <span class="col c-last">${esc(ago(h.last_used))}</span>
     <span class="col">${state}</span>
-    <div class="actions">${primaryAction(h).replace('class="btn', 'class="btn sm')}
+    <div class="actions"><button class="btn sm" data-act="files" data-id="${esc(h.id)}">${I('E8B7')}파일</button>${primaryAction(h).replace('class="btn', 'class="btn sm')}
       <button class="btn subtle icon" data-act="more" data-id="${esc(h.id)}" title="더보기">${I('E712')}</button></div>
   </div>`;
 }
@@ -486,38 +536,37 @@ function emptyBook() {
 // A device found on this Wi-Fi: what it is, how it would open, and what is missing.
 // Windows PCs announce themselves while Itda runs, even with sharing off.
 function foundRow(f) {
-  const have = inBook(f);
   const win = f.os === 'windows';
   const rdp = win && !f.share && f.rdp;
   const addr = [f.hostname, f.ip].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' · ');
-  const act = have
-    ? `<span class="pill mute">추가됨</span><button class="btn sm" data-act="connect" data-id="${esc(have.id)}">${I('E768')}연결</button>`
-    : `<button class="btn sm primary" data-act="add-found" data-host="${esc(f.host)}" data-name="${esc(f.name)}" data-os="${esc(f.os || '')}" data-itda="${win && !rdp ? '1' : ''}">${I('E710')}추가</button>`;
+  const act = `<button class="btn sm primary" data-act="add-found" data-host="${esc(f.host)}" data-name="${esc(f.name)}" data-os="${esc(f.os || '')}" data-itda="${win && !rdp ? '1' : ''}">${I('E710')}추가</button>`;
   const pill = win
     ? ` <span class="pill ${f.share || rdp ? 'ok' : 'mute'}">${f.share ? 'Windows · Itda 공유 중' : rdp ? 'Windows · 원격 데스크톱' : 'Windows · Itda'}</span>`
     : f.itda ? ` <span class="pill ${f.share ? 'ok' : 'mute'}">Mac · Itda</span>` : '';
   const off = !f.itda || f.share || rdp ? ''
     : win ? '<span class="off">공유가 꺼져 있습니다 — 그 PC의 Itda에서 <strong>공유 → 이 PC 공유</strong>를 켜면 연결됩니다.</span>'
       : '<span class="off">화면 공유가 꺼져 있습니다 — 그 Mac의 <strong>시스템 설정 → 일반 → 공유 → 화면 공유</strong>를 켜면 연결됩니다.</span>';
-  return `<div class="found"><div class="ico">${I(win ? 'E7F8' : 'E7F4')}</div><div class="txt"><b>${esc(f.name)}${pill}</b><span>${esc(addr)}</span>${off}</div>${act}</div>`;
+  return `<div class="found"><div class="ico">${osIcon({ os: win ? 'windows' : 'mac' })}</div><div class="txt"><b>${esc(f.name)}${pill}</b><span>${esc(addr)}</span>${off}</div>${act}</div>`;
 }
 
 function peerRow(p) {
-  const have = peerInBook(p);
   const os = { macOS: 'Mac', windows: 'Windows', linux: 'Linux' }[p.os] || p.os;
-  const act = have
-    ? `<span class="pill mute">추가됨</span><button class="btn sm" data-act="connect" data-id="${esc(have.id)}">${I('E768')}연결</button>`
-    : `<button class="btn sm primary" data-act="add-found" data-host="${esc(p.dns || p.ip)}" data-name="${esc(p.name)}" data-os="${esc(p.os)}">${I('E710')}추가</button>`;
-  return `<div class="found"><div class="ico">${I('E7F4')}</div><div class="txt"><b>${p.online ? '<span class="dot on"></span> ' : '<span class="dot off"></span> '}${esc(p.name)} <span class="pill mute">${esc(os)}</span></b><span>${esc(p.dns)} · ${esc(p.ip)}</span></div>${act}</div>`;
+  const act = `<button class="btn sm primary" data-act="add-found" data-host="${esc(p.dns || p.ip)}" data-name="${esc(p.name)}" data-os="${esc(p.os)}">${I('E710')}추가</button>`;
+  return `<div class="found"><div class="ico">${osIcon(p)}</div><div class="txt"><b>${p.online ? '<span class="dot on"></span> ' : '<span class="dot off"></span> '}${esc(p.name)} <span class="pill mute">${esc(os)}</span></b><span>${esc(p.dns)} · ${esc(p.ip)}</span></div>${act}</div>`;
 }
 
 function renderNearby() {
   const head = `<div class="banner">${I('E946')}<div class="txt"><b>연결할 수 있는 기기</b><span>같은 Wi-Fi에서는 화면 공유가 켜진 Mac과 Itda가 실행 중인 PC·Mac을 찾고(30초마다 새로 고침), 어디에 있든 연결되는 기기는 Tailscale로 찾습니다.</span></div>
     <button class="btn" data-act="scan" ${S.scanning ? 'disabled' : ''}>${S.scanning ? '<span class="spin"></span>검색 중…' : `${I('E72C')}다시 검색`}</button></div>`;
-  const lan = S.found.length
-    ? `<div class="found-list">${S.found.map(foundRow).join('')}</div>`
-    : `<p class="note-line">${S.scanning ? '찾는 중…' : '같은 Wi-Fi에서 찾은 기기가 없습니다. 화면 공유가 켜진 Mac과 Itda가 켜진 PC·Mac이 여기에 나타납니다. 원격 데스크톱만 켠 PC는 주소로 직접 추가하세요.'}</p>`;
-  const peers = tailPeers();
+  // Devices already in the address book are left out: they're on the home page.
+  const fresh = S.found.filter((f) => !inBook(f));
+  const lan = fresh.length
+    ? `<div class="found-list">${fresh.map(foundRow).join('')}</div>`
+    : S.found.length
+      ? `<p class="note-line">같은 Wi-Fi에서 찾은 기기는 모두 주소록에 있습니다.</p>`
+      : `<p class="note-line">${S.scanning ? '찾는 중…' : '같은 Wi-Fi에서 찾은 기기가 없습니다. 화면 공유가 켜진 Mac과 Itda가 켜진 PC·Mac이 여기에 나타납니다. 원격 데스크톱만 켠 PC는 주소로 직접 추가하세요.'}</p>`;
+  const all = tailPeers();
+  const peers = all.filter((p) => !peerInBook(p));
   const t = S.tailnet;
   const ts = !t
     ? `<p class="note-line">Tailscale을 설치하면 집 밖의 Mac에도 VPN 설정 없이 연결할 수 있습니다. <a href="https://tailscale.com/download" data-ext>Tailscale 받기</a></p>`
@@ -525,7 +574,9 @@ function renderNearby() {
       ? `<p class="note-line">Tailscale이 꺼져 있습니다. Tailscale을 켜면 어디서나 연결되는 기기가 여기에 나타납니다.</p>`
       : peers.length
         ? `<div class="found-list">${peers.map(peerRow).join('')}</div>`
-        : `<p class="note-line">같은 Tailscale 네트워크에 Mac·PC가 없습니다.</p>`;
+        : all.length
+          ? `<p class="note-line">Tailscale의 Mac·PC는 모두 주소록에 있습니다.</p>`
+          : `<p class="note-line">같은 Tailscale 네트워크에 열 수 있는 Mac·PC가 없습니다.</p>`;
   return `<div class="page">${head}
     <div class="section-head">${I('E701')}같은 Wi-Fi<span class="line"></span></div>${lan}
     <div class="section-head">${I('E774')}Tailscale — 어디서나${t && t.running ? ` · ${esc(t.me.name)}` : ''}<span class="line"></span></div>${ts}
@@ -680,6 +731,8 @@ function renderSettings() {
     ${setting('F0E2', '주소록 보기', '', seg('view', st.view, [['grid', '카드'], ['list', '목록']]))}
     ${setting('E71E', '화면 크기', MAC ? '⌘ + / ⌘ − 로도 바꿀 수 있습니다 (⌘0 = 100%)' : 'Ctrl + / Ctrl − / Ctrl+휠로도 바꿀 수 있습니다 (Ctrl+0 = 100%)', seg('zoom', st.zoom || 100, [[90, '90%'], [100, '100%'], [110, '110%'], [125, '125%'], [150, '150%']]), true)}
 
+    ${MAC ? `<div class="group-title">접속 창</div>
+    ${setting('E962', '다른 Mac 스크롤 속도', '트랙패드나 휠로 민 만큼 다른 Mac 화면이 움직이는 양. ‘빠르게’면 이 Mac에서와 거의 같습니다', seg('mac_scroll', st.mac_scroll || 'fast', [['normal', '보통'], ['fast', '빠르게'], ['faster', '아주 빠르게']]), true)}` : ''}
     ${MAC ? '' : `<div class="group-title">접속 창${more('session')}<a href="#" class="help-link" data-help="keys">단축키 전체 보기</a></div>
     ${setting('E7C4', '툴바', '화면 위쪽 가운데의 툴바 표시 방식', `<select class="input" data-select="toolbar"><option value="auto" ${st.toolbar === 'auto' ? 'selected' : ''}>자동 숨김</option><option value="pinned" ${st.toolbar === 'pinned' ? 'selected' : ''}>항상 표시</option><option value="hidden" ${st.toolbar === 'hidden' ? 'selected' : ''}>숨김 (단축키만)</option></select>`)}
     ${setting('E765', '단축키 조합', 'Mac으로 보내지 않고 Itda가 처리하는 키 조합', seg('hotkey', st.hotkey, [['ctrl_alt', 'Ctrl+Alt'], ['ctrl_shift', 'Ctrl+Shift']]))}
@@ -712,6 +765,89 @@ function renderSettings() {
   </div>`;
 }
 
+// New previews, loaded and decoded before render() swaps them in (see morph).
+const READY = new Map();
+
+// Bring el's children in line with `html`, changing only what differs. Rebuilding with
+// innerHTML made every redraw (sessions, online checks, previews) flash: previews decoded
+// again behind their placeholder, a hovered card lost its connect button until the mouse
+// moved, spinners restarted, and a field being typed in lost focus. Nodes keep their
+// identity here; keyed ones (id, data-id, data-page) are matched by key.
+function morph(el, html) {
+  const t = document.createElement('template');
+  t.innerHTML = html;
+  morphChildren(el, t.content);
+}
+
+function morphKey(n) {
+  if (n.nodeType !== 1) return null;
+  const k = n.id || n.dataset.id || n.dataset.page || n.dataset.help;
+  return k ? `${n.nodeName}|${k}|${n.dataset.act || ''}` : null;
+}
+
+function morphChildren(parent, next) {
+  let a = parent.firstChild;
+  for (let b = next.firstChild; b; ) {
+    const nb = b.nextSibling;
+    const key = morphKey(b);
+    let m = null;
+    if (key) {
+      for (let s = a; s; s = s.nextSibling) {
+        if (morphKey(s) === key) { m = s; break; }
+      }
+    } else if (a && !morphKey(a) && a.nodeType === b.nodeType && a.nodeName === b.nodeName) {
+      m = a;
+    }
+    if (m) {
+      if (m !== a) parent.insertBefore(m, a);
+      a = m.nextSibling;
+      morphNode(m, b);
+    } else {
+      parent.insertBefore(b, a);
+    }
+    b = nb;
+  }
+  while (a) {
+    const n = a.nextSibling;
+    parent.removeChild(a);
+    a = n;
+  }
+}
+
+function morphNode(old, b) {
+  if (old.nodeType !== 1) {
+    if (old.nodeValue !== b.nodeValue) old.nodeValue = b.nodeValue;
+    return;
+  }
+  if (old.nodeName === 'IMG' && old.getAttribute('src') !== b.getAttribute('src')) {
+    // A new preview: the one decoded ahead of time if there is one (no blank frame).
+    old.replaceWith(READY.get(b.getAttribute('src')) || b);
+    return;
+  }
+  for (const { name } of [...old.attributes]) {
+    if (!b.hasAttribute(name)) old.removeAttribute(name);
+  }
+  for (const { name, value } of [...b.attributes]) {
+    if (old.getAttribute(name) !== value) old.setAttribute(name, value);
+  }
+  if (old.classList.contains('i')) {
+    // Icon glyphs become SVG outside Windows (icons.js): compare the glyph, not the SVG.
+    const g = b.textContent;
+    if ((old._glyph ?? old.textContent) !== g) {
+      old.textContent = g;
+    }
+    old._glyph = g;
+    return;
+  }
+  morphChildren(old, b);
+  if (old !== document.activeElement) {
+    if ('checked' in old && old.type !== undefined && old.checked !== b.checked) old.checked = b.checked;
+    if (('value' in old) && (old.nodeName === 'INPUT' || old.nodeName === 'TEXTAREA' || old.nodeName === 'SELECT') && old.value !== b.value) {
+      old.value = old.nodeName === 'SELECT' ? (b.querySelector('option[selected]')?.value ?? old.value) : b.value;
+    }
+  }
+}
+
 function render() {
   renderNav();
   renderTop();
@@ -719,7 +855,8 @@ function render() {
   const focusId = document.activeElement && document.activeElement.closest && document.activeElement.closest('[data-id]') && c.contains(document.activeElement) ? document.activeElement.closest('[data-id]').dataset.id : null;
   const scroll = c.scrollTop;
   const p = S.page;
-  c.innerHTML = p === 'accounts' ? renderAccounts() : p === 'settings' ? renderSettings() : p === 'share' ? renderShare() : p === 'help' ? renderHelp() : p === 'nearby' ? renderNearby() : renderHosts();
+  morph(c, p === 'accounts' ? renderAccounts() : p === 'settings' ? renderSettings() : p === 'share' ? renderShare() : p === 'help' ? renderHelp() : p === 'nearby' ? renderNearby() : renderHosts());
+  READY.clear();
   c.scrollTop = scroll;
   if (focusId) {
     const el = c.querySelector(`.card[data-id="${CSS.escape(focusId)}"], .list-row[data-id="${CSS.escape(focusId)}"]`);
@@ -1245,6 +1382,7 @@ function showCtx(id, x, y) {
   if (!s) items.push(['connect', 'E768', '연결']);
   else if (s.state === 'connecting') items.push(['cancel', 'E711', '연결 취소']);
   else items.push(['focus', 'E8A7', '창으로 이동'], ['disconnect', 'E711', '연결 끊기']);
+  items.push(['files', 'E8B7', '파일 열기']);
   items.push('-', ['edit', 'E70F', '편집'], ['dup', 'E8C8', '복제'], ['fav', h.favorite ? 'E8D9' : 'E734', h.favorite ? '즐겨찾기 해제' : '즐겨찾기에 추가']);
   if (h.has_pw) items.push(['forget', 'E8D7', '저장된 암호 지우기']);
   items.push('-', ['del', 'E74D', '삭제', 'danger']);
@@ -1284,6 +1422,8 @@ function scan() {
 function act(a, el) {
   const id = el.dataset.id;
   switch (a) {
+    case 'files': return window.ItdaFiles.launch(hostById(id));
+    case 'file-network': return window.ItdaFiles.launchNetwork();
     case 'connect': return connect(id);
     case 'focus': return send('focus', { id });
     case 'cancel': return send('cancel', { id });
@@ -1368,7 +1508,7 @@ document.addEventListener('click', (e) => {
   const nav = e.target.closest('.nav-item');
   if (nav) return go(nav.dataset.page);
   const b = e.target.closest('[data-act]');
-  if (b && (b.closest('#content') || inCtx)) {
+  if (b && (b.closest('#content') || inCtx || b.dataset.act === 'file-network')) {
     e.stopPropagation();
     hideCtx();
     return act(b.dataset.act, b);

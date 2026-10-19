@@ -105,6 +105,8 @@ pub struct Host {
     /// What the device is, for wording and defaults: "mac" | "windows" | "linux" ("" = Mac, from
     /// before this was stored).
     pub os: String,
+    /// Files use a separate login/connection from the remote screen.
+    pub files: crate::files::Options,
 }
 
 impl Host {

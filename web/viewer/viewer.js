@@ -25,6 +25,18 @@ const P = {
 };
 const icon = (n) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${P[n]}</svg>`;
 
+// Operating system marks, filled (the same as the home page's, web/app.js).
+const OS_SVG = {
+  mac: '<path d="M16.37 12.73c-.02-2.1 1.72-3.12 1.8-3.17-.98-1.43-2.5-1.63-3.05-1.65-1.3-.13-2.53.76-3.19.76-.66 0-1.67-.74-2.75-.72-1.41.02-2.72.82-3.44 2.09-1.47 2.55-.38 6.32 1.05 8.39.7 1.01 1.53 2.15 2.62 2.11 1.05-.04 1.45-.68 2.72-.68s1.63.68 2.74.66c1.13-.02 1.85-1.03 2.54-2.05.8-1.17 1.13-2.31 1.15-2.37-.03-.01-2.2-.85-2.22-3.37zM14.29 6.55c.58-.7.97-1.68.86-2.65-.83.03-1.84.55-2.44 1.25-.53.62-1 1.61-.88 2.56.93.07 1.88-.47 2.46-1.16z"/>',
+  windows: '<path d="M3.5 5.6l7-1v6.9h-7zM11.5 4.5l9-1.3v8.3h-9zM3.5 12.5h7v6.9l-7-1zM11.5 12.5h9v8.3l-9-1.3z"/>',
+  linux: '<path d="M12 2.6c-2.3 0-3.6 1.9-3.6 4.4 0 1.3.3 2.2-.6 3.6-1.2 1.8-2.9 3.9-2.9 6.6 0 .6.1 1.1.3 1.6-.8.4-1.5.9-1.4 1.5.2.9 2.1.6 3.4 1.1 1.1.4 2 .6 2.6-.2.5-.1 1.4-.2 2.2-.2s1.7.1 2.2.2c.6.8 1.5.6 2.6.2 1.3-.5 3.2-.2 3.4-1.1.1-.6-.6-1.1-1.4-1.5.2-.5.3-1 .3-1.6 0-2.7-1.7-4.8-2.9-6.6-.9-1.4-.6-2.3-.6-3.6 0-2.5-1.3-4.4-3.6-4.4z"/><path class="cut" d="M12 10.2c-1.9 0-3.2 2.6-3.2 5.6 0 1.7.6 3.2 1.3 4h3.8c.7-.8 1.3-2.3 1.3-4 0-3-1.3-5.6-3.2-5.6z"/><circle class="cut" cx="10.6" cy="6.6" r=".9"/><circle class="cut" cx="13.4" cy="6.6" r=".9"/><path class="cut" d="M10.9 8.4h2.2L12 9.6z"/>',
+};
+const osName = (x) => (x.this || x.kind === 'rdp' ? 'windows' : String(x.os || '').toLowerCase() === 'macos' ? 'mac' : x.os);
+const osMark = (x) => {
+  const os = osName(x);
+  return OS_SVG[os] ? `<svg class="ic osm" viewBox="0 0 24 24" aria-hidden="true">${OS_SVG[os]}</svg>` : icon('monitor');
+};
+
 const XK = { cmd: 0xffeb, opt: 0xffe9, ctrl: 0xffe3, shift: 0xffe1, esc: 0xff1b, tab: 0xff09, enter: 0xff0d, back: 0xff08, del: 0xffff, space: 0x20,
   left: 0xff51, up: 0xff52, right: 0xff53, down: 0xff54, f3: 0xffc0, f4: 0xffc1, win: 0xffeb, alt: 0xffe9 };
 
@@ -68,6 +80,7 @@ async function boot() {
   const me = await api('/api/me');
   // Local mode: this page is the Mac app's own window (no PIN, nothing to install).
   S.local = !!(me.data && me.data.local);
+  if (me.data && me.data.scroll) S.macScroll = me.data.scroll.mac;
   if (S.local) {
     document.body.classList.add('local');
     $('#logout').hidden = true;
@@ -134,17 +147,23 @@ async function openFromApp() {
 function renderHosts() {
   const el = $('#hosts');
   const add = `<button class="host add" data-new="host">${icon('plus')}<b>기기 추가</b><span>Mac 또는 Windows PC</span></button>`;
+  // Previews already shown stay as they are (a new <img> would be decoded again and flash).
+  const shown = new Map([...el.querySelectorAll('img')].map((i) => [i.getAttribute('src'), i]));
   el.innerHTML = S.hosts.map((h) => `
       <div class="host${h.has_pw ? '' : ' nopw'}" data-id="${esc(h.id)}">
         <button class="open" aria-label="${esc(h.label)} 열기">
-          <div class="th ${isWin(h) ? 'win' : ''}">${icon(h.this ? 'pc' : 'monitor')}${h.thumb ? `<img alt="" src="thumb/${esc(h.id)}.png?t=${Date.now()}">` : ''}</div>
+          <div class="th ${esc(osName(h) || '')}">${osMark(h)}${h.thumb ? `<img alt="" src="thumb/${esc(h.id)}.png?v=${esc(String(h.thumb))}">` : ''}</div>
           <div class="meta"><b>${esc(h.label)}</b>
             <span>${h.ssh ? icon('lock') : ''}${esc(h.this ? 'Itda가 실행 중인 PC' : h.user ? `${h.user}@${h.host}` : h.host)}</span>
             ${h.has_pw ? `<span class="kind">${esc(KIND_TEXT(h))}</span>` : '<span class="warn">암호를 저장해야 열 수 있습니다 — 눌러서 입력</span>'}</div>
         </button>
         ${h.this ? '' : `<button class="more" data-edit="${esc(h.id)}" title="편집" aria-label="${esc(h.label)} 편집">${icon('edit')}</button>`}
       </div>`).join('') + add;
-  el.querySelectorAll('img').forEach((img) => img.addEventListener('error', () => img.remove()));
+  el.querySelectorAll('img').forEach((img) => {
+    const old = shown.get(img.getAttribute('src'));
+    if (old) img.replaceWith(old);
+    else img.addEventListener('error', () => img.remove());
+  });
 }
 
 function renderAccounts() {
@@ -294,7 +313,7 @@ async function showNearby(f, sync) {
   if (!list.length) { box.innerHTML = '<span class="muted">주변에서 찾은 기기가 없습니다 — 아래에 주소를 직접 넣으세요.</span>'; return; }
   const OS = { mac: 'Mac', windows: 'Windows', linux: 'Linux' };
   box.innerHTML = `<b>주변에서 찾은 기기</b><div class="chips">${list.map((d, i) =>
-    `<button type="button" class="chip" data-i="${i}">${icon(d.os === 'windows' ? 'pc' : 'monitor')}<span>${esc(d.name)}<small>${OS[d.os] || ''}${d.kind === 'rdp' ? ' · 원격 데스크톱' : ''}${d.via === 'tailscale' ? ' · Tailscale' : ''}${d.off ? ' · 공유 꺼짐' : ''}</small></span></button>`).join('')}</div>`;
+    `<button type="button" class="chip ${esc(osName(d) || '')}" data-i="${i}">${osMark(d)}<span>${esc(d.name)}<small>${OS[d.os] || ''}${d.kind === 'rdp' ? ' · 원격 데스크톱' : ''}${d.via === 'tailscale' ? ' · Tailscale' : ''}${d.off ? ' · 공유 꺼짐' : ''}</small></span></button>`).join('')}</div>`;
   box.onclick = (e) => {
     const c = e.target.closest('[data-i]');
     if (!c) return;
@@ -486,6 +505,7 @@ function appDropped(h, info) {
 
 // The card picture in the app's address book: a small copy of the screen now and then.
 let thumbTimer;
+let lastThumb = '';
 function thumbSoon(ms) {
   clearTimeout(thumbTimer);
   thumbTimer = setTimeout(() => {
@@ -496,7 +516,12 @@ function thumbSoon(ms) {
       c.width = Math.round(src.width * k);
       c.height = Math.round(src.height * k);
       c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
-      try { post({ ev: 'thumb', png: c.toDataURL('image/png') }); } catch (_) {}
+      try {
+        // An unchanged screen isn't sent again (the app would rewrite the file and redraw).
+        const png = c.toDataURL('image/png');
+        if (png !== lastThumb) post({ ev: 'thumb', png });
+        lastThumb = png;
+      } catch (_) {}
     }
     if (S.rfb) thumbSoon(60000);
   }, ms);
@@ -504,6 +529,48 @@ function thumbSoon(ms) {
 
 // Text copied on the Mac, handed over by the app when this window comes forward.
 window.itdaPaste = (t) => { if (S.rfb && !S.viewOnly && opt('clipboard', true) && t) S.rfb.clipboardPasteFrom(t); };
+
+// The wheel, instead of noVNC's: noVNC sends one click per event once 50 px have piled up
+// and drops the rest, so a trackpad swipe or a fast wheel moves the remote a fraction of
+// what it moves here. A Mac (Screen Sharing) scrolls a short line per click, so it gets one
+// click per WHEEL_MAC px divided by the "Mac scroll speed" setting (fast: about the same
+// distance as here); other servers one per WHEEL_PX, as noVNC. Leftovers carry over. macOS
+// already accelerates trackpad and wheel deltas, so nothing is added on top.
+const WHEEL_MAC = 20;
+const WHEEL_PX = 50;
+const WHEEL_MAX = 40; // clicks per event at most
+const wheel = { x: 0, y: 0 };
+const BTN = (b) => (b & 1) | ((b & 4) >> 1) | ((b & 2) << 1); // DOM buttons → RFB mask
+function onWheel(e) {
+  const rfb = S.rfb;
+  if (!rfb || !rfb._canvas || !rfb._canvas.contains(e.target)) return;
+  e.preventDefault();
+  e.stopPropagation(); // noVNC's own handler sits on the canvas
+  if (S.viewOnly || e.ctrlKey) return; // Ctrl + wheel is a pinch: kept here
+  const h = S.host || {};
+  const mac = h.kind !== 'rdp' && !h.this && kindOf(h) === 'mac';
+  const speed = { normal: 1, fast: 2, faster: 3 }[S.macScroll] || 2;
+  const step = mac ? WHEEL_MAC / speed : WHEEL_PX;
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? rfb._canvas.clientHeight : 1;
+  const r = rfb._canvas.getBoundingClientRect();
+  const x = Math.max(0, Math.min(r.width - 1, e.clientX - r.left));
+  const y = Math.max(0, Math.min(r.height - 1, e.clientY - r.top));
+  const held = BTN(e.buttons);
+  for (const [axis, d, back, fwd] of [['y', e.deltaY, 8, 16], ['x', e.deltaX, 32, 64]]) {
+    if (!d) continue;
+    if (Math.sign(d) !== Math.sign(wheel[axis])) wheel[axis] = 0; // turned around
+    wheel[axis] += d * unit;
+    const n = Math.min(WHEEL_MAX, Math.trunc(Math.abs(wheel[axis]) / step));
+    if (!n) continue;
+    wheel[axis] -= Math.sign(wheel[axis]) * n * step;
+    const bit = d < 0 ? back : fwd;
+    for (let i = 0; i < n; i++) {
+      rfb._handleMouseButton(x, y, held | bit);
+      rfb._handleMouseButton(x, y, held);
+    }
+  }
+}
+$('#screen').addEventListener('wheel', onWheel, { capture: true, passive: false });
 
 // noVNC turns a pinch into Ctrl + mouse wheel on the remote device, which zooms every app
 // there (and can leave Ctrl held). Keep pinches here: spread = 1:1, pinch in = fit.
