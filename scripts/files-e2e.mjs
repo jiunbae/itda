@@ -269,6 +269,8 @@ try {
       await page.keyboard.press("ArrowRight");
       const after = await page.locator('[data-pane="remote"] th').first().boundingBox();
       assert(after.width > before.width + 5, "Column resizing did not change the column");
+      await page.keyboard.press('Meta+f');
+      assert(await page.locator('.files-layer [data-search]').evaluate((el) => el === document.activeElement), "Column separator swallowed the search shortcut");
       const grip = await handle.boundingBox();
       await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
       await page.mouse.down();

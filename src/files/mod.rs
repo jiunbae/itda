@@ -141,6 +141,8 @@ fn windows_name(n: &str) -> bool {
     }
     let stem = n.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
     let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        // Win32 also recognizes superscript 1/2/3 as device-port digits.
+        || matches!(stem.as_str(), "COM¹" | "COM²" | "COM³" | "LPT¹" | "LPT²" | "LPT³")
         || ((stem.starts_with("COM") || stem.starts_with("LPT"))
             && stem.len() == 4
             && stem.as_bytes()[3].is_ascii_digit());
@@ -847,6 +849,9 @@ mod tests {
     #[test]
     fn names_windows_cannot_store() {
         for bad in ["C:x.txt", "a:b", "what?", "x*", "a<b", "a>b", "a|b", "q\"", "dot.", "space ", "CON", "con.txt", "NUL", "Com1.log", "LPT9", "CONIN$"] {
+            assert!(!windows_name(bad), "{bad}");
+        }
+        for bad in ["COM¹", "com².pdf", "COM³.txt", "LPT¹", "lpt².log", "LPT³.doc"] {
             assert!(!windows_name(bad), "{bad}");
         }
         for ok in ["report.txt", "CONTENT.txt", "COM10", "console", ".bashrc", "a b.txt", "한글 이름.pdf"] {

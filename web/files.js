@@ -1089,8 +1089,8 @@
         e.preventDefault();
         e.stopPropagation();
         resizeBy(e.target, e.key === "ArrowRight" ? 10 : -10);
+        return;
       }
-      return;
     }
     if (networkMode) {
       e.stopPropagation();
