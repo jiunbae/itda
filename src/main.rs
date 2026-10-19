@@ -6,6 +6,9 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 // Portable core: protocols, storage, discovery, the web gateway.
+#[cfg(test)]
+mod cu_e2e;
+mod demand;
 mod enc;
 mod gateway;
 mod img;

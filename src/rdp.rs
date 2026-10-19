@@ -14,8 +14,8 @@
 use crate::rfb::{self, Raw, Rx, ENC_CURSOR, ENC_DESKTOP_SIZE, ENC_EXT_DESKTOP_SIZE, ENC_ZRLE, PIXEL_FORMAT};
 use ironrdp_displaycontrol::client::DisplayControlClient;
 use ironrdp_dvc::DrdynvcClient;
-use crate::enc::{encode_rect, PixelFormat, TILE};
-use flate2::{Compress, Compression};
+use crate::demand::{self, Demand};
+use crate::enc::{Encoder, PixelFormat, TILE};
 use ironrdp_blocking::Framed;
 use ironrdp_connector::sspi;
 use ironrdp_connector::connection_activation::{ConnectionActivationFactory, ConnectionActivationState};
@@ -307,6 +307,8 @@ enum Msg {
     Pointer { mask: u8, x: u16, y: u16 },
     /// SetDesktopSize: the viewer would like this desktop size.
     Resize { w: u16, h: u16 },
+    /// EnableContinuousUpdates, Fence.
+    Ext(demand::Ext),
 }
 
 /// Browser → bridge: parse RFB client messages (after ClientInit) into `Msg`s.
@@ -347,6 +349,7 @@ fn read_client(mut r: BufReader<TcpStream>, tx: Sender<Msg>) -> io::Result<()> {
                 io::copy(&mut (&mut r).take(b[5] as u64 * 16), &mut io::sink())?;
                 Msg::Resize { w: u16::from_be_bytes([b[1], b[2]]), h: u16::from_be_bytes([b[3], b[4]]) }
             }
+            t @ (demand::MSG_CONTINUOUS | demand::MSG_FENCE) => Msg::Ext(demand::read(t, &mut r)?),
             other => return Err(io::Error::other(format!("unknown client message {other}"))),
         };
         if tx.send(m).is_err() {
@@ -365,9 +368,9 @@ struct Bridge {
     /// RFB state
     pf: PixelFormat,
     encs: Vec<i32>,
-    want: Option<bool>,
+    demand: Demand,
     prev: Vec<u32>,
-    z: Compress,
+    enc: Encoder,
     resized: bool,
     /// ExtendedDesktopSize: told the viewer it may ask for sizes; a requested size waiting
     /// for its turn; the answer owed to the viewer (status: 0 = done, 1 = not allowed).
@@ -422,9 +425,9 @@ impl Bridge {
             out: client,
             pf: PixelFormat::parse(&PIXEL_FORMAT),
             encs: Vec::new(),
-            want: None,
+            demand: Demand::default(),
             prev: Vec::new(),
-            z: Compress::new(Compression::new(5), true),
+            enc: Encoder::new(),
             resized: false,
             ext_told: false,
             pending_size: None,
@@ -543,12 +546,23 @@ impl Bridge {
                 return Ok(());
             }
             Msg::Encodings(e) => {
+                let mut reply = Vec::new();
+                self.demand.encodings(&e, &mut reply);
                 self.encs = e;
-                return Ok(());
+                return self.out.write_all(&reply);
             }
             Msg::Request { incremental } => {
-                self.want = Some(self.want.unwrap_or(true) && incremental);
+                self.demand.request(incremental);
                 return Ok(());
+            }
+            Msg::Ext(m) => {
+                let (w, h) = (self.image.width() as usize, self.image.height() as usize);
+                let mut reply = Vec::new();
+                if self.demand.ext(m, w, h, &mut reply) {
+                    self.prev.clear();
+                    self.dirty = true;
+                }
+                return self.out.write_all(&reply);
             }
             Msg::Resize { w, h } => {
                 let size = clamp_size(w as u32, h as u32);
@@ -650,10 +664,13 @@ impl Bridge {
         v
     }
 
-    /// Answer a pending FramebufferUpdateRequest with what changed (tiles), the new size
-    /// and pointer shape.
+    /// Answer a pending FramebufferUpdateRequest (or, with Continuous Updates, push) what
+    /// changed (tiles), the new size and pointer shape.
     fn send_update(&mut self) -> io::Result<()> {
-        let Some(incremental) = self.want else { return Ok(()) };
+        if self.demand.stalled() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "viewer stopped acknowledging updates"));
+        }
+        let Some(incremental) = self.demand.due() else { return Ok(()) };
         let cursor_due = self.cursor.is_some() && self.encs.contains(&ENC_CURSOR);
         let ext = self.encs.contains(&ENC_EXT_DESKTOP_SIZE);
         let ext_due = ext && (!self.ext_told || self.resize_reply.is_some());
@@ -691,11 +708,13 @@ impl Bridge {
             let mut tx = 0;
             while tx < w {
                 let dirty = |x: usize| {
-                    full || (ty..ty + th).any(|y| {
-                        let a = y * w + x;
-                        let tw = TILE.min(w - x);
-                        frame[a..a + tw] != self.prev[a..a + tw]
-                    })
+                    let tw = TILE.min(w - x);
+                    self.demand.covers(x, ty, tw, th)
+                        && (full
+                            || (ty..ty + th).any(|y| {
+                                let a = y * w + x;
+                                frame[a..a + tw] != self.prev[a..a + tw]
+                            }))
                 };
                 if !dirty(tx) {
                     tx += TILE;
@@ -705,7 +724,7 @@ impl Bridge {
                 while tx < w && dirty(tx) {
                     tx += TILE;
                 }
-                encode_rect(&mut out, &frame, w, start, ty, tx.min(w) - start, th, &self.pf, zrle, &mut self.z)?;
+                self.enc.rect(&mut out, &frame, w, start, ty, tx.min(w) - start, th, &self.pf, zrle)?;
                 rects += 1;
             }
         }
@@ -716,9 +735,9 @@ impl Bridge {
         let mut msg = vec![0u8, 0];
         msg.extend_from_slice(&rects.to_be_bytes());
         msg.extend_from_slice(&out);
+        self.demand.sent(msg.len(), &mut msg);
         self.out.write_all(&msg)?;
         self.prev = frame;
-        self.want = None;
         self.last_sent = Instant::now();
         Ok(())
     }
