@@ -139,7 +139,46 @@ struct View {
     crop: Option<[i32; 4]>,
 }
 
+/// What the window paints from: the UI thread's own copy of the framebuffer. Changed parts
+/// are copied over from the decoder's under a short lock, and scaling (HALFTONE StretchBlt,
+/// milliseconds for a big window) runs without it, so it never holds the decoder up.
+struct Front {
+    hbm: HBITMAP,
+    bits: *mut u32,
+    w: usize,
+    h: usize,
+}
+
+impl Front {
+    /// Make it w×h; true when it had to be (re)made (and holds nothing yet).
+    fn fit(&mut self, w: usize, h: usize) -> bool {
+        if (w, h) == (self.w, self.h) && !self.hbm.is_null() {
+            return false;
+        }
+        unsafe {
+            if !self.hbm.is_null() {
+                DeleteObject(self.hbm);
+            }
+            let bi = dib_info(w.max(1) as i32, h.max(1) as i32);
+            let mut bits = null_mut();
+            self.hbm = CreateDIBSection(null_mut(), &bi, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+            self.bits = if self.hbm.is_null() { null_mut() } else { bits as *mut u32 };
+        }
+        (self.w, self.h) = if self.bits.is_null() { (0, 0) } else { (w, h) };
+        true
+    }
+}
+
+impl Drop for Front {
+    fn drop(&mut self) {
+        if !self.hbm.is_null() {
+            unsafe { DeleteObject(self.hbm) };
+        }
+    }
+}
+
 thread_local! {
+    static FRONT: RefCell<Front> = const { RefCell::new(Front { hbm: null_mut(), bits: null_mut(), w: 0, h: 0 }) };
     static UI: RefCell<Ui> = RefCell::new(Ui::default());
     static VIEW: Cell<View> = Cell::new(View::default());
     static IN_SCROLL: Cell<bool> = const { Cell::new(false) };
@@ -1086,7 +1125,52 @@ unsafe fn draw(h: HWND, hdc: HDC, clip: RECT) {
 }
 
 unsafe fn draw_fb(h: HWND, hdc: HDC, clip: RECT) {
-    let fb = sh().fb.lock().unwrap();
+    let rects = update_rects(h, hdc, clip);
+    FRONT.with(|f| {
+        let f = f.borrow();
+        for r in rects {
+            draw_front(h, hdc, r, &f);
+        }
+    });
+}
+
+/// The parts of `clip` that actually need painting. Several changed rectangles reach
+/// WM_PAINT as one bounding box (ps.rcPaint); scaling that whole box would cost as much as
+/// the area between them, so each is drawn on its own (up to a dozen, else the box).
+unsafe fn update_rects(h: HWND, hdc: HDC, clip: RECT) -> Vec<RECT> {
+    let rgn = CreateRectRgn(0, 0, 0, 0);
+    let mut out = Vec::new();
+    if GetRandomRgn(hdc, rgn, SYSRGN as i32) == 1 {
+        let mut o = POINT { x: 0, y: 0 };
+        ClientToScreen(h, &mut o); // the system region is in screen coordinates
+        OffsetRgn(rgn, -o.x, -o.y);
+        let n = GetRegionData(rgn, 0, null_mut());
+        let mut buf = vec![0u64; (n as usize).div_ceil(8)];
+        if n > 0 && GetRegionData(rgn, n, buf.as_mut_ptr() as *mut RGNDATA) == n {
+            let hdr = &*(buf.as_ptr() as *const RGNDATAHEADER);
+            let first = (buf.as_ptr() as *const u8).add(hdr.dwSize as usize) as *const RECT;
+            for r in std::slice::from_raw_parts(first, hdr.nCount as usize) {
+                let r = RECT { left: r.left.max(clip.left), top: r.top.max(clip.top), right: r.right.min(clip.right), bottom: r.bottom.min(clip.bottom) };
+                if r.right > r.left && r.bottom > r.top {
+                    out.push(r);
+                }
+            }
+        }
+    }
+    DeleteObject(rgn);
+    if out.is_empty() || out.len() > 12 {
+        vec![clip]
+    } else {
+        out
+    }
+}
+
+unsafe fn draw_front(h: HWND, hdc: HDC, clip: RECT, fb: &Front) {
+    if fb.bits.is_null() {
+        // Nothing decoded yet: black, not whatever the window held.
+        FillRect(hdc, &clip, GetStockObject(BLACK_BRUSH) as HBRUSH);
+        return;
+    }
     let l = layout(h, fb.w as i32, fb.h as i32);
     let mut rc: RECT = std::mem::zeroed();
     GetClientRect(h, &mut rc);
@@ -1132,7 +1216,7 @@ unsafe fn draw_fb(h: HWND, hdc: HDC, clip: RECT) {
         SelectObject(mdc, old);
         DeleteDC(mdc);
     }
-    GdiFlush(); // finish reading the DIB before the decoder may touch it again
+    GdiFlush(); // finish reading the DIB before on_fb writes into it again
 }
 
 /// Link lost: dim the last frame and show what's happening, with a way out.
@@ -1183,16 +1267,54 @@ unsafe fn on_fb(h: HWND) {
             u.first_frame = Some(Instant::now());
         }
     });
-    let Some([x0, y0, x1, y1]) = sh().fb.lock().unwrap().dirty.take() else { return };
-    let l = cur_layout(h);
-    let (x0, x1, y0, y1) = (x0 - l.cx, x1 - l.cx, y0 - l.cy, y1 - l.cy);
-    let r = RECT {
-        left: l.ox + (x0 as f64 * l.s).floor() as i32 - 2,
-        top: l.oy + (y0 as f64 * l.s).floor() as i32 - 2,
-        right: l.ox + (x1 as f64 * l.s).ceil() as i32 + 2,
-        bottom: l.oy + (y1 as f64 * l.s).ceil() as i32 + 2,
+    // Copy what changed into the window's own copy, holding the decoder up only for that.
+    let (fresh, changed, fw, fh) = {
+        let mut fb = sh().fb.lock().unwrap();
+        if fb.dirty.is_empty() {
+            return;
+        }
+        let Some((fresh, changed, fw, fh)) = FRONT.with(|f| {
+            let mut f = f.borrow_mut();
+            let fresh = f.fit(fb.w, fb.h);
+            if f.bits.is_null() {
+                return None; // couldn't make it: keep the damage for the next try
+            }
+            let list = if fresh || fb.dirty.is_all() { vec![(0, 0, fb.w, fb.h)] } else { fb.dirty.rects().to_vec() };
+            let dst = std::slice::from_raw_parts_mut(f.bits, f.w * f.h);
+            let src = fb.pixels();
+            for &(x, y, w, hh) in &list {
+                for row in y..y + hh {
+                    let a = row * f.w + x;
+                    dst[a..a + w].copy_from_slice(&src[a..a + w]);
+                }
+            }
+            Some((fresh, list, f.w, f.h))
+        }) else {
+            return;
+        };
+        fb.dirty.clear();
+        (fresh, changed, fw, fh)
     };
-    InvalidateRect(h, &r, 0);
+    if fresh {
+        // A new size (or the first frame): the layout moved, letterbox bars included.
+        InvalidateRect(h, null(), 0);
+        UpdateWindow(h);
+        return;
+    }
+    // Each changed rectangle on its own: a clock in one corner and the pointer in another
+    // don't repaint everything between them. Laid out by the size just copied, which is
+    // what draw_front paints.
+    let l = layout(h, fw as i32, fh as i32);
+    for (x, y, w, hh) in changed {
+        let (x0, x1, y0, y1) = (x as i32 - l.cx, (x + w) as i32 - l.cx, y as i32 - l.cy, (y + hh) as i32 - l.cy);
+        let r = RECT {
+            left: l.ox + (x0 as f64 * l.s).floor() as i32 - 2,
+            top: l.oy + (y0 as f64 * l.s).floor() as i32 - 2,
+            right: l.ox + (x1 as f64 * l.s).ceil() as i32 + 2,
+            bottom: l.oy + (y1 as f64 * l.s).ceil() as i32 + 2,
+        };
+        InvalidateRect(h, &r, 0);
+    }
     UpdateWindow(h); // paint now rather than waiting for an idle queue
 }
 
