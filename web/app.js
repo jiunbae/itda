@@ -705,6 +705,8 @@ function renderSettings() {
     ${setting('F0E2', '주소록 보기', '', seg('view', st.view, [['grid', '카드'], ['list', '목록']]))}
     ${setting('E71E', '화면 크기', MAC ? '⌘ + / ⌘ − 로도 바꿀 수 있습니다 (⌘0 = 100%)' : 'Ctrl + / Ctrl − / Ctrl+휠로도 바꿀 수 있습니다 (Ctrl+0 = 100%)', seg('zoom', st.zoom || 100, [[90, '90%'], [100, '100%'], [110, '110%'], [125, '125%'], [150, '150%']]), true)}
 
+    ${MAC ? `<div class="group-title">접속 창</div>
+    ${setting('E962', '다른 Mac 스크롤 속도', '트랙패드나 휠로 민 만큼 다른 Mac 화면이 움직이는 양. ‘빠르게’면 이 Mac에서와 거의 같습니다', seg('mac_scroll', st.mac_scroll || 'fast', [['normal', '보통'], ['fast', '빠르게'], ['faster', '아주 빠르게']]), true)}` : ''}
     ${MAC ? '' : `<div class="group-title">접속 창${more('session')}<a href="#" class="help-link" data-help="keys">단축키 전체 보기</a></div>
     ${setting('E7C4', '툴바', '화면 위쪽 가운데의 툴바 표시 방식', `<select class="input" data-select="toolbar"><option value="auto" ${st.toolbar === 'auto' ? 'selected' : ''}>자동 숨김</option><option value="pinned" ${st.toolbar === 'pinned' ? 'selected' : ''}>항상 표시</option><option value="hidden" ${st.toolbar === 'hidden' ? 'selected' : ''}>숨김 (단축키만)</option></select>`)}
     ${setting('E765', '단축키 조합', 'Mac으로 보내지 않고 Itda가 처리하는 키 조합', seg('hotkey', st.hotkey, [['ctrl_alt', 'Ctrl+Alt'], ['ctrl_shift', 'Ctrl+Shift']]))}

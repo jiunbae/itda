@@ -645,7 +645,14 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             }
             respond(&mut c, "200 OK", "application/json", "Set-Cookie: itda=; Path=/; Max-Age=0\r\n", b"{}")
         }
-        (_, "/api/me") => json_resp(&mut c, if ok { "200 OK" } else { "401 Unauthorized" }, json!({"ok": ok, "local": local})),
+        (_, "/api/me") => {
+            // The viewer's wheel follows the app's Mac scroll setting.
+            let scroll = ok.then(|| {
+                let st = store::load_settings();
+                json!({"mac": st.mac_scroll})
+            });
+            json_resp(&mut c, if ok { "200 OK" } else { "401 Unauthorized" }, json!({"ok": ok, "local": local, "scroll": scroll}))
+        }
         (_, "/api/hosts") if ok => json_resp(&mut c, "200 OK", hosts_json()),
         ("GET", "/api/nearby") if ok => json_resp(&mut c, "200 OK", nearby_json()),
         ("GET", "/api/accounts") if ok => json_resp(&mut c, "200 OK", accounts_json()),

@@ -80,6 +80,7 @@ async function boot() {
   const me = await api('/api/me');
   // Local mode: this page is the Mac app's own window (no PIN, nothing to install).
   S.local = !!(me.data && me.data.local);
+  if (me.data && me.data.scroll) S.macScroll = me.data.scroll.mac;
   if (S.local) {
     document.body.classList.add('local');
     $('#logout').hidden = true;
@@ -516,6 +517,48 @@ function thumbSoon(ms) {
 
 // Text copied on the Mac, handed over by the app when this window comes forward.
 window.itdaPaste = (t) => { if (S.rfb && !S.viewOnly && opt('clipboard', true) && t) S.rfb.clipboardPasteFrom(t); };
+
+// The wheel, instead of noVNC's: noVNC sends one click per event once 50 px have piled up
+// and drops the rest, so a trackpad swipe or a fast wheel moves the remote a fraction of
+// what it moves here. A Mac (Screen Sharing) scrolls a short line per click, so it gets one
+// click per WHEEL_MAC px divided by the "Mac scroll speed" setting (fast: about the same
+// distance as here); other servers one per WHEEL_PX, as noVNC. Leftovers carry over. macOS
+// already accelerates trackpad and wheel deltas, so nothing is added on top.
+const WHEEL_MAC = 20;
+const WHEEL_PX = 50;
+const WHEEL_MAX = 40; // clicks per event at most
+const wheel = { x: 0, y: 0 };
+const BTN = (b) => (b & 1) | ((b & 4) >> 1) | ((b & 2) << 1); // DOM buttons → RFB mask
+function onWheel(e) {
+  const rfb = S.rfb;
+  if (!rfb || !rfb._canvas || !rfb._canvas.contains(e.target)) return;
+  e.preventDefault();
+  e.stopPropagation(); // noVNC's own handler sits on the canvas
+  if (S.viewOnly || e.ctrlKey) return; // Ctrl + wheel is a pinch: kept here
+  const h = S.host || {};
+  const mac = h.kind !== 'rdp' && !h.this && kindOf(h) === 'mac';
+  const speed = { normal: 1, fast: 2, faster: 3 }[S.macScroll] || 2;
+  const step = mac ? WHEEL_MAC / speed : WHEEL_PX;
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? rfb._canvas.clientHeight : 1;
+  const r = rfb._canvas.getBoundingClientRect();
+  const x = Math.max(0, Math.min(r.width - 1, e.clientX - r.left));
+  const y = Math.max(0, Math.min(r.height - 1, e.clientY - r.top));
+  const held = BTN(e.buttons);
+  for (const [axis, d, back, fwd] of [['y', e.deltaY, 8, 16], ['x', e.deltaX, 32, 64]]) {
+    if (!d) continue;
+    if (Math.sign(d) !== Math.sign(wheel[axis])) wheel[axis] = 0; // turned around
+    wheel[axis] += d * unit;
+    const n = Math.min(WHEEL_MAX, Math.trunc(Math.abs(wheel[axis]) / step));
+    if (!n) continue;
+    wheel[axis] -= Math.sign(wheel[axis]) * n * step;
+    const bit = d < 0 ? back : fwd;
+    for (let i = 0; i < n; i++) {
+      rfb._handleMouseButton(x, y, held | bit);
+      rfb._handleMouseButton(x, y, held);
+    }
+  }
+}
+$('#screen').addEventListener('wheel', onWheel, { capture: true, passive: false });
 
 // noVNC turns a pinch into Ctrl + mouse wheel on the remote device, which zooms every app
 // there (and can leave Ctrl held). Keep pinches here: spread = 1:1, pinch in = fit.
