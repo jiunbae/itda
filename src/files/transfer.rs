@@ -31,6 +31,8 @@ fn slot(c: &Control) -> io::Result<Slot> {
 }
 struct Endpoint {
     sftp: Option<Sftp>,
+    /// To reach the remote again once a cancel has closed `sftp` with the job.
+    cfg: Option<SshCfg>,
 }
 impl Endpoint {
     fn new(remote: bool, c: &Connection, control: &Control) -> io::Result<Self> {
@@ -40,7 +42,28 @@ impl Endpoint {
             } else {
                 None
             },
+            cfg: remote.then(|| c.cfg.clone()),
         })
+    }
+    /// Remove a staged copy that didn't get its name. A cancel stops this side's SFTP session
+    /// with the job, so a remote leftover is removed through a new session; the server may
+    /// still hold the file open for a moment after the old one closed.
+    fn discard(&mut self, p: &str, cancelled: bool) {
+        if self.remove(p, false).is_ok() || !cancelled {
+            return;
+        }
+        let Some(cfg) = &self.cfg else { return };
+        let control = Control::default();
+        let Ok(mut s) = Sftp::connect(cfg, &control) else {
+            return;
+        };
+        for _ in 0..10 {
+            if s.remove(p, false).is_ok() || matches!(s.stat(p), Ok(None)) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        crate::log!("files: staged copy left behind: {p}");
     }
     fn stat(&mut self, p: &str) -> io::Result<Option<Entry>> {
         if let Some(s) = &mut self.sftp {
@@ -397,7 +420,7 @@ impl Context {
             Ok(())
         })();
         if result.is_err() {
-            let _ = dst.remove(&staging, false);
+            dst.discard(&staging, self.control.cancel.load(Ordering::Relaxed));
         }
         result
     }
@@ -434,6 +457,12 @@ pub fn start(v: Value, host: Host, emit: Emit) {
             }
             let mut src_path = get(&v, "source");
             let mut dst_path = get(&v, "destination");
+            if from_remote {
+                src_path = remote_path(&src_path, &c.home);
+            }
+            if to_remote {
+                dst_path = remote_path(&dst_path, &c.home);
+            }
             let moving = v["move"] == true;
             let policy = get(&v, "policy");
             if !["skip", "keep", "replace"].contains(&policy.as_str()) {
@@ -466,7 +495,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                 job: job.clone(),
                 policy,
                 moving,
-                modes: !(from_remote && host.os == "windows"),
+                modes: !(from_remote && c.windows),
                 done: 0,
                 last: Instant::now() - Duration::from_secs(1),
             };
@@ -474,6 +503,23 @@ pub fn start(v: Value, host: Host, emit: Emit) {
             // changes. Explicit delta mode reports the missing capability instead.
             let requested = get(&v, "engine");
             let mut delta = None;
+            // Every name written to a Windows side is checked before anything is created, so
+            // a refused name deep in a folder leaves no half-copied folder behind.
+            if if to_remote { c.windows } else { cfg!(windows) } {
+                for n in names {
+                    let n = n.as_str().ok_or_else(|| error("잘못된 파일 이름"))?;
+                    name(n)?;
+                    windows_target(n, n)?;
+                    let from = if from_remote {
+                        join(&src_path, n)?
+                    } else {
+                        Path::new(&src_path).join(n).to_string_lossy().into_owned()
+                    };
+                    if src.stat(&from)?.is_some_and(|e| e.dir && !e.link) {
+                        windows_tree(&mut src, &from, n, 0, &control)?;
+                    }
+                }
+            }
             for n in names {
                 control.check()?;
                 let n = n.as_str().ok_or_else(|| error("잘못된 파일 이름"))?;
@@ -490,7 +536,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                 };
                 let compare = |p: &str| {
                     let p = p.replace('\\', "/");
-                    if (from_remote && host.os == "windows") || (!from_remote && cfg!(windows)) {
+                    if (from_remote && c.windows) || (!from_remote && cfg!(windows)) {
                         p.to_lowercase()
                     } else {
                         p
@@ -559,10 +605,33 @@ pub fn start(v: Value, host: Host, emit: Emit) {
         })();
         jobs().lock().unwrap().remove(&job);
         let cancelled = control.cancel.load(Ordering::Relaxed);
+        // A cancel ends the job's SSH sessions, so the error may only be their broken pipe.
+        let error = result.err().map(|e| {
+            if cancelled {
+                "전송을 취소했습니다".to_string()
+            } else {
+                e.to_string()
+            }
+        });
         emit(
-            json!({"type":"files_job","id":id,"job":job,"state":if result.is_ok(){"completed"}else if cancelled{"cancelled"}else{"failed"},"error":result.err().map(|e|e.to_string())}),
+            json!({"type":"files_job","id":id,"job":job,"state":if error.is_none(){"completed"}else if cancelled{"cancelled"}else{"failed"},"error":error}),
         );
     });
+}
+/// Every name under a source folder, checked against what Windows can store.
+fn windows_tree(src: &mut Endpoint, path: &str, shown: &str, depth: usize, c: &Control) -> io::Result<()> {
+    c.check()?;
+    if depth > 128 {
+        return Err(error("폴더가 너무 깊습니다"));
+    }
+    for e in src.list(path)? {
+        let shown = format!("{shown}/{}", e.name);
+        windows_target(&e.name, &shown)?;
+        if e.dir && !e.link {
+            windows_tree(src, &join(path, &e.name)?, &shown, depth + 1, c)?;
+        }
+    }
+    Ok(())
 }
 fn rsync_exe() -> Option<PathBuf> {
     let name = if cfg!(windows) { "rsync.exe" } else { "rsync" };
@@ -751,7 +820,7 @@ mod tests {
             done: 0,
             last: Instant::now() - Duration::from_secs(1),
         };
-        (root, Endpoint { sftp: None }, Endpoint { sftp: None }, cx)
+        (root, Endpoint { sftp: None, cfg: None }, Endpoint { sftp: None, cfg: None }, cx)
     }
     #[test]
     fn copy_conflicts_folders_and_move() {

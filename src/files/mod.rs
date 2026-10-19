@@ -98,6 +98,8 @@ struct Connection {
     control: Arc<Control>,
     home: String,
     options: Options,
+    /// The remote is Windows: names it can't store are refused before anything is written.
+    windows: bool,
 }
 static CONNECTIONS: OnceLock<Mutex<HashMap<String, Arc<Connection>>>> = OnceLock::new();
 fn connections() -> &'static Mutex<HashMap<String, Arc<Connection>>> {
@@ -131,6 +133,33 @@ pub fn name(n: &str) -> io::Result<()> {
         return Err(error("Windows에서 쓸 수 없는 파일 이름입니다"));
     }
     Ok(())
+}
+
+/// A name about to be written on a Windows side, refused with the item it names.
+fn windows_target(n: &str, shown: &str) -> io::Result<()> {
+    if windows_name(n) {
+        Ok(())
+    } else {
+        Err(error(format!("Windows에서 쓸 수 없는 파일 이름입니다: {shown}")))
+    }
+}
+
+/// A remote home like "/C:/Users/me" (Win32-OpenSSH) or "C:/Users/me".
+fn windows_root(p: &str) -> bool {
+    let b = p.strip_prefix('/').unwrap_or(p).as_bytes();
+    b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
+}
+
+/// A remote path as typed: without Windows' \\?\ prefix, which the SFTP server refuses,
+/// and with "~" for the connection's home.
+fn remote_path(p: &str, home: &str) -> String {
+    if p == "~" {
+        home.to_string()
+    } else if let Some(rest) = p.strip_prefix("~/") {
+        format!("{}/{rest}", home.trim_end_matches('/'))
+    } else {
+        plain(p)
+    }
 }
 
 /// Can Windows store a file under this name as-is: no <>:"|?*, no trailing dot or space,
@@ -382,10 +411,10 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                             .map(str::to_string),
                     )?;
                     let mut s = Sftp::connect(&c, &control)?;
-                    let root = s.realpath(if host.files.path.is_empty() {
-                        "."
+                    let root = s.realpath(&if host.files.path.is_empty() {
+                        ".".to_string()
                     } else {
-                        &host.files.path
+                        remote_path(&host.files.path, ".")
                     })?;
                     let entries = s.list(&root)?;
                     control.check()?;
@@ -400,6 +429,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                             cfg: c,
                             browse: Mutex::new(s),
                             control,
+                            windows: host.os == "windows" || windows_root(&root),
                             home: root.clone(),
                             options: host.files.clone(),
                         }),
@@ -449,6 +479,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                         bytes
                     } else {
                         let c = connection(&id)?;
+                        let p = remote_path(&p, &c.home);
                         let control = Control::default();
                         let mut s = Sftp::connect(&c.cfg, &control)?;
                         let entry = s.stat(&p)?.ok_or_else(|| error("파일이 없습니다"))?;
@@ -486,6 +517,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                             ));
                         }
                         let c = connection(&id)?;
+                        let p = remote_path(&p, &c.home);
                         let control = Control::default();
                         let mut s = Sftp::connect(&c.cfg, &control)?;
                         let entry = s.stat(&p)?.ok_or_else(|| error("파일이 없습니다"))?;
@@ -530,7 +562,11 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                     } else {
                         let c = connection(&id)?;
                         let mut s = c.browse.lock().unwrap();
-                        let p = s.realpath(if p.is_empty() { &c.home } else { &p })?;
+                        let p = s.realpath(&if p.is_empty() {
+                            c.home.clone()
+                        } else {
+                            remote_path(&p, &c.home)
+                        })?;
                         Ok(json!({"path":p,"entries":s.list(&p)?}))
                     }
                 }
@@ -581,12 +617,36 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                     } else {
                         let c = connection(&id)?;
                         let mut s = c.browse.lock().unwrap();
+                        let p = remote_path(&p, &c.home);
                         let source = join(&p, &n)?;
+                        // Refused here with a clear reason rather than by the server's bare
+                        // status: names Windows can't store (it would drop a trailing dot or
+                        // make a device-named file) and a name that is already taken.
+                        let taken = |s: &mut Sftp, path: &str, shown: &str| -> io::Result<()> {
+                            if s.stat(path)?.is_some() {
+                                return Err(error(format!("같은 이름의 항목이 있습니다: {shown}")));
+                            }
+                            Ok(())
+                        };
                         if op == "mkdir" {
+                            if c.windows {
+                                windows_target(&n, &n)?;
+                            }
+                            taken(&mut s, &source, &n)?;
                             s.mkdir(&source)?;
                         } else {
                             let target = if op == "rename" {
-                                join(&p, &get(&v, "new_name"))?
+                                let new = get(&v, "new_name");
+                                let target = join(&p, &new)?;
+                                if c.windows {
+                                    windows_target(&new, &new)?;
+                                }
+                                // A case-only change names the same item on a case-insensitive
+                                // remote; Sftp::rename handles that.
+                                if new.to_lowercase() != n.to_lowercase() {
+                                    taken(&mut s, &target, &new)?;
+                                }
+                                target
                             } else {
                                 let trash = join(&c.home, ".itda-trash")?;
                                 match s.stat(&trash)? {
@@ -1043,6 +1103,26 @@ mod tests {
         let defaults: Options = serde_json::from_str("{}").unwrap();
         assert_eq!(defaults.method, "auto");
         assert!(defaults.account.is_empty());
+    }
+    /// A Windows remote (told by the device or by its "/C:/..." home) gets Windows' name
+    /// rules whatever this device is, and the error names the item.
+    #[test]
+    fn windows_remote_names_and_paths() {
+        for root in ["/C:/Users/me", "C:/Users/me", "/d:/"] {
+            assert!(windows_root(root), "{root}");
+        }
+        for root in ["/home/me", "/Users/me", "/", "/C"] {
+            assert!(!windows_root(root), "{root}");
+        }
+        let e = windows_target("CON", "Folder/CON").unwrap_err().to_string();
+        assert!(e.contains("Folder/CON"), "{e}");
+        assert!(windows_target("trail.", "trail.").is_err());
+        assert!(windows_target("한글 it's a file.txt", "x").is_ok());
+        assert_eq!(remote_path(r"\\?\C:\Users\me", "/C:/Users/me"), r"C:\Users\me");
+        assert_eq!(remote_path(r"\\?\UNC\nas\share", "/"), r"\\nas\share");
+        assert_eq!(remote_path("~", "/C:/Users/me"), "/C:/Users/me");
+        assert_eq!(remote_path("~/Docs", "/home/me/"), "/home/me/Docs");
+        assert_eq!(remote_path("/C:/Users", "/"), "/C:/Users");
     }
     #[test]
     fn file_names() {

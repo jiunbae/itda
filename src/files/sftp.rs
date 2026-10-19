@@ -56,7 +56,14 @@ impl Packet {
             return Ok(code);
         }
         let text = self.text().unwrap_or_default();
-        Err(err(format!("SFTP: {text} (코드 {code})")))
+        // The server's own words stay for diagnosis; the common refusals get a reason.
+        let reason = match code {
+            3 => "원격 기기에서 권한이 없습니다",
+            4 => "원격 기기가 작업을 거부했습니다. 같은 이름이 있거나 쓸 수 없는 이름인지 확인하세요",
+            5 => "원격 기기가 이 경로나 이름을 받아들이지 않습니다",
+            _ => return Err(err(format!("SFTP: {text} (코드 {code})"))),
+        };
+        Err(err(format!("{reason} (SFTP 코드 {code}: {text})")))
     }
     fn attrs(&mut self, name: String) -> io::Result<Entry> {
         let f = self.u32()?;
@@ -297,6 +304,24 @@ impl Sftp {
         self.status_request(14, &b)
     }
     pub fn rename(&mut self, from: &str, to: &str, replace: bool) -> io::Result<()> {
+        let result = self.rename_once(from, to, replace);
+        if result.is_ok() || replace || from == to || from.to_lowercase() != to.to_lowercase() {
+            return result;
+        }
+        // A case-only change: a case-insensitive remote (Windows, macOS) sees the new name as
+        // taken. Go through a unique temporary name, putting the item back if that fails.
+        let at = from.rfind(['/', '\\']).map_or(0, |i| i + 1);
+        let temp = format!("{}.itda-{}.rename", &from[..at], crate::store::new_id());
+        if self.rename_once(from, &temp, false).is_err() {
+            return result;
+        }
+        if let Err(e) = self.rename_once(&temp, to, false) {
+            let _ = self.rename_once(&temp, from, false);
+            return Err(e);
+        }
+        Ok(())
+    }
+    fn rename_once(&mut self, from: &str, to: &str, replace: bool) -> io::Result<()> {
         let mut b = Vec::new();
         if replace {
             path(&mut b, "posix-rename@openssh.com");
@@ -493,6 +518,12 @@ mod tests {
         let to = format!("{p}.renamed");
         s.rename(&p, &to, false).unwrap();
         assert!(s.stat(&p).unwrap().is_none());
+        // A case-only rename (refused by a case-insensitive server's plain rename).
+        let upper = format!("{p}.RENAMED");
+        s.rename(&to, &upper, false).unwrap();
+        let names: Vec<String> = s.list(root.to_str().unwrap()).unwrap().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["한글 \"이름\".bin.RENAMED"]);
+        s.rename(&upper, &to, false).unwrap();
         // Permissions: ordinary bits set and reported back, special bits never.
         std::fs::write(root.join("tool.sh"), b"#!/bin/sh\n").unwrap();
         let tool = root.join("tool.sh").to_str().unwrap().to_string();
