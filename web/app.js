@@ -6,6 +6,7 @@ const S = {
   accounts: [],
   settings: { theme: 'system', view: 'grid', toolbar: 'auto', hotkey: 'ctrl_alt', mac_scroll: 'fast', scroll_accel: true, tray: true, notify: true, thumbnails: true, defaults: {} },
   sessions: {},
+  fileWindows: [],
   online: {},
   found: [],
   version: '',
@@ -134,16 +135,21 @@ document.addEventListener('wheel', (e) => {
 // ---------------------------------------------------------------- messages from Rust
 
 function onMessage(m) {
+  if (['state','hosts','session','online','found','tailnet'].includes(m.type)) queueMicrotask(() => window.ItdaFiles?.refreshNetwork());
+  if (window.ItdaFiles && window.ItdaFiles.message(m)) return;
   switch (m.type) {
     case 'state':
-      Object.assign(S, { accounts: m.accounts || [], hosts: m.hosts, settings: m.settings, sessions: m.sessions || {}, online: m.online || {}, found: m.found || [], version: m.version, sysDark: !!m.dark, sshOk: m.ssh_ok, tailnet: m.tailnet });
+      Object.assign(S, { accounts: m.accounts || [], hosts: m.hosts, settings: m.settings, sessions: m.sessions || {}, fileWindows: m.file_windows || [], online: m.online || {}, found: m.found || [], version: m.version, sysDark: !!m.dark, sshOk: m.ssh_ok, tailnet: m.tailnet });
       applyTheme();
       render();
+      window.ItdaFiles?.boot();
+      if (window.ITDA_FILE_HOST) break;
       if (m.quick) quickConnect(m.quick);
       else if (!S.settings.onboarded && !S.hosts.length && !topModal()) showOnboarding();
       break;
     case 'hosts':
       S.hosts = m.hosts;
+      if (m.file_windows) S.fileWindows = m.file_windows;
       if (m.accounts) S.accounts = m.accounts;
       render();
       break;
@@ -344,7 +350,7 @@ function thumb(h) {
 
 function primaryAction(h) {
   const s = S.sessions[h.id];
-  if (!s) return `<button class="btn primary" data-act="connect" data-id="${esc(h.id)}">${I('E768')}연결</button>`;
+  if (!s) return `<button class="btn primary" data-act="connect" data-id="${esc(h.id)}">${I('E768')}화면 연결</button>`;
   if (s.state === 'connecting') return `<button class="btn" data-act="cancel" data-id="${esc(h.id)}">${I('E711')}취소</button>`;
   return `<button class="btn primary" data-act="focus" data-id="${esc(h.id)}">${I('E8A7')}창으로 이동</button>`;
 }
@@ -365,6 +371,7 @@ function card(h) {
         <button class="more i" data-act="more" data-id="${esc(h.id)}" title="더보기">&#xE712;</button></div>
       <div class="sub">${who}</div>
       <div class="sub2">${extra}</div>
+      <button class="btn sm file-open" data-act="files" data-id="${esc(h.id)}">${I('E8B7')}파일 열기</button>
     </div>
   </div>`;
 }
@@ -388,7 +395,7 @@ function row(h) {
     <span class="col c-user">${h.user ? esc(h.user) : '<span style="color:var(--text-3)">VNC 암호</span>'}</span>
     <span class="col c-last">${esc(ago(h.last_used))}</span>
     <span class="col">${state}</span>
-    <div class="actions">${primaryAction(h).replace('class="btn', 'class="btn sm')}
+    <div class="actions"><button class="btn sm" data-act="files" data-id="${esc(h.id)}">${I('E8B7')}파일</button>${primaryAction(h).replace('class="btn', 'class="btn sm')}
       <button class="btn subtle icon" data-act="more" data-id="${esc(h.id)}" title="더보기">${I('E712')}</button></div>
   </div>`;
 }
@@ -1375,6 +1382,7 @@ function showCtx(id, x, y) {
   if (!s) items.push(['connect', 'E768', '연결']);
   else if (s.state === 'connecting') items.push(['cancel', 'E711', '연결 취소']);
   else items.push(['focus', 'E8A7', '창으로 이동'], ['disconnect', 'E711', '연결 끊기']);
+  items.push(['files', 'E8B7', '파일 열기']);
   items.push('-', ['edit', 'E70F', '편집'], ['dup', 'E8C8', '복제'], ['fav', h.favorite ? 'E8D9' : 'E734', h.favorite ? '즐겨찾기 해제' : '즐겨찾기에 추가']);
   if (h.has_pw) items.push(['forget', 'E8D7', '저장된 암호 지우기']);
   items.push('-', ['del', 'E74D', '삭제', 'danger']);
@@ -1414,6 +1422,8 @@ function scan() {
 function act(a, el) {
   const id = el.dataset.id;
   switch (a) {
+    case 'files': return window.ItdaFiles.launch(hostById(id));
+    case 'file-network': return window.ItdaFiles.launchNetwork();
     case 'connect': return connect(id);
     case 'focus': return send('focus', { id });
     case 'cancel': return send('cancel', { id });
@@ -1498,7 +1508,7 @@ document.addEventListener('click', (e) => {
   const nav = e.target.closest('.nav-item');
   if (nav) return go(nav.dataset.page);
   const b = e.target.closest('[data-act]');
-  if (b && (b.closest('#content') || inCtx)) {
+  if (b && (b.closest('#content') || inCtx || b.dataset.act === 'file-network')) {
     e.stopPropagation();
     hideCtx();
     return act(b.dataset.act, b);

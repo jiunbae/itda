@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Itda</title>
 <link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="files.css">
 <link rel="stylesheet" href="help.css">
 <script src="icons.js"></script>
 </head>
@@ -33,6 +34,7 @@
         <button data-view="grid" title="카드 보기"><span class="i">&#xF0E2;</span></button>
         <button data-view="list" title="목록 보기"><span class="i">&#xE8FD;</span></button>
       </div>
+      <button class="btn" data-act="file-network"><span class="i">&#xE774;</span>파일</button>
       <button class="btn primary" id="newBtn" title="새 연결 (Ctrl+N)"><span class="i">&#xE710;</span><span class="label-text">새 연결</span></button>
     </header>
     <section id="content" class="content" tabindex="-1"></section>
@@ -42,6 +44,7 @@
 <div id="ctx" class="ctx" hidden></div>
 <div id="toasts" class="toasts" aria-live="polite"></div>
 <script src="app.js"></script>
+<script src="files.js"></script>
 <script src="help.js"></script>
 </body>
 </html>

@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "itda"
-version = "0.6.5"
+version = "0.7.0"
 dependencies = [
  "aes 0.8.4",
  "des 0.8.1",
@@ -1958,6 +1958,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tao",
  "windows-sys 0.59.0",
  "wry",

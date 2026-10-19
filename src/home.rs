@@ -27,6 +27,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const APP_CSS: &str = include_str!("../web/app.css");
 const APP_JS: &str = include_str!("../web/app.js");
+const FILES_JS: &str = include_str!("../web/files.js");
+const FILES_CSS: &str = include_str!("../web/files.css");
 const ICONS_JS: &str = include_str!("../web/icons.js");
 const ICON_SVG: &str = include_str!("../assets/itda.svg");
 const HELP_JS: &str = include_str!("../web/help.js");
@@ -184,6 +186,8 @@ fn asset(path: &str) -> Option<(Cow<'static, [u8]>, &'static str)> {
         "index.html" => INDEX_HTML,
         "app.css" => APP_CSS,
         "app.js" => APP_JS,
+        "files.js" => FILES_JS,
+        "files.css" => FILES_CSS,
         "icons.js" => ICONS_JS,
         "icon.svg" => ICON_SVG,
         "help.js" => HELP_JS,
@@ -244,7 +248,7 @@ fn save_accounts() {
 }
 
 fn send_hosts() {
-    let v = home(|m| json!({"type": "hosts", "hosts": m.hosts.iter().map(|h| host_json(h, &m.accounts)).collect::<Vec<_>>(), "accounts": accounts_json(m)}));
+    let v = home(|m| json!({"type": "hosts", "hosts": m.hosts.iter().map(|h| host_json(h, &m.accounts)).collect::<Vec<_>>(), "accounts": accounts_json(m), "file_windows": plat::file_windows()}));
     send(v);
 }
 
@@ -259,6 +263,7 @@ fn send_state() {
             "accounts": accounts_json(m),
             "settings": m.settings,
             "sessions": sessions_json(m),
+            "file_windows": plat::file_windows(),
             "online": m.online,
             "found": m.found,
             "dark": plat::system_dark(),
@@ -300,6 +305,61 @@ fn on_ipc(v: Value) {
             let save = v.get("save").and_then(Value::as_bool).unwrap_or(false);
             connect(&id, pass, save);
         }
+        "files_window" => {
+            if id == crate::files::locations::NETWORK || home(|m| m.hosts.iter().any(|h| h.id == id)) { plat::files_window(&id, v["close"] == true); }
+        }
+        "file_locations" => {
+            let hosts = home(|m| m.hosts.clone());
+            let reveal = v["reveal"] != false;
+            std::thread::spawn(move || {
+                let root = crate::files::locations::folder();
+                let result = crate::files::locations::write(&hosts, &root);
+                if result.is_ok() && reveal { plat::open(&root.to_string_lossy()); }
+                post(Event::Page(json!({"type":"file_locations_result","ok":result.is_ok(),"path":root,"error":result.err().map(|e| e.to_string())})));
+            });
+        }
+        "files" => {
+            let Some(mut host) = home(|m| m.hosts.iter().find(|h| h.id == id).cloned()) else { return };
+            if v["op"] == "finder" {
+                std::thread::spawn(move || {
+                    let result = crate::files::native_target(&host).and_then(|target| crate::files::open_native(&target));
+                    post(Event::Page(json!({"type":"files_result","op":"finder","id":id,"ok":result.is_ok(),"error":result.err().map(|e|e.to_string())})));
+                });
+                return;
+            }
+            if v["op"] == "connect" {
+                let options = match serde_json::from_value::<crate::files::Options>(v["options"].clone()) {
+                    Ok(o) if ["auto", "sftp", "smb"].contains(&o.method.as_str()) => o,
+                    _ => { send(json!({"type":"files_result","id":id,"op":"connect","ok":false,"error":"파일 연결 설정을 확인하세요"})); return; }
+                };
+                {
+                    host.files = options;
+                    home(|m| { if let Some(h) = m.hosts.iter_mut().find(|h| h.id == id) { h.files = host.files.clone(); } });
+                    save_hosts();
+                    send_hosts();
+                }
+                if host.files.method == "smb" || (host.files.method == "auto" && !host.files.share.is_empty()) {
+                    std::thread::spawn(move || {
+                        let result = crate::files::native_target(&host).and_then(|target| crate::files::open_native(&target));
+                        post(Event::Page(json!({"type":"files_result","op":"native","id":id,"ok":result.is_ok(),"error":result.err().map(|e|e.to_string())})));
+                    });
+                    return;
+                }
+            }
+            let login = home(|m| {
+                if host.files.account == "custom" {
+                    Some(store::Login { user: host.files.user.clone(), ..Default::default() })
+                } else if host.files.account.is_empty() {
+                    Some(store::resolve(&host, &m.accounts))
+                } else if m.accounts.iter().any(|a| a.id == host.files.account) {
+                    let mut selected = host.clone();
+                    selected.account = host.files.account.clone();
+                    Some(store::resolve(&selected, &m.accounts))
+                } else { None }
+            });
+            let Some(login) = login else { send(json!({"type":"files_result","id":id,"op":"connect","ok":false,"error":"저장 계정이 삭제되었습니다. 사용할 계정을 다시 선택하세요"})); return; };
+            crate::files::dispatch(v, host, login, std::sync::Arc::new(|v| post(Event::Page(v))));
+        }
         "cancel" | "disconnect" => stop_session(&id),
         "focus" => focus_session(&id),
         "save_host" => {
@@ -319,6 +379,7 @@ fn on_ipc(v: Value) {
             home(|m| match m.hosts.iter_mut().find(|x| x.id == id) {
                 Some(x) => {
                     // Keep fields the editor doesn't own.
+                    host.files = x.files.clone();
                     host.last_used = x.last_used;
                     host.remote_name = std::mem::take(&mut x.remote_name);
                     host.remote_size = std::mem::take(&mut x.remote_size);
@@ -333,6 +394,9 @@ fn on_ipc(v: Value) {
         }
         "delete_host" => {
             stop_session(&id);
+            crate::files::disconnect(&id);
+            if let Some(h) = home(|m| m.hosts.iter().find(|h| h.id == id).cloned()) { store::set_password(&crate::files::password_key(&h), None); }
+            store::set_password(&format!("files-{id}"), None);
             home(|m| m.hosts.retain(|x| x.id != id));
             store::set_password(&id, None);
             let _ = std::fs::remove_file(store::thumb_path(&id));

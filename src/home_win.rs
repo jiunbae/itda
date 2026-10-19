@@ -43,6 +43,7 @@ static TRAY_MSG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::ne
 thread_local! {
     /// WebView2 calls can re-enter the window procedure, so the webview is only ever
     /// borrowed shared (except when created and dropped).
+    static FILE_PANES: RefCell<std::collections::HashMap<String, (isize, WebView)>> = RefCell::new(std::collections::HashMap::new());
     static WEBVIEW: RefCell<Option<WebView>> = const { RefCell::new(None) };
 }
 
@@ -152,7 +153,7 @@ pub fn run(quick: Option<String>) {
         SetWindowPos(h, null_mut(), (wa.left + wa.right - ww) / 2, (wa.top + wa.bottom - wh) / 2, ww, wh, SWP_NOZORDER);
 
         let bridge = std::env::var("ITDA_TEST_HTTP").ok().and_then(|p| p.parse::<u16>().ok());
-        match bridge.map(|p| Ok(super::test_bridge::start(p))).unwrap_or_else(|| build_webview(h, dark).map(|wv| WEBVIEW.with(|w| *w.borrow_mut() = Some(wv)))) {
+        match bridge.map(|p| Ok(super::test_bridge::start(p))).unwrap_or_else(|| build_webview(h, dark, None).map(|wv| WEBVIEW.with(|w| *w.borrow_mut() = Some(wv)))) {
             Ok(()) => {}
             Err(e) => {
                 crate::log!("webview: {e}");
@@ -179,7 +180,7 @@ pub fn run(quick: Option<String>) {
     }
 }
 
-fn build_webview(h: HWND, dark: bool) -> wry::Result<WebView> {
+fn build_webview(h: HWND, dark: bool, file: Option<&str>) -> wry::Result<WebView> {
     let data = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir).join(crate::APP).join("WebView2");
     let mut ctx = wry::WebContext::new(Some(data));
     let bg = if dark { (32, 32, 32, 255) } else { (243, 243, 243, 255) };
@@ -189,6 +190,7 @@ fn build_webview(h: HWND, dark: bool) -> wry::Result<WebView> {
     if let Ok(port) = std::env::var("ITDA_DEBUG_PORT") {
         args.push_str(&format!(" --remote-debugging-port={port}"));
     }
+    let drop_id = file.map(str::to_string);
     WebViewBuilder::new_with_web_context(&mut ctx)
         .with_additional_browser_args(args)
         .with_custom_protocol("itda".into(), |_id, req| {
@@ -197,6 +199,12 @@ fn build_webview(h: HWND, dark: bool) -> wry::Result<WebView> {
                 None => http::Response::builder().status(404).body(Cow::Borrowed(&b"not found"[..])),
             };
             resp.unwrap_or_else(|_| http::Response::new(Cow::Borrowed(&b""[..])))
+        })
+        .with_drag_drop_handler(move |event| {
+            if let wry::DragDropEvent::Drop { paths, .. } = event {
+                super::post(Event::Page(json!({"type":"files_drop","id":drop_id,"paths":paths})));
+            }
+            true
         })
         .with_ipc_handler(|req| {
             let body = req.into_body();
@@ -220,7 +228,7 @@ fn build_webview(h: HWND, dark: bool) -> wry::Result<WebView> {
             false
         })
         .with_new_window_req_handler(|_url, _features| wry::NewWindowResponse::Deny)
-        .with_url("itda://localhost/index.html")
+        .with_url(format!("itda://localhost/index.html{}", file.map(|id| format!("?files={}", id.bytes().map(|b| format!("%{b:02X}")).collect::<String>())).unwrap_or_default()))
         .with_background_color(bg)
         .with_devtools(devtools)
         .with_hotkeys_zoom(false)
@@ -243,6 +251,10 @@ pub fn apply_zoom(pct: u16) {
 unsafe fn resize_webview(h: HWND) {
     let mut rc: RECT = std::mem::zeroed();
     GetClientRect(h, &mut rc);
+    if h != hwnd() {
+        FILE_PANES.with(|p| { for (wh, wv) in p.borrow().values() { if *wh == h as isize { let _ = wv.set_bounds(Rect { position: wry::dpi::PhysicalPosition::new(0, 0).into(), size: wry::dpi::PhysicalSize::new(rc.right as u32, rc.bottom as u32).into() }); } } });
+        return;
+    }
     WEBVIEW.with(|w| {
         if let Some(wv) = w.borrow().as_ref() {
             let _ = wv.set_bounds(Rect {
@@ -253,7 +265,30 @@ unsafe fn resize_webview(h: HWND) {
     });
 }
 
+pub fn file_windows() -> Vec<String> {
+    FILE_PANES.with(|p| p.borrow().keys().cloned().collect())
+}
+
+pub fn files_window(id: &str, close: bool) {
+    let existing = FILE_PANES.with(|p| p.borrow().get(id).map(|(h, _)| *h));
+    unsafe {
+        if let Some(h) = existing {
+            if close { DestroyWindow(h as HWND); } else { ShowWindow(h as HWND, SW_RESTORE); SetForegroundWindow(h as HWND); }
+            return;
+        }
+        if close { return; }
+        let title = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| format!("{} — 파일", h.label())).unwrap_or_else(|| "네트워크 — Itda".into()));
+        let h = CreateWindowExW(0, wide("itda_home").as_ptr(), wide(&title).as_ptr(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1000, 740, null_mut(), null_mut(), GetModuleHandleW(null()), null());
+        if h.is_null() { return; }
+        match build_webview(h, home(|m| is_dark(&m.settings)), Some(id)) {
+            Ok(view) => { FILE_PANES.with(|p| { p.borrow_mut().insert(id.into(), (h as isize, view)); }); resize_webview(h); ShowWindow(h, SW_SHOW); SetForegroundWindow(h); super::send_hosts(); }
+            Err(e) => { crate::log!("files webview: {e}"); DestroyWindow(h); }
+        }
+    }
+}
+
 pub fn eval(js: &str) {
+    FILE_PANES.with(|p| { for (_, view) in p.borrow().values() { let _ = view.evaluate_script(js); } });
     WEBVIEW.with(|w| {
         if let Some(wv) = w.borrow().as_ref() {
             let _ = wv.evaluate_script(js);
@@ -546,6 +581,7 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
             SetWindowPos(h, null_mut(), r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
         }
         WM_CLOSE => {
+            if h != hwnd() { DestroyWindow(h); return 0; }
             let (tray, hinted) = home(|m| (m.settings.tray, m.settings.tray_hint_shown));
             if tray {
                 ShowWindow(h, SW_HIDE);
@@ -562,6 +598,12 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
             }
         }
         WM_DESTROY => {
+            if h != hwnd() {
+                let id = FILE_PANES.with(|p| p.borrow().iter().find(|(_, (wh, _))| *wh == h as isize).map(|(id, _)| id.clone()));
+                if let Some(id) = id { let removed = FILE_PANES.with(|p| p.borrow_mut().remove(&id)); drop(removed); super::send_hosts(); }
+                return 0;
+            }
+            crate::files::shutdown();
             let wv = WEBVIEW.with(|w| w.borrow_mut().take());
             drop(wv);
             PostQuitMessage(0);

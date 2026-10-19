@@ -56,6 +56,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>itda</string>
   <key>CFBundleIconFile</key><string>itda</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>dev.jiun.itda.files</string>
+    <key>CFBundleURLSchemes</key><array><string>itda</string></array>
+    <key>CFBundleTypeRole</key><string>Viewer</string>
+  </dict></array>
   <key>CFBundleDevelopmentRegion</key><string>ko</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>

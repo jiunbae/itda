@@ -18,7 +18,8 @@ jobs:
       - name: Test
         run: cargo test --release
       - name: Build
-        run: cargo build --release
+        shell: pwsh
+        run: ./scripts/windows-release.ps1
       - name: Size
         shell: pwsh
         run: "'itda.exe: {0:N2} MB' -f ((Get-Item target/release/itda.exe).Length / 1MB)"
