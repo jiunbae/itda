@@ -283,6 +283,7 @@ function renderNav() {
   let html = navItem('all', 'E80F', '모든 연결', S.hosts.length);
   html += navItem('favorites', 'E734', '즐겨찾기', fav || null);
   html += navItem('recent', 'E81C', '최근 사용', null);
+  html += navItem('files', 'E8B7', '파일 브라우저', null);
   html += navItem('accounts', 'E77B', '계정', S.accounts.length || null);
   if (live) html += navItem('live', 'E703', '연결 중', live);
   // Only devices that could still be added: the rest are in the book already.
@@ -299,14 +300,16 @@ function renderNav() {
   $$('.nav-bottom .nav-item').forEach((b) => b.classList.toggle('active', b.dataset.page === S.page));
 }
 
-const TITLES = { all: '모든 연결', favorites: '즐겨찾기', recent: '최근 사용', live: '연결 중', nearby: '주변 기기', accounts: '계정', settings: '설정', help: '도움말', share: '공유 — 다른 기기에서 보기' };
+const TITLES = { all: '모든 연결', favorites: '즐겨찾기', recent: '최근 사용', files: '파일 브라우저', live: '연결 중', nearby: '주변 기기', accounts: '계정', settings: '설정', help: '도움말', share: '공유 — 다른 기기에서 보기' };
 
 function renderTop() {
   const page = S.page;
   $('#title').textContent = page.startsWith('group:') ? page.slice(6) : TITLES[page] || '';
   const listy = !['settings', 'help', 'nearby', 'accounts', 'share'].includes(page);
   $('.search').style.visibility = listy ? '' : 'hidden';
-  $('#viewToggle').style.visibility = listy ? '' : 'hidden';
+  $('#viewToggle').style.visibility = listy && page !== 'files' ? '' : 'hidden';
+  $('#search').placeholder = page === 'files' ? '파일을 볼 기기 이름이나 주소 검색' : '검색하거나 주소를 입력해 바로 연결';
+  $('#newBtn .label-text').textContent = page === 'files' ? '새 기기' : '새 연결';
   $$('#viewToggle button').forEach((b) => b.classList.toggle('on', b.dataset.view === (S.settings.view || 'grid')));
 }
 
@@ -371,7 +374,6 @@ function card(h) {
         <button class="more i" data-act="more" data-id="${esc(h.id)}" title="더보기">&#xE712;</button></div>
       <div class="sub">${who}</div>
       <div class="sub2">${extra}</div>
-      <button class="btn sm file-open" data-act="files" data-id="${esc(h.id)}">${I('E8B7')}파일 열기</button>
     </div>
   </div>`;
 }
@@ -395,7 +397,7 @@ function row(h) {
     <span class="col c-user">${h.user ? esc(h.user) : '<span style="color:var(--text-3)">VNC 암호</span>'}</span>
     <span class="col c-last">${esc(ago(h.last_used))}</span>
     <span class="col">${state}</span>
-    <div class="actions"><button class="btn sm" data-act="files" data-id="${esc(h.id)}">${I('E8B7')}파일</button>${primaryAction(h).replace('class="btn', 'class="btn sm')}
+    <div class="actions">${primaryAction(h).replace('class="btn', 'class="btn sm')}
       <button class="btn subtle icon" data-act="more" data-id="${esc(h.id)}" title="더보기">${I('E712')}</button></div>
   </div>`;
 }
@@ -855,7 +857,7 @@ function render() {
   const focusId = document.activeElement && document.activeElement.closest && document.activeElement.closest('[data-id]') && c.contains(document.activeElement) ? document.activeElement.closest('[data-id]').dataset.id : null;
   const scroll = c.scrollTop;
   const p = S.page;
-  morph(c, p === 'accounts' ? renderAccounts() : p === 'settings' ? renderSettings() : p === 'share' ? renderShare() : p === 'help' ? renderHelp() : p === 'nearby' ? renderNearby() : renderHosts());
+  morph(c, p === 'files' ? (window.ItdaFiles?.renderBrowser() || '') : p === 'accounts' ? renderAccounts() : p === 'settings' ? renderSettings() : p === 'share' ? renderShare() : p === 'help' ? renderHelp() : p === 'nearby' ? renderNearby() : renderHosts());
   READY.clear();
   c.scrollTop = scroll;
   if (focusId) {
@@ -1423,7 +1425,6 @@ function act(a, el) {
   const id = el.dataset.id;
   switch (a) {
     case 'files': return window.ItdaFiles.launch(hostById(id));
-    case 'file-network': return window.ItdaFiles.launchNetwork();
     case 'connect': return connect(id);
     case 'focus': return send('focus', { id });
     case 'cancel': return send('cancel', { id });
@@ -1508,7 +1509,7 @@ document.addEventListener('click', (e) => {
   const nav = e.target.closest('.nav-item');
   if (nav) return go(nav.dataset.page);
   const b = e.target.closest('[data-act]');
-  if (b && (b.closest('#content') || inCtx || b.dataset.act === 'file-network')) {
+  if (b && (b.closest('#content') || inCtx)) {
     e.stopPropagation();
     hideCtx();
     return act(b.dataset.act, b);
@@ -1569,6 +1570,7 @@ search.addEventListener('input', () => {
 });
 search.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
+    if (S.page === 'files') { e.preventDefault(); return window.ItdaFiles?.browserSearch(); }
     const q = search.value.trim();
     if (!q) return;
     const list = pageHosts();

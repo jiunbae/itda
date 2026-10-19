@@ -132,11 +132,6 @@
     host = { id: NETWORK, name: "네트워크", files: {} };
     workspace({ path: "", entries: [], local_path: "", local_entries: [] });
   }
-  function launchNetwork() {
-    if (location.protocol === "http:" && location.hostname === "127.0.0.1")
-      return network();
-    send("files_window", { id: NETWORK });
-  }
   const sortedDevices = () =>
     [...S.hosts].sort(
       (a, b) =>
@@ -160,9 +155,9 @@
     tabs.hidden = true; // Device navigation lives in the sidebar; these are separate windows, not tabs.
     if (networkMode) renderNetwork();
   }
-  function renderNetwork() {
+  function networkData(query = search) {
     const matches = (text) =>
-      !search || text.toLocaleLowerCase().includes(search.toLocaleLowerCase());
+      !query || text.toLocaleLowerCase().includes(query.toLocaleLowerCase());
     const devices = sortedDevices().filter((h) =>
       matches(`${label(h)} ${h.host}`),
     );
@@ -179,8 +174,14 @@
             `<article class="files-network-device"><div class="files-network-machine">${I("E7F4")}</div><strong>${esc(f.name)}</strong><small>${esc(f.dns || f.host || f.ip)}</small><span class="files-network-state">${kind === "peer" ? "Tailscale 기기" : "주변에서 발견"}</span><button class="btn sm" data-found-device="${i}" data-found-kind="${kind}">추가</button></article>`,
         )
         .join("");
-    morph(layer.querySelector(".files-panes"),
-      `<section class="files-network" aria-label="네트워크 기기"><header><div><h2>네트워크</h2><p>파일과 화면에 접근할 기기를 선택하세요.</p></div><div class="files-network-actions"><button class="btn sm" data-action="scan">${I("E72C")}기기 찾기</button><button class="btn sm" data-action="add-device">${I("E710")}새 기기</button>${MAC ? '<button class="btn sm" data-action="locations">Finder 연결 폴더</button>' : ""}</div></header><h3>저장된 기기 <span>${devices.length}</span></h3><div class="files-network-grid">${devices.map((h) => `<article class="files-network-device" data-device-card="${esc(h.id)}" data-id="network-device-${esc(h.id)}"><button class="files-network-machine" data-device="${esc(h.id)}" aria-label="${esc(label(h))} 파일 열기">${I("E7F4")}</button><strong>${esc(label(h))}</strong><small>${esc(h.host)}</small><span class="files-network-state">${esc(deviceState(h))}</span><div class="files-network-buttons"><button class="btn sm" data-device="${esc(h.id)}">파일 열기</button><button class="btn sm" data-screen-device="${esc(h.id)}">화면</button><button class="btn sm" data-native-device="${esc(h.id)}">${nativeName}</button></div></article>`).join("") || '<p class="files-note">저장된 기기가 없습니다. 새 기기를 추가하거나 주변 기기를 찾아보세요.</p>'}</div>${found.length ? `<h3>주변 Itda 기기</h3><div class="files-network-grid" data-found-list>${discovered(found, "nearby")}</div>` : ""}${peers.length ? `<h3>Tailscale 기기</h3><div class="files-network-grid" data-peer-list>${discovered(peers, "peer")}</div>` : ""}<p class="files-network-hint">파일은 화면 공유를 켜지 않아도 연결할 수 있습니다. Finder·탐색기로 열려면 상대 기기의 파일 공유가 켜져 있어야 합니다.</p></section>`);
+    return { html: `<section class="files-network" aria-label="네트워크 기기"><header><div><h2>네트워크</h2><p>파일과 화면에 접근할 기기를 선택하세요.</p></div><div class="files-network-actions"><button class="btn sm" data-action="scan">${I("E72C")}기기 찾기</button><button class="btn sm" data-action="add-device">${I("E710")}새 기기</button>${MAC ? '<button class="btn sm" data-action="locations">Finder 연결 폴더</button>' : ""}</div></header><h3>저장된 기기 <span>${devices.length}</span></h3><div class="files-network-grid">${devices.map((h) => `<article class="files-network-device" data-device-card="${esc(h.id)}" data-id="network-device-${esc(h.id)}"><button class="files-network-machine" data-device="${esc(h.id)}" aria-label="${esc(label(h))} 파일 열기">${I("E7F4")}</button><strong>${esc(label(h))}</strong><small>${esc(h.host)}</small><span class="files-network-state">${esc(deviceState(h))}</span><div class="files-network-buttons"><button class="btn sm" data-device="${esc(h.id)}">파일 열기</button><button class="btn sm" data-screen-device="${esc(h.id)}">화면</button><button class="btn sm" data-native-device="${esc(h.id)}">${nativeName}</button></div></article>`).join("") || '<p class="files-note">저장된 기기가 없습니다. 새 기기를 추가하거나 주변 기기를 찾아보세요.</p>'}</div>${found.length ? `<h3>주변 Itda 기기</h3><div class="files-network-grid" data-found-list>${discovered(found, "nearby")}</div>` : ""}${peers.length ? `<h3>Tailscale 기기</h3><div class="files-network-grid" data-peer-list>${discovered(peers, "peer")}</div>` : ""}<p class="files-network-hint">파일은 화면 공유를 켜지 않아도 연결할 수 있습니다. Finder·탐색기로 열려면 상대 기기의 파일 공유가 켜져 있어야 합니다.</p></section>`, devices, found, peers };
+  }
+  function renderBrowser() {
+    return `<div class="files-home">${networkData(S.query).html}</div>`;
+  }
+  function renderNetwork() {
+    const { html, devices, found, peers } = networkData();
+    morph(layer.querySelector(".files-panes"), html);
     layer.querySelector("[data-status]").textContent =
       `저장된 기기 ${devices.length}대`;
     layer.querySelector("[data-location]").textContent = "네트워크";
@@ -225,6 +226,38 @@
           });
         }),
     );
+  }
+  function browserClick(e) {
+    if (S.page !== "files" || !e.target.closest(".files-home")) return;
+    const device = e.target.closest("[data-device]");
+    if (device) return launch(hostById(device.dataset.device));
+    const native = e.target.closest("[data-native-device]");
+    if (native) {
+      nativePending.add(native.dataset.nativeDevice);
+      send("files", { id: native.dataset.nativeDevice, op: "finder" });
+      return;
+    }
+    const screen = e.target.closest("[data-screen-device]");
+    if (screen) return connect(screen.dataset.screenDevice);
+    const action = e.target.closest("[data-action]")?.dataset.action;
+    if (action === "scan") return send("scan");
+    if (action === "add-device") return openEdit();
+    if (action === "locations") {
+      locationsPending = true;
+      return send("file_locations");
+    }
+    const found = e.target.closest("[data-found-device]");
+    if (found) {
+      const data = networkData(S.query);
+      const f = (found.dataset.foundKind === "peer" ? data.peers : data.found)[Number(found.dataset.foundDevice)];
+      if (f) openEdit({ host: f.dns || f.host || f.ip, name: f.name, os: f.os || "mac", kind: f.os === "windows" && !f.itda ? "rdp" : "" });
+    }
+  }
+  function browserSearch() {
+    const devices = networkData(S.query).devices;
+    if (!devices.length) return toast("일치하는 기기가 없습니다. 새 기기를 추가하거나 검색어를 바꿔 주세요", "E946");
+    if (devices.length === 1) launch(devices[0]);
+    else document.querySelector('.files-home [data-device]')?.focus();
   }
   function open(h) {
     if (!h) return;
@@ -415,7 +448,6 @@
     layer.addEventListener("dblclick", dblclick);
     layer.addEventListener("contextmenu", context);
     layer.addEventListener("pointerdown", pointerDown);
-    layer.addEventListener("keydown", key);
     layer.querySelector("[data-search]").oninput = (e) => {
       search = e.target.value;
       for (const p of Object.values(panes)) {
@@ -1049,6 +1081,9 @@
   }
 
   function key(e) {
+    // WKWebView does not focus buttons after a click. Route file shortcuts even when
+    // focus falls back to the document, while leaving dialogs and popup menus in charge.
+    if (!layer || document.querySelector(".files-prompt,.files-menu") || topModal()) return;
     if (e.target.matches("[data-resize-column],[data-resize-sidebar]")) {
       if (["ArrowLeft", "ArrowRight"].includes(e.key)) {
         e.preventDefault();
@@ -1389,13 +1424,22 @@
     return true;
   }
   window.ItdaFiles = {
+    renderBrowser,
+    browserSearch,
     open,
     launch,
     boot,
     message,
     network,
-    launchNetwork,
     refreshNetwork,
   };
+  document.addEventListener("keydown", key, true);
+  document.addEventListener("click", browserClick);
+  document.addEventListener("dblclick", (e) => {
+    if (S.page !== "files" || !e.target.closest(".files-home") || e.target.closest("button")) return;
+    const card = e.target.closest("[data-device-card]");
+    if (card) launch(hostById(card.dataset.deviceCard));
+  });
+  if (S.page === "files") render();
   boot();
 })();

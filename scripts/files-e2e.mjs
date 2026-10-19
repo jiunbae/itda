@@ -207,25 +207,49 @@ try {
       `http://127.0.0.1:${appPort}/${platform.startsWith("Mac") ? "" : "?files=files-fixture"}`,
     );
     if (platform.startsWith("Mac")) {
-      await page.locator('[data-act="file-network"]').click();
-      await page.locator(".files-network").waitFor();
+      await page.locator('.card[data-id="files-fixture"]').waitFor();
+      assert((await page.locator('.card [data-act="files"]').count()) === 0, "Screen cards still have file buttons");
+      await page.locator('.nav-item[data-page="files"]').click();
+      await page.locator(".files-home .files-network").waitFor();
+      assert(await page.locator('.nav-item[data-page="files"].active').count(), "File browser nav is not selected");
       await page.locator('[data-device-card="files-second"]').waitFor();
       assert(
         (await page.locator("[data-device-card]").count()) === 2,
         "Saved network devices are missing",
       );
-      await page.locator('.files-sidebar [data-device="files-second"]').focus();
-      await page.evaluate(() => ItdaFiles.refreshNetwork());
+      await page.locator('.files-home [data-device="files-second"]').first().focus();
+      await page.evaluate(() => render());
       assert(await page.evaluate(() => document.activeElement?.dataset.device === "files-second"), "Network refresh stole sidebar focus");
       await page.keyboard.press("Meta+f");
-      assert(await page.locator('[data-search]').evaluate((el) => el === document.activeElement), "Network search shortcut did not focus search");
+      assert(await page.locator('#search').evaluate((el) => el === document.activeElement), "Network search shortcut did not focus search");
+      // WKWebView can return focus to the document when clicking a toolbar button.
+      await page.evaluate(() => document.activeElement.blur());
+      await page.keyboard.press("Meta+f");
+      assert(await page.locator('#search').evaluate((el) => el === document.activeElement), "Document focus lost the file search shortcut");
       assert(await page.locator('.files-view-switch').isHidden(), "Network shows view controls with no alternate view");
-      await page.locator("[data-search]").fill("Travel");
+      await page.locator("#search").fill("Travel");
       assert(
         (await page.locator("[data-device-card]").count()) === 1,
         "Network search did not filter devices",
       );
-      await page.locator("[data-search]").fill("");
+      await page.locator('#search').press('Enter');
+      await page.locator('.files-setup h2').filter({ hasText: 'Travel Mac' }).waitFor();
+      assert(await page.evaluate(() => Object.keys(S.sessions).length === 0), "File search started a screen session");
+      await page.locator('[data-close]').click();
+      await page.locator('#search').fill('unlisted-device');
+      await page.locator('#search').press('Enter');
+      await page.locator('.toast').filter({ hasText: '일치하는 기기가 없습니다' }).waitFor();
+      await page.locator("#search").fill("");
+      await page.locator('[data-action="add-device"]').click();
+      await page.locator('#modals [data-key="edit"] #f-name').click();
+      await page.locator('#modals [data-key="edit"] #f-name').fill("Not saved");
+      await page.keyboard.press("Escape");
+      await page.locator('#modals [data-key="edit"]').waitFor({ state: "detached" });
+      assert((await page.locator('[data-device-card]').count()) === 2, "Cancelled editor changed the device list");
+      if (process.env.SCREENSHOT_DIR) {
+        fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
+        await page.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, 'files-browser-mac.png') });
+      }
       await page
         .locator('[data-device-card="files-fixture"] [data-device]')
         .first()
@@ -261,6 +285,7 @@ try {
       await page.locator('.files-grid').waitFor();
       await page.keyboard.press("Meta+2");
       await page.locator('[data-pane="remote"] table').waitFor();
+      await page.evaluate(() => document.activeElement.blur());
       await page.keyboard.press("Meta+Shift+g");
       await page.locator('.files-prompt [name="path"]').fill(remote);
       await page.locator('[data-choice="ok"]').click();
@@ -440,8 +465,17 @@ try {
       .locator('[data-path="remote"]')
       .inputValue();
     await page.locator('[data-action="network"]').first().click();
+    if (platform.startsWith("Mac")) {
+      await page.evaluate(() => document.activeElement.blur());
+      await page.keyboard.press("Meta+f");
+      assert(await page.locator('.files-layer [data-search]').evaluate((el) => el === document.activeElement), "File-window search fell through to home");
+      await page.locator('.files-layer [data-action="add-device"]').click();
+      await page.locator('#modals [data-key="edit"] #f-name').click();
+      await page.keyboard.press('Escape');
+      await page.locator('#modals [data-key="edit"]').waitFor({ state: 'detached' });
+    }
     assert(
-      (await page.locator("[data-device-card]").count()) === 2,
+      (await page.locator(".files-layer [data-device-card]").count()) === 2,
       "Network roster lost a device",
     );
     const previousStatus = await page.evaluate(() => ({
@@ -456,7 +490,7 @@ try {
     assert(
       (
         await page
-          .locator('[data-device-card="files-fixture"] .files-network-state')
+          .locator('.files-layer [data-device-card="files-fixture"] .files-network-state')
           .textContent()
       ).includes("화면 연결됨"),
       "Screen session badge missing",
@@ -464,7 +498,7 @@ try {
     assert(
       (
         await page
-          .locator('[data-device-card="files-second"] .files-network-state')
+          .locator('.files-layer [data-device-card="files-second"] .files-network-state')
           .textContent()
       ).includes("파일 창 열림"),
       "File-window badge missing",
@@ -476,7 +510,7 @@ try {
         if (body.cmd === "file_locations") body.reveal = false;
         await route.continue({ postData: JSON.stringify(body) });
       });
-      await page.locator('[data-action="locations"]').click();
+      await page.locator('.files-layer [data-action="locations"]').click();
       const links = path.join(data, "Locations", "Itda");
       for (
         let i = 0;

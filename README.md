@@ -64,11 +64,13 @@ Under the hood each connection window is the web viewer (noVNC) against a privat
 
 ## 📁 Files without a screen connection
 
-The address book's **Files** button opens a network window with saved devices, nearby Itda devices, and Tailscale peers. Open files and screens independently. Saved devices appear in the sidebar, with an indicator for open file windows. Each device opens in its own window. Screen connection state and open file-window state are shown separately.
+The left sidebar's **파일 브라우저 (File browser)** opens a Network page with saved devices, nearby Itda devices, and Tailscale peers. Search for a device and press Enter, or select its file action, to open an independent file window. Screen connection cards stay focused on screens; their More menu retains an Open files shortcut. Screen connection state and open file-window state are shown separately.
 
 On macOS, **Finder connection folder** creates `.inetloc` shortcuts in `…/Itda/Locations/Itda` and opens the folder in Finder. Each link opens the saved device through `itda://files/<device ID>` without embedding passwords, keys, or remote paths. The folder can be added to Finder's sidebar. This is a connection folder, not a mounted remote volume or File Provider; direct SSH browsing/editing inside Finder remains unimplemented. The Finder button opens actual SMB shares. Export from the CLI with `Itda.app/Contents/MacOS/itda --export-file-locations`.
 
-Choose **파일 열기 (Open files)** to open an independent native window for a device. Opening the same device again focuses its existing window. Screen sessions are independent; closing a file window leaves ongoing transfers running, and reopening reuses a live connection.
+Choose **파일 열기 (Open files)** inside File browser to open an independent native window for a device. Opening the same device again focuses its existing window. Screen sessions are independent; closing a file window leaves ongoing transfers running, and reopening reuses a live connection.
+
+<img src="web/help/itda-files-browser.png" width="860" alt="File browser tab in the isolated SSH test fixture">
 
 <img src="web/help/itda-files.png" width="860" alt="macOS-style file workspace, showing transfers between two folders in the isolated SSH test fixture">
 

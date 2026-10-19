@@ -1,9 +1,4 @@
 /* File workspace follows the local OS: Finder toolbar/sidebar on Mac; Explorer command bar on Windows. */
-.file-open {
-  margin-top: 12px;
-  width: 100%;
-  justify-content: center;
-}
 .files-layer {
   position: fixed;
   inset: 0;
@@ -887,3 +882,9 @@ body.file-window .files-layer.mac .files-sidebar { padding-top: 52px; }
 }
 .files-menu .btn { justify-content: flex-start; line-height: 1.25; }
 .files-layer.is-network .files-view-switch { display: none; }
+body:has(.files-layer) #modals .scrim { z-index: 3800; }
+.files-home { min-height: 100%; }
+.files-home .files-network { padding: 0; overflow: visible; background: transparent; }
+.files-home .files-network-buttons [data-screen-device] { display: none; }
+.files-home .files-network-machine:focus-visible { outline: 2px solid var(--accent); border-radius: 8px; }
+#content:has(.files-home) { background: var(--surface); }
