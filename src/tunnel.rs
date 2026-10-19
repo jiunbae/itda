@@ -150,7 +150,11 @@ impl Tunnel {
         let target = if c.user.is_empty() { c.host.clone() } else { format!("{}@{}", c.user, c.host) };
         let me = std::env::current_exe()?;
         let mut cmd = Command::new(exe);
+        // A screen tunnel carries input and frames: mark it low-delay. Without a session ssh
+        // treats it as bulk, and older OpenSSH (Windows' own) sends bulk as background
+        // traffic (DSCP CS1), the lowest Wi-Fi queue.
         cmd.args(["-v", "-N", "-T"])
+            .args(["-o", "IPQoS=lowdelay"])
             .args(["-o", "ExitOnForwardFailure=yes"])
             .args(["-o", "StrictHostKeyChecking=accept-new"])
             .arg("-o")
