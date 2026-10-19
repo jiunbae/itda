@@ -21,6 +21,28 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const I = (code) => `<span class="i">&#x${code};</span>`;
 
+// Operating system marks (Segoe Fluent has no logos, so these are SVG everywhere).
+const OS_SVG = {
+  mac: '<path d="M16.37 12.73c-.02-2.1 1.72-3.12 1.8-3.17-.98-1.43-2.5-1.63-3.05-1.65-1.3-.13-2.53.76-3.19.76-.66 0-1.67-.74-2.75-.72-1.41.02-2.72.82-3.44 2.09-1.47 2.55-.38 6.32 1.05 8.39.7 1.01 1.53 2.15 2.62 2.11 1.05-.04 1.45-.68 2.72-.68s1.63.68 2.74.66c1.13-.02 1.85-1.03 2.54-2.05.8-1.17 1.13-2.31 1.15-2.37-.03-.01-2.2-.85-2.22-3.37zM14.29 6.55c.58-.7.97-1.68.86-2.65-.83.03-1.84.55-2.44 1.25-.53.62-1 1.61-.88 2.56.93.07 1.88-.47 2.46-1.16z"/>',
+  windows: '<path d="M3.5 5.6l7-1v6.9h-7zM11.5 4.5l9-1.3v8.3h-9zM3.5 12.5h7v6.9l-7-1zM11.5 12.5h9v8.3l-9-1.3z"/>',
+  linux: '<path d="M12 2.6c-2.3 0-3.6 1.9-3.6 4.4 0 1.3.3 2.2-.6 3.6-1.2 1.8-2.9 3.9-2.9 6.6 0 .6.1 1.1.3 1.6-.8.4-1.5.9-1.4 1.5.2.9 2.1.6 3.4 1.1 1.1.4 2 .6 2.6-.2.5-.1 1.4-.2 2.2-.2s1.7.1 2.2.2c.6.8 1.5.6 2.6.2 1.3-.5 3.2-.2 3.4-1.1.1-.6-.6-1.1-1.4-1.5.2-.5.3-1 .3-1.6 0-2.7-1.7-4.8-2.9-6.6-.9-1.4-.6-2.3-.6-3.6 0-2.5-1.3-4.4-3.6-4.4z"/><path class="cut" d="M12 10.2c-1.9 0-3.2 2.6-3.2 5.6 0 1.7.6 3.2 1.3 4h3.8c.7-.8 1.3-2.3 1.3-4 0-3-1.3-5.6-3.2-5.6z"/><circle class="cut" cx="10.6" cy="6.6" r=".9"/><circle class="cut" cx="13.4" cy="6.6" r=".9"/><path class="cut" d="M10.9 8.4h2.2L12 9.6z"/>',
+};
+
+// 'mac' | 'windows' | 'linux' | '' for a host in the book, a Bonjour find or a tailnet peer.
+function osOf(x) {
+  const o = String(x.os || '').toLowerCase();
+  if (o === 'mac' || o === 'macos') return 'mac';
+  if (o === 'windows') return 'windows';
+  if (o === 'linux') return 'linux';
+  return x.kind === 'rdp' || x.this ? 'windows' : '';
+}
+
+// The device's OS mark, or the generic screen when unknown.
+function osIcon(x) {
+  const os = osOf(x);
+  return OS_SVG[os] ? `<span class="osm osm-${os}"><svg viewBox="0 0 24 24" aria-hidden="true">${OS_SVG[os]}</svg></span>` : I('E7F4');
+}
+
 // Itda for Mac shows this same home; the words and a few controls follow the platform.
 const MAC = /Macintosh|Mac OS X/.test(navigator.userAgent) && !/Windows/.test(navigator.userAgent);
 const HERE = MAC ? '이 Mac' : '이 PC';
@@ -238,7 +260,9 @@ function renderNav() {
   html += navItem('recent', 'E81C', '최근 사용', null);
   html += navItem('accounts', 'E77B', '계정', S.accounts.length || null);
   if (live) html += navItem('live', 'E703', '연결 중', live);
-  html += navItem('nearby', 'E701', '주변 기기', S.found.length + tailPeers().filter((p) => p.online).length || null);
+  // Only devices that could still be added: the rest are in the book already.
+  const addable = S.found.filter((f) => !inBook(f)).length + tailPeers().filter((p) => p.online && !peerInBook(p)).length;
+  html += navItem('nearby', 'E701', '주변 기기', addable || null);
   const sharing = (S.settings.web || {}).on || (S.settings.share || {}).on;
   html += navItem('share', 'E72D', '공유', null).replace('</button>', sharing ? '<span class="dot-on" title="켜짐"></span></button>' : '</button>');
   const gs = groups();
@@ -296,7 +320,7 @@ function thumb(h) {
   const img = h.thumb ? `<img src="thumb/${esc(h.id)}.png?v=${h.thumb}" alt="" loading="lazy" onerror="this.remove()">` : '';
   const initial = esc((label(h)[0] || '?').toUpperCase());
   return `<div class="thumb" style="--h:${hue(h.id)}">
-    <span class="ph i">&#xE7F4;</span><span class="ph-initial">${initial}</span>${img}`;
+    <span class="ph">${osIcon(h)}</span><span class="ph-initial">${initial}</span>${img}`;
 }
 
 function primaryAction(h) {
@@ -486,38 +510,37 @@ function emptyBook() {
 // A device found on this Wi-Fi: what it is, how it would open, and what is missing.
 // Windows PCs announce themselves while Itda runs, even with sharing off.
 function foundRow(f) {
-  const have = inBook(f);
   const win = f.os === 'windows';
   const rdp = win && !f.share && f.rdp;
   const addr = [f.hostname, f.ip].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' · ');
-  const act = have
-    ? `<span class="pill mute">추가됨</span><button class="btn sm" data-act="connect" data-id="${esc(have.id)}">${I('E768')}연결</button>`
-    : `<button class="btn sm primary" data-act="add-found" data-host="${esc(f.host)}" data-name="${esc(f.name)}" data-os="${esc(f.os || '')}" data-itda="${win && !rdp ? '1' : ''}">${I('E710')}추가</button>`;
+  const act = `<button class="btn sm primary" data-act="add-found" data-host="${esc(f.host)}" data-name="${esc(f.name)}" data-os="${esc(f.os || '')}" data-itda="${win && !rdp ? '1' : ''}">${I('E710')}추가</button>`;
   const pill = win
     ? ` <span class="pill ${f.share || rdp ? 'ok' : 'mute'}">${f.share ? 'Windows · Itda 공유 중' : rdp ? 'Windows · 원격 데스크톱' : 'Windows · Itda'}</span>`
     : f.itda ? ` <span class="pill ${f.share ? 'ok' : 'mute'}">Mac · Itda</span>` : '';
   const off = !f.itda || f.share || rdp ? ''
     : win ? '<span class="off">공유가 꺼져 있습니다 — 그 PC의 Itda에서 <strong>공유 → 이 PC 공유</strong>를 켜면 연결됩니다.</span>'
       : '<span class="off">화면 공유가 꺼져 있습니다 — 그 Mac의 <strong>시스템 설정 → 일반 → 공유 → 화면 공유</strong>를 켜면 연결됩니다.</span>';
-  return `<div class="found"><div class="ico">${I(win ? 'E7F8' : 'E7F4')}</div><div class="txt"><b>${esc(f.name)}${pill}</b><span>${esc(addr)}</span>${off}</div>${act}</div>`;
+  return `<div class="found"><div class="ico">${osIcon({ os: win ? 'windows' : 'mac' })}</div><div class="txt"><b>${esc(f.name)}${pill}</b><span>${esc(addr)}</span>${off}</div>${act}</div>`;
 }
 
 function peerRow(p) {
-  const have = peerInBook(p);
   const os = { macOS: 'Mac', windows: 'Windows', linux: 'Linux' }[p.os] || p.os;
-  const act = have
-    ? `<span class="pill mute">추가됨</span><button class="btn sm" data-act="connect" data-id="${esc(have.id)}">${I('E768')}연결</button>`
-    : `<button class="btn sm primary" data-act="add-found" data-host="${esc(p.dns || p.ip)}" data-name="${esc(p.name)}" data-os="${esc(p.os)}">${I('E710')}추가</button>`;
-  return `<div class="found"><div class="ico">${I('E7F4')}</div><div class="txt"><b>${p.online ? '<span class="dot on"></span> ' : '<span class="dot off"></span> '}${esc(p.name)} <span class="pill mute">${esc(os)}</span></b><span>${esc(p.dns)} · ${esc(p.ip)}</span></div>${act}</div>`;
+  const act = `<button class="btn sm primary" data-act="add-found" data-host="${esc(p.dns || p.ip)}" data-name="${esc(p.name)}" data-os="${esc(p.os)}">${I('E710')}추가</button>`;
+  return `<div class="found"><div class="ico">${osIcon(p)}</div><div class="txt"><b>${p.online ? '<span class="dot on"></span> ' : '<span class="dot off"></span> '}${esc(p.name)} <span class="pill mute">${esc(os)}</span></b><span>${esc(p.dns)} · ${esc(p.ip)}</span></div>${act}</div>`;
 }
 
 function renderNearby() {
   const head = `<div class="banner">${I('E946')}<div class="txt"><b>연결할 수 있는 기기</b><span>같은 Wi-Fi에서는 화면 공유가 켜진 Mac과 Itda가 실행 중인 PC·Mac을 찾고(30초마다 새로 고침), 어디에 있든 연결되는 기기는 Tailscale로 찾습니다.</span></div>
     <button class="btn" data-act="scan" ${S.scanning ? 'disabled' : ''}>${S.scanning ? '<span class="spin"></span>검색 중…' : `${I('E72C')}다시 검색`}</button></div>`;
-  const lan = S.found.length
-    ? `<div class="found-list">${S.found.map(foundRow).join('')}</div>`
-    : `<p class="note-line">${S.scanning ? '찾는 중…' : '같은 Wi-Fi에서 찾은 기기가 없습니다. 화면 공유가 켜진 Mac과 Itda가 켜진 PC·Mac이 여기에 나타납니다. 원격 데스크톱만 켠 PC는 주소로 직접 추가하세요.'}</p>`;
-  const peers = tailPeers();
+  // Devices already in the address book are left out: they're on the home page.
+  const fresh = S.found.filter((f) => !inBook(f));
+  const lan = fresh.length
+    ? `<div class="found-list">${fresh.map(foundRow).join('')}</div>`
+    : S.found.length
+      ? `<p class="note-line">같은 Wi-Fi에서 찾은 기기는 모두 주소록에 있습니다.</p>`
+      : `<p class="note-line">${S.scanning ? '찾는 중…' : '같은 Wi-Fi에서 찾은 기기가 없습니다. 화면 공유가 켜진 Mac과 Itda가 켜진 PC·Mac이 여기에 나타납니다. 원격 데스크톱만 켠 PC는 주소로 직접 추가하세요.'}</p>`;
+  const all = tailPeers();
+  const peers = all.filter((p) => !peerInBook(p));
   const t = S.tailnet;
   const ts = !t
     ? `<p class="note-line">Tailscale을 설치하면 집 밖의 Mac에도 VPN 설정 없이 연결할 수 있습니다. <a href="https://tailscale.com/download" data-ext>Tailscale 받기</a></p>`
@@ -525,7 +548,9 @@ function renderNearby() {
       ? `<p class="note-line">Tailscale이 꺼져 있습니다. Tailscale을 켜면 어디서나 연결되는 기기가 여기에 나타납니다.</p>`
       : peers.length
         ? `<div class="found-list">${peers.map(peerRow).join('')}</div>`
-        : `<p class="note-line">같은 Tailscale 네트워크에 Mac·PC가 없습니다.</p>`;
+        : all.length
+          ? `<p class="note-line">Tailscale의 Mac·PC는 모두 주소록에 있습니다.</p>`
+          : `<p class="note-line">같은 Tailscale 네트워크에 열 수 있는 Mac·PC가 없습니다.</p>`;
   return `<div class="page">${head}
     <div class="section-head">${I('E701')}같은 Wi-Fi<span class="line"></span></div>${lan}
     <div class="section-head">${I('E774')}Tailscale — 어디서나${t && t.running ? ` · ${esc(t.me.name)}` : ''}<span class="line"></span></div>${ts}
