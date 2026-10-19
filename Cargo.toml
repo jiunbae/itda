@@ -33,6 +33,11 @@ x509-cert = { version = "0.2", default-features = false, features = ["std"] }
 tao = "0.34"
 muda = "0.17"
 
+# Desktop Duplication (Share this PC); the same version ironrdp's sspi already builds.
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = ["Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"]
+
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.59"
 features = [

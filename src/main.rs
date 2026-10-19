@@ -27,6 +27,8 @@ mod ws;
 #[cfg(windows)]
 mod clip;
 #[cfg(windows)]
+mod dxgi;
+#[cfg(windows)]
 mod fb;
 #[cfg(windows)]
 mod keys;

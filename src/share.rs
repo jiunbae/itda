@@ -1,8 +1,9 @@
 //! "Share this PC": a small VNC server so other devices (Itda on another PC, the web
 //! viewer, macOS Screen Sharing, any VNC client) can see and control this Windows PC.
 //!
-//! GDI capture of the whole virtual desktop (all monitors), 64×64 tile diffing, ZRLE
-//! (solid/raw tiles over one zlib stream), SendInput for mouse and keyboard, clipboard both
+//! One capture of the whole virtual desktop (all monitors; Desktop Duplication, else GDI)
+//! shared by all viewers, 64×64 tile diffing, ZRLE (solid/raw tiles over one zlib
+//! stream), SendInput for mouse and keyboard, clipboard both
 //! ways, VNC-password auth plus an on-screen "allow?" prompt, and DNS-SD (Bonjour)
 //! registration so nearby Itdas list this PC.
 
@@ -247,16 +248,21 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
     let _shared: [u8; 1] = rd(&mut c)?;
     c.set_read_timeout(None)?;
 
-    let mut cap = Capture::new();
+    let cap = capture();
+    let size = {
+        let mut c = cap.lock().unwrap();
+        c.fit();
+        (c.w, c.h)
+    };
     let name = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows".into());
     let mut init = Vec::new();
-    init.extend_from_slice(&(cap.w as u16).to_be_bytes());
-    init.extend_from_slice(&(cap.h as u16).to_be_bytes());
+    init.extend_from_slice(&(size.0 as u16).to_be_bytes());
+    init.extend_from_slice(&(size.1 as u16).to_be_bytes());
     init.extend_from_slice(&PIXEL_FORMAT);
     init.extend_from_slice(&(name.len() as u32).to_be_bytes());
     init.extend_from_slice(name.as_bytes());
     c.write_all(&init)?;
-    crate::log!("share {peer}: viewer in ({}x{})", cap.w, cap.h);
+    crate::log!("share {peer}: viewer in ({}x{})", size.0, size.1);
 
     let id = {
         let mut b = [0u8; 8];
@@ -274,7 +280,7 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
         let _ = read_client(BufReader::new(reader), &tx, &mut input);
         input.release_all();
     });
-    let r = Outbox::new(c.try_clone()?).and_then(|out| pump(&out, &rx, &mut cap, stop));
+    let r = Outbox::new(c.try_clone()?).and_then(|out| pump(&out, &rx, &cap, size, stop));
     let _ = c.shutdown(Shutdown::Both);
     VIEWERS.lock().unwrap().retain(|(i, _, _)| *i != id);
     changed();
@@ -359,7 +365,7 @@ const ENC_DESKTOP_SIZE: i32 = -223;
 const FRAME: Duration = Duration::from_millis(33);
 
 /// Server → client: capture, diff, encode, send.
-fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &mut Capture, stop: &AtomicBool) -> io::Result<()> {
+fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<Capture>, mut size: (usize, usize), stop: &AtomicBool) -> io::Result<()> {
     let mut pf = PixelFormat::parse(&PIXEL_FORMAT);
     let mut encs: Vec<i32> = Vec::new();
     let mut demand = Demand::default();
@@ -408,7 +414,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &mut Capture, stop: &AtomicBool) 
                 Msg::Resize => refuse_resize = true,
                 Msg::Request { incremental } => demand.request(incremental),
                 Msg::Ext(m) => {
-                    if demand.ext(m, cap.w, cap.h, &mut reply) {
+                    if demand.ext(m, size.0, size.1, &mut reply) {
                         prev.clear();
                     }
                 }
@@ -439,10 +445,13 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &mut Capture, stop: &AtomicBool) 
             continue; // (a viewer that's behind gets the changes together later)
         }
         last_capture = Instant::now();
-        let (w0, h0) = (cap.w, cap.h);
+        // The size this viewer was last given (another viewer's capture may have resized it).
+        let (w0, h0) = size;
+        let mut cap = cap.lock().unwrap();
         cap.fit(); // (grab does too) the virtual desktop's corner, read before the frame borrows cap
         let (ox, oy) = (cap.x, cap.y);
         let (w, h, frame) = cap.grab();
+        size = (w, h);
         u.start();
         let ext = encs.contains(&ENC_EXT_DESKTOP_SIZE);
         if ext && ((w, h) != (w0, h0) || screens_read.elapsed() >= Duration::from_secs(1)) {
@@ -501,6 +510,19 @@ fn monitors() -> Vec<(u32, i32, i32, i32, i32)> {
     list
 }
 
+/// The one capture all viewers share: a display can be duplicated only once per process,
+/// and one capture is cheaper anyway. Each viewer diffs it against its own last frame.
+/// Released (duplication included) when the last viewer leaves.
+fn capture() -> Arc<Mutex<Capture>> {
+    static SHARED: Mutex<std::sync::Weak<Mutex<Capture>>> = Mutex::new(std::sync::Weak::new());
+    let mut g = SHARED.lock().unwrap();
+    g.upgrade().unwrap_or_else(|| {
+        let c = Arc::new(Mutex::new(Capture::new()));
+        *g = Arc::downgrade(&c);
+        c
+    })
+}
+
 struct Capture {
     x: i32,
     y: i32,
@@ -509,11 +531,21 @@ struct Capture {
     mdc: HDC,
     bmp: HBITMAP,
     bits: *mut u32,
+    /// Desktop Duplication, when it works; else (and while it's being retried) GDI.
+    dup: Option<crate::dxgi::Dup>,
+    dup_retry: Instant,
+    /// The pixels the drawn-in cursor covers, to put back before the next frame:
+    /// duplication only refreshes what changed on the screen.
+    under: Option<([i32; 4], Vec<u32>)>,
+    gdi_logged: bool,
 }
+
+// GDI objects and the D3D context are used by one viewer's thread at a time (the mutex).
+unsafe impl Send for Capture {}
 
 impl Capture {
     fn new() -> Capture {
-        let mut c = Capture { x: 0, y: 0, w: 0, h: 0, mdc: null_mut(), bmp: null_mut(), bits: null_mut() };
+        let mut c = Capture { x: 0, y: 0, w: 0, h: 0, mdc: null_mut(), bmp: null_mut(), bits: null_mut(), dup: None, dup_retry: Instant::now(), under: None, gdi_logged: false };
         c.fit();
         c
     }
@@ -543,21 +575,93 @@ impl Capture {
             ReleaseDC(null_mut(), screen);
         }
         (self.x, self.y, self.w, self.h) = (x, y, w, h);
+        // New layout: displays moved, and the new buffer starts empty.
+        self.dup = None;
+        self.dup_retry = Instant::now();
+        self.under = None;
     }
 
     fn grab(&mut self) -> (usize, usize, &[u32]) {
         self.fit();
         unsafe {
-            let screen = GetDC(null_mut());
-            BitBlt(self.mdc, 0, 0, self.w as i32, self.h as i32, screen, self.x, self.y, SRCCOPY | CAPTUREBLT);
-            ReleaseDC(null_mut(), screen);
-            // GDI capture leaves the cursor out: draw it in.
+            let (w, h) = (self.w, self.h);
+            let px = std::slice::from_raw_parts_mut(self.bits, w * h);
+            if let Some(([x, y, cw, ch], saved)) = self.under.take() {
+                for r in 0..ch as usize {
+                    let o = (y as usize + r) * w + x as usize;
+                    px[o..o + cw as usize].copy_from_slice(&saved[r * cw as usize..(r + 1) * cw as usize]);
+                }
+            }
+            // Duplication delivers changes only, so a new one starts from a whole GDI frame
+            // (its own first frame is whole too).
+            let mut gdi = self.dup.is_none();
+            if self.dup.is_none() && Instant::now() >= self.dup_retry {
+                match crate::dxgi::Dup::new() {
+                    Ok(d) => {
+                        crate::log!("capture: desktop duplication");
+                        self.dup = Some(d);
+                    }
+                    Err(e) => {
+                        if !self.gdi_logged {
+                            crate::log!("capture: GDI ({e})");
+                            self.gdi_logged = true;
+                        }
+                        self.dup_retry = Instant::now() + Duration::from_secs(2);
+                    }
+                }
+            }
+            if !gdi {
+                if let Some(d) = &mut self.dup {
+                    if d.update(px, w, h, self.x, self.y).is_err() {
+                        crate::log!("capture: desktop duplication lost");
+                        self.gdi_logged = false;
+                        self.dup = None;
+                        self.dup_retry = Instant::now() + Duration::from_millis(500);
+                        gdi = true;
+                    }
+                }
+            }
+            if gdi {
+                let screen = GetDC(null_mut());
+                BitBlt(self.mdc, 0, 0, w as i32, h as i32, screen, self.x, self.y, SRCCOPY | CAPTUREBLT);
+                ReleaseDC(null_mut(), screen);
+                GdiFlush();
+                for p in px.iter_mut() {
+                    *p &= 0x00ff_ffff;
+                }
+            }
+            // Neither capture includes the cursor: draw it in, keeping what it covers.
             let mut ci: CURSORINFO = std::mem::zeroed();
             ci.cbSize = size_of::<CURSORINFO>() as u32;
             if GetCursorInfo(&mut ci) != 0 && ci.flags & CURSOR_SHOWING != 0 {
                 let mut ii: ICONINFO = std::mem::zeroed();
                 if GetIconInfo(ci.hCursor, &mut ii) != 0 {
-                    DrawIconEx(self.mdc, ci.ptScreenPos.x - self.x - ii.xHotspot as i32, ci.ptScreenPos.y - self.y - ii.yHotspot as i32, ci.hCursor, 0, 0, 0, null_mut(), DI_NORMAL);
+                    let mut bm: BITMAP = std::mem::zeroed();
+                    let (bw, bh) = if GetObjectW(ii.hbmMask, size_of::<BITMAP>() as i32, &mut bm as *mut BITMAP as _) != 0 {
+                        (bm.bmWidth, if ii.hbmColor.is_null() { bm.bmHeight / 2 } else { bm.bmHeight })
+                    } else {
+                        (64, 64)
+                    };
+                    let (cx, cy) = (ci.ptScreenPos.x - self.x - ii.xHotspot as i32, ci.ptScreenPos.y - self.y - ii.yHotspot as i32);
+                    let (x0, y0) = (cx.max(0), cy.max(0));
+                    let (x1, y1) = ((cx + bw).min(w as i32), (cy + bh).min(h as i32));
+                    if x0 < x1 && y0 < y1 {
+                        let (rw, rh) = ((x1 - x0) as usize, (y1 - y0) as usize);
+                        let mut saved = Vec::with_capacity(rw * rh);
+                        for r in 0..rh {
+                            let o = (y0 as usize + r) * w + x0 as usize;
+                            saved.extend_from_slice(&px[o..o + rw]);
+                        }
+                        DrawIconEx(self.mdc, cx, cy, ci.hCursor, 0, 0, 0, null_mut(), DI_NORMAL);
+                        GdiFlush();
+                        for r in 0..rh {
+                            let o = (y0 as usize + r) * w + x0 as usize;
+                            for p in &mut px[o..o + rw] {
+                                *p &= 0x00ff_ffff;
+                            }
+                        }
+                        self.under = Some(([x0, y0, rw as i32, rh as i32], saved));
+                    }
                     if !ii.hbmMask.is_null() {
                         DeleteObject(ii.hbmMask);
                     }
@@ -566,12 +670,7 @@ impl Capture {
                     }
                 }
             }
-            GdiFlush();
-            let px = std::slice::from_raw_parts_mut(self.bits, self.w * self.h);
-            for p in px.iter_mut() {
-                *p &= 0x00ff_ffff;
-            }
-            (self.w, self.h, px)
+            (w, h, px)
         }
     }
 
