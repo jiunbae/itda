@@ -89,7 +89,7 @@ const SPECIAL_KEYS: &[(&str, &[u32])] = &[
     ("⇧⌘ 4 — Mac 영역 캡처", &[SHIFT, CMD, 0x34]),
     ("⌃ ↑ — Mission Control", &[CTRL, 0xff52]),
     ("⌃ ↓ — 앱 Exposé", &[CTRL, 0xff54]),
-    ("⌘ F3 — 데스크탑 보기", &[CMD, 0xffc0]),
+    ("F11 — 데스크탑 보기", &[0xffc8]),
     ("⌃ ← — 왼쪽 데스크탑", &[CTRL, 0xff51]),
     ("⌃ → — 오른쪽 데스크탑", &[CTRL, 0xff53]),
 ];

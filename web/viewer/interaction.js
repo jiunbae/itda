@@ -28,7 +28,7 @@ export const macHost = h => !!h && !h.this && h.kind!=='rdp' && ['mac','macos'].
 export const macActions = [
     ['mission','Mission Control','⌃ ↑',[0xffe3,0xff52]],
     ['expose','앱 Exposé','⌃ ↓',[0xffe3,0xff54]],
-    ['desktop','데스크탑 보기','⌘ F3',[0xffeb,0xffc0]],
+    ['desktop','데스크탑 보기','F11',[0xffc8]],
     ['space-left','이전 데스크탑','⌃ ←',[0xffe3,0xff51]],
     ['space-right','다음 데스크탑','⌃ →',[0xffe3,0xff53]],
     ['spotlight','Spotlight','⌘ Space',[0xffeb,0x20]],
