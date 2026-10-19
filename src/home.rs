@@ -927,6 +927,8 @@ fn drain() {
                 if v["type"] == "files_native_copy_ready" { plat::native_file_copy_ready(&mut v); }
                 #[cfg(target_os = "macos")]
                 if v["type"] == "files_native_promise_done" { plat::native_file_promise_done(&v); continue; }
+                #[cfg(target_os = "macos")]
+                if v["type"] == "files_native_drag_end" { plat::native_file_drag_done(&v); }
                 send(v);
             },
         }

@@ -24,6 +24,7 @@ mod native_files;
 pub(super) fn native_file_copy(v: Value) {native_files::copy(v);}
 pub(super) fn native_file_paste(v: Value) {native_files::paste(v);}
 pub(super) fn native_file_copy_ready(v: &mut Value) { native_files::finish_copy(v); }
+pub(super) fn native_file_drag_done(v: &Value) { native_files::drag_done(v); }
 pub(super) fn native_file_promise_done(v: &Value) { native_files::promise_done(v); }
 
 pub const PLATFORM: &str = "mac";

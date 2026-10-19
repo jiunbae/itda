@@ -1546,7 +1546,7 @@
     }
     if(m.type==="files_result" && ["native_copy_started","native_copy"].includes(m.op)) {
       if(m.id!==host?.id || m.seq!==clipboard?.seq)return true;
-      if(m.ok){clipboard.nativeStamp=m.data.stamp;if(m.op==="native_copy")toast("파일 복사 준비 완료 — Finder에서 붙여넣으세요", "E8B7");}
+      if(m.ok){clipboard.nativeStamp=m.data.stamp;if(m.op==="native_copy")toast(clipboard.move ? "Finder에서는 복사됩니다 — Itda 안의 붙여넣기는 이동합니다" : "파일 복사 준비 완료 — Finder에서 붙여넣으세요", "E8B7");}
       else fail(m.error||"파일 복사를 준비하지 못했습니다");
       return true;
     }

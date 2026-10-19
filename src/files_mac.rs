@@ -4,7 +4,7 @@ use objc2::{
     define_class, msg_send,
     rc::Retained,
     runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject},
-    AnyThread, DeclaredClass, MainThreadMarker, MainThreadOnly,
+    AnyThread, DeclaredClass, MainThreadMarker, MainThreadOnly, Message,
 };
 use objc2_app_kit::{
     NSApp, NSDragOperation, NSDraggingContext, NSDraggingItem, NSDraggingSession, NSDraggingSource,
@@ -23,7 +23,7 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-thread_local! { static PROMISES: RefCell<HashMap<String,Retained<Promise>>> = RefCell::new(HashMap::new()); static CLIP: Cell<(u64,isize)> = const {Cell::new((0,0))}; }
+thread_local! { static DRAGS: RefCell<HashMap<String,Retained<Source>>> = RefCell::new(HashMap::new()); static PROMISES: RefCell<HashMap<String,Retained<Promise>>> = RefCell::new(HashMap::new()); static CLIP: Cell<(u64,isize)> = const {Cell::new((0,0))}; }
 fn emit(v: Value) {
     super::super::post(super::super::Event::Page(v));
 }
@@ -147,6 +147,9 @@ define_class!(
             url: &NSURL,
             done: &block2::DynBlock<dyn Fn(*mut NSError)>,
         ) {
+            // The provider's delegate is weak. Keep it alive even if quitting or a
+            // queued completion removes its main-thread registry entry meanwhile.
+            let _keep_alive = self.retain();
             let result = if url.isFileURL() { url.path() } else { None }
                 .ok_or_else(|| std::io::Error::other("Finder 복사 위치를 확인할 수 없습니다"))
                 .and_then(|path| {
@@ -177,6 +180,7 @@ define_class!(
     }
 );
 struct DragState {
+    drag: String,
     tokens: Vec<String>,
     id: String,
 }
@@ -198,6 +202,7 @@ define_class!(
         }
         #[unsafe(method(draggingSession:endedAtPoint:operation:))]
         fn ended(&self, _session: &NSDraggingSession, _point: NSPoint, operation: NSDragOperation) {
+            let _keep_alive = self.retain();
             if operation == NSDragOperation::None {
                 let _ = PROMISES.try_with(|p| {
                     let mut p = p.borrow_mut();
@@ -207,7 +212,7 @@ define_class!(
                 });
             }
             emit(
-                json!({"type":"files_native_drag_end","id":self.ivars().id,"dropped":operation!=NSDragOperation::None}),
+                json!({"type":"files_native_drag_end","id":self.ivars().id,"drag":self.ivars().drag,"dropped":operation!=NSDragOperation::None}),
             );
         }
     }
@@ -276,13 +281,20 @@ pub fn drag(nsview: &NSView, v: Value) -> Result<(), String> {
         unsafe { item.setDraggingFrame_contents(frame, Some(&image)) };
         items.push(item);
     }
+    let token = crate::store::new_id();
     let state = Source::alloc(mtm).set_ivars(DragState {
+        drag: token.clone(),
         tokens,
         id: v["id"].as_str().unwrap_or("").into(),
     });
     let source: Retained<Source> = unsafe { msg_send![super(state), init] };
     let timestamp = NSApp(mtm).currentEvent().map_or(0., |e| e.timestamp());
     let event=NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(NSEventType::LeftMouseDragged,position,NSEventModifierFlags::empty(),timestamp,window.windowNumber(),None,0,1,1.).ok_or("드래그 이벤트를 만들지 못했습니다")?;
+    // NSDraggingSource is usually a view; our standalone source needs an explicit
+    // owner until the asynchronous end callback has returned.
+    DRAGS.with(|d| {
+        d.borrow_mut().insert(token, source.clone());
+    });
     content.beginDraggingSessionWithItems_event_source(
         &NSArray::from_retained_slice(&items),
         &event,
@@ -298,7 +310,22 @@ pub fn promise_done(v: &Value) {
         });
     }
 }
+pub fn drag_done(v: &Value) {
+    if let Some(token) = v["drag"].as_str() {
+        let _ = DRAGS.try_with(|d| {
+            d.borrow_mut().remove(token);
+        });
+    }
+}
 pub fn shutdown() {
+    let drags = DRAGS.with(|d| std::mem::take(&mut *d.borrow_mut()));
+    // AppKit has no public drag-session cancellation API. At process shutdown
+    // keep any still-active source alive through late AppKit teardown callbacks.
+    // Sources hold only Rust metadata, not windows; normal completed drags are
+    // removed by drag_done(). The OS reclaims these on process exit.
+    for source in drags.into_values() {
+        std::mem::forget(source);
+    }
     let promises = PROMISES.with(|p| std::mem::take(&mut *p.borrow_mut()));
     drop(promises);
 }
