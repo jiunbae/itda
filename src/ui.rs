@@ -991,10 +991,39 @@ unsafe fn crop_main(i: Option<usize>) {
     MAIN_REGION.with(|m| m.set(r.map(|r| r.id)));
     let crop = r.map(|r| r.rect);
     let h = sh().hwnd.load(Relaxed) as HWND;
+    let reshape = view().crop != crop;
     set_view(View { crop, sx: 0, sy: 0, ..view() });
+    if reshape {
+        let (w, h2) = sh().size();
+        let [_, _, cw, ch] = crop.unwrap_or([0, 0, w as i32, h2 as i32]);
+        fit_shape(h, cw, ch);
+    }
     update_scroll(h);
     rebuild_cursor(h);
     InvalidateRect(h, null(), 0);
+}
+
+/// A normal (not maximized, not full screen) session window takes the shape of what it now
+/// shows — one display instead of all of them side by side — keeping its centre, within its
+/// monitor's work area, no larger than 1:1.
+unsafe fn fit_shape(h: HWND, fw: i32, fh: i32) {
+    if fw < 1 || fh < 1 || IsZoomed(h) != 0 || IsWindowVisible(h) == 0 || ui(|u| u.saved.is_some()) {
+        return;
+    }
+    let mut rc = RECT { left: 0, top: 0, right: fw, bottom: fh };
+    AdjustWindowRectEx(&mut rc, GetWindowLongW(h, GWL_STYLE) as u32, 0, GetWindowLongW(h, GWL_EXSTYLE) as u32);
+    let (bw, bh) = (rc.right - rc.left - fw, rc.bottom - rc.top - fh);
+    let mut mi: MONITORINFO = std::mem::zeroed();
+    mi.cbSize = size_of::<MONITORINFO>() as u32;
+    GetMonitorInfoW(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mut mi);
+    let wa = mi.rcWork;
+    let s = (((wa.right - wa.left - bw) as f64 / fw as f64).min((wa.bottom - wa.top - bh) as f64 / fh as f64)).min(1.0);
+    let (ww, wh) = ((fw as f64 * s) as i32 + bw, (fh as f64 * s) as i32 + bh);
+    let mut cur: RECT = std::mem::zeroed();
+    GetWindowRect(h, &mut cur);
+    let x = ((cur.left + cur.right) / 2 - ww / 2).clamp(wa.left, (wa.right - ww).max(wa.left));
+    let y = ((cur.top + cur.bottom) / 2 - wh / 2).clamp(wa.top, (wa.bottom - wh).max(wa.top));
+    SetWindowPos(h, null_mut(), x, y, ww, wh, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 // ---------------------------------------------------------------- displays and their windows
@@ -1079,7 +1108,8 @@ unsafe fn local_work_areas() -> Vec<RECT> {
 }
 
 /// One window per region: the session window keeps the first, a display window opens for
-/// each other one, on the next monitor of this PC (cascaded when there are fewer).
+/// each other one on another monitor of this PC — not the session window's own (cascaded
+/// over it when there are fewer monitors than displays).
 unsafe fn open_windows() {
     let main = sh().hwnd.load(Relaxed) as HWND;
     let rs = regions();
@@ -1094,13 +1124,19 @@ unsafe fn open_windows() {
         u.l.opts.monitor_fullscreen
     });
     emit_opts();
-    let areas = local_work_areas();
+    let mut mi: MONITORINFO = std::mem::zeroed();
+    mi.cbSize = size_of::<MONITORINFO>() as u32;
+    GetMonitorInfoW(MonitorFromWindow(main, MONITOR_DEFAULTTONEAREST), &mut mi);
+    let own = mi.rcWork;
+    let same = |a: &RECT| (a.left, a.top, a.right, a.bottom) == (own.left, own.top, own.right, own.bottom);
+    let areas: Vec<RECT> = local_work_areas().into_iter().filter(|a| !same(a)).collect();
     let style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
     let cls = wide(CHILD_CLASS);
     let hinst = GetModuleHandleW(null());
     for (i, r) in rs.iter().enumerate().skip(1).take(MAX_SCREENS - 1) {
-        let wa = areas.get(i).or(areas.last()).copied().unwrap_or(RECT { left: 0, top: 0, right: 1280, bottom: 800 });
-        let cascade = if i < areas.len() { 0 } else { 40 * (i - areas.len() + 1) as i32 };
+        let k = i - 1;
+        let wa = areas.get(k).copied().unwrap_or(own);
+        let cascade = if k < areas.len() { 0 } else { 40 * (k - areas.len() + 1) as i32 };
         let (fw, fh) = (r.rect[2].max(1), r.rect[3].max(1));
         let mut rc = RECT { left: 0, top: 0, right: fw, bottom: fh };
         AdjustWindowRectEx(&mut rc, style, 0, WS_EX_APPWINDOW);
