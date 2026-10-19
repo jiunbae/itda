@@ -886,3 +886,4 @@ body.file-window .files-layer.mac .files-sidebar { padding-top: 52px; }
   .files-layer.mac .files-list td:nth-child(2) { display: table-cell; }
 }
 .files-menu .btn { justify-content: flex-start; line-height: 1.25; }
+.files-layer.is-network .files-view-switch { display: none; }

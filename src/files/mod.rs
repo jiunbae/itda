@@ -861,9 +861,9 @@ mod tests {
         let root = std::env::temp_dir().join(format!("itda-list-{}", crate::store::new_id()));
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("ok.txt"), b"x").unwrap();
-        std::fs::write(root.join("Icon\r"), b"").unwrap();
         #[cfg(unix)]
         {
+            std::fs::write(root.join("Icon\r"), b"").unwrap();
             use std::os::unix::ffi::OsStrExt;
             let _ = std::fs::write(root.join(std::ffi::OsStr::from_bytes(b"bad\xff")), b"");
         }

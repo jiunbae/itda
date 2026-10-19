@@ -305,6 +305,7 @@
       setupStarted = true;
       setup.querySelector("[data-connect]").disabled = true;
       setup.classList.add("is-connecting");
+      setup.querySelector("[data-close]").focus();
       setup.querySelector(".files-dialog-error").textContent = "";
       call("connect", {
         options: host.files,
@@ -339,6 +340,7 @@
       setupStarted = true;
       setup.querySelector("[data-connect]").disabled = true;
       setup.classList.add("is-connecting");
+      setup.querySelector("[data-close]").focus();
       setup.querySelector(".files-dialog-error").textContent = "";
       call("connect", {
         options: { ...f, method: f.method || "auto" },
@@ -424,7 +426,7 @@
     };
     renderPanes();
     renderJobs();
-    layer.querySelector(".files-list")?.focus({ preventScroll: true });
+    layer.querySelector(networkMode ? "[data-search]" : ".files-list")?.focus({ preventScroll: true });
   }
   function visible(side) {
     const p = panes[side],
@@ -1056,6 +1058,11 @@
       return;
     }
     if (networkMode) {
+      e.stopPropagation();
+      if ((MAC ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        layer.querySelector("[data-search]").focus();
+      }
       if ((MAC ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === "w") {
         e.preventDefault();
         act("close");

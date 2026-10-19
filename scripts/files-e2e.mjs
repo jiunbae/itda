@@ -217,6 +217,9 @@ try {
       await page.locator('.files-sidebar [data-device="files-second"]').focus();
       await page.evaluate(() => ItdaFiles.refreshNetwork());
       assert(await page.evaluate(() => document.activeElement?.dataset.device === "files-second"), "Network refresh stole sidebar focus");
+      await page.keyboard.press("Meta+f");
+      assert(await page.locator('[data-search]').evaluate((el) => el === document.activeElement), "Network search shortcut did not focus search");
+      assert(await page.locator('.files-view-switch').isHidden(), "Network shows view controls with no alternate view");
       await page.locator("[data-search]").fill("Travel");
       assert(
         (await page.locator("[data-device-card]").count()) === 1,
