@@ -4,6 +4,7 @@
 'use strict';
 import './novnc.min.js';
 import { MonitorController, startMirror } from './monitors.js';
+import { WheelInput, macHost, macActions, macMenu, sendChord } from './interaction.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -19,6 +20,7 @@ const P = {
   full: '<path d="M8 4H4v4M16 4h4v4M8 20H4v-4M16 20h4v-4"/>',
   eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/>',
+  mission: '<rect x="3" y="4" width="8" height="7" rx="1"/><rect x="13" y="4" width="8" height="7" rx="1"/><rect x="7" y="13" width="10" height="7" rx="1"/>',
   monitor: '<rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M9 20h6M12 16.5V20"/>',
   lock: '<rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -536,16 +538,8 @@ function thumbSoon(ms) {
 // Text copied on the Mac, handed over by the app when this window comes forward.
 window.itdaPaste = (t) => { if (S.rfb && !S.viewOnly && opt('clipboard', true) && t) S.rfb.clipboardPasteFrom(t); };
 
-// The wheel, instead of noVNC's: noVNC sends one click per event once 50 px have piled up
-// and drops the rest, so a trackpad swipe or a fast wheel moves the remote a fraction of
-// what it moves here. A Mac (Screen Sharing) scrolls a short line per click, so it gets one
-// click per WHEEL_MAC px divided by the "Mac scroll speed" setting (fast: about the same
-// distance as here); other servers one per WHEEL_PX, as noVNC. Leftovers carry over. macOS
-// already accelerates trackpad and wheel deltas, so nothing is added on top.
-const WHEEL_MAC = 20;
-const WHEEL_PX = 50;
-const WHEEL_MAX = 40; // clicks per event at most
-const wheel = { x: 0, y: 0 };
+// One WebSocket packet per wheel event; fractional motion is shared with mirrors.
+const wheel = new WheelInput();
 const BTN = (b) => (b & 1) | ((b & 4) >> 1) | ((b & 2) << 1); // DOM buttons → RFB mask
 function onWheel(e) {
   const rfb = S.rfb;
@@ -553,28 +547,10 @@ function onWheel(e) {
   e.preventDefault();
   e.stopPropagation(); // noVNC's own handler sits on the canvas
   if (S.viewOnly || e.ctrlKey) return; // Ctrl + wheel is a pinch: kept here
-  const h = S.host || {};
-  const mac = h.kind !== 'rdp' && !h.this && kindOf(h) === 'mac';
-  const speed = { normal: 1, fast: 2, faster: 3 }[S.macScroll] || 2;
-  const step = mac ? WHEEL_MAC / speed : WHEEL_PX;
-  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? rfb._canvas.clientHeight : 1;
   const r = rfb._canvas.getBoundingClientRect();
   const x = Math.max(0, Math.min(r.width - 1, e.clientX - r.left));
   const y = Math.max(0, Math.min(r.height - 1, e.clientY - r.top));
-  const held = BTN(e.buttons);
-  for (const [axis, d, back, fwd] of [['y', e.deltaY, 8, 16], ['x', e.deltaX, 32, 64]]) {
-    if (!d) continue;
-    if (Math.sign(d) !== Math.sign(wheel[axis])) wheel[axis] = 0; // turned around
-    wheel[axis] += d * unit;
-    const n = Math.min(WHEEL_MAX, Math.trunc(Math.abs(wheel[axis]) / step));
-    if (!n) continue;
-    wheel[axis] -= Math.sign(wheel[axis]) * n * step;
-    const bit = d < 0 ? back : fwd;
-    for (let i = 0; i < n; i++) {
-      rfb._handleMouseButton(x, y, held | bit);
-      rfb._handleMouseButton(x, y, held);
-    }
-  }
+  rfb.itdaWheel(x,y,BTN(e.buttons),wheel.clicks(e,macHost(S.host),S.macScroll,rfb._canvas.clientHeight));
 }
 $('#screen').addEventListener('wheel', onWheel, { capture: true, passive: false });
 
@@ -594,6 +570,7 @@ for (const t of ['gesturestart', 'gesturemove', 'gestureend']) {
 }
 
 function close(notifyNative=true) {
+  wheel.reset();
   monitors.disconnect(notifyNative);
   if (S.rfb) { const r = S.rfb; S.rfb = null; try { r.disconnect(); } catch (_) {} }
   S.mods.clear();
@@ -613,6 +590,7 @@ function renderTools() {
   t.innerHTML = [
     ...(APP ? [] : [['back', 'back', '목록으로'], 'sep', ['keyboard', 'keyboard', '키보드']]),
     ['keys', 'command', `${isWin(S.host) ? 'Windows' : 'Mac'} 특수 키`],
+    ...(macHost(S.host) ? [['mac-actions', 'mission', 'Mac 화면 동작 — Mission Control · Exposé']] : []),
     ...(APP ? [] : [['clip', 'clip', '클립보드']]),
     'sep',
     ['monitors', 'monitor', '모니터 선택 및 창 배치'],
@@ -638,6 +616,7 @@ $('#tools').addEventListener('click', (e) => {
     case 'back': return leave();
     case 'keyboard': return toggleKeyboard();
     case 'keys': return toggleSheet('keys');
+    case 'mac-actions': return toggleSheet('mac-actions');
     case 'monitors': return toggleSheet('monitors');
     case 'clip': return toggleSheet('clip');
     case 'scale':
@@ -668,7 +647,7 @@ const COMBOS = [
   ['⌘ W', '창 닫기', [XK.cmd, 0x77]],
   ['⌥⌘ Esc', '강제 종료', [XK.opt, XK.cmd, XK.esc]],
   ['⌃⌘ Q', '화면 잠금', [XK.ctrl, XK.cmd, 0x71]],
-  ['⌃ ↑', 'Mission Control', [XK.ctrl, XK.up]],
+  ...macActions.slice(0,5).map(([,label,key,keys])=>[key,label,keys]),
   ['Esc', '', [XK.esc]],
   ['Tab', '', [XK.tab]],
   ['⌫', '지우기', [XK.back]],
@@ -693,15 +672,14 @@ const combos = () => (isWin(S.host) ? WIN_COMBOS : COMBOS);
 function sendCombo(keys) {
   const r = S.rfb;
   if (!r || S.viewOnly) return;
-  keys.forEach((k) => r.sendKey(k, null, true));
-  [...keys].reverse().forEach((k) => r.sendKey(k, null, false));
+  sendChord(r,keys);
 }
 
 function toggleSheet(kind) {
   const sh = $('#sheet');
   if (!sh.hidden && sh.dataset.kind === kind) { sh.hidden = true; return; }
   sh.dataset.kind = kind;
-  if (kind === 'monitors') { sh.innerHTML = monitors.menu(); monitors.bindMenu(sh); } else if (kind === 'keys') {
+  if (kind === 'mac-actions') { sh.innerHTML = macMenu(); } else if (kind === 'monitors') { sh.innerHTML = monitors.menu(); monitors.bindMenu(sh); } else if (kind === 'keys') {
     const mod = (k, label) => `<button data-mod="${k}" class="${S.mods.has(k) ? 'on' : ''}">${label}</button>`;
     const mods = isWin(S.host)
       ? mod('ctrl', 'Ctrl') + mod('alt', 'Alt') + mod('shift', '⇧') + mod('win', '⊞')
@@ -719,6 +697,9 @@ function toggleSheet(kind) {
 }
 
 $('#sheet').addEventListener('click', async (e) => {
+  if (MIRROR !== null) return; // The mirror routes its menu through the owner's bridge.
+  const action = e.target.closest('[data-mac-action]');
+  if(action) { const a=macActions.find(a=>a[0]===action.dataset.macAction); if(a&&macHost(S.host))sendCombo(a[3]); $('#sheet').hidden=true; S.rfb?.focus(); return; }
   const m = e.target.closest('[data-mod]');
   if (m) {
     const k = m.dataset.mod;

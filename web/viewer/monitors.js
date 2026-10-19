@@ -1,3 +1,4 @@
+import { WheelInput, macHost, macActions, macMenu, sendChord } from './interaction.js';
 // A sibling window is a view of the owner's canvas. It never authenticates or opens RFB.
 const esc = s => String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export function screenLayout(width, height, reported = [], layout = 0) {
@@ -26,6 +27,7 @@ export class MonitorController {
             closed:id=>{this.release(id);this.children.delete(id);},
             pointer:(x,y,mask,id)=>this.pointer(x,y,mask,id),
             key:(...args)=>this.key(...args),
+            wheel:(x,y,held,clicks)=>this.e.S.rfb?.itdaWheel(x,y,held,clicks,true),
             option:(key,value)=>this.option(key,value),
             mode:mode=>this.mode(mode),
             windowAction:(action,id)=>this.e.post({ev:"monitor-window",action,screen:id}),
@@ -158,17 +160,21 @@ export function startMirror(env,id) {
     if(!owner) {status.hidden=false;status.textContent='원래 연결 창을 찾을 수 없습니다. Itda에서 연결을 다시 여세요.';return;}
     env.S.host=owner.state().host; env.S.fit=true;
     document.title=`${env.S.host?.label||'Itda'} — 모니터`;
+    const wheel=new WheelInput();
     const canvas=document.createElement('canvas'); canvas.tabIndex=0; canvas.className='monitor-canvas'; holder.append(canvas);
     let keyboard=new window.ItdaKeyboard(canvas), last=-1, geometry='', bounds=null, held=new Set(), buttons=0, point=null, stopped=false;
     const sendKey=(keysym,code,down)=>{ down?held.add([keysym,code]):held.forEach(k=>{if(k[1]===code)held.delete(k);});owner.key(keysym,code,down,id);};
     keyboard.onkeyevent=sendKey; keyboard.grab();
-    function release(){for(const [key,code]of held)owner.key(key,code,false,id);held.clear();if(buttons&&point)owner.pointer(point.x,point.y,0,id);buttons=0;}
+    function release(){wheel.reset();for(const [key,code]of held)owner.key(key,code,false,id);held.clear();if(buttons&&point)owner.pointer(point.x,point.y,0,id);buttons=0;}
     window.ItdaMirrorRelease=release;
     window.ItdaMirrorStop=()=>{stopped=true;release();keyboard.ungrab();canvas.width=canvas.height=1;env.S.rfb=null;};
     window.addEventListener('blur',release); window.addEventListener('beforeunload',release);
     env.S.rfb={sendKey:(k,c,d)=>owner.key(k,c,d,id),focus:()=>canvas.focus(),clipboardPasteFrom:()=>{},disconnect:release};
     tools.innerHTML='<button data-mirror="fit" title="맞춤 / 실제 크기">맞춤 / 1:1</button><button data-mirror="full">전체 화면</button><button data-mirror="single" title="한 창으로 돌아가기">한 창으로</button><button data-mirror="close" title="이 창 닫기">닫기</button>';
-    tools.onclick=e=>{const a=e.target.closest('[data-mirror]')?.dataset.mirror;if(a==='fit'){env.S.fit=!env.S.fit;last=-1;}if(a==='full'){if(env.app)owner.windowAction('full',id);else if(document.fullscreenElement)document.exitFullscreen();else document.documentElement.requestFullscreen?.();}if(a==='single')owner.mode(0);if(a==='close'){if(env.app)owner.windowAction('close',id);else window.close();}};
+    if(macHost(env.S.host))tools.insertAdjacentHTML('afterbegin','<button data-mirror=mac-actions title="Mission Control · Exposé">Mac 화면 동작</button>');
+    const sheet=document.querySelector('#sheet');
+    sheet.onclick=e=>{const action=macActions.find(a=>a[0]===e.target.closest('[data-mac-action]')?.dataset.macAction);if(!action)return;if(!owner.state().viewOnly)sendChord(env.S.rfb,action[3]);sheet.hidden=true;canvas.focus();};
+    tools.onclick=e=>{const a=e.target.closest('[data-mirror]')?.dataset.mirror;if(a==='mac-actions'){sheet.innerHTML=macMenu();sheet.hidden=!sheet.hidden;}if(a==='fit'){env.S.fit=!env.S.fit;last=-1;}if(a==='full'){if(env.app)owner.windowAction('full',id);else if(document.fullscreenElement)document.exitFullscreen();else document.documentElement.requestFullscreen?.();}if(a==='single')owner.mode(0);if(a==='close'){if(env.app)owner.windowAction('close',id);else window.close();}};
     function coords(e) {const r=canvas.getBoundingClientRect();return{x:bounds.x+Math.max(0,Math.min(bounds.w-1,(e.clientX-r.left)*bounds.w/r.width)),y:bounds.y+Math.max(0,Math.min(bounds.h-1,(e.clientY-r.top)*bounds.h/r.height))};}
     for(const type of ['pointerdown','pointermove','pointerup','pointercancel']) canvas.addEventListener(type,e=>{
         if(!bounds)return;e.preventDefault();if(type==='pointerdown'){canvas.focus();canvas.setPointerCapture(e.pointerId);}
@@ -181,7 +187,11 @@ export function startMirror(env,id) {
         owner.pointer(point.x,point.y,buttons,id);
     });
     canvas.addEventListener('contextmenu',e=>e.preventDefault());
-    canvas.addEventListener('wheel',e=>{if(!bounds)return;e.preventDefault();const p=coords(e);const vertical=Math.abs(e.deltaY)>=Math.abs(e.deltaX),mask=vertical?(e.deltaY<0?8:16):(e.deltaX<0?32:64);owner.pointer(p.x,p.y,mask|buttons,id);owner.pointer(p.x,p.y,buttons,id);},{passive:false});
+    canvas.addEventListener('wheel',e=>{
+        if(!bounds)return;e.preventDefault();if(owner.state().viewOnly)return;
+        const p=coords(e),state=owner.state();
+        owner.wheel(p.x,p.y,buttons,wheel.clicks(e,macHost(state.host),state.scroll,canvas.clientHeight));
+    },{passive:false});
     function draw(){
         if(stopped)return;
         if(window.opener?.closed){release();status.hidden=false;status.textContent='연결이 종료됐습니다';return;}

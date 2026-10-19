@@ -3,8 +3,8 @@
 // with the cached copy as a fallback; the API, thumbnails and WebSockets are never cached.
 'use strict';
 
-const CACHE = 'itda-shell-v2';
-const SHELL = ['./', 'viewer.css', 'viewer.js', 'monitors.js', 'novnc.min.js', 'icon.svg', 'icon-192.png', 'icon-512.png', 'manifest.webmanifest'];
+const CACHE = 'itda-shell-v3';
+const SHELL = ['./', 'viewer.css', 'viewer.js', 'monitors.js', 'interaction.js', 'novnc.min.js', 'icon.svg', 'icon-192.png', 'icon-512.png', 'manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

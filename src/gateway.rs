@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 const INDEX: &str = include_str!("../web/viewer/index.html");
 const CSS: &str = include_str!("../web/viewer/viewer.css");
 const JS: &str = include_str!("../web/viewer/viewer.js");
+const INTERACTION: &str = include_str!("../web/viewer/interaction.js");
 const MONITORS: &str = include_str!("../web/viewer/monitors.js");
 const NOVNC: &str = include_str!("../web/viewer/novnc.min.js");
 const ICON: &str = include_str!("../assets/itda.svg");
@@ -668,6 +669,7 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
         ("GET", "/" | "/index.html") => asset(&mut c, &req, "text/html; charset=utf-8", INDEX.as_bytes()),
         ("GET", "/viewer.css") => asset(&mut c, &req, "text/css; charset=utf-8", CSS.as_bytes()),
         ("GET", "/viewer.js") => asset(&mut c, &req, "text/javascript; charset=utf-8", JS.as_bytes()),
+        ("GET", "/interaction.js") => asset(&mut c, &req, "text/javascript; charset=utf-8", INTERACTION.as_bytes()),
         ("GET", "/monitors.js") => asset(&mut c, &req, "text/javascript; charset=utf-8", MONITORS.as_bytes()),
         ("GET", "/novnc.min.js") => asset(&mut c, &req, "text/javascript; charset=utf-8", NOVNC.as_bytes()),
         ("GET", "/icon.svg") => asset(&mut c, &req, "image/svg+xml", ICON.as_bytes()),

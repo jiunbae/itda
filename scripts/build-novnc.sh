@@ -10,6 +10,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 (cd "$work" && npm pack "@novnc/novnc@$VERSION" --silent >/dev/null && tar xzf "novnc-novnc-$VERSION.tgz")
 cp web/viewer/novnc-src/zrle.js "$work/package/core/decoders/zrle.js"
+cp web/viewer/novnc-src/raw.js "$work/package/core/decoders/raw.js"
 python3 scripts/patch-novnc.py "$work"
 cp web/viewer/novnc-src/itda.js "$work/entry.js"
 npx --yes "esbuild@$ESBUILD" "$work/entry.js" --bundle --format=esm --minify --target=es2022 --outfile=web/viewer/novnc.min.js

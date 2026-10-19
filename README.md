@@ -48,6 +48,8 @@ It is the same home as on Windows: address book with live previews, nearby devic
 - **Your devices and accounts:** passwords stay in your login **Keychain**, and your data is in `~/Library/Application Support/Itda`.
 - **Sharing this Mac:** macOS has Screen Sharing built in; the 공유 page opens its settings and shows what other devices should type.
 
+The remote Mac toolbar’s **Mac 화면 동작** menu provides Mission Control, App Exposé, Show Desktop and previous/next desktop in the owner and monitor windows. These send the remote Mac’s default keyboard shortcuts; custom or disabled shortcuts on that Mac affect the result.
+
 Under the hood each connection window is the web viewer (noVNC) against a private gateway on `127.0.0.1`, signed in with a per-launch token.
 
 ## 🚀 Quick start

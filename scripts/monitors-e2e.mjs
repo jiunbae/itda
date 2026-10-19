@@ -10,15 +10,18 @@ const pw=await import(process.env.PLAYWRIGHT?pathToFileURL(process.env.PLAYWRIGH
 const assert=(ok,why)=>{if(!ok)throw Error(why);};
 const sockets=new Set(), peers=[];let connections=0;
 const host={id:'monitors-fixture',label:'Two monitors',name:'Two monitors',kind:'rdp',os:'windows',opts:{resize:true,monitor_mode:0,monitor_layout:0,clipboard:true}};
+if(process.env.MAC_FIXTURE){host.kind='vnc';host.os='mac';}
 const server=http.createServer((req,res)=>{
  const url=new URL(req.url,'http://localhost');
  if(url.pathname==='/fixture-stats'){res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({connections,peers:peers.map(p=>({pointer:p.pointer,keys:p.keys,resizes:p.resizes,closed:!!p.closed}))}));}
+ if(url.pathname==='/fixture-fragment'){const data=update([rect(0,0,640,480,0,pixels(180,70,130))]);for(const p of peers){let at=0;const send=()=>{const end=Math.min(data.length,at+640*4*17+13);p.send(data.subarray(at,end));at=end;if(at<data.length)setTimeout(send,0);};send();}return res.end('fragment');}
+ if(url.pathname==='/fixture-burst'){const frames=Array.from({length:12},(_,i)=>update([rect(0,0,640,480,0,pixels(20,30+i*10,20)),rect(640,0,640,480,0,pixels(20,20,230))]));for(const p of peers)p.send(Buffer.concat(frames));return res.end('burst');}
  if(url.pathname==='/fixture-change'){for(const p of peers)p.send(update([rect(0,0,640,480,0,pixels(20,230,20))]));return res.end('changed');}
  if(url.pathname==='/api/me'){res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({local:true,scroll:{mac:'fast'}}));}
  if(url.pathname==='/api/hosts'){res.setHeader('Content-Type','application/json');return res.end(JSON.stringify([host]));}
  if(url.pathname==='/api/edit'){res.setHeader('Content-Type','application/json');return res.end('{"ok":true}');}
  const name=url.pathname==='/'?'index.html':url.pathname.slice(1);
- if(!['index.html','viewer.js','viewer.css','monitors.js','novnc.min.js','icon.svg','icon-192.png','manifest.webmanifest','sw.js'].includes(name)){res.writeHead(404);return res.end();}
+ if(!['index.html','viewer.js','viewer.css','monitors.js','interaction.js','novnc.min.js','icon.svg','icon-192.png','manifest.webmanifest','sw.js'].includes(name)){res.writeHead(404);return res.end();}
  let file=path.join(root,'web/viewer',name);if(name==='icon.svg')file=path.join(root,'assets/itda.svg');if(name==='icon-192.png')file=path.join(root,'assets/itda-192.png');
  res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':name.endsWith('.svg')?'image/svg+xml':'text/html');res.end(fs.readFileSync(file));
 });
@@ -64,7 +67,7 @@ let browser, page;
 try{
  browser=await pw.chromium.launch({...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{}),headless:true});
  const context=await browser.newContext({viewport:{width:1000,height:720}});
- await context.addInitScript(()=>{window.ipc={postMessage:msg=>(window.ipcEvents||=[]).push(JSON.parse(msg))};});
+ await context.addInitScript(()=>{const send=WebSocket.prototype.send;window.wirePackets=[];WebSocket.prototype.send=function(data){window.wirePackets.push(data.byteLength);return send.call(this,data);};let RFB;Object.defineProperty(window,'RFB',{get:()=>RFB,set:Base=>{RFB=class extends Base{constructor(...a){super(...a);window.fixtureRfb=this;}};}});window.ipc={postMessage:msg=>(window.ipcEvents||=[]).push(JSON.parse(msg))};});
  page=await context.newPage();const errors=[];context.on('page',p=>p.on('pageerror',e=>errors.push(e.message)));page.on('pageerror',e=>{errors.push(e.message);console.error('PAGE ERROR',e.message);});page.on('console',m=>{if(m.type()==='error')console.error('BROWSER',m.text());});
  await page.goto(`http://127.0.0.1:${port}/?open=monitors-fixture`);
  await page.waitForFunction(()=>window.ItdaMonitorOwner?.state().screens.length===2);
@@ -76,18 +79,30 @@ try{
  await canvas.click({position:{x:200,y:150}});
  await page.waitForTimeout(80);assert(peers[0].pointer.some(p=>p.mask===1&&p.x>=640),'Selected monitor input lost framebuffer offset');
  await page.locator('[data-t="monitors"]').click();
+ if(process.env.MAC_FIXTURE){const beforeKeys=peers[0].keys.length;await page.locator('[data-t=monitors]').click();await page.locator('[data-t=mac-actions]').click();await page.locator('[data-mac-action=expose]').click();await page.waitForTimeout(40);const keys=peers[0].keys.slice(beforeKeys);assert(JSON.stringify(keys)===JSON.stringify([{down:true,key:65507},{down:true,key:65364},{down:false,key:65364},{down:false,key:65507}]),'Exposé chord or modifier release incorrect');await page.locator('[data-t=monitors]').click();}
+ const mainWheel=await page.evaluate(()=>{const c=document.querySelector('#screen canvas'),r=c.getBoundingClientRect(),before=wirePackets.length;c.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:2000,clientX:r.left+100,clientY:r.top+100}));return wirePackets.length-before;});
+ await page.waitForTimeout(40);assert(mainWheel===1,'Wheel was not batched into one packet');assert(peers[0].pointer.slice(-80).every((p,i)=>p.mask===(i%2?0:16)&&p.x>=640),'Wheel click count, release or cropped coordinates incorrect');
+ console.log('PASS: main wheel 80 pointer messages in one WebSocket packet (previously 80 packets)');
+ const fractions=await page.evaluate(mac=>{const c=document.querySelector('#screen canvas'),r=c.getBoundingClientRect(),before=wirePackets.length,step=mac?10:50;for(const deltaY of [1,-1,step-1,1])c.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY,clientX:r.left+100,clientY:r.top+100}));return wirePackets.length-before;},!!process.env.MAC_FIXTURE);assert(fractions===1,'Fractional wheel motion, reversal or capped-event remainder is incorrect');
+
  const next=context.waitForEvent('page');await page.locator('[data-monitor-mode="2"]').click();const child=await next;
  await child.locator('.monitor-canvas').waitFor();await child.waitForFunction(()=>document.querySelector('.monitor-canvas')?.getContext('2d').getImageData(50,50,1,1).data[0]>200);
  assert(connections===1,'Splitting windows opened another RFB session');
  await child.locator('.monitor-canvas').click();await child.keyboard.press('a');await child.waitForTimeout(80);
  assert(peers[0].pointer.some(p=>p.mask===1&&p.x<640),'Mirror input did not use its own monitor offset');
  assert(peers[0].keys.some(k=>k.key===97&&k.down),'Mirror keyboard was not forwarded');
+ const mirrorWheel=await child.evaluate(()=>{const c=document.querySelector('.monitor-canvas'),r=c.getBoundingClientRect();c.dispatchEvent(new WheelEvent('wheel',{cancelable:true,deltaY:2000,clientX:r.left+50,clientY:r.top+50}));});await child.waitForTimeout(40);assert(peers[0].pointer.slice(-80).every((p,i)=>p.mask===(i%2?0:16)&&p.x<640),'Mirror wheel differs from owner or lost its monitor coordinates');
+ if(process.env.MAC_FIXTURE){const beforeKeys=peers[0].keys.length;await child.locator('[data-mirror=mac-actions]').click();await child.locator('[data-mac-action=mission]').click();await child.waitForTimeout(40);assert(peers[0].keys.slice(beforeKeys).map(k=>k.key).join(',')==='65507,65362,65362,65507','Mirror Mission Control keys not forwarded');}
+ const cdp=await context.newCDPSession(page);await cdp.send('Emulation.setCPUThrottlingRate',{rate:4});
+ const timing=await page.evaluate(async()=>{const d=window.fixtureRfb._display,start=d.itdaFrame;let checkpoints=[];const at=performance.now();const timer=setInterval(()=>checkpoints.push(d.itdaFrame-start),0);await fetch('/fixture-burst');await new Promise((resolve,reject)=>{const poll=()=>{if(d.itdaFrame-start>=12)return resolve();if(performance.now()-at>5000)return reject(Error('Burst stalled'));setTimeout(poll,1);};poll();});clearInterval(timer);return {ms:Math.round(performance.now()-at),updates:d.itdaFrame-start,intermediate:checkpoints.filter(n=>n>0&&n<12)};});await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});assert(timing.updates>=12,'Burst lost a completed update');console.log('Burst decode checkpoints',timing);
+ await page.evaluate(()=>fetch('/fixture-fragment'));await child.waitForFunction(()=>{const d=document.querySelector('.monitor-canvas').getContext('2d').getImageData(50,50,1,1).data;return d[0]===180&&d[1]===70&&d[2]===130&&d[3]===255;});
  peers[0].send(update([rect(0,0,640,480,0,pixels(20,230,20))]));
  await child.waitForFunction(()=>document.querySelector('.monitor-canvas').getContext('2d').getImageData(50,50,1,1).data[1]>200);
  await child.locator('.monitor-canvas').focus();await child.keyboard.down('b');await child.waitForTimeout(40);
  await page.evaluate(()=>window.ItdaMonitorOwner.option('view_only',true));
  await child.waitForTimeout(80);assert(peers[0].keys.some(k=>k.key===98&&!k.down),'View-only left a mirror key held');
  const count=peers[0].pointer.length;await child.locator('.monitor-canvas').click();await child.waitForTimeout(80);assert(peers[0].pointer.length===count,'View-only mirror sent input');
+ if(process.env.MAC_FIXTURE){const keys=peers[0].keys.length;await page.locator('[data-t=mac-actions]').click();await page.locator('[data-mac-action=desktop]').click();await page.waitForTimeout(40);assert(peers[0].keys.length===keys,'View-only sent a Mac action');}
  assert(peers[0].resizes===0,'Monitor view requested a destructive remote resize');
  if(process.env.SCREENSHOT_DIR){fs.mkdirSync(process.env.SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'monitor-owner.png')});await child.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'monitor-child.png')});}
  await page.evaluate(()=>window.ItdaMonitorOwner.mode(1));await child.waitForEvent('close');
