@@ -1965,6 +1965,7 @@ dependencies = [
  "sha2 0.10.9",
  "tao",
  "windows 0.62.2",
+ "windows-core 0.62.2",
  "windows-sys 0.59.0",
  "wry",
  "x509-cert",

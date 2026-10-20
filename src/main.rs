@@ -31,6 +31,8 @@ mod dxgi;
 #[cfg(windows)]
 mod fb;
 #[cfg(windows)]
+mod files_win;
+#[cfg(windows)]
 mod keys;
 #[cfg(windows)]
 mod net;

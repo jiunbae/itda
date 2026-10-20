@@ -7,6 +7,7 @@ pub struct File {
     pub remote: bool,
     pub source: String,
     pub name: String,
+    #[cfg_attr(windows, allow(dead_code))]
     pub dir: bool,
 }
 pub fn selection(v: &Value) -> io::Result<Vec<File>> {
@@ -49,6 +50,7 @@ impl File {
         })
     }
 }
+#[cfg(target_os = "macos")]
 /// Copy requested remote files to a private, persistent staging directory for the
 /// system clipboard. Retain it after quitting so Finder can paste after Itda closes.
 pub fn prepare(files: &[File], emit: Emit) -> io::Result<Vec<PathBuf>> {
@@ -77,6 +79,7 @@ pub fn prepare(files: &[File], emit: Emit) -> io::Result<Vec<PathBuf>> {
     }
     result
 }
+#[cfg(target_os = "macos")]
 pub fn write(file: &File, target: &Path, emit: Emit) -> io::Result<()> {
     super::transfer::export_batch(std::slice::from_ref(file), &[target.to_path_buf()], emit)
 }

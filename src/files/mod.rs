@@ -1,9 +1,11 @@
 //! File browsing and transfers, independent of remote screen sessions.
 pub mod locations;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub mod export;
 mod sftp;
 mod transfer;
+#[cfg(any(windows, test))]
+pub mod vdrag;
 use crate::{
     store::{Host, Login},
     tunnel::SshCfg,
