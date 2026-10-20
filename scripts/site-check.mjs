@@ -16,6 +16,7 @@ try{
       await page.goto(base+name+'?lang='+lang,{waitUntil:'networkidle'});
       await page.evaluate(async()=>{await document.fonts.ready;for(const image of document.images){image.loading='eager';await image.decode().catch(()=>{});}});
       assert(await page.evaluate(()=>document.documentElement.lang)===lang,'Language switch failed');
+      assert((await page.locator('meta[name="description"]').getAttribute('content')).includes(lang==='ko'?'파일 브라우저':'file browser'),'Description language stale');
       const broken=await page.evaluate(()=>[...document.images].filter(i=>!i.complete||!i.naturalWidth).map(i=>i.currentSrc));
       assert(!broken.length,`Broken images: ${broken}`);
       const overflow=await page.evaluate(()=>[...document.querySelectorAll('.nav .wrap,.hero-copy,.device-scene,.device-phone,.device-tablet,.show-copy,.features,.paths,.phone-row,.final')].filter(e=>{const r=e.getBoundingClientRect();return r.width&& (r.left < -2||r.right>innerWidth+2);}).map(e=>e.className));
