@@ -268,14 +268,16 @@ function onMessage(m) {
       // ⚡ high-performance mode being set up from a connection's editor (or window).
       const h = S.hosts.find((x) => x.id === m.id);
       const name = h ? label(h) : '';
-      const btn = document.querySelector('#hp-enable');
+      // Only the open editor of this very connection reflects it.
+      const ed = document.querySelector(`#modals [data-key="edit"][data-host="${CSS.escape(m.id || '')}"]`);
+      const btn = ed && ed.querySelector('#hp-enable');
       if (m.stage) toast(`${name} 고성능 모드: ${m.stage}`, 'E72C');
       else if (m.error && !m.status) {
         toast(`${name} 고성능 모드를 켜지 못했습니다 — ${m.error}`, 'E7BA');
         if (btn) { btn.disabled = false; btn.textContent = '켜기'; }
       } else if (m.ready) {
         toast(m.screen && m.access ? `${name} 고성능 모드를 켰습니다 — 다음 연결부터 사용합니다` : `${name} 고성능 모드를 켰습니다. 그 Mac에서 Itda의 화면 기록·손쉬운 사용 권한을 허용하세요.`, 'E73E');
-        const st = document.querySelector('#hp-state');
+        const st = ed && ed.querySelector('#hp-state');
         if (st) st.textContent = '켜짐 — 이 Mac의 Itda 고성능 공유로 연결합니다 (SSH 터널).';
         if (btn) btn.remove();
       }
@@ -1139,6 +1141,7 @@ ${quick ? sshBox : ''}
       <p class="lead">${quick ? '새 연결로 저장되어 다음부터 바로 연결할 수 있습니다.' : '연결할 기기의 종류와 주소, 로그인 정보를 입력하세요.'}</p>
       ${tabs}${general}${quick ? '' : display + input + conn}</div><div class="foot">${foot}</div></div>`);
 
+  m.dataset.host = h.id || '';
   m.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => {
     m.querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('on', x === b));
     m.querySelectorAll('[data-pane]').forEach((p) => (p.hidden = p.dataset.pane !== b.dataset.tab));
@@ -1157,6 +1160,8 @@ ${quick ? sshBox : ''}
     };
     gin.addEventListener('keydown', (e) => {
       // Enter adds a group here; it must not also save the dialog. (Empty Enter still saves.)
+      // Enter that finishes Korean composition only commits the syllable.
+      if (e.key === 'Enter' && (e.isComposing || e.keyCode === 229)) { e.stopPropagation(); return; }
       if ((e.key === 'Enter' && gin.value.trim() || e.key === ',') && !e.isComposing) { e.preventDefault(); e.stopPropagation(); add(gin.value); }
       else if (e.key === 'Backspace' && !gin.value) { const last = [...chips.querySelectorAll('[data-chip]')].pop(); if (last) { last.remove(); gin.placeholder = current().length ? '' : '없음 — 예: 집, 회사'; } }
     });
@@ -1224,8 +1229,12 @@ ${quick ? sshBox : ''}
     host.kind = k.kind;
     host.os = k.os;
     if (!k.user) host.user = '';
+    // High-performance mode is set up outside this draft (hp_upgrade): keep the host's latest
+    // state, unless it was switched off here.
+    const live = S.hosts.find((x) => x.id === h.id);
+    if (live && live.hp) host.hp = { ...live.hp };
     const hpOff = m.querySelector('#f-hp');
-    if (hpOff && !hpOff.checked) host.hp = { ...(h.hp || {}), on: false };
+    if (hpOff && !hpOff.checked) host.hp = { ...(host.hp || {}), on: false };
     host.ssh = { on: k.ssh && m.querySelector('#f-ssh').checked, user: v('#f-ssh-user') || '', port: parseInt(v('#f-ssh-port'), 10) || 0 };
     m.querySelectorAll('[data-opt]').forEach((c) => (host.opts[c.dataset.opt] = c.checked));
     m.querySelectorAll('[data-opt-number]').forEach(c => host.opts[c.dataset.optNumber] = Number(c.value));
