@@ -85,10 +85,14 @@ pub fn ssh_target(c: &SshCfg) -> io::Result<String> {
 }
 
 pub fn ssh_command(c: &SshCfg) -> io::Result<Command> {
+    ssh_command_with_check(c,false)
+}
+pub fn ssh_command_strict(c:&SshCfg)->io::Result<Command> {ssh_command_with_check(c,true)}
+fn ssh_command_with_check(c:&SshCfg,strict:bool)->io::Result<Command> {
     ssh_target(c)?;
     let exe = ssh_exe().ok_or_else(|| err(io::ErrorKind::NotFound, "OpenSSH 클라이언트를 찾을 수 없습니다"))?;
     let mut cmd = Command::new(exe);
-    cmd.arg("-T").args(["-o", "StrictHostKeyChecking=accept-new", "-o"])
+    cmd.arg("-T").args(["-o", if strict{"StrictHostKeyChecking=yes"}else{"StrictHostKeyChecking=accept-new"}, "-o"])
         .arg(format!("UserKnownHostsFile={}", known_hosts().display()))
         .args(["-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3", "-o", "ConnectTimeout=10", "-o", "NumberOfPasswordPrompts=1", "-o", "BatchMode=no"])
         .arg("-p").arg(c.port.to_string())

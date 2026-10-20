@@ -192,24 +192,25 @@ pub fn snapshot(
         .collect();
     let mut secrets = Vec::new();
     let mut keys = Vec::new();
-    let mut add = |kind, owner: &str, key: &str| {
-        if let Some(value) = store::get_password(key) {
+    let mut add = |kind, owner: &str, key: &str| -> io::Result<()> {
+        if let Some(value) = store::get_password_checked(key)? {
             secrets.push(Secret {
                 kind,
                 owner: owner.into(),
                 value,
             });
         }
+        Ok(())
     };
     for h in &mut selected_hosts {
         if choice.passwords {
-            add(SecretKind::Host, &h.id, &h.id);
-            add(SecretKind::Files, &h.id, &crate::files::password_key(h));
+            add(SecretKind::Host, &h.id, &h.id)?;
+            add(SecretKind::Files, &h.id, &crate::files::password_key(h))?;
             add(
                 SecretKind::Hp,
                 &h.id,
                 &crate::hp_upgrade::password_key(&h.id),
-            );
+            )?;
         }
         // Last pictures and usage history are local, not connection settings.
         h.last_used = 0;
@@ -218,7 +219,7 @@ pub fn snapshot(
     }
     for a in &mut selected_accounts {
         if choice.passwords {
-            add(SecretKind::Account, &a.id, &store::acct_key(&a.id));
+            add(SecretKind::Account, &a.id, &store::acct_key(&a.id))?;
         }
         if choice.private_keys && !a.ssh_key.is_empty() {
             keys.push(Key {
@@ -228,7 +229,7 @@ pub fn snapshot(
             if keys.iter().map(|k| k.bytes.len() as u64).sum::<u64>() > MAX_PACKAGE / 4 {
                 return Err(error("선택한 SSH 개인키의 전체 크기가 너무 큽니다"));
             }
-            add(SecretKind::KeyPass, &a.id, &store::acct_keypass(&a.id));
+            add(SecretKind::KeyPass, &a.id, &store::acct_keypass(&a.id))?;
         }
         // A source-machine path must never become a broken destination key path.
         a.ssh_key.clear();
@@ -245,13 +246,13 @@ pub fn snapshot(
 }
 
 trait Vault {
-    fn get(&self, key: &str) -> Option<String>;
+    fn get(&self, key: &str) -> io::Result<Option<String>>;
     fn set(&mut self, key: &str, value: Option<&str>) -> io::Result<()>;
 }
 struct NativeVault;
 impl Vault for NativeVault {
-    fn get(&self, key: &str) -> Option<String> {
-        store::get_password(key)
+    fn get(&self, key: &str) -> io::Result<Option<String>> {
+        store::get_password_checked(key)
     }
     fn set(&mut self, key: &str, value: Option<&str>) -> io::Result<()> {
         store::set_password_checked(key, value)
@@ -501,7 +502,7 @@ fn apply_locked(root: &Path, p: &Package, vault: &mut dyn Vault) -> io::Result<V
                             .ok_or_else(|| error("파일 연결의 계정이 없습니다"))?,
                     ),
                 };
-                old_secrets.push((key.clone(), vault.get(&key).map(Zeroizing::new)));
+                old_secrets.push((key.clone(), vault.get(&key)?.map(Zeroizing::new)));
                 vault.set(&key, Some(&secret.value))?;
             }
             for (name, _) in &changes {
@@ -626,7 +627,7 @@ fn idle_lock(root: &Path, close: bool) -> io::Result<ConfigurationLock> {
     private_dir(root)?;
     let marker = StopMarker(root.join("remote-setup-stop"));
     fs::write(&marker.0, (store::now() + 30).to_string())?;
-    // Cooperative shutdown honors the destination app's active-session/transfer checks.
+    // This is the explicit opt-in close confirmed in the source dialog; it closes sessions/transfers.
     // Older versions without this protocol must be closed directly by the user.
     let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
@@ -873,8 +874,72 @@ fn ps(script: &str) -> String {
         crate::ws::base64(&bytes)
     )
 }
+fn trusted_fingerprints(cfg: &crate::tunnel::SshCfg) -> io::Result<Vec<String>> {
+    // Resolve SSH aliases locally, before making any authenticated connection.
+    let mut resolve = crate::tunnel::ssh_command_strict(cfg)?;
+    let output = resolve
+        .arg("-G")
+        .arg(crate::tunnel::ssh_target(cfg)?)
+        .stdin(Stdio::null())
+        .output()?;
+    if !output.status.success() {
+        return Err(error("SSH 설정을 읽지 못했습니다"));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let field = |name: &str| {
+        text.lines()
+            .find_map(|line| line.strip_prefix(&format!("{name} ")))
+            .map(str::trim)
+    };
+    let host = field("hostname").ok_or_else(|| error("SSH 기기 이름을 확인하지 못했습니다"))?;
+    let port = field("port").unwrap_or("22");
+    let lookup = match field("hostkeyalias").filter(|v| *v != "none") {
+        Some(alias) => alias.to_owned(),
+        None if port == "22" => host.to_owned(),
+        None => format!("[{host}]:{port}"),
+    };
+    let keygen = crate::tunnel::ssh_exe()
+        .unwrap()
+        .with_file_name(if cfg!(windows) {
+            "ssh-keygen.exe"
+        } else {
+            "ssh-keygen"
+        });
+    let known = crate::tunnel::known_hosts();
+    if !known.is_file() {
+        return Err(error("처음 SSH로 연결하는 기기입니다. 먼저 Itda의 파일 열기 또는 SSH 화면 연결에서 기기를 확인한 뒤 다시 시도하세요. 원격 설치에서는 새 SSH 호스트 키를 자동 수락하지 않습니다"));
+    }
+    let keys = std::process::Command::new(&keygen)
+        .arg("-F")
+        .arg(&lookup)
+        .arg("-f")
+        .arg(&known)
+        .stdin(Stdio::null())
+        .output()?;
+    if !keys.status.success() {
+        return Err(error("이 기기의 SSH 호스트 키를 아직 신뢰하지 않았습니다. 먼저 파일 열기 또는 SSH 화면 연결에서 기기를 확인한 뒤 다시 시도하세요"));
+    }
+    let mut child = std::process::Command::new(&keygen)
+        .args(["-l", "-E", "sha256", "-f", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    child.stdin.take().unwrap().write_all(&keys.stdout)?;
+    let output = child.wait_with_output()?;
+    let fingerprints: Vec<_> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .filter(|v| v.starts_with("SHA256:"))
+        .map(str::to_owned)
+        .collect();
+    if !output.status.success() || fingerprints.is_empty() {
+        return Err(error("신뢰한 SSH 키의 지문을 확인하지 못했습니다"));
+    }
+    Ok(fingerprints)
+}
 fn run(cfg: &crate::tunnel::SshCfg, command: &str, input: &[u8]) -> io::Result<String> {
-    let mut cmd = crate::tunnel::ssh_command(cfg)?;
+    let mut cmd = crate::tunnel::ssh_command_strict(cfg)?;
     cmd.arg(crate::tunnel::ssh_target(cfg)?).arg(command);
     let mut child = cmd
         .stdin(Stdio::piped())
@@ -997,6 +1062,34 @@ fn probe(cfg: &crate::tunnel::SshCfg) -> io::Result<Remote> {
             error("원격 설치는 macOS와 Windows를 지원합니다. SSH와 운영체제를 확인하세요")
         })
 }
+const WIN_VAULT_PROBE: &str = r#"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
+Add-Type -TypeDefinition @'
+using System;using System.Runtime.InteropServices;
+public class ItdaVaultCheck {
+[StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] public struct C {public uint Flags,Type;public string TargetName;public IntPtr Comment;public System.Runtime.InteropServices.ComTypes.FILETIME Written;public uint Size;public IntPtr Blob;public uint Persist,Count;public IntPtr Attributes,Alias;public string User;}
+[DllImport("advapi32",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool CredWriteW(ref C c,uint f);
+[DllImport("advapi32",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool CredReadW(string t,uint type,uint f,out IntPtr p);
+[DllImport("advapi32",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool CredDeleteW(string t,uint type,uint f);
+[DllImport("advapi32")] static extern void CredFree(IntPtr p);
+public static bool Check(){string target="Itda/provision-check-"+Guid.NewGuid().ToString("N");IntPtr b=Marshal.AllocHGlobal(1),p=IntPtr.Zero;bool written=false,ok=false;
+try{Marshal.WriteByte(b,120);C c=new C();c.Type=1;c.TargetName=target;c.Size=1;c.Blob=b;c.Persist=2;c.User="Itda test";written=CredWriteW(ref c,0);if(written&&CredReadW(target,1,0,out p)){C read=(C)Marshal.PtrToStructure(p,typeof(C));ok=read.Size==1&&Marshal.ReadByte(read.Blob)==120;}}
+finally{if(p!=IntPtr.Zero)CredFree(p);Marshal.FreeHGlobal(b);if(written)ok=CredDeleteW(target,1,0)&&ok;}return ok;}
+}
+'@
+@{vault_ok=[ItdaVaultCheck]::Check()}|ConvertTo-Json -Compress
+"#;
+fn check_remote_vault(cfg: &crate::tunnel::SshCfg) -> io::Result<()> {
+    let result = run(cfg, &ps(WIN_VAULT_PROBE), &[])?;
+    if result
+        .lines()
+        .filter_map(|s| serde_json::from_str::<Value>(s).ok())
+        .any(|v| v["vault_ok"] == true)
+    {
+        return Ok(());
+    }
+    Err(error("이 Windows SSH 로그인 세션에서 자격 증명 관리자를 사용할 수 없습니다. 비밀번호 공유를 해제하고, 키 암호가 있는 경우 개인키 공유도 해제해 주세요. 앱과 프로필만 설치할 수 있습니다"))
+}
+
 pub fn prepare(
     cfg: crate::tunnel::SshCfg,
     choice: Selection,
@@ -1006,12 +1099,19 @@ pub fn prepare(
     progress: &dyn Fn(&str),
 ) -> io::Result<Value> {
     crate::tunnel::ssh_target(&cfg)?;
+    let fingerprints = trusted_fingerprints(&cfg)?;
     progress("SSH 연결과 원격 기기를 확인하고 있어요…");
     let remote = probe(&cfg)?;
+    if crate::update::newer(&remote.version, env!("CARGO_PKG_VERSION")) {
+        return Err(error("원격 Itda가 더 최신 버전입니다. 이 기기의 Itda를 먼저 업데이트하세요. 원격 앱과 설정은 변경하지 않았습니다"));
+    }
     progress("선택한 설정을 준비하고 있어요…");
     let package = snapshot(&hosts, &accounts, &settings, &choice)?;
+    if remote.platform == "windows" && !package.secrets.is_empty() {
+        check_remote_vault(&cfg)?;
+    }
     let token = random_id()?;
-    let summary = json!({"type":"remote_setup","prepared":true,"token":token,"platform":remote.platform,"version":remote.version,"running":remote.running,"address":cfg.host,"user":cfg.user,"port":cfg.port,"hosts":package.hosts.len(),"accounts":package.accounts.len(),"passwords":choice.passwords,"private_keys":choice.private_keys,"key_count":package.keys.len(),"settings":choice.settings,"launch":choice.launch,"close_running":choice.close_running});
+    let summary = json!({"type":"remote_setup","prepared":true,"token":token,"platform":remote.platform,"version":remote.version,"running":remote.running,"address":cfg.host,"user":cfg.user,"port":cfg.port,"hosts":package.hosts.len(),"accounts":package.accounts.len(),"passwords":choice.passwords,"private_keys":choice.private_keys,"key_count":package.keys.len(),"settings":choice.settings,"launch":choice.launch,"close_running":choice.close_running,"fingerprints":fingerprints,"new_host_key":false});
     *PLAN.lock().unwrap() = Some(Plan {
         token: token.clone(),
         cfg,
@@ -1069,12 +1169,12 @@ codesign -dv --verbose=2 "$new" 2>&1 | grep -q '^TeamIdentifier=728FW73BS8$' || 
 fn win_install(version: &str, close: bool, launch: bool) -> String {
     // Keep the UTF-16 encoded command below cmd.exe's 8191-character limit.
     // The package is passed directly to the staged native importer via stdin.
-    let script = r#"$ErrorActionPreference='Stop'
+    let script = r#"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
 $t=Join-Path $env:TEMP ('itda-'+[Guid]::NewGuid().ToString('N'));New-Item -ItemType Directory $t|Out-Null
 try {
 $b='https://github.com/jiunbae/itda/releases/download/v__VERSION__';$f=Join-Path $t 'itda.exe';$s=Join-Path $t 'sums'
-Invoke-WebRequest -UseBasicParsing ($b+'/itda.exe') -OutFile $f
-Invoke-WebRequest -UseBasicParsing ($b+'/SHA256SUMS.txt') -OutFile $s
+Invoke-WebRequest -UseBasicParsing -TimeoutSec 600 ($b+'/itda.exe') -OutFile $f
+Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 ($b+'/SHA256SUMS.txt') -OutFile $s
 $h=(@(Get-Content -LiteralPath $s|Where-Object {$_ -match '^[0-9a-fA-F]{64}\s+\*?itda\.exe$'})|Select-Object -First 1) -split '\s+'
 if(!$h -or $h[0] -ne (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash){throw 'Checksum verification failed'}
 $i=New-Object Diagnostics.ProcessStartInfo;$i.FileName=$f;$i.Arguments='--provision-configuration __FLAGS__';$i.UseShellExecute=$false;$i.CreateNoWindow=$true
@@ -1112,6 +1212,12 @@ pub fn install(token: &str, progress: &dyn Fn(&str)) -> io::Result<Value> {
     if !version.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
         return Err(error("설치 버전이 올바르지 않습니다"));
     }
+    let current = probe(&plan.cfg)?;
+    if crate::update::newer(&current.version, version) {
+        return Err(error(
+            "원격 Itda가 더 최신 버전으로 변경됐습니다. 이 기기를 먼저 업데이트하세요",
+        ));
+    }
     let raw = Zeroizing::new(serde_json::to_vec(&plan.package)?);
     if raw.len() as u64 > MAX_PACKAGE {
         return Err(error("공유 설정이 너무 큽니다"));
@@ -1123,11 +1229,12 @@ pub fn install(token: &str, progress: &dyn Fn(&str)) -> io::Result<Value> {
     };
     progress("정식 앱을 확인한 뒤 원격 설치와 설정 공유를 진행하고 있어요…");
     let response = run(&plan.cfg, &command, &raw)?;
-    let mut result = response
+    let result = response
         .lines()
         .find_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter(|v| v["ok"] == true)
         .ok_or_else(|| error("원격 설정 적용을 확인하지 못했습니다"))?;
+    let mut result = json!({"hosts":result["hosts"].as_u64().ok_or_else(||error("원격 적용 결과가 올바르지 않습니다"))?,"accounts":result["accounts"].as_u64().ok_or_else(||error("원격 적용 결과가 올바르지 않습니다"))?,"ok":true,"launch_error":result["launch_error"].as_str()});
     result["type"] = json!("remote_setup");
     result["complete"] = json!(true);
     result["version"] = json!(version);
@@ -1140,25 +1247,45 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_bootstrap_is_valid_powershell_without_executing_it() {
-        let command = win_install("0.9.99", true, true);
-        let encoded = command.split_whitespace().last().unwrap();
-        let mut child=std::process::Command::new("powershell.exe").args(["-NoProfile","-NonInteractive","-Command",r#"$s=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd()));$t=$null;$e=$null;[Management.Automation.Language.Parser]::ParseInput($s,[ref]$t,[ref]$e)|Out-Null;if($e.Count){$e|ForEach-Object {[Console]::Error.WriteLine($_.Message)};exit 1}"#]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(encoded.as_bytes())
+        for command in [win_install("0.9.99", true, true), ps(WIN_VAULT_PROBE)] {
+            let encoded = command.split_whitespace().last().unwrap();
+            let mut child=std::process::Command::new("powershell.exe").args(["-NoProfile","-NonInteractive","-Command",r#"$s=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd()));$t=$null;$e=$null;[Management.Automation.Language.Parser]::ParseInput($s,[ref]$t,[ref]$e)|Out-Null;if($e.Count){$e|ForEach-Object {[Console]::Error.WriteLine($_.Message)};exit 1}"#]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(encoded.as_bytes())
+                .unwrap();
+            let result = child.wait_with_output().unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        let compile = ps(&WIN_VAULT_PROBE.replace(
+            "@{vault_ok=[ItdaVaultCheck]::Check()}|ConvertTo-Json -Compress",
+            "",
+        ));
+        let output = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-EncodedCommand",
+                compile.split_whitespace().last().unwrap(),
+            ])
+            .output()
             .unwrap();
-        let result = child.wait_with_output().unwrap();
         assert!(
-            result.status.success(),
+            output.status.success(),
             "{}",
-            String::from_utf8_lossy(&result.stderr)
+            String::from_utf8_lossy(&output.stderr)
         );
     }
     #[test]
     fn installers_keep_secrets_on_stdin_and_windows_command_fits_cmd_limit() {
         let win = win_install("0.9.99", true, true);
+        assert!(ps(WIN_VAULT_PROBE).len() < 8191);
         assert!(
             win.len() < 8191,
             "encoded Windows command is {} characters",
@@ -1196,10 +1323,14 @@ mod tests {
         data: HashMap<String, String>,
         calls: usize,
         fail_at: usize,
+        fail_get: bool,
     }
     impl Vault for FakeVault {
-        fn get(&self, key: &str) -> Option<String> {
-            self.data.get(key).cloned()
+        fn get(&self, key: &str) -> io::Result<Option<String>> {
+            if self.fail_get {
+                return Err(error("test vault inaccessible"));
+            }
+            Ok(self.data.get(key).cloned())
         }
         fn set(&mut self, key: &str, value: Option<&str>) -> io::Result<()> {
             self.calls += 1;
@@ -1217,6 +1348,26 @@ mod tests {
                 Ok(())
             }
         }
+    }
+    #[test]
+    fn inaccessible_vault_is_not_treated_as_a_missing_rollback_value() {
+        let dir = Scratch::new();
+        let mut p = package();
+        p.secrets.push(Secret {
+            kind: SecretKind::Account,
+            owner: "source-account".into(),
+            value: "new-test-value".into(),
+        });
+        let mut vault = FakeVault {
+            fail_get: true,
+            ..Default::default()
+        };
+        let key = store::acct_key(&mapped(&p.origin, "account", "source-account"));
+        vault.data.insert(key.clone(), "keep-test-value".into());
+        assert!(apply(&dir.0, &p, &mut vault).is_err());
+        assert_eq!(vault.calls, 0);
+        assert_eq!(vault.data[&key], "keep-test-value");
+        assert!(!dir.0.join("hosts.json").exists());
     }
     struct Scratch(PathBuf);
     impl Scratch {
