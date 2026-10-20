@@ -28,10 +28,26 @@ pub fn dir() -> PathBuf {
     .clone()
 }
 
+/// The connection's last screen, saved by its session.
 pub fn thumb_path(id: &str) -> PathBuf {
     let d = dir().join("thumbs");
     let _ = std::fs::create_dir_all(&d);
     d.join(format!("{id}.png"))
+}
+
+/// A picture the user chose for the card, to tell devices apart.
+pub fn custom_thumb_path(id: &str) -> PathBuf {
+    thumb_path(id).with_extension("custom.png")
+}
+
+/// What the card shows: the chosen picture, else the last screen.
+pub fn shown_thumb_path(id: &str) -> PathBuf {
+    Some(custom_thumb_path(id)).filter(|p| p.is_file()).unwrap_or_else(|| thumb_path(id))
+}
+
+pub fn remove_thumbs(id: &str) {
+    let _ = std::fs::remove_file(thumb_path(id));
+    let _ = std::fs::remove_file(custom_thumb_path(id));
 }
 
 /// Per-connection viewer options.

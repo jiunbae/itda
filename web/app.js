@@ -193,7 +193,7 @@ function onMessage(m) {
       break;
     }
     case 'toast':
-      toast(m.text, 'E73E');
+      toast(m.text, m.err ? 'E783' : 'E73E', !!m.err);
       break;
     case 'tailnet':
       // Asked every 30 s: draw again only when something changed.
@@ -221,6 +221,8 @@ function onMessage(m) {
       // Load and decode the new preview first, then swap it in: the old one stays until then.
       const h = hostById(m.id);
       if (!h) break;
+      if ('custom' in m) h.custom_thumb = m.custom;
+      if (!m.v) { h.thumb = 0; render(); break; }
       const src = `thumb/${h.id}.png?v=${m.v}`;
       const img = new Image();
       img.alt = '';
@@ -1393,6 +1395,8 @@ function showCtx(id, x, y) {
   else items.push(['focus', 'E8A7', '창으로 이동'], ['disconnect', 'E711', '연결 끊기']);
   items.push(['files', 'E8B7', '파일 열기']);
   items.push('-', ['edit', 'E70F', '편집'], ['dup', 'E8C8', '복제'], ['fav', h.favorite ? 'E8D9' : 'E734', h.favorite ? '즐겨찾기 해제' : '즐겨찾기에 추가']);
+  items.push(['thumb-pick', 'E91B', '미리보기 이미지 지정…']);
+  if (h.custom_thumb) items.push(['thumb-reset', 'E72C', '미리보기를 마지막 화면으로']);
   if (h.has_pw) items.push(['forget', 'E8D7', '저장된 암호 지우기']);
   items.push('-', ['del', 'E74D', '삭제', 'danger']);
   const el = $('#ctx');
@@ -1444,6 +1448,8 @@ function act(a, el) {
       return;
     }
     case 'forget': send('forget_password', { id }); return toast('저장된 암호를 지웠습니다', 'E8D7');
+    case 'thumb-pick': return pickThumb(id);
+    case 'thumb-reset': send('set_thumb', { id, png: null }); return toast('마지막 화면을 미리보기로 씁니다', 'E72C');
     case 'del': return askDelete(id);
     case 'more': {
       const r = el.getBoundingClientRect();
@@ -1500,6 +1506,36 @@ function act(a, el) {
     case 'pin-reset':
       return confirmDialog('새 PIN을 만들까요?', '지금 웹 뷰어에 들어와 있는 기기는 모두 로그아웃됩니다.', '새 PIN 만들기', false, () => { S.web = {}; send('web_reset_pin'); toast('새 PIN을 만들었습니다', 'E72C'); });
   }
+}
+
+// A picture of the user's choosing for the card, so look-alike screens are told apart.
+// Shrunk here to card size; the home keeps it until it is reset.
+function pickThumb(id) {
+  const f = document.createElement('input');
+  f.type = 'file';
+  f.accept = 'image/*';
+  f.hidden = true;
+  document.body.appendChild(f);
+  f.onchange = () => {
+    const file = f.files[0];
+    f.remove();
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const k = Math.min(1, 800 / img.naturalWidth, 500 / img.naturalHeight);
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.naturalWidth * k));
+      c.height = Math.max(1, Math.round(img.naturalHeight * k));
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      send('set_thumb', { id, png: c.toDataURL('image/png') });
+      toast('미리보기 이미지를 바꿨습니다', 'E91B');
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); toast('이 이미지는 열 수 없습니다', 'E783', true); };
+    img.src = url;
+  };
+  f.click();
 }
 
 function saveSettings() {
