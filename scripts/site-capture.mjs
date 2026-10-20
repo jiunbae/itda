@@ -31,7 +31,7 @@ await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const base=`http://127.0.0.1:${server.address().port}`;
 const browser=await pw.chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
 try{
-  const context=await browser.newContext({viewport:{width:1440,height:900},deviceScaleFactor:1,locale:'ko-KR',timezoneId:'Asia/Seoul',userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'});
+  const context=await browser.newContext({viewport:{width:1440,height:900},deviceScaleFactor:1,reducedMotion:'reduce',locale:'ko-KR',timezoneId:'Asia/Seoul',userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'});
   await context.clock.install({time:new Date('2026-10-20T06:00:00Z')});
   await context.addInitScript(({hosts,entries})=>{
     window.fixtureHosts=hosts;window.fixtureEntries=entries;
@@ -56,15 +56,41 @@ try{
     await page.screenshot({path:path.join(out,`files-${theme}.png`)});
   }
   await prepare('light');
-  await page.evaluate(()=>{S.found=[{name:'Studio Mac',host:'studio.local',os:'mac',itda:true},{name:'Office PC',host:'office.local',os:'windows',itda:true}];S.tailnet={peers:[{name:'Dev Server',dns:'dev.example.ts.net',ip:'100.64.0.10',os:'linux',online:true}]};S.page='nearby';render();});
+  await page.evaluate(()=>{S.found=[{name:'Design Mac',host:'design.local',hostname:'design.local',ip:'192.0.2.21',os:'mac',itda:true,share:true},{name:'Meeting PC',host:'meeting.local',hostname:'meeting.local',ip:'192.0.2.22',os:'windows',itda:true,share:true}];S.tailnet={running:true,me:{name:'My Mac'},peers:[{name:'Lab Mac',dns:'lab.example.ts.net',ip:'100.64.0.20',os:'macOS',online:true}]};S.page='nearby';render();});
+  if(await page.locator('.found').count()!==3)throw Error('Nearby fixture must show 3 addable devices');
   await page.screenshot({path:path.join(out,'nearby.png')});
-  await prepare('light');await page.evaluate(()=>openEdit(S.hosts[0]));await page.locator('#modals [data-key="edit"]').waitFor();await page.screenshot({path:path.join(out,'editor.png')});
+  await prepare('light');await page.evaluate(()=>openEdit(S.hosts[0]));await page.locator('#modals [data-key="edit"]').waitFor();if(!await page.locator('#modals [data-key="edit"]').evaluate(e=>Number(getComputedStyle(e).opacity)===1))throw Error('Editor capture is still animating');await page.screenshot({path:path.join(out,'editor.png')});
   await prepare('light');
   await page.evaluate(qr=>{S.settings.web={on:true,port:8780};S.web={running:true,pin:'123456',urls:[{url:'http://192.0.2.10:8780',kind:'lan'}],qr};S.share={local_name:'my-mac.local',user:'alex'};S.page='share';render();},fs.readFileSync(path.join(root,'scripts/fixtures/site-qr.svg'),'utf8'));
   await page.screenshot({path:path.join(out,'share.png')});
+  // Landing detail views: actual app zoom, shorter windows, and explicit mobile crops.
+  await page.setViewportSize({width:1100,height:580});
+  for(const theme of ['light','dark']){
+    await page.setViewportSize({width:1440,height:700});
+    await prepare(theme);await page.evaluate(()=>{document.documentElement.style.zoom='1.25';});
+    const grid=await page.locator('.grid').boundingBox(),card=await page.locator('.grid .card').first().boundingBox();
+    await page.screenshot({path:path.join(out,`home-focus-${theme}.png`),clip:{x:grid.x,y:grid.y,width:grid.width,height:card.height}});
+    await page.screenshot({path:path.join(out,`home-mobile-${theme}.png`),clip:card});
+    await page.screenshot({path:path.join(out,`home-medium-${theme}.png`),clip:{x:grid.x,y:grid.y,width:card.width*2+20,height:card.height}});
+    await page.setViewportSize({width:1100,height:580});
+    await page.evaluate(()=>ItdaFiles.launch(S.hosts[0]));await page.locator('.files-list [data-index]').first().waitFor();
+    await page.screenshot({path:path.join(out,`files-focus-${theme}.png`)});
+    const pane=await page.locator('.files-panes').boundingBox();
+    await page.screenshot({path:path.join(out,`files-medium-${theme}.png`),clip:{x:pane.x,y:0,width:pane.width,height:580}});
+    await page.screenshot({path:path.join(out,`files-mobile-${theme}.png`),clip:{x:pane.x,y:0,width:400,height:450}});
+  }
+  await prepare('light');await page.evaluate(()=>{document.documentElement.style.zoom='1.25';S.found=[{name:'Design Mac',host:'design.local',hostname:'design.local',ip:'192.0.2.21',os:'mac',itda:true,share:true},{name:'Meeting PC',host:'meeting.local',hostname:'meeting.local',ip:'192.0.2.22',os:'windows',itda:true,share:true}];S.tailnet={running:true,me:{name:'My Mac'},peers:[{name:'Lab Mac',dns:'lab.example.ts.net',ip:'100.64.0.20',os:'macOS',online:true}]};S.page='nearby';render();});
+  await page.locator('.page').screenshot({path:path.join(out,'nearby-focus.png')});
+  await page.setViewportSize({width:530,height:720});
+  await page.locator('.page').screenshot({path:path.join(out,'nearby-mobile.png')});
+  await page.setViewportSize({width:1100,height:580});await prepare('light');
+  await page.evaluate(qr=>{document.documentElement.style.zoom='1.25';S.settings.web={on:true,port:8780};S.web={running:true,pin:'123456',urls:[{url:'http://192.0.2.10:8780',kind:'lan'}],qr};S.share={local_name:'my-mac.local',user:'alex'};S.page='share';render();},fs.readFileSync(path.join(root,'scripts/fixtures/site-qr.svg'),'utf8'));
+  await page.locator('.web-panel').screenshot({path:path.join(out,'share-focus.png')});
+  await page.setViewportSize({width:530,height:720});
+  await page.locator('.web-panel').screenshot({path:path.join(out,'share-mobile.png')});
   await context.close();
-  for(const [name,width,height]of [['phone-list',390,780],['tablet-view',1024,768]]){
-    const p=await browser.newPage({viewport:{width,height},deviceScaleFactor:2,colorScheme:'light',locale:'ko-KR',timezoneId:'Asia/Seoul',isMobile:true,hasTouch:true});
+  for(const [name,width,height]of [['phone-list',390,720]]){
+    const p=await browser.newPage({viewport:{width,height},deviceScaleFactor:2,reducedMotion:'reduce',colorScheme:'light',locale:'ko-KR',timezoneId:'Asia/Seoul',isMobile:true,hasTouch:true});
     await p.goto(base+'/viewer/');await p.locator('.host[data-id="a1"]').waitFor();await p.evaluate(()=>document.fonts.ready);
     await p.screenshot({path:path.join(out,name+'.png')});await p.close();
   }
@@ -74,5 +100,5 @@ try{
   await og.setContent(`<!doctype html><html lang="ko" data-lang="ko"><head><base href="${base}/docs/"><link rel="stylesheet" href="style.css"><style>body{width:1200px;height:630px;background:radial-gradient(ellipse at 70% 55%,#32305c,#100f1d 70%);display:grid;grid-template-columns:390px 1fr;gap:30px;align-items:center;padding:48px;overflow:hidden}.brand{font-size:28px;margin-bottom:36px}.brand img{width:44px;height:44px}h1{font-size:52px;line-height:1.18;letter-spacing:-.04em;margin:0 0 20px}.og-copy p{font-size:19px;color:#b7b4d3;line-height:1.7}.og-devices{width:640px}.og-devices .device-scene{padding-bottom:24px}.og-devices figcaption{display:none}.og-copy small{color:#a4a1ff;font-size:16px}.device-scene>.device-phone{width:22%}</style></head><body><div class="og-copy"><div class="brand"><img src="favicon.svg" alt="">Itda</div><h1>내 기기를,<br><span class="grad">잇다.</span></h1><p>Windows · Mac · 휴대폰<br>화면 공유와 파일 브라우저</p><small>무료 · 오픈 소스</small></div><div class="og-devices">${stage}</div></body></html>`);
   await og.evaluate(async()=>{await document.fonts.ready;await Promise.all([...document.images].map(i=>i.decode()));});
   await og.screenshot({path:path.join(out,'og.png')});await og.close();
-  console.log('Captured product frontend with fictional data: desktop, files, nearby, editor, phone and tablet');
+  console.log('Captured product frontend with fictional data: desktop, files, nearby, editor, phone and readable details');
 }finally{await browser.close();for(const s of sockets)s.destroy();await new Promise(r=>server.close(r));}
