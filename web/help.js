@@ -495,7 +495,7 @@ function helpKeysMac() {
   const row = (a, k) => `<tr><td>${a}</td><td><kbd>${k}</kbd></td></tr>`;
   return `<p class="hlead">연결 창에서는 키보드 입력이 그대로 원격 기기로 갑니다. macOS가 먼저 가로채는 조합(⌘Tab, ⌘Space 등)은 창 위쪽 도구 막대의 <b>특수 키</b>로 보내세요.</p>
     <h3 class="hsec">Itda 홈</h3>
-    <table class="shortcuts">${row('새 연결', '⌘N')}${row('검색', '⌘F')}${row('설정', '⌘,')}${row('화면 크기', '⌘+ / ⌘− / ⌘0')}${row('Itda 홈 창 보기', '⌘1')}${row('종료', '⌘Q')}</table>
+    <table class="shortcuts">${row('새 연결 · 파일 브라우저에서는 새 창', '⌘N')}${row('검색', '⌘F')}${row('설정', '⌘,')}${row('화면 크기', '⌘+ / ⌘− / ⌘0')}${row('Itda 홈 창 보기', '⌘1')}${row('종료', '⌘Q')}</table>
     <h3 class="hsec">연결 창의 도구 막대</h3>
     <table class="shortcuts"><tr><td>특수 키</td><td>Mac: ⌘ Space, ⌘ Tab, ⌥⌘ Esc, ⌃⌘ Q … · Windows: Ctrl Alt Del, Alt Tab, ⊞ …</td></tr>
       <tr><td>화면 맞춤 / 실제 크기</td><td>창에 맞춰 보기 ↔ 1:1로 보기</td></tr><tr><td>보기 전용</td><td>마우스·키보드를 보내지 않습니다</td></tr><tr><td>전체 화면</td><td>다시 누르면 돌아옵니다</td></tr></table>

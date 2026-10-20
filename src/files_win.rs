@@ -32,7 +32,7 @@ use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
 pub fn drag(v: &Value, post: fn(Value)) -> Result<(), String> {
     ole()?;
     let files = export::selection(v).map_err(|e| e.to_string())?;
-    let id = v["id"].clone();
+    let id = crate::files::scoped_id(v["id"].as_str().unwrap_or(""), &v["window"]);
     let data: IDataObject = if files.iter().all(|f| !f.remote) { local(&files)? } else { remote(files, post)? };
     let mut effect = DROPEFFECT_NONE;
     let hr = unsafe { DoDragDrop(&data, &IDropSource::from(Source), DROPEFFECT_COPY, &mut effect) };

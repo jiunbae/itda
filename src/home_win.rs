@@ -154,7 +154,7 @@ pub fn run(quick: Option<String>) {
         SetWindowPos(h, null_mut(), (wa.left + wa.right - ww) / 2, (wa.top + wa.bottom - wh) / 2, ww, wh, SWP_NOZORDER);
 
         let bridge = std::env::var("ITDA_TEST_HTTP").ok().and_then(|p| p.parse::<u16>().ok());
-        match bridge.map(|p| Ok(super::test_bridge::start(p))).unwrap_or_else(|| build_webview(h, dark, None, None).map(|wv| WEBVIEW.with(|w| *w.borrow_mut() = Some(wv)))) {
+        match bridge.map(|p| Ok(super::test_bridge::start(p))).unwrap_or_else(|| build_webview(h, dark, None, None, None).map(|wv| WEBVIEW.with(|w| *w.borrow_mut() = Some(wv)))) {
             Ok(()) => {}
             Err(e) => {
                 crate::log!("webview: {e}");
@@ -183,13 +183,13 @@ pub fn run(quick: Option<String>) {
 
 /// Files dragged past the file browser's edge go on as a native drag to Explorer.
 pub(super) fn native_file_drag(v: Value) {
-    let id = v["id"].clone();
+    let id = crate::files::scoped_id(v["id"].as_str().unwrap_or(""), &v["window"]);
     if let Err(e) = crate::files_win::drag(&v, |m| super::post(Event::Page(m))) {
         super::post(Event::Page(json!({"type":"files_native_drag_end","id":id,"error":e})));
     }
 }
 
-fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&str>) -> wry::Result<WebView> {
+fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&str>, file_path: Option<&str>) -> wry::Result<WebView> {
     let data = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir).join(crate::APP).join("WebView2");
     let mut ctx = wry::WebContext::new(Some(data));
     let bg = if dark { (32, 32, 32, 255) } else { (243, 243, 243, 255) };
@@ -242,7 +242,7 @@ fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&s
             format!("?files={host}&fileWindow={}", file_window.unwrap_or(""))
         }).unwrap_or_default()))
         .with_background_color(bg)
-        .with_initialization_script("window.itdaNativeDrag=true;")
+        .with_initialization_script(&format!("window.itdaNativeDrag=true;window.ITDA_FILE_PATH={};", json!(file_path)))
         .with_devtools(devtools)
         .with_hotkeys_zoom(false)
         .with_browser_accelerator_keys(false)
@@ -282,8 +282,8 @@ pub fn file_windows() -> Vec<String> {
     FILE_HOSTS.with(|p| p.borrow().values().cloned().collect())
 }
 
-pub fn files_window(id: &str, close: bool) { file_window(id, close, false); }
-pub fn files_new_window(id: &str) { file_window(id, false, true); }
+pub fn files_window(id: &str, close: bool) { file_window(id, close, false, None); }
+pub fn files_new_window_at(id: &str, path: Option<&str>) { file_window(id, false, true, path); }
 pub fn files_window_context(window: &str, id: &str) {
     let h = FILE_PANES.with(|p| p.borrow().get(window).map(|(h,_)| *h));
     if let Some(h) = h {
@@ -292,7 +292,7 @@ pub fn files_window_context(window: &str, id: &str) {
         FILE_HOSTS.with(|p| {p.borrow_mut().insert(window.into(), id.into());}); super::send_hosts();
     }
 }
-fn file_window(id: &str, close: bool, new: bool) {
+fn file_window(id: &str, close: bool, new: bool, path: Option<&str>) {
     let key = if close { Some(id.to_string()) } else if new { None } else { FILE_HOSTS.with(|p| p.borrow().iter().find(|(_,host)| *host == id).map(|(key,_)| key.clone())) };
     let existing = FILE_PANES.with(|p| key.as_ref().and_then(|key| p.borrow().get(key).map(|(h, _)| *h)));
     unsafe {
@@ -305,7 +305,7 @@ fn file_window(id: &str, close: bool, new: bool) {
         let title = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| format!("{} — 파일", h.label())).unwrap_or_else(|| "네트워크 — Itda".into()));
         let h = CreateWindowExW(0, wide("itda_home").as_ptr(), wide(&title).as_ptr(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1000, 740, null_mut(), null_mut(), GetModuleHandleW(null()), null());
         if h.is_null() { return; }
-        match build_webview(h, home(|m| is_dark(&m.settings)), Some(id), Some(&window_id)) {
+        match build_webview(h, home(|m| is_dark(&m.settings)), Some(id), Some(&window_id), path) {
             Ok(view) => { FILE_HOSTS.with(|p| {p.borrow_mut().insert(window_id.clone(), id.into());}); FILE_PANES.with(|p| { p.borrow_mut().insert(window_id, (h as isize, view)); }); resize_webview(h); ShowWindow(h, SW_SHOW); SetForegroundWindow(h); super::send_hosts(); }
             Err(e) => { crate::log!("files webview: {e}"); DestroyWindow(h); }
         }

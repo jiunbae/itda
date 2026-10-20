@@ -354,7 +354,28 @@ fn cfg(h: &Host, login: &Login, password: Option<String>) -> io::Result<SshCfg> 
     crate::tunnel::ssh_target(&c)?;
     Ok(c)
 }
+/// Isolate browsing, cancellation and transfer jobs for each file-browser page.
+pub fn scoped_id(id: &str, window: &Value) -> String {
+    match window.as_str().filter(|s| !s.is_empty()) {
+        Some(window) => format!("{id}\x1f{window}"),
+        None => id.to_string(),
+    }
+}
+pub fn route_event(v: &mut Value) {
+    if let Some(id) = v["id"].as_str().map(str::to_string) {
+        if let Some((host, window)) = id.rsplit_once('\x1f') {
+            v["id"] = json!(host); v["window"] = json!(window);
+        }
+    }
+}
 pub fn disconnect(id: &str) {
+    if !id.contains('\x1f') {
+        let prefix = format!("{id}\x1f");
+        let mut keys: Vec<String> = connections().lock().unwrap().keys().chain(connecting().lock().unwrap().keys()).filter(|key| key.starts_with(&prefix)).cloned().collect();
+        keys.extend(jobs().lock().unwrap().values().filter(|(key,_)| key.starts_with(&prefix)).map(|(key,_)| key.clone()));
+        keys.sort(); keys.dedup();
+        for key in keys { disconnect(&key); }
+    }
     if let Some(c) = connecting().lock().unwrap().remove(id) {
         c.stop();
     }
@@ -371,14 +392,17 @@ pub fn disconnect(id: &str) {
 pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
     let op = get(&v, "op");
     let id = host.id.clone();
+    let key = scoped_id(&id, &v["window"]);
+    let window = v["window"].clone();
+    let emit: Emit = Arc::new(move |mut m| { m["window"] = window.clone(); emit(m); });
     if op == "cancel" {
-        if let Some((_, c)) = jobs().lock().unwrap().get(&get(&v, "job")) {
-            c.stop();
+        if let Some((owner, c)) = jobs().lock().unwrap().get(&get(&v, "job")) {
+            if owner == &key { c.stop(); }
         }
         return;
     }
     if op == "disconnect" {
-        disconnect(&id);
+        disconnect(&key);
         return;
     }
     if op == "transfer" {
@@ -390,7 +414,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
             match op.as_str() {
                 "connect" => {
                     if v["reuse"] == true {
-                        if let Ok(c) = connection(&id) {
+                        if let Ok(c) = connection(&key) {
                             if c.options == host.files && c.control.check().is_ok() {
                                 let entries = c.browse.lock().unwrap().list(&c.home)?;
                                 let local = local_home().to_string_lossy().into_owned();
@@ -400,12 +424,12 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                             }
                         }
                     }
-                    disconnect(&id);
+                    disconnect(&key);
                     let control = Arc::new(Control::default());
                     connecting()
                         .lock()
                         .unwrap()
-                        .insert(id.clone(), control.clone());
+                        .insert(key.clone(), control.clone());
                     let c = cfg(
                         &host,
                         &login,
@@ -428,7 +452,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                         }
                     }
                     connections().lock().unwrap().insert(
-                        id.clone(),
+                        key.clone(),
                         Arc::new(Connection {
                             cfg: c,
                             browse: Mutex::new(s),
@@ -482,7 +506,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                         file.by_ref().take(limit + 1).read_to_end(&mut bytes)?;
                         bytes
                     } else {
-                        let c = connection(&id)?;
+                        let c = connection(&key)?;
                         let p = remote_path(&p, &c.home);
                         let control = Control::default();
                         let mut s = Sftp::connect(&c.cfg, &control)?;
@@ -520,7 +544,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                                 "이 형식은 원격에서 바로 열 수 없습니다. 내 기기로 복사한 뒤 열어 주세요",
                             ));
                         }
-                        let c = connection(&id)?;
+                        let c = connection(&key)?;
                         let p = remote_path(&p, &c.home);
                         let control = Control::default();
                         let mut s = Sftp::connect(&c.cfg, &control)?;
@@ -564,7 +588,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                             json!({"path":canonical(&p)?,"entries":local_list(&p)?}),
                         )
                     } else {
-                        let c = connection(&id)?;
+                        let c = connection(&key)?;
                         let mut s = c.browse.lock().unwrap();
                         let p = s.realpath(&if p.is_empty() {
                             c.home.clone()
@@ -580,7 +604,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                     if v["side"] == "local" {
                         rename_local(&from, &to, false)?;
                     } else {
-                        let c = connection(&id)?;
+                        let c = connection(&key)?;
                         c.browse.lock().unwrap().rename(&from, &to, false)?;
                     }
                     Ok(json!({"undo":{"side":v["side"],"from":to,"to":from}}))
@@ -619,7 +643,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                             undo = json!({"side":"local","from":target,"to":source});
                         }
                     } else {
-                        let c = connection(&id)?;
+                        let c = connection(&key)?;
                         let mut s = c.browse.lock().unwrap();
                         let p = remote_path(&p, &c.home);
                         let source = join(&p, &n)?;
@@ -1001,6 +1025,21 @@ pub fn shutdown() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancellation_is_owned_by_the_requesting_file_page() {
+        let host = Host { id: crate::store::new_id(), ..Default::default() };
+        let key = scoped_id(&host.id, &json!("page-a"));
+        let job = crate::store::new_id();
+        let control = Arc::new(Control::default());
+        jobs().lock().unwrap().insert(job.clone(), (key, control.clone()));
+        let emit: Emit = Arc::new(|_| {});
+        dispatch(json!({"op":"cancel","job":job,"window":"page-b"}), host.clone(), Login::default(), emit.clone());
+        assert!(control.check().is_ok(), "another page cancelled this page's job");
+        dispatch(json!({"op":"cancel","job":job,"window":"page-a"}), host, Login::default(), emit);
+        assert!(control.check().is_err(), "the owning page could not cancel its job");
+        jobs().lock().unwrap().remove(&job);
+    }
 
     #[test]
     fn verbatim_prefix_dropped() {

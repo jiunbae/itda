@@ -66,11 +66,11 @@ Under the hood each connection window is the web viewer (noVNC) against a privat
 
 ## 📁 Files without a screen connection
 
-The left sidebar's **파일 브라우저 (File browser)** opens a folder-oriented home: recent remote folders in the content area and friendly device names under Locations. Raw host addresses and machine cards stay out of the file home. Choose a location to open its independent file window using the saved account, or reopen a recent folder. Screen connection cards retain an Open files shortcut in More.
+The left sidebar's **파일 브라우저 (File browser)** shows saved devices and recent folders. Selecting a device or recent folder navigates in the current window using its saved account. **Cmd-click** on macOS or **Ctrl-click** on Windows opens another file window; **Cmd/Ctrl+N** opens the current location in a new window. Multiple windows can show the same device with independent browsing and transfers. The macOS path bar and item/selection count share one footer row.
 
 On macOS, **Finder connection folder** creates `.inetloc` shortcuts in `…/Itda/Locations/Itda` and opens the folder in Finder. Each link opens the saved device through `itda://files/<device ID>` without embedding passwords, keys, or remote paths. The folder can be added to Finder's sidebar. This is a connection folder, not a mounted remote volume or File Provider; direct SSH browsing/editing inside Finder remains unimplemented. The Finder button opens actual SMB shares. Export from the CLI with `Itda.app/Contents/MacOS/itda --export-file-locations`.
 
-Choose **파일 열기 (Open files)** inside File browser to open an independent native window for a device. Opening the same device again focuses its existing window. Screen sessions are independent; closing a file window leaves ongoing transfers running, and reopening reuses a live connection.
+File browsing is independent of screen sharing. Closing a window leaves its ongoing transfers active. Visited file connections remain available for reuse until app exit.
 
 The macOS file window exports real file URLs for Finder's clipboard. Wait for **파일 복사 준비 완료** before pasting remote files; stale HTML is cleared while they are prepared. Staged copies stay under `…/Itda/file-exports` so the clipboard remains usable after quitting. In-window dragging keeps folder/tab transfers; dragging outside hands off to native file promises and downloads only after Finder accepts the drop. External drags copy without deleting remote originals. This applies to the file browser, independently of a Finder running inside a remote screen session.
 

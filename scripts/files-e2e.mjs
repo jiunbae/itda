@@ -215,8 +215,11 @@ try {
       window.fileWindowRequests = [];
       window.send = (cmd, data) => {
         if (cmd === "files_window") { fileWindowRequests.push(data); return; }
+        if (["files","files_native_copy","files_native_paste","files_native_drag"].includes(cmd)) data = {window:ItdaFiles.windowToken,...data};
         original(cmd, data);
       };
+      const message = ItdaFiles.message;
+      ItdaFiles.message = m => message({window:ItdaFiles.windowToken,...m});
     });
     if (platform.startsWith("Mac")) {
       await page.locator('.card[data-id="files-fixture"]').waitFor();
@@ -258,6 +261,9 @@ try {
       assert(await page.evaluate(() => Object.keys(S.sessions).length === 0), "File search started a screen session");
       assert(await page.evaluate(() => fileWindowRequests.length === 0), "File search opened another native window");
       await page.keyboard.press('Meta+w');
+      await page.locator('.files-home [data-recent]').first().click({modifiers:['Meta']});
+      const recentWindow = await page.evaluate(() => fileWindowRequests.splice(0));
+      assert(recentWindow.length === 1 && recentWindow[0].new === true && recentWindow[0].path, "Recent folder window lost its explicit path");
       await page.locator('#search').fill('unlisted-device');
       await page.locator('#search').press('Enter');
       await page.locator('.toast').filter({ hasText: '일치하는 기기가 없습니다' }).waitFor();
@@ -278,6 +284,19 @@ try {
         .click();
     }
     await page.locator(".files-layer").waitFor({ timeout: 30000 });
+    if (!platform.startsWith("Mac")) {
+      await page.locator('.files-device-link[data-device="files-second"]').click();
+      await page.locator('.files-device-link.on[data-device="files-second"]').waitFor();
+      await page.locator('.files-device-link[data-device="files-fixture"]').click();
+      await page.locator('.files-device-link.on[data-device="files-fixture"]').waitFor();
+      assert(await page.evaluate(() => fileWindowRequests.length === 0), "Windows device navigation opened a window");
+      // The fixture runs on macOS, where physical Ctrl-click opens a context menu.
+      // Dispatch the Windows modifier click to test its own browser policy.
+      await page.locator('.files-device-link[data-device="files-second"]').dispatchEvent('click',{ctrlKey:true});
+      await page.keyboard.press('Control+n');
+      const windows = await page.evaluate(() => fileWindowRequests.splice(0));
+      assert(windows.length === 2 && windows.every(w => w.new === true) && windows[0].id === 'files-second' && windows[1].id === 'files-fixture', "Windows explicit new-window commands lost their target");
+    }
     if (platform.startsWith("Mac")) {
       await page.locator('[data-pane="remote"] th[data-sort="kind"]').waitFor();
       const footer = await page.evaluate(() => {
@@ -305,6 +324,23 @@ try {
       await page.locator('[data-choice="cancel"]').click();
       await page.evaluate(() => { delete window.ITDA_FILE_WINDOW; });
       console.log('Device navigation stays in place; explicit Cmd+click/Cmd+N, window-bound drops and single footer row passed');
+      // Two real pages of the same host: results and disconnect must stay isolated.
+      const originalPath = await page.locator('[data-path="remote"]').inputValue();
+      const sibling = await browser.newPage({userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/145.0.0.0 Safari/537.36'});
+      await sibling.goto(`http://127.0.0.1:${appPort}/?files=files-fixture`);
+      await sibling.waitForFunction(() => document.querySelector('[data-pane="remote"] tr[data-index]') || document.querySelector('.files-dialog-error')?.textContent, {timeout:10000});
+      await sibling.locator('[data-pane="remote"] tr[data-index]').filter({hasText:'Folder'}).dblclick();
+      await sibling.locator('[data-pane="remote"] tr[data-index]').filter({hasText:'nested.txt'}).waitFor();
+      assert(await page.locator('[data-path="remote"]').inputValue() === originalPath && await page.locator('[data-pane="remote"] tr[data-index]').filter({hasText:'한글 문서.txt'}).count() === 1, "Sibling navigation changed the original window");
+      await page.evaluate(() => ItdaFiles.message({type:'files_result',id:'files-fixture',window:'other-page',op:'connect',ok:true,data:{path:'/wrong',entries:[],local_path:'/',local_entries:[]}}));
+      assert(await page.locator('[data-path="remote"]').inputValue() === originalPath, "Sibling connect result reset the original window");
+      await sibling.evaluate(() => send('files',{id:'files-fixture',window:ItdaFiles.windowToken,op:'disconnect'}));
+      await sibling.close();
+      await page.locator('[data-action="refresh"]').click();
+      await page.locator('[data-pane="remote"] tr[data-index]').filter({hasText:'한글 문서.txt'}).waitFor();
+      assert(await page.locator('.files-error:not([hidden])').count() === 0, "Sibling disconnect stopped the original connection");
+      console.log('Two same-host pages: independent listings/results and disconnect passed');
+
 
       // Real native clipboard IPC. The headless test reads back file URLs through
       // the product's native Paste path; no textual path/HTML clipboard substitute.
@@ -331,12 +367,12 @@ try {
 
       await page.evaluate(()=>{window.itdaNativeFiles=true;});
       let nativeDrag;
-      await page.route('**/ipc',async route=>{const message=route.request().postDataJSON();if(message.cmd==='files_native_drag'){nativeDrag=message;await route.fulfill({status:200,body:'ok'});}else await route.continue();});
+      await page.route('**/ipc*',async route=>{const message=route.request().postDataJSON();if(message.cmd==='files_native_drag'){nativeDrag=message;await route.fulfill({status:200,body:'ok'});}else await route.continue();});
       const handoffRow=await page.locator('[data-pane="remote"] tr[data-index]').filter({hasText:'한글 문서.txt'}).boundingBox();
       await page.mouse.move(handoffRow.x+45,handoffRow.y+10);await page.mouse.down();await page.mouse.move(0,handoffRow.y+10,{steps:20});await page.mouse.up();
       for(let i=0;!nativeDrag;i++){assert(i<100,'Drag did not hand off to the native Finder bridge');await delay(20);}
       assert(nativeDrag.side==='remote'&&fs.realpathSync(nativeDrag.path)===fs.realpathSync(remote)&&nativeDrag.items.length===1&&nativeDrag.items[0].name==='한글 문서.txt','Native drag handoff lost its file selection: '+JSON.stringify(nativeDrag));
-      assert(await page.locator('.files-drag').count()===0,'Native drag handoff left a ghost');await page.unroute('**/ipc');
+      assert(await page.locator('.files-drag').count()===0,'Native drag handoff left a ghost');await page.unroute('**/ipc*');
       await page.evaluate(()=>{window.itdaNativeFiles=false;});
       console.log('Native drag edge handoff preserves selection and clears the pointer ghost');
 
@@ -685,7 +721,7 @@ try {
     );
     if (platform.startsWith("Mac")) {
       // Exercise the real export IPC but keep the test fixture from opening OS Finder.
-      await page.route("**/ipc", async (route) => {
+      await page.route("**/ipc*", async (route) => {
         const body = JSON.parse(route.request().postData());
         if (body.cmd === "file_locations") body.reveal = false;
         await route.continue({ postData: JSON.stringify(body) });
@@ -720,7 +756,7 @@ try {
           "Finder link leaked private paths",
         );
       }
-      await page.unroute("**/ipc");
+      await page.unroute("**/ipc*");
       if (process.env.SCREENSHOT_DIR)
         await page.screenshot({
           path: path.join(process.env.SCREENSHOT_DIR, "network-mac.png"),

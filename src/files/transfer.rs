@@ -451,12 +451,13 @@ pub(super) fn export_batch(files: &[super::export::File], targets: &[PathBuf], e
 }
 pub fn start(v: Value, host: Host, emit: Emit) {
     let id = host.id.clone();
+    let key = super::scoped_id(&id, &v["window"]);
     let job = crate::store::new_id();
     let control = Arc::new(Control::default());
     jobs()
         .lock()
         .unwrap()
-        .insert(job.clone(), (id.clone(), control.clone()));
+        .insert(job.clone(), (key.clone(), control.clone()));
     {
         let mut q = jobs().lock().unwrap();
         if q.len() > 32 {
@@ -471,7 +472,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
     std::thread::spawn(move || {
         let result = (|| -> io::Result<()> {
             let _slot = slot(&control)?;
-            let c = connection(&id)?;
+            let c = connection(&key)?;
             let from_remote = v["from"] == "remote";
             let to_remote = v["to"] == "remote";
             if !(v["from"] == "remote" || v["from"] == "local")

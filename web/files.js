@@ -6,6 +6,8 @@
   const fileWindow = () => window.ITDA_FILE_WINDOW || window.ITDA_FILE_HOST;
   const inNewWindow = (e) => MAC ? e.metaKey : e.ctrlKey;
   if (window.ITDA_FILE_HOST) document.body.classList.add("file-window");
+  const pageToken = crypto.randomUUID();
+  let pendingFolder = null;
   let host,
     layer,
     setup,
@@ -226,7 +228,7 @@
       busy: false,
     };
   }
-  const call = (op, data = {}) => send("files", { id: host.id, op, ...data });
+  const call = (op, data = {}) => send("files", { id: host.id, window: pageToken, op, ...data });
   const nativeFiles = () => MAC && window.itdaNativeFiles === true;
   // Dragging past the window's edge hands the files to the system (Finder, or Explorer).
   const nativeDrag = () => nativeFiles() || (!MAC && window.itdaNativeDrag === true);
@@ -436,7 +438,7 @@
     const recent = e.target.closest("[data-recent]");
     if (recent) {
       const f = recentFolders().filter(x => !S.query || `${x.path} ${label(hostById(x.id))}`.toLowerCase().includes(S.query.toLowerCase()))[Number(recent.dataset.recent)];
-      if (f) { try { localStorage.setItem(`itda.file.pending.${f.id}`, f.path); } catch {} launch(hostById(f.id), inNewWindow(e)); }
+      if (f) launch(hostById(f.id), inNewWindow(e), f.path);
       return;
     }
     const device = e.target.closest("[data-device]");
@@ -444,7 +446,7 @@
     const native = e.target.closest("[data-native-device]");
     if (native) {
       nativePending.add(native.dataset.nativeDevice);
-      send("files", { id: native.dataset.nativeDevice, op: "finder" });
+      send("files", { id: native.dataset.nativeDevice, window: pageToken, op: "finder" });
       return;
     }
     const screen = e.target.closest("[data-screen-device]");
@@ -583,14 +585,16 @@
     booted = true;
     document.body.classList.add("file-window");
     document.title = `${label(h)} — 파일`;
+    pendingFolder = window.ITDA_FILE_PATH || null;
     open(h, true);
   }
-  function launch(h, newWindow = false) {
+  function launch(h, newWindow = false, path = null) {
     if (!h) return;
-    if (newWindow) return send("files_window", { id: h.id, new: true });
+    if (newWindow) return send("files_window", { id: h.id, new: true, path: path || (host?.id === h.id && layer && !networkMode && active === "remote" ? panes.remote.path : null) });
     if (host?.id === h.id && layer) {
-      active = "remote"; networkMode = false; renderPanes(); return;
+      active = "remote"; networkMode = false; if (path) nav("remote", path); else renderPanes(); return;
     }
+    pendingFolder = path;
     open(h, true);
   }
   function workspace(data) {
@@ -691,7 +695,7 @@
     rememberFolder();
     renderPanes();
     renderJobs();
-    try { const pending = localStorage.getItem(`itda.file.pending.${host.id}`); if (pending) { localStorage.removeItem(`itda.file.pending.${host.id}`); nav("remote", pending); } } catch {}
+    if (pendingFolder) { const path = pendingFolder; pendingFolder = null; nav("remote", path); }
     layer.querySelector(networkMode ? "[data-search]" : ".files-list")?.focus({ preventScroll: true });
   }
   function visible(side) {
@@ -874,7 +878,7 @@
     if (!layer) return;
     const p = panes[active];
     if (MAC) {
-      const footer = layer.querySelector("[data-footer-path]"), key = `${active}:${p.path}`;
+      const footer = layer.querySelector("[data-footer-path]"), key = `${host.id}:${active}:${p.path}`;
       if (footer.dataset.footerLocation !== key) { footer.innerHTML = pathHTML(active); footer.dataset.footerLocation = key; }
     }
     layer.querySelector("[data-status]").textContent =
@@ -993,7 +997,7 @@
     const native = e.target.closest("[data-native-device]");
     if (native) {
       nativePending.add(native.dataset.nativeDevice);
-      send("files", { id: native.dataset.nativeDevice, op: "finder" });
+      send("files", { id: native.dataset.nativeDevice, window: pageToken, op: "finder" });
       return;
     }
 
@@ -1119,6 +1123,8 @@
         layer.remove();
         layer = null;
         removeMenu();
+        document.title = "Itda";
+        render();
         return;
       case "transfers":
         layer.querySelector(".files-jobs").hidden =
@@ -1193,13 +1199,13 @@
           status();
           if(nativeFiles()) {
             clipboard.seq=crypto.randomUUID();
-            send("files_native_copy",{id:host.id,seq:clipboard.seq,side:active,path:p.path,items:exportItems(active,clipboard.names)});
+            send("files_native_copy",{id:host.id,window:pageToken,seq:clipboard.seq,side:active,path:p.path,items:exportItems(active,clipboard.names)});
             toast("Finder에서 붙여넣을 파일을 준비하고 있습니다", "E8B7");
           }
         }
         return;
       case "paste":
-        if(nativeFiles()) { send("files_native_paste",{id:host.id,stamp:clipboard?.nativeStamp,side:active,path:p.path}); return; }
+        if(nativeFiles()) { send("files_native_paste",{id:host.id,window:pageToken,stamp:clipboard?.nativeStamp,side:active,path:p.path}); return; }
       case "paste-internal":
         if (clipboard)
           await transfer(
@@ -1358,7 +1364,7 @@
   function key(e) {
     if ((MAC ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "n" && (layer || S.page === "files") && !document.querySelector(".files-prompt,.files-menu") && !topModal()) {
       e.preventDefault(); e.stopImmediatePropagation();
-      const device = e.target.closest("[data-device]");
+      const device = layer ? null : e.target.closest("[data-device]");
       launch(device ? hostById(device.dataset.device) : host || {id:NETWORK}, true);
       return;
     }
@@ -1588,7 +1594,7 @@
       const d=drag,items=exportItems(d.side,d.names);
       try{d.capture.releasePointerCapture(d.pointer);}catch{}
       clearDrag(); suppressClick=true; setTimeout(()=>{suppressClick=false;},0);
-      send("files_native_drag",{id:host.id,side:d.side,path:d.path,items});
+      send("files_native_drag",{id:host.id,window:pageToken,side:d.side,path:d.path,items});
       return;
     }
     if (drag.live) {
@@ -1651,6 +1657,7 @@
   document.addEventListener("pointercancel", clearDrag);
   window.addEventListener("blur", clearDrag);
   function message(m) {
+    if (["files_result", "files_job", "files_native_paste", "files_native_drag_end"].includes(m.type) && m.window !== pageToken) return true;
     if (m.type === "files_native_drag_end") { if(m.id===host?.id){clearDrag();if(m.error)fail(m.error);}return true; }
     if (m.type === "files_native_paste") {
       if(m.id!==host?.id)return true;
@@ -1791,23 +1798,19 @@
       nav(m.side, panes[m.side].path, false);
     return true;
   }
-  window.addEventListener("storage", e => {
-    if (!host || !layer || e.key !== `itda.file.pending.${host.id}` || !e.newValue) return;
-    localStorage.removeItem(e.key);
-    newTab(e.newValue, "remote");
-  });
   function nativeEdit(action) {
     const selection=window.getSelection();
     const text=document.activeElement?.closest("input,textarea") || (!selection?.isCollapsed && selection?.anchorNode?.parentElement?.closest(".files-preview pre"));
     if(!layer || networkMode || text || document.querySelector(".files-prompt") || topModal())send("files_system_edit",{action});
     else act(action);
   }
-  function nativeNew() {
+  function nativeNew(force = false) {
     if (document.querySelector(".files-prompt,.files-menu") || topModal()) return;
-    if (layer || S.page === "files") launch(host || {id: NETWORK}, true);
-    else launch({id: NETWORK}, true);
+    if (force || layer || S.page === "files") launch(host || {id: NETWORK}, true);
+    else openEdit();
   }
   window.ItdaFiles = {
+    windowToken: pageToken,
     nativeNew,
     nativeEdit,
     renderBrowser,
