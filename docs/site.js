@@ -70,7 +70,10 @@
         viewer.classList.toggle('actual');
         this.setAttribute('aria-pressed', String(viewer.classList.contains('actual')));
       });
-      viewer.addEventListener('close', function () { if (lastPreview) lastPreview.focus({preventScroll:true}); });
+      viewer.addEventListener('close', function () {
+        // A queued close event must not steal focus after the user has moved on.
+        if (lastPreview && (document.activeElement === document.body || viewer.contains(document.activeElement))) lastPreview.focus({preventScroll:true});
+      });
       viewer.addEventListener('click', function (event) {
         var box = viewer.getBoundingClientRect();
         if (event.target === viewer && (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom)) viewer.close();

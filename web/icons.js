@@ -8,6 +8,8 @@
   const eye = '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>';
   const search = '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.3-4.3"/>';
   const P = {
+    E8C6: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.5 7.5L21 20M8.5 16.5L21 4"/>',
+    E8CB: '<path d="M4 6h13M4 12h9M4 18h5M18 10v10M15 17l3 3 3-3"/>',
     E8F4: '<path d="M3 6h7l2 3h9v11H3zM17 2v6M14 5h6"/>',
     E80A: '<path d="M4 5h16M4 10h16M4 15h16M4 20h16"/>',
     E701: '<path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M2 9a15 15 0 0 1 20 0"/><circle class="f" cx="12" cy="19.5" r="1"/>',
