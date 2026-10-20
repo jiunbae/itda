@@ -38,13 +38,12 @@ fn reply(v: Value) {
 }
 fn status() {
     let v = state();
-    if v["screen"] == true && v["access"] == true {
-        PANE.with(|p| {
-            if let Some(p) = p.borrow().as_ref() {
-                p.window.set_always_on_top(false);
-            }
-        });
-    }
+    PANE.with(|p| {
+        if let Some(p) = p.borrow().as_ref() {
+            p.window
+                .set_always_on_top(!(v["screen"] == true && v["access"] == true));
+        }
+    });
     reply(v);
 }
 pub(super) fn show(permission: Option<&str>) {
