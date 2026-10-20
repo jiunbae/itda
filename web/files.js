@@ -23,6 +23,8 @@
     locationsPending = false;
   let previewOn = false, previewSeq = 0, previewTimer, previewKey = "", previewModal = false;
   let previewKind = "preview", explorerHome = false;
+  // Windows Explorer: the Home / Network page a local folder was opened from (Back returns).
+  let returnPage = null;
   let previewInFlight = false, queuedPreview = null;
   let tabId = 0, currentTab = 0, suppressClick = false;
   const fileTabs = [], folderCache = new Map(), columnRequests = new Map();
@@ -40,14 +42,14 @@
   }
   function saveTab() {
     const t = fileTabs.find(t => t.id === currentTab);
-    if (t) Object.assign(t, { host, panes: structuredClone(panes), active, view, search, hidden, split });
+    if (t) Object.assign(t, { host, panes: structuredClone(panes), active, view, search, hidden, split, returnPage });
   }
   function tabBar() {
     if (!layer) return;
     const bar = layer.querySelector(".files-tabs");
     bar.hidden = MAC && host.id === NETWORK;
     const mixed = fileTabs.some(t => t.host && t.host.id !== host.id);
-    bar.innerHTML = fileTabs.map(t => { const on = t.id === currentTab, h = on ? host : t.host || host, folder = (on ? panes[active].path : t.panes[t.active].path).split(/[\\/]/).filter(Boolean).pop() || "/", name = mixed && h.id !== NETWORK ? `${label(h)} · ${folder}` : folder; return `<div role="tab" aria-selected="${on}" class="files-tab ${on ? "on" : ""}" data-tab="${t.id}" tabindex="${on ? 0 : -1}" title="${esc(h.id === NETWORK ? folder : `${label(h)} · ${folder}`)}"><span>${icon(true)}${esc(name)}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`; }).join("") + `<button class="files-tab-add" ${host.id === NETWORK ? "disabled" : ""} data-action="new-tab" aria-label="새 탭" title="새 탭 (${MAC ? "⌘T" : "Ctrl+T"})"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>`;
+    bar.innerHTML = fileTabs.map(t => { const on = t.id === currentTab, h = on ? host : t.host || host, folder = (on ? panes[active].path : t.panes[t.active].path).split(/[\\/]/).filter(Boolean).pop() || (!MAC && (on ? panes[active].path : t.panes[t.active].path) === "" ? "내 PC" : "/"), name = mixed && h.id !== NETWORK ? `${label(h)} · ${folder}` : folder; return `<div role="tab" aria-selected="${on}" class="files-tab ${on ? "on" : ""}" data-tab="${t.id}" tabindex="${on ? 0 : -1}" title="${esc(h.id === NETWORK ? folder : `${label(h)} · ${folder}`)}"><span>${icon(true)}${esc(name)}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`; }).join("") + `<button class="files-tab-add" ${host.id === NETWORK ? "disabled" : ""} data-action="new-tab" aria-label="새 탭" title="새 탭 (${MAC ? "⌘T" : "Ctrl+T"})"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>`;
     if (!MAC && networkMode) { const t = bar.querySelector(".files-tab.on > span"); if (t) t.innerHTML = `${I(explorerHome ? "E80F" : "E774")}${explorerHome ? "홈" : "네트워크"}`; }
   }
   function newTab(path, side) {
@@ -70,6 +72,7 @@
     currentTab = id;
     Object.assign(panes, structuredClone(t.panes));
     ({ active, view, search, hidden, split } = t);
+    returnPage = t.returnPage || null;
     if (t.host && t.host.id !== host.id) useHost(t.host);
     layer.querySelector("[data-search]").value = search;
     previewKey = "";
@@ -236,7 +239,7 @@
   const jobs = new Map();
   let showTransferHistory = false;
   const extension = (name = "") => name.includes(".") ? name.split(".").pop().toLowerCase() : "";
-  const kind = (e) => e.link ? "심볼릭 링크" : e.dir ? "폴더" : ({ txt: "텍스트 문서", md: "Markdown 문서", pdf: "PDF 문서", png: "PNG 이미지", jpg: "JPEG 이미지", jpeg: "JPEG 이미지", heic: "HEIF 이미지", zip: "ZIP 아카이브", mp4: "MPEG-4 동영상", mp3: "MP3 오디오" }[extension(e.name)] || (extension(e.name) ? `${extension(e.name).toUpperCase()} 문서` : "문서"));
+  const kind = (e) => e.link ? "심볼릭 링크" : e.dir && !MAC && /^[A-Za-z]:$/.test(e.name) ? "로컬 디스크" : e.dir ? "폴더" : ({ txt: "텍스트 문서", md: "Markdown 문서", pdf: "PDF 문서", png: "PNG 이미지", jpg: "JPEG 이미지", jpeg: "JPEG 이미지", heic: "HEIF 이미지", zip: "ZIP 아카이브", mp4: "MPEG-4 동영상", mp3: "MP3 오디오" }[extension(e.name)] || (extension(e.name) ? `${extension(e.name).toUpperCase()} 문서` : "문서"));
   const icon = (dir, name = "") => {
     const ext = extension(name), color = /^(png|jpg|jpeg|gif|heic|webp|svg)$/.test(ext) ? "image" : /^(zip|gz|tar|7z)$/.test(ext) ? "archive" : ext === "pdf" ? "pdf" : "text";
     return `<svg class="${dir ? "folder" : `document ${color}`}" viewBox="0 0 24 24" aria-hidden="true">${dir ? !MAC ? '<path fill="#d99c16" d="M2 5a2 2 0 0 1 2-2h5l3 3h8a2 2 0 0 1 2 2v11H2z"/><path fill="#fff4ce" d="M4 7h16v12H4z"/><path fill="#f7c344" d="M2 9h20v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z"/><path stroke="#ffe08a" d="M3 10h18"/>' : '<path fill="#70c8f1" d="M2 5a2 2 0 0 1 2-2h5l3 3h8a2 2 0 0 1 2 2v11H2z"/><path fill="#40aee8" d="M2 8h20v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z"/><path stroke="#b0e8ff" d="M3 9h18"/>' : `<path fill="#fff" stroke="#9ba5af" stroke-width=".8" d="M5 2h9l5 5v15H5z"/><path fill="#e8edf2" stroke="#9ba5af" stroke-width=".8" d="M14 2v6h5"/><rect x="6" y="12" width="12" height="7" rx="1" fill="currentColor"/><text x="12" y="17.2" text-anchor="middle" fill="white" font-size="4.6" font-family="-apple-system, sans-serif" font-weight="600">${esc(ext.slice(0, 4).toUpperCase() || "DOC")}</text>`}</svg>`;
@@ -376,7 +379,7 @@
     // While another device is connecting in this tab, the tab still shows its previous device.
     const shown = tabSwitch?.previous || host;
     const deviceLinks = devices.map((h) => `<button class="btn subtle files-device-link ${!networkMode && active === "remote" && shown.id === h.id ? "on" : ""}" data-device="${esc(h.id)}" data-id="file-device-${esc(h.id)}" ${MAC && shown.id === h.id ? 'data-side="remote"' : ""} title="${esc(label(h))} · ${esc(deviceState(h))} · ${MOD}+클릭: 새 창">${I("E7F4")}<span>${esc(label(h))}</span>${(S.fileWindows || []).includes(h.id) ? '<span class="files-device-dot" aria-label="파일 창 열림"></span>' : ""}</button>`).join("");
-    morph(sidebar, MAC ? `<h4>위치</h4><button class="btn subtle ${networkMode ? "on" : ""}" data-action="network">${I("E774")}모든 기기</button>${deviceLinks}` : `<button class="btn subtle ${networkMode && explorerHome ? "on" : ""}" data-action="explorer-home">${I("E80F")}홈</button><div class="files-explorer-pins"><button class="btn subtle" data-bookmark="Desktop" ${!panes.local.home ? "disabled" : ""}>${I("E7F8")}바탕 화면</button><button class="btn subtle" data-bookmark="Downloads" ${!panes.local.home ? "disabled" : ""}>${I("E8B7")}다운로드</button><button class="btn subtle" data-bookmark="Documents" ${!panes.local.home ? "disabled" : ""}>${I("E8A5")}문서</button></div><button class="btn subtle ${!networkMode && active === "local" ? "on" : ""}" data-side="local" ${!panes.local.home ? "disabled" : ""}>${I("E7F8")}내 PC</button><button class="btn subtle ${networkMode && !explorerHome ? "on" : ""}" data-action="network">${I("E774")}네트워크</button><div class="files-explorer-devices">${deviceLinks}</div><button class="btn subtle" data-bookmark=".itda-trash" ${!panes[active].home ? "disabled" : ""}>${I("E74D")}보관함</button>`);
+    morph(sidebar, MAC ? `<h4>위치</h4><button class="btn subtle ${networkMode ? "on" : ""}" data-action="network">${I("E774")}모든 기기</button>${deviceLinks}` : `<button class="btn subtle ${networkMode && explorerHome ? "on" : ""}" data-action="explorer-home">${I("E80F")}홈</button><div class="files-explorer-pins"><button class="btn subtle" data-bookmark="Desktop" ${!panes.local.home ? "disabled" : ""}>${I("E7F8")}바탕 화면</button><button class="btn subtle" data-bookmark="Downloads" ${!panes.local.home ? "disabled" : ""}>${I("E8B7")}다운로드</button><button class="btn subtle" data-bookmark="Documents" ${!panes.local.home ? "disabled" : ""}>${I("E8A5")}문서</button></div><button class="btn subtle ${!networkMode && active === "local" ? "on" : ""}" data-side="local">${I("E7F8")}내 PC</button><button class="btn subtle ${networkMode && !explorerHome ? "on" : ""}" data-action="network">${I("E774")}네트워크</button><div class="files-explorer-devices">${deviceLinks}</div><button class="btn subtle" data-bookmark=".itda-trash" ${!panes[active].home ? "disabled" : ""}>${I("E74D")}보관함</button>`);
     if (!MAC) { const nav = layer.querySelector(".files-sidebar"), selected = sidebar.querySelector(".on"); const key = `${networkMode}:${explorerHome}:${active}:${host.id}`; if(nav.dataset.selectedLocation !== key) { nav.dataset.selectedLocation = key; selected?.scrollIntoView({block:"nearest"}); } }
     layer.querySelector(".files-locations").hidden = true;
     if (networkMode) renderNetwork();
@@ -718,6 +721,7 @@
     setup?.remove();
     setup = null;
     networkMode = false;
+    returnPage = null;
     Object.assign(panes.remote, emptyPane(), { path: data.path, home: data.path, entries: data.entries, history: [data.path], at: 0 });
     if (!panes.local.home) Object.assign(panes.local, emptyPane(), { path: data.local_path, home: data.local_path, entries: data.local_entries, history: [data.local_path], at: 0 });
     active = "remote";
@@ -755,6 +759,7 @@
     active = "remote";
     split = false;
     search = "";
+    returnPage = null;
     clipboard = null;
     undo.length = 0;
     layer = document.createElement("div");
@@ -831,6 +836,8 @@
     rememberFolder();
     renderPanes();
     renderJobs();
+    // No device yet: this computer's own folders still need their home.
+    if (host.id === NETWORK) call("local_home");
     if (pendingFolder) { const path = pendingFolder; pendingFolder = null; nav("remote", path); }
     layer.querySelector(networkMode ? "[data-search]" : ".files-list")?.focus({ preventScroll: true });
   }
@@ -1025,11 +1032,12 @@
       p.path.split(/[\\/]/).filter(Boolean).pop() || p.path;
     layer.querySelector('[data-action="paste"]').disabled = !clipboard && !nativeFiles();
     for (const a of ["copy", "cut", "rename", "trash"])
-      layer.querySelector(`[data-action="${a}"]`).disabled = a === "rename" && !MAC ? p.selected.size !== 1 : !p.selected.size;
+      layer.querySelector(`[data-action="${a}"]`).disabled = thisPC() || (a === "rename" && !MAC ? p.selected.size !== 1 : !p.selected.size);
+    if (thisPC()) for (const a of ["paste", "new", "mkdir"]) layer.querySelector(`[data-action="${a}"]`)?.setAttribute("disabled", "");
     if (!MAC) {
-      layer.querySelector('[data-action="back"]').disabled = p.at <= 0;
+      layer.querySelector('[data-action="back"]').disabled = p.at <= 0 && !returnPage;
       layer.querySelector('[data-action="forward"]').disabled = p.at + 1 >= p.history.length;
-      layer.querySelector('[data-action="up"]').disabled = parent(p.path) === p.path;
+      layer.querySelector('[data-action="up"]').disabled = p.path === "" || (!driveRoot(active, p.path) && parent(p.path) === p.path);
       const details = layer.querySelector('[data-action="details"]');
       details.setAttribute("aria-pressed", String(previewOn && previewKind === "details"));
     }
@@ -1062,8 +1070,14 @@
     const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
     return i <= 0 ? "/" : s.slice(0, i) + (i === 2 && s[1] === ":" ? "\\" : "");
   }
+  // "" is Windows' This PC (the drives); a drive root goes up to it.
   const child = (p, n) =>
-    p.replace(/[\\/]+$/, "") + (p.includes("\\") ? "\\" : "/") + n;
+    p === "" && /^[A-Za-z]:$/.test(n) ? n + "\\" : p.replace(/[\\/]+$/, "") + (p.includes("\\") ? "\\" : "/") + n;
+  const thisPC = () => !MAC && active === "local" && panes.local.path === "" && !networkMode;
+  // Only drive navigation happens on This PC: nothing there can be created, moved or pasted.
+  const VIRTUAL_BLOCKED = ["mkdir", "new", "rename", "trash", "paste", "paste-internal", "cut", "copy", "undo"];
+  const driveRoot = (side, path) => !MAC && side === "local" && /^[A-Za-z]:[\\/]?$/.test(path);
+  const up = (side, path) => driveRoot(side, path) ? "" : parent(path);
   function select(side, index, e) {
     const p = panes[side];
     const items = visible(side);
@@ -1168,8 +1182,12 @@
     }
     const s = e.target.closest("[data-side]");
     if (s) {
-      if (!panes[s.dataset.side].home) return;
+      // Windows: This PC lists the drives, and needs no connected device.
+      const thisPC = !MAC && s.dataset.side === "local";
+      if (!thisPC && !panes[s.dataset.side].home) return;
+      if (networkMode && !MAC) { returnPage = explorerHome ? "home" : "network"; Object.assign(panes.local, { history: [], at: -1 }); }
       networkMode = false;
+      if (thisPC) { active = "local"; search = ""; layer.querySelector("[data-search]").value = ""; nav("local", ""); return; }
       active = s.dataset.side;
       search = "";
       layer.querySelector("[data-search]").value = "";
@@ -1180,6 +1198,7 @@
     if (b) {
       if (!MAC && b.dataset.bookmark !== ".itda-trash") active = "local";
       if (!panes[active].home) return;
+      if (networkMode && !MAC) { returnPage = explorerHome ? "home" : "network"; Object.assign(panes.local, { history: [], at: -1 }); }
       networkMode = false;
       nav(
         active,
@@ -1270,6 +1289,7 @@
     )
       return;
     const p = panes[active];
+    if (thisPC() && VIRTUAL_BLOCKED.includes(action)) { fail("내 PC에서는 드라이브를 열 수만 있어요"); return; }
     if (action.startsWith("mode-")) { const mode = action.slice(5); if (viewModes.includes(mode)) {view = mode; renderPanes();} return; }
     if (action.startsWith("sort-")) { const value = action.slice(5); if (["name","modified","size","kind"].includes(value)) p.sort = value; else if (["ascending","descending"].includes(value)) p.desc = value === "descending"; p.start = 0; p.scroll = 0; renderPanes(); return; }
     fail("");
@@ -1335,13 +1355,14 @@
       case "refresh":
         return nav(active, p.path, false);
       case "back":
+        if (p.at <= 0 && returnPage) { const page = returnPage; returnPage = null; return network(page); }
         if (p.at > 0) nav(active, p.history[--p.at], false);
         return;
       case "forward":
         if (p.at + 1 < p.history.length) nav(active, p.history[++p.at], false);
         return;
       case "up":
-        return nav(active, parent(p.path));
+        return nav(active, up(active, p.path));
       case "hidden":
         hidden = !hidden;
         renderPanes();
@@ -1438,6 +1459,14 @@
   }
   async function transfer(from, source, names, to, destination, move = false, id = host.id) {
     if (!names.length) return;
+    if (id === NETWORK) {
+      fail("기기를 고르지 않은 창에서는 아직 파일을 복사·이동할 수 없어요. 기기 창에서 하거나 탐색기를 사용해 주세요");
+      return;
+    }
+    if (to === "local" && destination === "" && !MAC) {
+      fail("내 PC에는 파일을 놓을 수 없어요. 드라이브나 폴더를 열고 놓아 주세요");
+      return;
+    }
     const dest = panes[to];
     const collisions =
       dest.path === destination
@@ -1963,6 +1992,17 @@
         renderPanes();
       }
       fail(m.error || "파일 작업에 실패했습니다");
+      return true;
+    }
+    if (m.op === "local_home") {
+      if (!layer) return true;
+      // Only the home is new; a pane already browsing (This PC, a drive) keeps its place.
+      const fresh = !panes.local.path && !(panes.local.entries || []).length && !panes.local.busy;
+      for (const t of fileTabs) if (t.panes?.local && !t.panes.local.home) t.panes.local.home = m.data.path;
+      if (fresh) Object.assign(panes.local, emptyPane(), { path: m.data.path, home: m.data.path, entries: m.data.entries, history: [m.data.path], at: 0 });
+      else panes.local.home ||= m.data.path;
+      saveTab();
+      renderPanes();
       return true;
     }
     if (m.op === "connect") {
