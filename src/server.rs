@@ -520,6 +520,9 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
                     // and keep any pending reset for the first real picture.
                     Ok(data) if data.is_empty() => {
                         enc.changes(&mut u, frame, &prev, w, h, full, |x, y, tw, th| demand.covers(x, y, tw, th), &pf, zrle)?;
+                        // Only the changed tiles are exact now: unless the picture was exact before
+                        // (no lossy video since), the still repaint must still cover everything.
+                        lossless = full || (exact.len() == prev.len() && exact[..] == prev[..]);
                     }
                     Ok(data) => {
                         u.h264(0, 0, vw as u16, vh as u16, if reset { crate::enc::H264_RESET } else { 0 }, &data);

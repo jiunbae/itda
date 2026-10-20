@@ -23,6 +23,9 @@ pub struct H264 {
     h: usize,
     bitrate: u32,
     frame: i64,
+    /// This encoder has given output: a forced key must start a fresh one (until then, its
+    /// first output is an IDR anyway).
+    produced: bool,
     nv12: Vec<u8>,
 }
 
@@ -89,7 +92,7 @@ impl H264 {
             return Err("Media Foundation unavailable".into());
         }
         let mft = open(w, h, bitrate).map_err(|e| format!("H.264 encoder: {e}"))?;
-        Ok(H264 { mft, w, h, bitrate, frame: 0, nv12: vec![0; w * h * 3 / 2] })
+        Ok(H264 { mft, w, h, bitrate, frame: 0, produced: false, nv12: vec![0; w * h * 3 / 2] })
     }
 
     /// BGRA (0x00RRGGBB) to NV12, BT.601 limited range.
@@ -121,9 +124,9 @@ impl H264 {
     }
 
     fn encode_frame(&mut self, px: &[u32], stride: usize, key: bool) -> windows::core::Result<Vec<u8>> {
-        if key && self.frame > 0 {
+        if key && self.produced {
             self.mft = open(self.w, self.h, self.bitrate)?;
-            self.frame = 0;
+            (self.frame, self.produced) = (0, false);
         }
         self.convert(px, stride);
         unsafe {
@@ -179,6 +182,7 @@ impl H264 {
                     }
                 }
             }
+            self.produced |= !out.is_empty();
             Ok(out)
         }
     }
