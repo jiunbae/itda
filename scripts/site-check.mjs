@@ -40,8 +40,12 @@ try{
         await page.locator('.image-dialog img').evaluate(i=>i.decode());
         assert((await page.locator('.image-dialog img').getAttribute('src')).includes('files-windows'),'Windows enlargement opens another platform');
         await page.keyboard.press('Escape');
+        await page.waitForFunction(()=>!document.querySelector('.image-dialog').open&&document.activeElement.matches('[data-preview]'));
         if((width===390||width===1440)&&lang==='ko'&&colorScheme==='light')await gallery.screenshot({path:path.join(out,`files-windows-${width}.png`)});
-        await gallery.locator('[data-platform="windows"]').focus();await page.keyboard.press('ArrowLeft');
+        await gallery.locator('[data-platform="windows"]').focus();
+        await page.locator('.image-dialog').evaluate(e=>e.dispatchEvent(new Event('close')));
+        assert(await gallery.locator('[data-platform="windows"]').evaluate(e=>e===document.activeElement),'Delayed image close stole platform-tab focus');
+        await page.keyboard.press('ArrowLeft');
         assert(await gallery.locator('[data-platform="mac"]').getAttribute('aria-selected')==='true','Platform keyboard selection failed');
         await gallery.locator('[data-platform="mac"]').evaluate(e=>e.blur());
       }

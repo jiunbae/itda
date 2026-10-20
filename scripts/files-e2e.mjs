@@ -352,15 +352,15 @@ try {
       assert(await page.locator('.files-job').filter({hasText:'완료'}).count() === 1, "Explicit history did not show the completed transfer");
       console.log('Transfer completion: transient deduplicated toast, collapsed footer and persistent failure passed');
       // Two real pages of the same host: results and disconnect must stay isolated.
-      const originalPath = await page.locator('[data-path="remote"]').inputValue();
+      const originalPath = await page.locator('[data-path="remote"]').first().inputValue();
       const sibling = await browser.newPage({userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/145.0.0.0 Safari/537.36'});
       await sibling.goto(`http://127.0.0.1:${appPort}/?files=files-fixture`);
       await sibling.waitForFunction(() => document.querySelector('[data-pane="remote"] tr[data-index]') || document.querySelector('.files-dialog-error')?.textContent, {timeout:10000});
       await sibling.locator('[data-pane="remote"] tr[data-index]').filter({hasText:'Folder'}).dblclick();
       await sibling.locator('[data-pane="remote"] tr[data-index]').filter({hasText:'nested.txt'}).waitFor();
-      assert(await page.locator('[data-path="remote"]').inputValue() === originalPath && await page.locator('[data-pane="remote"] tr[data-index]').filter({hasText:'한글 문서.txt'}).count() === 1, "Sibling navigation changed the original window");
+      assert(await page.locator('[data-path="remote"]').first().inputValue() === originalPath && await page.locator('[data-pane="remote"] tr[data-index]').filter({hasText:'한글 문서.txt'}).count() === 1, "Sibling navigation changed the original window");
       await page.evaluate(() => ItdaFiles.message({type:'files_result',id:'files-fixture',window:'other-page',op:'connect',ok:true,data:{path:'/wrong',entries:[],local_path:'/',local_entries:[]}}));
-      assert(await page.locator('[data-path="remote"]').inputValue() === originalPath, "Sibling connect result reset the original window");
+      assert(await page.locator('[data-path="remote"]').first().inputValue() === originalPath, "Sibling connect result reset the original window");
       await sibling.evaluate(() => send('files_release_page',{page:ItdaFiles.windowToken}));
       await sibling.close();
       await page.locator('[data-action="refresh"]').click();
@@ -530,7 +530,7 @@ try {
       await page.locator('.files-column:last-child [data-index]').filter({hasText:'Folder'}).click();
       await page.locator('.files-device-link[data-device="files-second"]').click();
       await page.locator('.files-device-link.on[data-device="files-second"]').waitFor();
-      assert(await page.locator('.files-column').last().getAttribute('data-column') === await page.locator('[data-path="remote"]').inputValue(), "Old pending folder leaked into the new device");
+      assert(await page.locator('.files-column').last().getAttribute('data-column') === await page.locator('[data-path="remote"]').first().inputValue(), "Old pending folder leaked into the new device");
       releaseOldList();
       await page.unroute('**/ipc*');
       await page.locator('.files-device-link[data-device="files-fixture"]').click();
@@ -743,14 +743,14 @@ try {
     }
     // Network locations can be visited without losing the current device's browsing state.
     const previousPath = await page
-      .locator('[data-path="remote"]')
+      .locator('[data-path="remote"]').first()
       .inputValue();
     await page.locator('[data-action="network"]').first().click();
     const recentIndex = await page.locator('.files-layer [data-recent]').evaluateAll((rows, path) => rows.find(row => row.title === path)?.dataset.recent, previousPath);
     assert(recentIndex !== undefined, "Dedicated file window lost recent folders");
     await page.locator(`.files-layer [data-recent="${recentIndex}"]`).click();
-    await page.locator('[data-path="remote"]').waitFor();
-    assert(await page.locator('[data-path="remote"]').inputValue() === previousPath, "Recent folder navigated to the wrong location");
+    await page.locator('[data-path="remote"]').first().waitFor({state:'attached'});
+    assert(await page.locator('[data-path="remote"]').first().inputValue() === previousPath, "Recent folder navigated to the wrong location");
     await page.locator('[data-action="network"]').first().click();
     if (platform.startsWith("Mac")) {
       await page.evaluate(() => document.activeElement.blur());
@@ -842,7 +842,7 @@ try {
       .locator('[data-network-sidebar] [data-device="files-fixture"]')
       .click();
     assert(
-      (await page.locator('[data-path="remote"]').inputValue()) ===
+      (await page.locator('[data-path="remote"]').first().inputValue()) ===
         previousPath,
       "Network view lost the folder path",
     );

@@ -84,7 +84,7 @@ try{
     const c=await browser.newContext({viewport:{width:1100,height:800},deviceScaleFactor:2,reducedMotion:'reduce',locale:'ko-KR',timezoneId:'Asia/Seoul',userAgent:platform==='mac'?'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)':'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
     await c.clock.install({time:new Date('2026-10-20T06:00:00Z')});
     await c.addInitScript(({entries,platform})=>{window.ipc={postMessage:raw=>{const m=JSON.parse(raw);if(m.cmd==='files'&&m.op==='connect')queueMicrotask(()=>itda.recv({type:'files_result',id:m.id,window:m.window,op:'connect',ok:true,data:{path:'/Users/alex/Documents',entries,local_path:platform==='mac'?'/Users/alex':'C:\\Users\\alex',local_entries:entries,rsync:true}}));}};},{entries,platform});
-    const p=await c.newPage();
+    const p=await c.newPage(); const pageErrors=[];p.on("pageerror",e=>pageErrors.push(e.message));
     // This host lacks the Windows-only Segoe icon font. Use the app's own SVG fallback.
     if(platform==='windows')await p.route('**/icons.js',route=>route.fulfill({contentType:'text/javascript',body:fs.readFileSync(path.join(root,'web/icons.js'),'utf8').replace("if (/Windows/.test(navigator.userAgent)) return;",'')}));
     for(const theme of ['light','dark']){
@@ -100,10 +100,11 @@ try{
           await p.screenshot({path:path.join(out,'nearby-window.png')});
         }
       }else{
-        await p.setViewportSize({width:1200,height:600});
+        await p.setViewportSize({width:1200,height:700});
         await p.evaluate(()=>{document.documentElement.style.zoom='1.25';ItdaFiles.launch(S.hosts[0]);});
         await p.locator('.files-layer.windows .files-list [data-index]').first().waitFor();
-        const titleIcon=await p.locator('.files-title > svg').boundingBox();
+        if(pageErrors.length)throw Error(pageErrors.join(' | '));
+        const titleIcon=await p.locator('.files-explorer-address > .i svg').boundingBox();
         if(titleIcon.width>30||titleIcon.height>30)throw Error('Windows toolbar folder icon is oversized');
         await p.screenshot({path:path.join(out,`files-windows-${theme}.png`)});
         const pane=await p.locator('.files-panes').boundingBox();
