@@ -180,6 +180,14 @@ pub fn run(quick: Option<String>) {
     }
 }
 
+/// Files dragged past the file browser's edge go on as a native drag to Explorer.
+pub(super) fn native_file_drag(v: Value) {
+    let id = v["id"].clone();
+    if let Err(e) = crate::files_win::drag(&v, |m| super::post(Event::Page(m))) {
+        super::post(Event::Page(json!({"type":"files_native_drag_end","id":id,"error":e})));
+    }
+}
+
 fn build_webview(h: HWND, dark: bool, file: Option<&str>) -> wry::Result<WebView> {
     let data = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir).join(crate::APP).join("WebView2");
     let mut ctx = wry::WebContext::new(Some(data));
@@ -230,6 +238,7 @@ fn build_webview(h: HWND, dark: bool, file: Option<&str>) -> wry::Result<WebView
         .with_new_window_req_handler(|_url, _features| wry::NewWindowResponse::Deny)
         .with_url(format!("itda://localhost/index.html{}", file.map(|id| format!("?files={}", id.bytes().map(|b| format!("%{b:02X}")).collect::<String>())).unwrap_or_default()))
         .with_background_color(bg)
+        .with_initialization_script("window.itdaNativeDrag=true;")
         .with_devtools(devtools)
         .with_hotkeys_zoom(false)
         .with_browser_accelerator_keys(false)

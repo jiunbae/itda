@@ -225,6 +225,8 @@
   }
   const call = (op, data = {}) => send("files", { id: host.id, op, ...data });
   const nativeFiles = () => MAC && window.itdaNativeFiles === true;
+  // Dragging past the window's edge hands the files to the system (Finder, or Explorer).
+  const nativeDrag = () => nativeFiles() || (!MAC && window.itdaNativeDrag === true);
   const exportItems = (side, names) => panes[side].entries.filter(e => names.includes(e.name)).map(e => ({name:e.name,dir:e.dir}));
   function clearDrag() { drag=null; document.querySelector(".files-drag")?.remove(); layer?.querySelectorAll(".files-drop-target").forEach(el=>el.classList.remove("files-drop-target")); }
   function importPaths(paths, side, destination) {
@@ -1554,7 +1556,7 @@
       tag.className = "files-drag";
       document.body.append(tag);
     }
-    if (drag.live && nativeFiles() && (e.clientX<=1 || e.clientY<=1 || e.clientX>=innerWidth-1 || e.clientY>=innerHeight-1)) {
+    if (drag.live && nativeDrag() && (e.clientX<=1 || e.clientY<=1 || e.clientX>=innerWidth-1 || e.clientY>=innerHeight-1)) {
       const d=drag,items=exportItems(d.side,d.names);
       try{d.capture.releasePointerCapture(d.pointer);}catch{}
       clearDrag(); suppressClick=true; setTimeout(()=>{suppressClick=false;},0);

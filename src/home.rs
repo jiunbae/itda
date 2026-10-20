@@ -309,6 +309,8 @@ fn on_ipc(v: Value) {
         "files_native_copy" => plat::native_file_copy(v),
         #[cfg(target_os = "macos")]
         "files_native_paste" => plat::native_file_paste(v),
+        #[cfg(windows)]
+        "files_native_drag" => plat::native_file_drag(v),
         "files_window" => {
             if id == crate::files::locations::NETWORK || home(|m| m.hosts.iter().any(|h| h.id == id)) { plat::files_window(&id, v["close"] == true); }
         }
