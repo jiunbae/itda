@@ -1,5 +1,7 @@
 //! File browsing and transfers, independent of remote screen sessions.
 pub mod locations;
+#[cfg(target_os = "macos")]
+pub mod export;
 mod sftp;
 mod transfer;
 use crate::{

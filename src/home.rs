@@ -305,6 +305,10 @@ fn on_ipc(v: Value) {
             let save = v.get("save").and_then(Value::as_bool).unwrap_or(false);
             connect(&id, pass, save);
         }
+        #[cfg(target_os = "macos")]
+        "files_native_copy" => plat::native_file_copy(v),
+        #[cfg(target_os = "macos")]
+        "files_native_paste" => plat::native_file_paste(v),
         "files_window" => {
             if id == crate::files::locations::NETWORK || home(|m| m.hosts.iter().any(|h| h.id == id)) { plat::files_window(&id, v["close"] == true); }
         }
@@ -916,7 +920,17 @@ fn drain() {
                 on_ipc(v);
                 let _ = done.send(());
             }
-            Event::Page(v) => send(v),
+            Event::Page(v) => {
+                #[cfg(target_os = "macos")]
+                let mut v=v;
+                #[cfg(target_os = "macos")]
+                if v["type"] == "files_native_copy_ready" { plat::native_file_copy_ready(&mut v); }
+                #[cfg(target_os = "macos")]
+                if v["type"] == "files_native_promise_done" { plat::native_file_promise_done(&v); continue; }
+                #[cfg(target_os = "macos")]
+                if v["type"] == "files_native_drag_end" { plat::native_file_drag_done(&v); }
+                send(v);
+            },
         }
     }
 }

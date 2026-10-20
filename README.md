@@ -72,6 +72,8 @@ On macOS, **Finder connection folder** creates `.inetloc` shortcuts in `…/Itda
 
 Choose **파일 열기 (Open files)** inside File browser to open an independent native window for a device. Opening the same device again focuses its existing window. Screen sessions are independent; closing a file window leaves ongoing transfers running, and reopening reuses a live connection.
 
+The macOS file window exports real file URLs for Finder's clipboard. Wait for **파일 복사 준비 완료** before pasting remote files; stale HTML is cleared while they are prepared. Staged copies stay under `…/Itda/file-exports` so the clipboard remains usable after quitting. In-window dragging keeps folder/tab transfers; dragging outside hands off to native file promises and downloads only after Finder accepts the drop. External drags copy without deleting remote originals. This applies to the file browser, independently of a Finder running inside a remote screen session.
+
 <img src="web/help/itda-files-browser.png" width="860" alt="File browser tab in the isolated SSH test fixture">
 
 <img src="web/help/itda-files.png" width="860" alt="macOS-style file workspace, showing transfers between two folders in the isolated SSH test fixture">

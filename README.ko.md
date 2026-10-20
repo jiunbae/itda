@@ -71,6 +71,8 @@ macOS의 **Finder 연결 폴더**는 저장된 기기의 `.inetloc` 바로가기
 
 파일 브라우저의 **파일 열기**는 기기별 독립 창을 엽니다. 같은 기기를 다시 누르면 기존 창을 앞으로 가져옵니다. 화면 공유와 별도로 사용하며, 창을 닫아도 진행 중인 전송은 계속됩니다. 다시 열 때 살아 있는 연결은 재사용합니다.
 
+macOS 파일 창의 복사는 Finder용 파일 URL을 만듭니다. 원격 파일은 먼저 준비되며, **파일 복사 준비 완료** 안내 뒤 Finder에서 붙여넣습니다. 준비 중에는 오래된 HTML 클립보드를 비워 `.textClipping`으로 잘못 붙여넣지 않게 합니다. 원격 복사본은 앱을 종료해도 붙여넣을 수 있도록 `…/Itda/file-exports`에 유지됩니다. 창 안 드래그는 기존 폴더·탭 전송을 사용하고, 창 밖 드래그는 Finder가 수락한 뒤 파일 약속으로 내려받습니다. 외부 드래그는 복사만 하며 원격 원본을 삭제하지 않습니다. 이 경로는 파일 브라우저용이며 원격 화면의 Finder 클립보드와는 별개입니다.
+
 <img src="web/help/itda-files-browser.png" width="860" alt="File browser tab in the isolated SSH test fixture">
 
 <img src="web/help/itda-files.png" width="860" alt="격리된 SSH 테스트 환경에서 내 기기와 원격 기기 사이의 파일 전송을 확인한 macOS 파일 창">

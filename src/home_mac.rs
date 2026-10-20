@@ -19,6 +19,14 @@ use tao::platform::macos::WindowBuilderExtMacOS;
 use tao::window::{Fullscreen, Theme, Window, WindowBuilder};
 use wry::{http, WebView, WebViewBuilder, WebViewBuilderExtMacos, WebViewExtMacOS};
 
+#[path = "files_mac.rs"]
+mod native_files;
+pub(super) fn native_file_copy(v: Value) {native_files::copy(v);}
+pub(super) fn native_file_paste(v: Value) {native_files::paste(v);}
+pub(super) fn native_file_copy_ready(v: &mut Value) { native_files::finish_copy(v); }
+pub(super) fn native_file_drag_done(v: &Value) { native_files::drag_done(v); }
+pub(super) fn native_file_promise_done(v: &Value) { native_files::promise_done(v); }
+
 pub const PLATFORM: &str = "mac";
 
 #[derive(Clone)]
@@ -500,9 +508,9 @@ fn menu() -> Menu {
             &PredefinedMenuItem::undo(None),
             &PredefinedMenuItem::redo(None),
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::cut(None),
-            &PredefinedMenuItem::copy(None),
-            &PredefinedMenuItem::paste(None),
+            &item("file-cut", "잘라내기", Some((Modifiers::SUPER, Code::KeyX))),
+            &item("file-copy", "복사", Some((Modifiers::SUPER, Code::KeyC))),
+            &item("file-paste", "붙여넣기", Some((Modifiers::SUPER, Code::KeyV))),
             &PredefinedMenuItem::select_all(None),
         ],
     );
@@ -523,6 +531,13 @@ fn menu() -> Menu {
 }
 
 fn on_menu(id: &muda::MenuId) {
+    if let Some(action)=match id.as_ref(){"file-copy"=>Some("copy"),"file-cut"=>Some("cut"),"file-paste"=>Some("paste"),_=>None}{
+        let script=format!("window.ItdaFiles?.nativeEdit({})",json!(action));
+        let handled=FILE_PANES.with(|p|{let p=p.borrow();if let Some(p)=p.values().find(|p|p.window.is_focused()){let _=p.view.evaluate_script(&script);true}else{false}})
+            || HOME_PANE.with(|p|p.borrow().as_ref().is_some_and(|p|{if p.window.is_focused(){let _=p.view.evaluate_script(&script);true}else{false}}));
+        if !handled{native_files::system_edit(action);}
+        return;
+    }
     show_home();
     match id.as_ref() {
         MENU_SETTINGS => send(json!({"type": "go", "page": "settings"})),
@@ -537,6 +552,8 @@ fn home_view(window: &Window, dark: bool, file: Option<&str>) -> wry::Result<Web
     let drop_id = file.map(str::to_string);
     let drag_id = file.map(str::to_string);
     WebViewBuilder::new()
+        .with_initialization_script("window.itdaNativeFiles=true;")
+        .with_accept_first_mouse(file.is_some())
         .with_custom_protocol("itda".into(), |_id, req| {
             let resp = match super::asset(req.uri().path()) {
                 Some((body, mime)) => http::Response::builder().header("Content-Type", mime).header("Cache-Control", "no-store").body(body),
@@ -545,14 +562,31 @@ fn home_view(window: &Window, dark: bool, file: Option<&str>) -> wry::Result<Web
             resp.unwrap_or_else(|_| http::Response::new(Cow::Borrowed(&b""[..])))
         })
         .with_drag_drop_handler(move |event| {
-            if let wry::DragDropEvent::Drop { paths, .. } = event {
-                super::post(Event::Page(json!({"type":"files_drop","id":drop_id,"paths":paths})));
+            if let wry::DragDropEvent::Drop { paths, position } = event {
+                super::post(Event::Page(json!({"type":"files_drop","id":drop_id,"paths":paths,"position":[position.0,position.1]})));
             }
             true
         })
         .with_ipc_handler(move |req| match serde_json::from_str::<Value>(req.body()) {
             // Handled after this callback returns, like every other event.
             Ok(v) => {
+                match v["cmd"].as_str() {
+                    Some("files_system_edit") => {native_files::system_edit(v["action"].as_str().unwrap_or(""));return;}
+                    Some("files_native_copy") => { native_files::copy(v); return; }
+                    Some("files_native_paste") => { native_files::paste(v); return; }
+                    Some("files_native_drag") => {
+                        let id=v["id"].as_str().unwrap_or("").to_string();
+                        // Release the pane-map borrow before calling AppKit, which can
+                        // enter a nested drag event loop and run window callbacks.
+                        let view=if let Some(window_id)=&drag_id {
+                            FILE_PANES.with(|panes|panes.borrow().get(window_id).map(|p|p.view.webview()))
+                        } else { HOME_PANE.with(|pane|pane.borrow().as_ref().map(|p|p.view.webview())) };
+                        let result=view.ok_or_else(||"파일 창을 찾을 수 없습니다".to_string()).and_then(|view|native_files::drag(&view,v));
+                        if let Err(error)=result { super::post(Event::Page(json!({"type":"files_native_drag_end","id":id,"error":error}))); }
+                        return;
+                    }
+                    _ => {}
+                }
                 if v["cmd"] == "files_drag" {
                     if let Some(id) = &drag_id {
                         FILE_PANES.with(|panes| { if let Some(p) = panes.borrow().get(id) { let _ = p.window.drag_window(); } });
@@ -644,6 +678,7 @@ pub fn run(quick: Option<String>) {
         match event {
             TaoEvent::LoopDestroyed => {
                 crate::files::shutdown();
+                native_files::shutdown();
                 // Drop related views while all thread locals are still available.
                 SESSIONS.with(|p| {for id in p.borrow().keys(){crate::gateway::close_local(id);}});
                 let mirrors=MONITOR_PANES.with(|p| std::mem::take(&mut *p.borrow_mut()));drop(mirrors);
