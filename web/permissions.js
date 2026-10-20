@@ -14,6 +14,7 @@
   const ready=m.screen&&m.access,count=Number(!!m.screen)+Number(!!m.access);
   const restartKeys=['screen','access'].filter(key=>!m[key]&&m[`configured_${key}`]===true),restart=restartKeys.length>0;
   const ungranted=['screen','access'].filter(key=>!m[key]&&!restartKeys.includes(key));
+  const checkedDenied=ungranted.some(key=>m[`configured_${key}`]===false);
   requested=m.requested||requested;
   if(m.requested_seq&&m.requested_seq!==seenRequest){seenRequest=m.requested_seq;if(!ready)watch();}
   const next=ungranted.includes(requested)?requested:ungranted[0]||restartKeys[0]||'access';
@@ -21,7 +22,7 @@
   for(const key of ['screen','access']){const row=document.querySelector(`[data-permission="${key}"]`),done=!!m[key];row.classList.toggle('done',done);row.classList.toggle('pending',restartKeys.includes(key));row.classList.toggle('next',!done&&key===next);row.querySelector('.badge').textContent=done?'✓ 허용됨':restartKeys.includes(key)?'재시작 필요':'허용 필요';row.querySelector('button').disabled=done||restartKeys.includes(key);}
   document.querySelector('.recovery').hidden=ready;
   document.querySelector('.recovery h2').textContent=restart?'변경한 권한 적용':'설정에서 이미 허용했나요?';
-  document.querySelector('.recovery-message').textContent=restart?ungranted.length?'허용한 권한이 실행 중인 Itda에 아직 반영되지 않았어요. 남은 권한을 설정한 후 Itda를 다시 열어 주세요.':'권한 변경을 확인했어요. 현재 실행 중인 Itda에 반영하려면 다시 열어 주세요.':'권한을 켰어도 실행 중인 Itda에 바로 반영되지 않을 수 있어요. Itda를 다시 열어 확인해 주세요.';
+  document.querySelector('.recovery-message').textContent=restart?ungranted.length?'허용한 권한이 실행 중인 Itda에 아직 반영되지 않았어요. 남은 권한을 설정한 후 Itda를 다시 열어 주세요.':'권한 변경을 확인했어요. 현재 실행 중인 Itda에 반영하려면 다시 열어 주세요.':checkedDenied?'현재 앱에서는 아직 허용을 확인하지 못했어요. 설정의 Itda가 이미 켜져 있다면 아래에서 앱을 다시 등록하는 방법을 확인해 주세요.':'권한을 켰어도 실행 중인 Itda에 바로 반영되지 않을 수 있어요. Itda를 다시 열어 확인해 주세요.';
   document.querySelector('.current-app').textContent=`Itda ${m.version||''} · ${m.app_path||'앱 위치를 확인할 수 없습니다'}`;
   document.querySelector('[data-action="restart"]').disabled=!m.app_path;
   const instructions=document.querySelector('.instructions');instructions.hidden=ready||!requested||(restart&&!ungranted.length);
