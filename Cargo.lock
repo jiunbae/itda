@@ -1976,6 +1976,7 @@ dependencies = [
  "windows-sys 0.59.0",
  "wry",
  "x509-cert",
+ "zeroize",
 ]
 
 [[package]]

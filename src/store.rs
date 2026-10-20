@@ -516,12 +516,21 @@ fn cred_delete(target: &str) {
 }
 
 #[cfg(not(windows))]
+fn security_arg(value:&str)->String {
+    format!("\"{}\"",value.replace('\\',"\\\\").replace('"',"\\\""))
+}
+
+#[cfg(not(windows))]
 fn cred_write(target: &str, pass: &str) {
     use std::io::Write;
     // The secret goes through stdin (`security -i`), hex-encoded (-X), so it never shows up
     // in the process list. -U updates an existing item.
-    let hex: String = pass.bytes().map(|b| format!("{b:02x}")).collect();
-    let line = format!("add-generic-password -U -s {KEYCHAIN_SERVICE} -a \"{target}\" -l \"Itda ({target})\" -X {hex}\n");
+    let hex=zeroize::Zeroizing::new(pass.bytes().map(|b|format!("{b:02x}")).collect::<String>());
+    if target.chars().any(char::is_control) { return; }
+    let line=zeroize::Zeroizing::new(format!("add-generic-password -U -s {KEYCHAIN_SERVICE} -a {} -l {} -X \"{}\"\n",security_arg(target),security_arg(&format!("Itda ({target})")),&*hex));
+    // Apple's interactive parser has a 4096-byte line buffer. Never let a
+    // truncated line replace a valid stored password with partial bytes.
+    if line.len()>=4096 {return;}
     let child = std::process::Command::new("/usr/bin/security")
         .arg("-i")
         .stdin(std::process::Stdio::piped())
@@ -611,6 +620,24 @@ pub fn set_password(id: &str, pass: Option<&str>) {
     match pass {
         Some(p) => cred_write(&t, p),
         None => cred_delete(&t),
+    }
+}
+
+/// Configuration provisioning must not report success when the OS vault rejected a write.
+pub fn set_password_checked(id: &str, pass: Option<&str>) -> std::io::Result<()> {
+    if id.chars().any(char::is_control) {return Err(std::io::Error::other("로그인 식별자에 제어 문자가 있습니다"));}
+    #[cfg(not(windows))]
+    if pass.is_some_and(|p|p.len().saturating_mul(2)+format!("add-generic-password -U -s {KEYCHAIN_SERVICE} -a {} -l {} -X \"\"\n",security_arg(&target(id)),security_arg(&format!("Itda ({})",target(id)))).len()>=4096) {
+        return Err(std::io::Error::other("비밀번호가 이 Mac의 보안 저장소 입력 한도를 초과했습니다. 해당 항목을 제외하고 다시 시도하세요"));
+    }
+    set_password(id,pass);
+    let mut got=get_password(id);
+    let ok=got.as_deref()==pass;
+    if let Some(value)=got.as_mut() {use zeroize::Zeroize;value.zeroize();}
+    if ok {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("원격 기기의 보안 저장소에 로그인 정보를 저장하지 못했습니다. Mac은 로그인 키체인을 잠금 해제한 후 다시 시도하세요"))
     }
 }
 

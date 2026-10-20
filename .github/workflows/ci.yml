@@ -109,6 +109,8 @@ jobs:
         run: node scripts/files-tabs-e2e.mjs
       - name: Self-update UI
         run: node scripts/update-e2e.mjs
+      - name: SSH remote setup UI
+        run: node scripts/remote-setup-e2e.mjs
       - name: Permission helper regression
         run: node scripts/permissions-e2e.mjs
         env:

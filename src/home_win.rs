@@ -131,6 +131,9 @@ pub fn run(quick: Option<String>) {
             }
             return;
         }
+        let _configuration_lock=match crate::remote_setup::application_lock() {
+            Ok(lock)=>lock,Err(e)=>{crate::ui::message(&e.to_string(),true);return;}
+        };
         super::init(quick);
         let dark = home(|m| is_dark(&m.settings));
 

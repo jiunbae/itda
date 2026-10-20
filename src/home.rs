@@ -68,6 +68,7 @@ enum Event {
     /// A message for the page, produced off the UI thread.
     #[cfg_attr(windows, allow(dead_code))]
     Page(Value),
+    ConfigurationStop,
 }
 
 static QUEUE: Mutex<Vec<Event>> = Mutex::new(Vec::new());
@@ -122,6 +123,16 @@ pub fn run(quick: Option<String>) {
 
 /// Load the address book and settings (the platform calls this once it owns the window).
 fn init(quick: Option<String>) {
+    std::thread::spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let path=store::dir().join("remote-setup-stop");
+        if let Ok(value)=std::fs::read_to_string(&path) {
+            let _=std::fs::remove_file(path);
+            if value.trim().parse::<u64>().ok().is_some_and(|expires| expires>=store::now()&&expires<=store::now()+30) {
+                post(Event::ConfigurationStop);
+            }
+        }
+    });
     let settings = store::load_settings();
     let hosts = store::load_hosts();
     let accounts = store::load_accounts();
@@ -255,6 +266,8 @@ fn asset(path: &str) -> Option<(Cow<'static, [u8]>, &'static str)> {
         "help.css" => HELP_CSS,
         "hp-setup.css" => include_str!("../web/hp-setup.css"),
         "hp-setup.js" => include_str!("../web/hp-setup.js"),
+        "remote-setup.js" => include_str!("../web/remote-setup.js"),
+        "remote-setup.css" => include_str!("../web/remote-setup.css"),
         "permissions.html" => include_str!("../web/permissions.html"),
         "permissions.css" => include_str!("../web/permissions.css"),
         "permissions.js" => include_str!("../web/permissions.js"),
@@ -660,6 +673,21 @@ fn on_ipc(v: Value) {
         "hp_upgrade" => hp_upgrade(&id),
         "update_check" => update_check(),
         "update_install" => update_install(),
+        "remote_setup_probe"=>remote_setup_probe(v),
+        "remote_setup_apply"=>{
+            let request=s(&v,"request");let token=s(&v,"token");
+            match crate::remote_setup::begin() {
+                Err(e)=>send(json!({"type":"remote_setup","request":request,"error":e.to_string()})),
+                Ok(busy)=>{std::thread::spawn(move||{
+                    let _busy=busy;
+                    let progress=|stage:&str|post(Event::Page(json!({"type":"remote_setup","request":request,"stage":stage})));
+                    let result=crate::remote_setup::install(&token,&progress);
+                    let mut v=match result {Ok(v)=>v,Err(e)=>json!({"type":"remote_setup","error":e.to_string()})};
+                    v["request"]=json!(request);post(Event::Page(v));
+                });}
+            }
+        }
+        "remote_setup_discard"=>crate::remote_setup::discard(&s(&v,"token")),
         "hp_status" => hp_status(&id),
         "hp_permissions" => hp_permissions(&id,v["permission"].as_str().map(str::to_string)),
         #[cfg(target_os = "macos")]
@@ -908,6 +936,37 @@ fn hp_upgrade(id: &str) {
     });
 }
 
+fn remote_setup_probe(v:Value) {
+    let request=s(&v,"request");
+    let result=(|| {
+        let choice=serde_json::from_value::<crate::remote_setup::Selection>(v["selection"].clone())?;
+        let (hosts,accounts,settings)=home(|m|(m.hosts.clone(),m.accounts.clone(),m.settings.clone()));
+        let h=hosts.iter().find(|h|h.id==s(&v,"id"));
+        let account=s(&v,"login_account");
+        let login=if account=="-" {store::Login::default()}
+        else if !account.is_empty() {
+            let a=accounts.iter().find(|a|a.id==account).ok_or_else(||std::io::Error::other("SSH에 사용할 계정을 다시 선택하세요"))?;
+            store::Login{user:a.user.clone(),pass:store::get_password(&store::acct_key(&a.id)),ssh_key:a.ssh_key.clone(),key_pass:store::get_password(&store::acct_keypass(&a.id))}
+        } else {h.map(|h|store::resolve(h,&accounts)).unwrap_or_default()};
+        let host=s(&v,"address");
+        let port=v["port"].as_u64().filter(|p|*p>0&&*p<=65535).ok_or_else(||std::io::Error::other("SSH 포트는 1부터 65535 사이여야 합니다"))? as u16;
+        let pass=match v["password"].as_str().filter(|p|!p.is_empty()){Some(p)=>p.into(),None=>if account.is_empty(){h.and_then(|h|crate::gateway::typed(&h.id)).or(login.pass).unwrap_or_default()}else{login.pass.unwrap_or_default()}};
+        let cfg=crate::tunnel::SshCfg{host,port,user:s(&v,"user"),pass,vnc_port:0,key:login.ssh_key,key_pass:login.key_pass.unwrap_or_default()};
+        crate::tunnel::ssh_target(&cfg)?;
+        if cfg.host.trim().is_empty(){return Err(std::io::Error::other("설치할 기기의 SSH 주소를 입력하세요"));}
+        let busy=crate::remote_setup::begin()?;
+        Ok::<_,std::io::Error>((cfg,choice,hosts,accounts,settings,busy))
+    })();
+    match result {
+        Err(e)=>send(json!({"type":"remote_setup","request":request,"error":e.to_string()})),
+        Ok((cfg,choice,hosts,accounts,settings,busy))=>{std::thread::spawn(move|| {
+            let _busy=busy;let progress=|stage:&str|post(Event::Page(json!({"type":"remote_setup","request":request,"stage":stage})));
+            let mut result=match crate::remote_setup::prepare(cfg,choice,hosts,accounts,settings,&progress){Ok(v)=>v,Err(e)=>json!({"type":"remote_setup","error":e.to_string()})};
+            result["request"]=json!(request);post(Event::Page(result));
+        });}
+    }
+}
+
 /// Whether that Mac's Itda can show its screen yet (the viewer waits for the permission).
 fn hp_status(id: &str) {
     let Some((host, login)) = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| (h.clone(), store::resolve(h, &m.accounts)))) else { return };
@@ -1041,6 +1100,7 @@ fn drain() {
     let evs = std::mem::take(&mut *QUEUE.lock().unwrap());
     for e in evs {
         match e {
+            Event::ConfigurationStop=>plat::quit(),
             Event::Session(id, v) if id == "__ipc" => on_ipc(v),
             Event::Session(id, v) => on_session(&id, v),
             Event::Exit(id) => on_exit(&id),
@@ -1090,7 +1150,9 @@ fn drain() {
                 send(web_info());
             }
             Event::WebEdit(v, done) => {
-                on_ipc(v);
+                // Provisioning can export credentials; it is native-app-only, not
+                // an address-book operation exposed by the web viewer.
+                if !v["cmd"].as_str().is_some_and(|cmd|cmd.starts_with("remote_setup_")) {on_ipc(v);}
                 let _ = done.send(());
             }
             Event::Page(v) => {
