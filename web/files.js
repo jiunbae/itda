@@ -474,12 +474,14 @@
   function open(h, reuse = false) {
     if (!h) return;
     if (host && host.id !== h.id) {
+      if (host.id !== NETWORK) call("release");
       layer?.remove();
       layer = null;
       clipboard = null;
       undo.length = 0;
     }
     host = h;
+    if (fileWindow()) send("files_window_context", {window:fileWindow(),id:h.id,page:pageToken});
     document.title = `${label(h)} — 파일`;
     showSetup();
     const f = h.files || {};
@@ -598,7 +600,7 @@
     open(h, true);
   }
   function workspace(data) {
-    if (fileWindow()) send("files_window_context", { window: fileWindow(), id: host.id });
+    if (fileWindow()) send("files_window_context", { window: fileWindow(), id: host.id, page: pageToken });
     networkMode = host.id === NETWORK;
     setup?.remove();
     setup = null;
@@ -1120,6 +1122,7 @@
           send("files_window", { id: host.id, window: fileWindow(), close: true });
           return;
         }
+        send("files_release_page", {page:pageToken});
         layer.remove();
         layer = null;
         removeMenu();

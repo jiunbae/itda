@@ -368,6 +368,27 @@ pub fn route_event(v: &mut Value) {
         }
     }
 }
+fn retired() -> &'static Mutex<std::collections::HashSet<String>> {
+    static KEYS: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    KEYS.get_or_init(Default::default)
+}
+/// Release an unused browse session; active/queued transfers keep it until completion.
+pub(super) fn cleanup_retired(key: &str) {
+    let mut retired = retired().lock().unwrap();
+    if retired.contains(key) && !jobs().lock().unwrap().values().any(|(owner,_)| owner == key) {
+        disconnect(key); retired.remove(key);
+    }
+}
+fn retire(key: String) {
+    retired().lock().unwrap().insert(key.clone()); cleanup_retired(&key);
+}
+pub fn release_page(page: &str) {
+    if page.is_empty() { return; }
+    let suffix = format!("\x1f{page}");
+    let mut keys: Vec<String> = connections().lock().unwrap().keys().chain(connecting().lock().unwrap().keys()).filter(|key| key.ends_with(&suffix)).cloned().collect();
+    keys.extend(jobs().lock().unwrap().values().filter(|(key,_)| key.ends_with(&suffix)).map(|(key,_)| key.clone()));
+    keys.sort(); keys.dedup(); for key in keys { retire(key); }
+}
 pub fn disconnect(id: &str) {
     if !id.contains('\x1f') {
         let prefix = format!("{id}\x1f");
@@ -395,6 +416,8 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
     let key = scoped_id(&id, &v["window"]);
     let window = v["window"].clone();
     let emit: Emit = Arc::new(move |mut m| { m["window"] = window.clone(); emit(m); });
+    if op == "release" { retire(key); return; }
+    if op == "connect" { retired().lock().unwrap().remove(&key); }
     if op == "cancel" {
         if let Some((owner, c)) = jobs().lock().unwrap().get(&get(&v, "job")) {
             if owner == &key { c.stop(); }
@@ -451,7 +474,11 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                             crate::store::set_password(&password_key(&host), Some(p));
                         }
                     }
-                    connections().lock().unwrap().insert(
+                    let mut sessions = connections().lock().unwrap();
+                    // Closing a page can cancel a connect after its first check.
+                    // Check under the insertion lock so disconnect cannot miss it.
+                    control.check()?;
+                    sessions.insert(
                         key.clone(),
                         Arc::new(Connection {
                             cfg: c,
@@ -462,6 +489,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                             options: host.files.clone(),
                         }),
                     );
+                    drop(sessions);
                     let local = local_home().to_string_lossy().into_owned();
                     Ok(
                         json!({"path":root,"entries":entries,"local_path":local,"local_entries":local_list(&local)?,"rsync":transfer::rsync_available()}),
@@ -1025,6 +1053,21 @@ pub fn shutdown() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closing_a_page_keeps_its_running_transfer_until_completion() {
+        let page = crate::store::new_id();
+        let key = scoped_id("release-test", &json!(page));
+        let job = crate::store::new_id();
+        let control = Arc::new(Control::default());
+        jobs().lock().unwrap().insert(job.clone(), (key.clone(), control.clone()));
+        release_page(&page);
+        assert!(control.check().is_ok(), "closing a page cancelled its transfer");
+        assert!(retired().lock().unwrap().contains(&key));
+        jobs().lock().unwrap().remove(&job);
+        cleanup_retired(&key);
+        assert!(!retired().lock().unwrap().contains(&key), "finished page resources were retained");
+    }
 
     #[test]
     fn cancellation_is_owned_by_the_requesting_file_page() {

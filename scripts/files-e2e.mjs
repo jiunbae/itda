@@ -334,7 +334,7 @@ try {
       assert(await page.locator('[data-path="remote"]').inputValue() === originalPath && await page.locator('[data-pane="remote"] tr[data-index]').filter({hasText:'한글 문서.txt'}).count() === 1, "Sibling navigation changed the original window");
       await page.evaluate(() => ItdaFiles.message({type:'files_result',id:'files-fixture',window:'other-page',op:'connect',ok:true,data:{path:'/wrong',entries:[],local_path:'/',local_entries:[]}}));
       assert(await page.locator('[data-path="remote"]').inputValue() === originalPath, "Sibling connect result reset the original window");
-      await sibling.evaluate(() => send('files',{id:'files-fixture',window:ItdaFiles.windowToken,op:'disconnect'}));
+      await sibling.evaluate(() => send('files_release_page',{page:ItdaFiles.windowToken}));
       await sibling.close();
       await page.locator('[data-action="refresh"]').click();
       await page.locator('[data-pane="remote"] tr[data-index]').filter({hasText:'한글 문서.txt'}).waitFor();

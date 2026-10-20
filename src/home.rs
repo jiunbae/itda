@@ -320,9 +320,10 @@ fn on_ipc(v: Value) {
         }
         "files_window_context" => {
             if id == crate::files::locations::NETWORK || home(|m| m.hosts.iter().any(|h| h.id == id)) {
-                plat::files_window_context(s(&v, "window").as_str(), &id);
+                plat::files_window_context(s(&v, "window").as_str(), &id, s(&v, "page").as_str());
             }
         }
+        "files_release_page" => crate::files::release_page(s(&v, "page").as_str()),
         "file_locations" => {
             let hosts = home(|m| m.hosts.clone());
             let reveal = v["reveal"] != false;

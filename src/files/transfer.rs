@@ -446,6 +446,7 @@ pub(super) fn export_batch(files: &[super::export::File], targets: &[PathBuf], e
         Ok(())
     })();
     jobs().lock().unwrap().remove(&job);
+    super::cleanup_retired(&file.id);
     emit(json!({"type":"files_job","id":file.id,"job":job,"state":if result.is_ok(){"completed"}else if control.cancel.load(Ordering::Relaxed){"cancelled"}else{"failed"},"error":result.as_ref().err().map(|e|e.to_string())}));
     result
 }
@@ -629,6 +630,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
             Ok(())
         })();
         jobs().lock().unwrap().remove(&job);
+        super::cleanup_retired(&key);
         let cancelled = control.cancel.load(Ordering::Relaxed);
         // A cancel ends the job's SSH sessions, so the error may only be their broken pipe.
         let error = result.err().map(|e| {

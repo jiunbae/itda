@@ -68,6 +68,7 @@ thread_local! {
     static HOME_PANE: RefCell<Option<Pane>> = const { RefCell::new(None) };
     /// Connection windows by connection id.
     static FILE_PANES: RefCell<HashMap<String, Pane>> = RefCell::new(HashMap::new());
+    static FILE_PAGES: RefCell<std::collections::HashMap<String, String>> = RefCell::new(std::collections::HashMap::new());
     static FILE_HOSTS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
     static FILE_REQUESTS: RefCell<Vec<(String, bool, bool, Option<String>)>> = const { RefCell::new(Vec::new()) };
     static MONITOR_PANES: RefCell<HashMap<(String, u32), Pane>> = RefCell::new(HashMap::new());
@@ -148,10 +149,10 @@ pub fn files_new_window_at(id: &str, path: Option<&str>) {
     FILE_REQUESTS.with(|q| q.borrow_mut().push((id.into(), false, true, path.map(str::to_string))));
     wake();
 }
-pub fn files_window_context(window: &str, id: &str) {
+pub fn files_window_context(window: &str, id: &str, page: &str) {
     let title = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| format!("{} — 파일", h.label())).unwrap_or_else(|| "네트워크 — Itda".into()));
     let exists = FILE_PANES.with(|p| { if let Some(p) = p.borrow().get(window) { p.window.set_title(&title); true } else { false } });
-    if exists { FILE_HOSTS.with(|p| {p.borrow_mut().insert(window.into(), id.into());}); super::send_hosts(); }
+    if exists { FILE_PAGES.with(|p| {p.borrow_mut().insert(window.into(), page.into());}); FILE_HOSTS.with(|p| {p.borrow_mut().insert(window.into(), id.into());}); super::send_hosts(); }
 }
 
 pub fn eval(js: &str) {
@@ -428,7 +429,8 @@ fn flush(target: &EventLoopWindowTarget<Wake>) {
     let file_requests = FILE_REQUESTS.with(|q| std::mem::take(&mut *q.borrow_mut()));
     let files_changed = !file_requests.is_empty();
     for (id, close, new, path) in file_requests {
-        if close { FILE_PANES.with(|p| { p.borrow_mut().remove(&id); }); FILE_HOSTS.with(|p| {p.borrow_mut().remove(&id);}); continue; }
+        if close { if let Some(page) = FILE_PAGES.with(|p| p.borrow_mut().remove(&id)) {crate::files::release_page(&page);}
+            let pane = FILE_PANES.with(|p| p.borrow_mut().remove(&id)); FILE_HOSTS.with(|p| {p.borrow_mut().remove(&id);}); drop(pane); continue; }
         let existing = if new { None } else { FILE_HOSTS.with(|p| p.borrow().iter().find(|(_,host)| *host == &id).map(|(key,_)| key.clone())) };
         let exists = FILE_PANES.with(|p| {
             let panes = p.borrow();

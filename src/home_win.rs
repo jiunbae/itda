@@ -43,6 +43,7 @@ static TRAY_MSG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::ne
 thread_local! {
     /// WebView2 calls can re-enter the window procedure, so the webview is only ever
     /// borrowed shared (except when created and dropped).
+    static FILE_PAGES: RefCell<std::collections::HashMap<String, String>> = RefCell::new(std::collections::HashMap::new());
     static FILE_HOSTS: RefCell<std::collections::HashMap<String, String>> = RefCell::new(std::collections::HashMap::new());
     static FILE_PANES: RefCell<std::collections::HashMap<String, (isize, WebView)>> = RefCell::new(std::collections::HashMap::new());
     static WEBVIEW: RefCell<Option<WebView>> = const { RefCell::new(None) };
@@ -284,9 +285,10 @@ pub fn file_windows() -> Vec<String> {
 
 pub fn files_window(id: &str, close: bool) { file_window(id, close, false, None); }
 pub fn files_new_window_at(id: &str, path: Option<&str>) { file_window(id, false, true, path); }
-pub fn files_window_context(window: &str, id: &str) {
+pub fn files_window_context(window: &str, id: &str, page: &str) {
     let h = FILE_PANES.with(|p| p.borrow().get(window).map(|(h,_)| *h));
     if let Some(h) = h {
+        FILE_PAGES.with(|p| {p.borrow_mut().insert(window.into(), page.into());});
         let title = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| format!("{} — 파일", h.label())).unwrap_or_else(|| "네트워크 — Itda".into()));
         unsafe { SetWindowTextW(h as HWND, wide(&title).as_ptr()); }
         FILE_HOSTS.with(|p| {p.borrow_mut().insert(window.into(), id.into());}); super::send_hosts();
@@ -625,7 +627,8 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
         WM_DESTROY => {
             if h != hwnd() {
                 let id = FILE_PANES.with(|p| p.borrow().iter().find(|(_, (wh, _))| *wh == h as isize).map(|(id, _)| id.clone()));
-                if let Some(id) = id { FILE_HOSTS.with(|p| {p.borrow_mut().remove(&id);}); let removed = FILE_PANES.with(|p| p.borrow_mut().remove(&id)); drop(removed); super::send_hosts(); }
+                if let Some(id) = id { if let Some(page) = FILE_PAGES.with(|p| p.borrow_mut().remove(&id)) {crate::files::release_page(&page);}
+                    FILE_HOSTS.with(|p| {p.borrow_mut().remove(&id);}); let removed = FILE_PANES.with(|p| p.borrow_mut().remove(&id)); drop(removed); super::send_hosts(); }
                 return 0;
             }
             crate::files::shutdown();
