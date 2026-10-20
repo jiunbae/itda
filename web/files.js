@@ -1291,10 +1291,9 @@
   function renderJobs() {
     if (!layer) return;
     const current = [...jobs.values()]
-      .filter((j) => j.id === host.id)
+      .filter((j) => j.id === host.id && ["queued", "running", "failed"].includes(j.state))
       .slice(-12);
-    if (current.some((j) => ["queued", "running", "failed"].includes(j.state)))
-      layer.querySelector(".files-jobs").hidden = false;
+    layer.querySelector(".files-jobs").hidden = current.length === 0;
     layer.querySelector(".files-jobs").innerHTML = current
       .map((j) => {
         const live = ["queued", "running"].includes(j.state);
@@ -1696,6 +1695,10 @@
     if (m.type === "files_job") {
       const previous = jobs.get(m.job) || {};
       jobs.set(m.job, { ...previous, ...m });
+      if (m.state === "completed" && previous.state !== "completed") {
+        const device = hostById(m.id);
+        toast(`${device ? `${label(device)} · ` : ""}${previous.moving || m.moving ? "파일 이동 완료" : "파일 복사 완료"}`, "E8B7");
+      }
       if (jobs.size > 200) {
         const old = [...jobs].find(([, j]) =>
           ["completed", "failed", "cancelled"].includes(j.state),

@@ -324,6 +324,24 @@ try {
       await page.locator('[data-choice="cancel"]').click();
       await page.evaluate(() => { delete window.ITDA_FILE_WINDOW; });
       console.log('Device navigation stays in place; explicit Cmd+click/Cmd+N, window-bound drops and single footer row passed');
+      // Completed transfers leave the footer immediately and notify only once.
+      await page.evaluate(() => {
+        document.querySelector('#toasts').replaceChildren();
+        const event = {type:'files_job',id:'files-fixture',window:ItdaFiles.windowToken,job:'notice-check'};
+        ItdaFiles.message({...event,state:'running',moving:false,file:'notice.txt'});
+      });
+      assert(await page.locator('.files-jobs').isVisible(), "Running transfer was hidden");
+      await page.evaluate(() => {
+        const event = {type:'files_job',id:'files-fixture',window:ItdaFiles.windowToken,job:'notice-check',state:'completed'};
+        ItdaFiles.message(event); ItdaFiles.message(event);
+      });
+      assert(await page.locator('.files-jobs').isHidden(), "Completed transfer kept the footer expanded");
+      assert(await page.locator('#toasts .toast').filter({hasText:'파일 복사 완료'}).count() === 1, "Completion notification was missing or duplicated");
+      await page.locator('#toasts .toast').filter({hasText:'파일 복사 완료'}).waitFor({state:'detached',timeout:5000});
+      await page.evaluate(() => ItdaFiles.message({type:'files_job',id:'files-fixture',window:ItdaFiles.windowToken,job:'failed-notice-check',state:'failed',error:'fixture failure'}));
+      assert(await page.locator('.files-jobs').isVisible() && await page.locator('.files-job').filter({hasText:'fixture failure'}).count() === 1, "Failed transfer details were hidden");
+      await page.evaluate(() => ItdaFiles.message({type:'files_job',id:'files-fixture',window:ItdaFiles.windowToken,job:'failed-notice-check',state:'cancelled'}));
+      console.log('Transfer completion: transient deduplicated toast, collapsed footer and persistent failure passed');
       // Two real pages of the same host: results and disconnect must stay isolated.
       const originalPath = await page.locator('[data-path="remote"]').inputValue();
       const sibling = await browser.newPage({userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/145.0.0.0 Safari/537.36'});
