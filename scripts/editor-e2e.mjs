@@ -28,10 +28,13 @@ try {
   const saved = () => page.evaluate(() => (window.sent || []).filter((x) => x.cmd === "save_host"));
   await page.evaluate(([a, b]) => { itda.recv({ type: "state", hosts: [a, b], settings: { onboarded: true, theme: "light", defaults: {} } }); openEdit(a); }, [mac, pc]);
   // Chips: Enter and comma add, existing spelling wins, × removes.
+  // openModal focuses the first field 30 ms later; let that happen before typing elsewhere.
+  const settled = () => page.waitForFunction(() => document.activeElement && document.activeElement.closest(".dialog"));
+  await settled();
   const chips = () => page.locator("#group-chips [data-chip]").evaluateAll((e) => e.map((x) => x.dataset.chip));
   await page.locator("#f-group").fill("회사");
   await page.locator("#f-group").press("Enter");
-  await page.locator("#f-group").type("home,여행,");
+  await page.locator("#f-group").pressSequentially("home,여행,");
   assert(JSON.stringify(await chips()) === JSON.stringify(["Home", "회사", "여행"]), `chips ${await chips()}`);
   await page.locator('[data-chip-x="회사"]').click();
   assert((await saved()).length === 0, "Enter in the group field saved the dialog");
@@ -50,6 +53,7 @@ try {
   assert(JSON.stringify(s1.groups) === JSON.stringify(["Home", "여행", "집"]) && s1.group === "Home, 여행, 집", `groups ${JSON.stringify(s1.groups)} ${s1.group}`);
   // Another connection's HP result leaves this editor alone.
   await page.evaluate((h) => openEdit(h), pc);
+  await settled();
   await page.locator("[data-tab=conn]").click();
   assert(await page.locator(".hp-box").isHidden(), "HP block shown for a Windows connection");
   await page.evaluate(() => itda.recv({ type: "hp", id: "mac", ready: true, screen: true, access: true }));
