@@ -31,7 +31,7 @@ await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const base=`http://127.0.0.1:${server.address().port}`;
 const browser=await pw.chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
 try{
-  const context=await browser.newContext({viewport:{width:1440,height:900},deviceScaleFactor:1,locale:'ko-KR',timezoneId:'Asia/Seoul',userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'});
+  const context=await browser.newContext({viewport:{width:1440,height:900},deviceScaleFactor:1,reducedMotion:'reduce',locale:'ko-KR',timezoneId:'Asia/Seoul',userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'});
   await context.clock.install({time:new Date('2026-10-20T06:00:00Z')});
   await context.addInitScript(({hosts,entries})=>{
     window.fixtureHosts=hosts;window.fixtureEntries=entries;
@@ -59,7 +59,7 @@ try{
   await page.evaluate(()=>{S.found=[{name:'Design Mac',host:'design.local',hostname:'design.local',ip:'192.0.2.21',os:'mac',itda:true,share:true},{name:'Meeting PC',host:'meeting.local',hostname:'meeting.local',ip:'192.0.2.22',os:'windows',itda:true,share:true}];S.tailnet={running:true,me:{name:'My Mac'},peers:[{name:'Lab Mac',dns:'lab.example.ts.net',ip:'100.64.0.20',os:'macOS',online:true}]};S.page='nearby';render();});
   if(await page.locator('.found').count()!==3)throw Error('Nearby fixture must show 3 addable devices');
   await page.screenshot({path:path.join(out,'nearby.png')});
-  await prepare('light');await page.evaluate(()=>openEdit(S.hosts[0]));await page.locator('#modals [data-key="edit"]').waitFor();await page.screenshot({path:path.join(out,'editor.png')});
+  await prepare('light');await page.evaluate(()=>openEdit(S.hosts[0]));await page.locator('#modals [data-key="edit"]').waitFor();if(!await page.locator('#modals [data-key="edit"]').evaluate(e=>Number(getComputedStyle(e).opacity)===1))throw Error('Editor capture is still animating');await page.screenshot({path:path.join(out,'editor.png')});
   await prepare('light');
   await page.evaluate(qr=>{S.settings.web={on:true,port:8780};S.web={running:true,pin:'123456',urls:[{url:'http://192.0.2.10:8780',kind:'lan'}],qr};S.share={local_name:'my-mac.local',user:'alex'};S.page='share';render();},fs.readFileSync(path.join(root,'scripts/fixtures/site-qr.svg'),'utf8'));
   await page.screenshot({path:path.join(out,'share.png')});
@@ -90,7 +90,7 @@ try{
   await page.locator('.web-panel').screenshot({path:path.join(out,'share-mobile.png')});
   await context.close();
   for(const [name,width,height]of [['phone-list',390,720]]){
-    const p=await browser.newPage({viewport:{width,height},deviceScaleFactor:2,colorScheme:'light',locale:'ko-KR',timezoneId:'Asia/Seoul',isMobile:true,hasTouch:true});
+    const p=await browser.newPage({viewport:{width,height},deviceScaleFactor:2,reducedMotion:'reduce',colorScheme:'light',locale:'ko-KR',timezoneId:'Asia/Seoul',isMobile:true,hasTouch:true});
     await p.goto(base+'/viewer/');await p.locator('.host[data-id="a1"]').waitFor();await p.evaluate(()=>document.fonts.ready);
     await p.screenshot({path:path.join(out,name+'.png')});await p.close();
   }
