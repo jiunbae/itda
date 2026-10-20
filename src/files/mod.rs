@@ -115,6 +115,10 @@ fn connecting() -> &'static Mutex<HashMap<String, Arc<Control>>> {
 }
 type Jobs = HashMap<String, (String, Arc<Control>)>;
 static JOBS: OnceLock<Mutex<Jobs>> = OnceLock::new();
+/// Transfers queued or running, also those whose file window was already closed.
+pub fn active_jobs() -> usize {
+    jobs().lock().unwrap().len()
+}
 fn jobs() -> &'static Mutex<Jobs> {
     JOBS.get_or_init(Default::default)
 }

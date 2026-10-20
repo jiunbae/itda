@@ -602,7 +602,7 @@ fn advance(permission: &str, target: &EventLoopWindowTarget<Wake>) {
     }
     if !crate::host_mac::permissions().0 {
         // Relaunching closes every Itda window: only when nothing else is open in it.
-        let busy = super::super::home(|m| m.sessions.len()) + super::file_windows().len();
+        let busy = super::super::home(|m| m.sessions.len()) + super::file_windows().len() + crate::files::active_jobs();
         if busy == 0 {
             guide_reply(json!({"type":"guide","done":"모두 허용됐어요. 적용하려고 Itda를 다시 여는 중…"}));
             match restart_app() {
@@ -614,7 +614,7 @@ fn advance(permission: &str, target: &EventLoopWindowTarget<Wake>) {
         close_guide();
         let _ = open(target);
         let mut v = state();
-        v["notice"] = json!(format!("모두 허용됐어요. 열려 있는 Itda 창 {busy}개를 닫은 뒤 ‘Itda 다시 열기’를 누르면 적용돼요."));
+        v["notice"] = json!("모두 허용됐어요. 열려 있는 Itda 창과 진행 중인 파일 전송이 끝난 뒤 ‘Itda 다시 열기’를 누르면 적용돼요.");
         reply(v);
         return;
     }
