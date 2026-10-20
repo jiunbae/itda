@@ -414,6 +414,7 @@ fn hosts_json() -> serde_json::Value {
                 "own_user": h.user,
                 "account": h.account,
                 "group": h.group,
+                "groups": h.groups,
                 "favorite": h.favorite,
                 "kind": if h.is_rdp() { "rdp" } else { "vnc" },
                 "os": if h.is_rdp() { "windows" } else if h.os.is_empty() { "mac" } else { h.os.as_str() },
@@ -611,6 +612,11 @@ fn edit(c: &mut TcpStream, req: &Req) -> io::Result<()> {
                 if let Some(s) = str_of(k) {
                     *f = s;
                 }
+            }
+            // The web editor edits groups as one comma-separated field.
+            if str_of("group").is_some() {
+                h.groups.clear();
+                h.normalize_groups();
             }
             if let Some(k) = str_of("kind") {
                 h.kind = if k == "rdp" { k } else { String::new() };

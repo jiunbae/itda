@@ -388,6 +388,7 @@ fn on_ipc(v: Value) {
             host.host = host.host.trim().to_string();
             host.name = host.name.trim().to_string();
             host.user = host.user.trim().to_string();
+            host.normalize_groups();
             if host.id.is_empty() {
                 host.id = store::new_id();
             }

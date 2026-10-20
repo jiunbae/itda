@@ -87,15 +87,20 @@ function ago(sec) {
 function matches(h, q) {
   if (!q) return true;
   q = q.toLowerCase();
-  return [h.name, h.host, h.user, h.group, h.remote_name].some((v) => (v || '').toLowerCase().includes(q));
+  return [h.name, h.host, h.user, hostGroups(h).join(' '), h.remote_name].some((v) => (v || '').toLowerCase().includes(q));
 }
 
 function sorted(list) {
   return [...list].sort((a, b) => (b.favorite - a.favorite) || (b.last_used - a.last_used) || label(a).localeCompare(label(b), 'ko'));
 }
 
+// A connection's groups (any number); older data kept them as one comma-separated "group".
+function hostGroups(h) {
+  if (h.groups && h.groups.length) return h.groups;
+  return (h.group || '').split(',').map((g) => g.trim()).filter(Boolean);
+}
 function groups() {
-  return [...new Set(S.hosts.map((h) => h.group).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
+  return [...new Set(S.hosts.flatMap(hostGroups))].sort((a, b) => a.localeCompare(b, 'ko'));
 }
 
 function inBook(f) {
@@ -259,6 +264,23 @@ function onMessage(m) {
     case 'new':
       if (!topModal()) openEdit();
       break;
+    case 'hp': {
+      // ⚡ high-performance mode being set up from a connection's editor (or window).
+      const h = S.hosts.find((x) => x.id === m.id);
+      const name = h ? label(h) : '';
+      const btn = document.querySelector('#hp-enable');
+      if (m.stage) toast(`${name} 고성능 모드: ${m.stage}`, 'E72C');
+      else if (m.error && !m.status) {
+        toast(`${name} 고성능 모드를 켜지 못했습니다 — ${m.error}`, 'E7BA');
+        if (btn) { btn.disabled = false; btn.textContent = '켜기'; }
+      } else if (m.ready) {
+        toast(m.screen && m.access ? `${name} 고성능 모드를 켰습니다 — 다음 연결부터 사용합니다` : `${name} 고성능 모드를 켰습니다. 그 Mac에서 Itda의 화면 기록·손쉬운 사용 권한을 허용하세요.`, 'E73E');
+        const st = document.querySelector('#hp-state');
+        if (st) st.textContent = '켜짐 — 이 Mac의 Itda 고성능 공유로 연결합니다 (SSH 터널).';
+        if (btn) btn.remove();
+      }
+      return;
+    }
     case 'share':
       S.share = m;
       if (S.page === 'share') render();
@@ -299,7 +321,7 @@ function renderNav() {
   const gs = groups();
   if (gs.length) {
     html += `<div class="nav-section">그룹</div>`;
-    for (const g of gs) html += navItem(`group:${g}`, 'E8B7', g, S.hosts.filter((h) => h.group === g).length);
+    for (const g of gs) html += navItem(`group:${g}`, 'E8B7', g, S.hosts.filter((h) => hostGroups(h).includes(g)).length);
   }
   morph($('#nav'), html);
   $$('.nav-bottom .nav-item').forEach((b) => b.classList.toggle('active', b.dataset.page === S.page));
@@ -325,7 +347,7 @@ function pageHosts() {
   if (p === 'favorites') list = list.filter((h) => h.favorite);
   else if (p === 'recent') list = [...list].filter((h) => h.last_used).sort((a, b) => b.last_used - a.last_used);
   else if (p === 'live') list = list.filter((h) => S.sessions[h.id]);
-  else if (p.startsWith('group:')) list = list.filter((h) => h.group === p.slice(6));
+  else if (p.startsWith('group:')) list = list.filter((h) => hostGroups(h).includes(p.slice(6)));
   if (p !== 'recent') list = sorted(list);
   return list.filter((h) => matches(h, S.query));
 }
@@ -368,7 +390,7 @@ function card(h) {
   const live = S.sessions[h.id] ? ' live' : '';
   const lu = h.login_user || h.user;
   const who = (h.ssh && h.ssh.on ? `<span class="i lock" title="SSH로 암호화">&#xE72E;</span>` : '') + (lu ? `${esc(lu)}@${esc(h.host)}` : esc(h.host));
-  const extra = [h.kind === 'rdp' ? '원격 데스크톱' : '', ago(h.last_used), h.remote_size, h.group].filter(Boolean).map(esc).join(' · ');
+  const extra = [h.kind === 'rdp' ? '원격 데스크톱' : '', ago(h.last_used), h.remote_size, hostGroups(h).join(', ')].filter(Boolean).map(esc).join(' · ');
   return `<div class="card${live}" tabindex="0" data-id="${esc(h.id)}">
     ${thumb(h)}
       ${badge(h)}
@@ -1045,12 +1067,31 @@ function openEdit(init = {}, mode = {}) {
   const tabs = quick ? '' : `<div class="tabs" role="tablist">
       <button class="on" data-tab="general">일반</button><button data-tab="display">화면</button>${MAC ? '' : '<button data-tab="input">키보드</button>'}<button data-tab="conn">연결</button></div>`;
   const groupsList = groups().map((g) => `<option value="${esc(g)}">`).join('');
+  const chipList = (gs) => gs.map((g) => `<span class="chip" data-chip="${esc(g)}">${esc(g)}<button type="button" class="chip-x" data-chip-x="${esc(g)}" aria-label="${esc(g)} 그룹 빼기">×</button></span>`).join('');
+  const groupField = quick ? '' : `<div class="field"><label for="f-group">그룹</label>
+      <div class="chips input" id="group-chips">${chipList(hostGroups(h))}<input id="f-group" list="groups" placeholder="${hostGroups(h).length ? '' : '없음 — 예: 집, 회사'}" aria-label="그룹 추가"></div>
+      <datalist id="groups">${groupsList}</datalist><span class="hint">Enter나 쉼표로 추가합니다. 같은 그룹의 연결은 왼쪽 목록에서 모아 볼 수 있습니다.</span></div>`;
+  const sshBox = `<div class="ssh-box" ${KD.ssh ? '' : 'hidden'}>
+        <div class="opt"><span class="i ssh-ico">&#xE72E;</span><div class="txt"><b>SSH로 암호화해서 연결 <a href="#" class="help-link" data-help="accounts">자세히</a></b><span>인터넷·공용 Wi-Fi에서 켜세요. 상대 기기에 SSH(Mac은 ‘원격 로그인’)가 켜져 있어야 하고 암호는 위와 같습니다.</span></div>
+          <label class="switch"><input type="checkbox" id="f-ssh" ${ssh.on ? 'checked' : ''}><span></span></label></div>
+        <div class="row" id="ssh-fields" ${ssh.on ? '' : 'hidden'}>
+          <div class="field"><label>SSH 사용자</label><input class="input" id="f-ssh-user" value="${esc(ssh.user)}" placeholder="위 계정 이름과 같음"></div>
+          <div class="field"><label>SSH 포트</label><input class="input" id="f-ssh-port" value="${ssh.port || ''}" placeholder="22" inputmode="numeric"><span class="err" id="e-ssh"></span></div>
+        </div>
+        ${S.sshOk === false ? `<p class="warn-note" id="ssh-missing" ${ssh.on ? '' : 'hidden'}>${I('E7BA')} 이 PC에 OpenSSH 클라이언트가 없습니다. 설정 → 시스템 → 선택적 기능에서 ‘OpenSSH 클라이언트’를 추가하세요.</p>` : ''}
+      </div>`;
+  const hp = h.hp || {};
+  const hpBox = h.kind !== 'rdp' && (h.os || 'mac') === 'mac' && MAC ? `<div class="field hp-box"><label>성능</label>
+      <div class="opt"><span class="hp-ico" aria-hidden="true">⚡</span><div class="txt"><b>고성능 모드 (H.264)</b><span id="hp-state">${hp.on ? '켜짐 — 이 Mac의 Itda 고성능 공유로 연결합니다 (SSH 터널). 연결할 수 없으면 기본 화면 공유를 씁니다.' : '꺼짐 — 기본 화면 공유(ZRLE)로 연결합니다. 켜면 SSH로 이 Mac에 Itda를 설치하고 고성능 공유를 켭니다.'}</span></div>
+        ${hp.on ? '<label class="switch"><input type="checkbox" id="f-hp" checked><span></span></label>' : (existing ? '<button type="button" class="btn sm" id="hp-enable">켜기</button>' : '')}</div>
+      <span class="hint">원격 로그인(SSH)이 켜져 있고, 그 Mac 화면에 로그인한 계정으로 연결해야 합니다. 켜는 동안 그 Mac에 화면 기록·손쉬운 사용 권한 요청이 뜹니다.</span></div>` : '';
   const general = `<div data-pane="general">
       ${quick ? '' : `<div class="field"><label>종류</label><div class="seg kind-seg">
           ${Object.entries(KINDS).map(([k, d]) => `<button type="button" data-kind="${k}" class="${k === K0 ? 'on' : ''}">${d.label}</button>`).join('')}</div>
         <span class="hint" id="kind-hint">${KD.hint}</span></div>`}
       ${quick ? '' : `<div class="field"><label>이름</label><input class="input" id="f-name" value="${esc(h.name)}" placeholder="예: 사무실 Mac mini (비우면 주소 사용)"></div>`}
       ${quick ? '' : `<div class="field"><label>주소</label><input class="input" id="f-host" value="${esc(h.host)}" placeholder="${KD.hostPh}" ${existing ? '' : 'autofocus'}><span class="err" id="e-host"></span></div>`}
+      ${groupField}
       <div class="field"><label>로그인</label>
         <select class="input" id="f-account">
           <option value="">이 연결에만 입력</option>
@@ -1066,15 +1107,7 @@ function openEdit(init = {}, mode = {}) {
         <label class="check"><input type="checkbox" id="f-save" ${hasPw || !existing ? 'checked' : ''}>암호 저장 <span style="color:var(--text-3);font-size:12px">— ${MAC ? 'Mac 키체인에' : 'Windows 자격 증명 관리자에 암호화되어'} 저장됩니다</span></label>
       </div>
       <span class="hint" id="pass-hint" ${KD.passHint ? '' : 'hidden'}>${KD.passHint || ''}</span>
-      <div class="ssh-box" ${KD.ssh ? '' : 'hidden'}>
-        <div class="opt"><span class="i ssh-ico">&#xE72E;</span><div class="txt"><b>SSH로 암호화해서 연결 <a href="#" class="help-link" data-help="accounts">자세히</a></b><span>인터넷·공용 Wi-Fi에서 켜세요. 상대 기기에 SSH(Mac은 ‘원격 로그인’)가 켜져 있어야 하고 암호는 위와 같습니다.</span></div>
-          <label class="switch"><input type="checkbox" id="f-ssh" ${ssh.on ? 'checked' : ''}><span></span></label></div>
-        <div class="row" id="ssh-fields" ${ssh.on ? '' : 'hidden'}>
-          <div class="field"><label>SSH 사용자</label><input class="input" id="f-ssh-user" value="${esc(ssh.user)}" placeholder="위 계정 이름과 같음"></div>
-          <div class="field"><label>SSH 포트</label><input class="input" id="f-ssh-port" value="${ssh.port || ''}" placeholder="22" inputmode="numeric"><span class="err" id="e-ssh"></span></div>
-        </div>
-        ${S.sshOk === false ? `<p class="warn-note" id="ssh-missing" ${ssh.on ? '' : 'hidden'}>${I('E7BA')} 이 PC에 OpenSSH 클라이언트가 없습니다. 설정 → 시스템 → 선택적 기능에서 ‘OpenSSH 클라이언트’를 추가하세요.</p>` : ''}
-      </div>
+${quick ? sshBox : ''}
     </div>`;
   const o = h.opts || {};
   const display = `<div data-pane="display" hidden>
@@ -1092,7 +1125,9 @@ function openEdit(init = {}, mode = {}) {
       ${optRow('hangul_caps', '한/영 키를 Caps Lock으로 보내기', '끄면 Ctrl+Space를 보냅니다 (Mac의 입력 소스 단축키에 맞추세요)', o.hangul_caps)}
     </div>`;
   const conn = `<div data-pane="conn" hidden>
-      <div class="field"><label>그룹</label><input class="input" id="f-group" list="groups" value="${esc(h.group)}" placeholder="없음 — 예: 집, 회사"><datalist id="groups">${groupsList}</datalist><span class="hint">같은 그룹의 연결은 왼쪽 목록에서 모아 볼 수 있습니다.</span></div>
+      <div class="field"><label>연결 방법</label></div>
+      ${sshBox}
+      ${hpBox}
       ${optRow('clipboard', '클립보드 공유', '복사한 텍스트를 양쪽에서 붙여 넣을 수 있습니다', o.clipboard)}
       ${optRow('reconnect', '자동 재연결', '네트워크가 끊기면 다시 연결합니다', o.reconnect)}
     </div>`;
@@ -1108,6 +1143,38 @@ function openEdit(init = {}, mode = {}) {
     m.querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('on', x === b));
     m.querySelectorAll('[data-pane]').forEach((p) => (p.hidden = p.dataset.pane !== b.dataset.tab));
   }));
+  const chips = m.querySelector('#group-chips');
+  if (chips) {
+    const gin = chips.querySelector('#f-group');
+    const current = () => [...chips.querySelectorAll('[data-chip]')].map((c) => c.dataset.chip);
+    const add = (raw) => {
+      for (const g of raw.split(',').map((x) => x.trim().slice(0, 40)).filter(Boolean)) {
+        if (current().some((x) => x.toLowerCase() === g.toLowerCase())) continue;
+        gin.insertAdjacentHTML('beforebegin', chipList([g]));
+      }
+      gin.value = '';
+      gin.placeholder = current().length ? '' : '없음 — 예: 집, 회사';
+    };
+    gin.addEventListener('keydown', (e) => {
+      // Enter adds a group here; it must not also save the dialog. (Empty Enter still saves.)
+      if ((e.key === 'Enter' && gin.value.trim() || e.key === ',') && !e.isComposing) { e.preventDefault(); e.stopPropagation(); add(gin.value); }
+      else if (e.key === 'Backspace' && !gin.value) { const last = [...chips.querySelectorAll('[data-chip]')].pop(); if (last) { last.remove(); gin.placeholder = current().length ? '' : '없음 — 예: 집, 회사'; } }
+    });
+    gin.addEventListener('input', () => { if (gin.value.includes(',')) add(gin.value); });
+    // Picking a suggestion from the list adds it right away.
+    gin.addEventListener('change', () => { if (gin.value.trim()) add(gin.value); });
+    chips.addEventListener('click', (e) => {
+      const x = e.target.closest('[data-chip-x]');
+      if (x) { x.closest('[data-chip]').remove(); gin.focus(); } else gin.focus();
+    });
+    m._groups = () => { if (gin.value.trim()) add(gin.value); return current(); };
+  }
+  const hpEnable = m.querySelector('#hp-enable');
+  if (hpEnable) hpEnable.onclick = () => {
+    hpEnable.disabled = true;
+    hpEnable.textContent = '준비 중…';
+    send('hp_upgrade', { id: h.id });
+  };
   const pass = m.querySelector('#f-pass');
   m.querySelector('.reveal').onclick = () => { pass.type = pass.type === 'password' ? 'text' : 'password'; pass.focus(); };
   m.querySelectorAll('.kind-seg button').forEach((b) => (b.onclick = () => {
@@ -1124,6 +1191,8 @@ function openEdit(init = {}, mode = {}) {
     m.querySelector('#pass-hint').textContent = d.passHint || '';
     m.querySelector('#kind-hint').textContent = d.hint;
     m.querySelector('#f-host').placeholder = d.hostPh;
+    const hpb = m.querySelector('.hp-box');
+    if (hpb) hpb.hidden = d.kind === 'rdp' || d.os !== 'mac';
   }));
   m.querySelector('#f-account').onchange = (e) => {
     if (e.target.value === '__new') {
@@ -1145,7 +1214,8 @@ function openEdit(init = {}, mode = {}) {
     if (!quick) {
       host.name = v('#f-name');
       host.host = v('#f-host');
-      host.group = v('#f-group');
+      host.groups = m._groups ? m._groups() : hostGroups(h);
+      host.group = host.groups.join(', ');
     }
     host.user = v('#f-user');
     const acct = m.querySelector('#f-account').value;
@@ -1154,6 +1224,8 @@ function openEdit(init = {}, mode = {}) {
     host.kind = k.kind;
     host.os = k.os;
     if (!k.user) host.user = '';
+    const hpOff = m.querySelector('#f-hp');
+    if (hpOff && !hpOff.checked) host.hp = { ...(h.hp || {}), on: false };
     host.ssh = { on: k.ssh && m.querySelector('#f-ssh').checked, user: v('#f-ssh-user') || '', port: parseInt(v('#f-ssh-port'), 10) || 0 };
     m.querySelectorAll('[data-opt]').forEach((c) => (host.opts[c.dataset.opt] = c.checked));
     m.querySelectorAll('[data-opt-number]').forEach(c => host.opts[c.dataset.optNumber] = Number(c.value));
