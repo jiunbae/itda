@@ -63,32 +63,56 @@ try{
   await prepare('light');
   await page.evaluate(qr=>{S.settings.web={on:true,port:8780};S.web={running:true,pin:'123456',urls:[{url:'http://192.0.2.10:8780',kind:'lan'}],qr};S.share={local_name:'my-mac.local',user:'alex'};S.page='share';render();},fs.readFileSync(path.join(root,'scripts/fixtures/site-qr.svg'),'utf8'));
   await page.screenshot({path:path.join(out,'share.png')});
-  // Landing detail views: actual app zoom, shorter windows, and explicit mobile crops.
-  await page.setViewportSize({width:1100,height:580});
+  // Keep the file browser at the established scale.
   for(const theme of ['light','dark']){
-    await page.setViewportSize({width:1440,height:700});
-    await prepare(theme);await page.evaluate(()=>{document.documentElement.style.zoom='1.25';});
-    const grid=await page.locator('.grid').boundingBox(),card=await page.locator('.grid .card').first().boundingBox();
-    await page.screenshot({path:path.join(out,`home-focus-${theme}.png`),clip:{x:grid.x,y:grid.y,width:grid.width,height:card.height}});
-    await page.screenshot({path:path.join(out,`home-mobile-${theme}.png`),clip:card});
-    await page.screenshot({path:path.join(out,`home-medium-${theme}.png`),clip:{x:grid.x,y:grid.y,width:card.width*2+20,height:card.height}});
-    await page.setViewportSize({width:1100,height:580});
-    await page.evaluate(()=>ItdaFiles.launch(S.hosts[0]));await page.locator('.files-list [data-index]').first().waitFor();
+    await page.setViewportSize({width:1100,height:580});await prepare(theme);
+    await page.evaluate(()=>{document.documentElement.style.zoom='1.25';ItdaFiles.launch(S.hosts[0]);});
+    await page.locator('.files-list [data-index]').first().waitFor();
     await page.screenshot({path:path.join(out,`files-focus-${theme}.png`)});
     const pane=await page.locator('.files-panes').boundingBox();
     await page.screenshot({path:path.join(out,`files-medium-${theme}.png`),clip:{x:pane.x,y:0,width:pane.width,height:580}});
     await page.screenshot({path:path.join(out,`files-mobile-${theme}.png`),clip:{x:pane.x,y:0,width:400,height:450}});
   }
-  await prepare('light');await page.evaluate(()=>{document.documentElement.style.zoom='1.25';S.found=[{name:'Design Mac',host:'design.local',hostname:'design.local',ip:'192.0.2.21',os:'mac',itda:true,share:true},{name:'Meeting PC',host:'meeting.local',hostname:'meeting.local',ip:'192.0.2.22',os:'windows',itda:true,share:true}];S.tailnet={running:true,me:{name:'My Mac'},peers:[{name:'Lab Mac',dns:'lab.example.ts.net',ip:'100.64.0.20',os:'macOS',online:true}]};S.page='nearby';render();});
-  await page.locator('.page').screenshot({path:path.join(out,'nearby-focus.png')});
-  await page.setViewportSize({width:530,height:720});
-  await page.locator('.page').screenshot({path:path.join(out,'nearby-mobile.png')});
   await page.setViewportSize({width:1100,height:580});await prepare('light');
   await page.evaluate(qr=>{document.documentElement.style.zoom='1.25';S.settings.web={on:true,port:8780};S.web={running:true,pin:'123456',urls:[{url:'http://192.0.2.10:8780',kind:'lan'}],qr};S.share={local_name:'my-mac.local',user:'alex'};S.page='share';render();},fs.readFileSync(path.join(root,'scripts/fixtures/site-qr.svg'),'utf8'));
   await page.locator('.web-panel').screenshot({path:path.join(out,'share-focus.png')});
   await page.setViewportSize({width:530,height:720});
   await page.locator('.web-panel').screenshot({path:path.join(out,'share-mobile.png')});
   await context.close();
+  // Whole-window views at 2x density, plus the actual Windows-specific file layout.
+  for(const platform of ['mac','windows']){
+    const c=await browser.newContext({viewport:{width:1100,height:800},deviceScaleFactor:2,reducedMotion:'reduce',locale:'ko-KR',timezoneId:'Asia/Seoul',userAgent:platform==='mac'?'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)':'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
+    await c.clock.install({time:new Date('2026-10-20T06:00:00Z')});
+    await c.addInitScript(({entries,platform})=>{window.ipc={postMessage:raw=>{const m=JSON.parse(raw);if(m.cmd==='files'&&m.op==='connect')queueMicrotask(()=>itda.recv({type:'files_result',id:m.id,window:m.window,op:'connect',ok:true,data:{path:'/Users/alex/Documents',entries,local_path:platform==='mac'?'/Users/alex':'C:\\Users\\alex',local_entries:entries,rsync:true}}));}};},{entries,platform});
+    const p=await c.newPage();
+    // This host lacks the Windows-only Segoe icon font. Use the app's own SVG fallback.
+    if(platform==='windows')await p.route('**/icons.js',route=>route.fulfill({contentType:'text/javascript',body:fs.readFileSync(path.join(root,'web/icons.js'),'utf8').replace("if (/Windows/.test(navigator.userAgent)) return;",'')}));
+    for(const theme of ['light','dark']){
+      await p.setViewportSize({width:1100,height:800});await p.goto(base+'/web/');
+      await p.evaluate(({hosts,theme,platform})=>{S.hosts=hosts;S.accounts=[];S.version='';S.settings={...S.settings,onboarded:true,theme,view:'grid'};S.online=Object.fromEntries(hosts.map(h=>[h.id,true]));S.computer=platform==='mac'?'My Mac':'My PC';S.sysDark=theme==='dark';S.hosts.forEach(h=>h.last_used=Math.floor(Date.now()/1000)-120);applyTheme();render();},{hosts,theme,platform});
+      await p.evaluate(()=>document.fonts.ready);
+      if(platform==='mac'){
+        await p.screenshot({path:path.join(out,`home-window-${theme}.png`)});
+        if(theme==='light'){
+          await p.setViewportSize({width:1100,height:680});
+          await p.evaluate(()=>{S.found=[{name:'Design Mac',host:'design.local',hostname:'design.local',ip:'192.0.2.21',os:'mac',itda:true,share:true},{name:'Meeting PC',host:'meeting.local',hostname:'meeting.local',ip:'192.0.2.22',os:'windows',itda:true,share:true}];S.tailnet={running:true,me:{name:'My Mac'},peers:[{name:'Lab Mac',dns:'lab.example.ts.net',ip:'100.64.0.20',os:'macOS',online:true}]};S.page='nearby';render();});
+          if(await p.locator('.found').count()!==3)throw Error('Missing nearby device');
+          await p.screenshot({path:path.join(out,'nearby-window.png')});
+        }
+      }else{
+        await p.setViewportSize({width:1200,height:600});
+        await p.evaluate(()=>{document.documentElement.style.zoom='1.25';ItdaFiles.launch(S.hosts[0]);});
+        await p.locator('.files-layer.windows .files-list [data-index]').first().waitFor();
+        const titleIcon=await p.locator('.files-title > svg').boundingBox();
+        if(titleIcon.width>30||titleIcon.height>30)throw Error('Windows toolbar folder icon is oversized');
+        await p.screenshot({path:path.join(out,`files-windows-${theme}.png`)});
+        const pane=await p.locator('.files-panes').boundingBox();
+        await p.screenshot({path:path.join(out,`files-windows-medium-${theme}.png`),clip:{x:pane.x,y:pane.y,width:850,height:pane.height}});
+        await p.screenshot({path:path.join(out,`files-windows-mobile-${theme}.png`),clip:{x:pane.x,y:pane.y,width:400,height:pane.height}});
+      }
+    }
+    await c.close();
+  }
   for(const [name,width,height]of [['phone-list',390,720]]){
     const p=await browser.newPage({viewport:{width,height},deviceScaleFactor:2,reducedMotion:'reduce',colorScheme:'light',locale:'ko-KR',timezoneId:'Asia/Seoul',isMobile:true,hasTouch:true});
     await p.goto(base+'/viewer/');await p.locator('.host[data-id="a1"]').waitFor();await p.evaluate(()=>document.fonts.ready);

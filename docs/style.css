@@ -300,6 +300,17 @@ body:has(.image-dialog[open]) { overflow:hidden; }
  .image-scroll { padding:8px; }
 }
 
+/* Balanced full-window overviews and platform-specific file windows. */
+.overview-visual { max-width:1000px; }
+.platform-gallery { min-width:0; }
+.platform-tabs { display:none; gap:4px; width:fit-content; padding:4px; margin-bottom:20px; border:1px solid var(--line-2); border-radius:12px; background:var(--surface-2); }
+.js .platform-tabs { display:flex; }
+.platform-tabs button { border:0; padding:9px 22px; border-radius:8px; background:transparent; color:var(--text-2); font:600 14px/1.3 var(--font); cursor:pointer; }
+.platform-tabs [aria-selected="true"] { background:var(--surface); color:var(--text); box-shadow:0 2px 7px #0002; }
+.platform-tabs button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+[data-platform-panel][hidden] { display:none !important; }
+.platform-gallery:not(.ready) [data-platform-panel] + [data-platform-panel] { margin-top:24px; }
+
 /* how it works */
 .flow { position: relative; border-radius: 24px; border: 1px solid var(--line); background: var(--surface); padding: 36px 28px; overflow: hidden; }
 .flow svg.diagram { width: 100%; height: auto; display: block; }

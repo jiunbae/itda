@@ -29,6 +29,29 @@
     apply(b.dataset.set);
   });
 
+  // Compare the platform layouts without leaving the file-browser story.
+  document.querySelectorAll('[data-platform-gallery]').forEach(function (gallery) {
+    var tabs = Array.from(gallery.querySelectorAll('[data-platform]'));
+    function select(tab, focus) {
+      tabs.forEach(function (item) {
+        var on = item === tab;
+        item.setAttribute('aria-selected', String(on));
+        item.tabIndex = on ? 0 : -1;
+        document.getElementById(item.getAttribute('aria-controls')).hidden = !on;
+      });
+      if (focus) tab.focus();
+    }
+    tabs.forEach(function (tab, index) {
+      tab.addEventListener('click', function () { select(tab, false); });
+      tab.addEventListener('keydown', function (event) {
+        var next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1;
+        if (next < 0) return;
+        event.preventDefault(); select(tabs[next], true);
+      });
+    });
+    select(tabs[0], false); gallery.classList.add('ready');
+  });
+
   // Product captures open in a keyboard-accessible viewer; the original link works without JS.
   var viewer, lastPreview;
   document.addEventListener('click', function (e) {

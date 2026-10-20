@@ -24,8 +24,27 @@ try{
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Document overflow');
       const overflow=await page.evaluate(()=>[...document.querySelectorAll('.nav .wrap,.hero-copy,.device-scene,.device-phone,.device-tablet,.show-copy,.features,.paths,.phone-row,.final,.product-visual,.discovery-detail,.capture-heading')].filter(e=>{const r=e.getBoundingClientRect();return r.width&& (r.left < -2||r.right>innerWidth+2);}).map(e=>e.className));
       assert(!overflow.length,`Overflow ${width}/${colorScheme}/${lang}/${name}: ${overflow}`);
-      const readable=await page.evaluate(()=>[...document.querySelectorAll('img[data-ui-font]')].map(i=>({src:i.currentSrc,size:Number(i.dataset.uiFont)*i.getBoundingClientRect().width/i.naturalWidth})).filter(i=>i.size<11.5));
+      const readable=await page.evaluate(()=>[...document.querySelectorAll('img[data-ui-font]')].map(i=>({src:i.currentSrc,size:Number(i.dataset.uiFont)*i.getBoundingClientRect().width/i.naturalWidth})).filter(i=>i.size>0&&i.size<11.5));
       assert(!readable.length,`Product detail text too small: ${JSON.stringify(readable)}`);
+      const overview=await page.evaluate(()=>[...document.querySelectorAll('img[data-overview]')].map(i=>{const r=i.getBoundingClientRect(),ratio=i.currentSrc.includes('nearby')?1100/680:1100/800;return i.naturalWidth>=r.width*2-2&&Math.abs(i.naturalWidth/i.naturalHeight-ratio)<.01;}));
+      assert(overview.every(Boolean),'Overview cropped or upscaled beyond 2x resolution');
+      const gallery=page.locator('[data-platform-gallery]');
+      if(await gallery.count()){
+        await gallery.locator('[data-platform="windows"]').click();
+        const win=gallery.locator('[data-platform-panel="windows"]');
+        assert(await win.isVisible(),'Windows file browser did not appear');
+        const winReadable=await win.locator('img[data-ui-font]').evaluateAll(images=>images.every(i=>Number(i.dataset.uiFont)*i.getBoundingClientRect().width/i.naturalWidth>=11.5));
+        assert(winReadable,'Windows file detail text too small');
+        assert(!await gallery.locator('[data-platform-panel="mac"]').isVisible(),'Mac panel did not hide');
+        await win.locator('[data-preview]').click();
+        await page.locator('.image-dialog img').evaluate(i=>i.decode());
+        assert((await page.locator('.image-dialog img').getAttribute('src')).includes('files-windows'),'Windows enlargement opens another platform');
+        await page.keyboard.press('Escape');
+        if((width===390||width===1440)&&lang==='ko'&&colorScheme==='light')await gallery.screenshot({path:path.join(out,`files-windows-${width}.png`)});
+        await gallery.locator('[data-platform="windows"]').focus();await page.keyboard.press('ArrowLeft');
+        assert(await gallery.locator('[data-platform="mac"]').getAttribute('aria-selected')==='true','Platform keyboard selection failed');
+        await gallery.locator('[data-platform="mac"]').evaluate(e=>e.blur());
+      }
       const wrongPreview=await page.evaluate(()=>[...document.querySelectorAll("[data-preview]")].filter(a=>{const img=a.querySelector("img");if(!img)return false;const family=s=>new URL(s,location.href).pathname.split("/").pop().split(/[.-]/)[0];const target=a.dataset.full||a.dataset.fullLight||a.href;return family(img.currentSrc)!==family(target);}).map(a=>a.href));
       assert(!wrongPreview.length,`Screenshot opens unrelated image: ${wrongPreview}`);
       const preview=page.locator('[data-preview]').first();
@@ -61,5 +80,5 @@ try{
     assert(await page.evaluate(()=>document.documentElement.lang)!==lang,'Language control not interactive');
     await context.close();
   }
-  console.log('PASS: 40 landing/guide layouts, 5 widths, KO/EN, light/dark, images, anchors, device ratios, readable details, image viewer and language controls');
+  console.log('PASS: 40 landing/guide layouts, 5 widths, KO/EN, light/dark, images, anchors, device ratios, readable file details, full-window overviews, platform tabs, image viewer and language controls');
 }finally{await browser.close();}

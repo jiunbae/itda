@@ -450,6 +450,8 @@ body.file-window {
   flex-shrink: 0;
 }
 .files-title > svg {
+  width: 20px;
+  height: 20px;
   flex: none;
 }
 .files-folder-title {
