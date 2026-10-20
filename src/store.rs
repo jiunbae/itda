@@ -258,6 +258,8 @@ pub struct Settings {
     pub share: Share,
     /// Tell other Itdas on the network that Itda runs here (Bonjour `_itda._tcp`).
     pub announce: bool,
+    /// Look for a newer release at launch and once a day (installing still asks).
+    pub auto_update: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -312,6 +314,7 @@ impl Default for Settings {
             web: Web::default(),
             share: Share::default(),
             announce: true,
+            auto_update: true,
         }
     }
 }

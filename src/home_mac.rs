@@ -37,11 +37,17 @@ enum Wake {
     Drain,
     Menu(muda::MenuId),
     Permissions(Value),
+    Quit,
 }
 
 static PROXY: OnceLock<Mutex<EventLoopProxy<Wake>>> = OnceLock::new();
 /// Without a window loop (the test bridge), the UI thread waits here instead.
 static HEADLESS: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+
+/// End the app the normal way (views released before thread-local teardown).
+pub fn quit() {
+    if let Some(p) = PROXY.get() { let _ = p.lock().unwrap().send_event(Wake::Quit); }
+}
 
 pub fn wake() {
     match PROXY.get() {
@@ -777,6 +783,7 @@ pub fn run(quick: Option<String>) {
                 crate::log!("all native views released before thread-local teardown");
             },
             TaoEvent::UserEvent(Wake::Drain) => drain(),
+            TaoEvent::UserEvent(Wake::Quit) => *flow = ControlFlow::Exit,
             TaoEvent::UserEvent(Wake::Permissions(v)) => permission_guide::handle(v,target),
             TaoEvent::UserEvent(Wake::Menu(id)) => on_menu(&id),
             // Clicking the Dock icon brings the home back.

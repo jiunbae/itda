@@ -74,10 +74,23 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc signature so Gatekeeper treats the bundle as one unit (not notarized).
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
-
 ZIP="$OUT/Itda-macos-$ARCH.zip"
 rm -f "$ZIP"
+if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then
+  # Developer ID with the hardened runtime: the same identity in every release keeps macOS
+  # permissions (Screen Recording, Accessibility) across updates.
+  codesign --force --deep --options runtime --timestamp ${MACOS_KEYCHAIN:+--keychain "$MACOS_KEYCHAIN"} --sign "$MACOS_SIGN_IDENTITY" "$APP"
+  codesign --verify --deep --strict "$APP"
+  if [ -n "${NOTARY_KEY:-}" ]; then
+    ditto -c -k --keepParent "$APP" "$ZIP"
+    xcrun notarytool submit "$ZIP" --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" --wait --timeout 30m
+    xcrun stapler staple "$APP"
+    spctl --assess --type execute -vv "$APP"
+    rm -f "$ZIP"
+  fi
+else
+  # Ad-hoc signature so Gatekeeper treats the bundle as one unit (not notarized).
+  codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
+fi
 ditto -c -k --keepParent "$APP" "$ZIP"
 echo "$ZIP ($(du -h "$ZIP" | cut -f1))"

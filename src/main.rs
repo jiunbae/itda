@@ -13,6 +13,7 @@ mod h264_mac;
 #[cfg(target_os = "macos")]
 mod host_mac;
 mod hp_upgrade;
+mod update;
 /// Itda's high-performance sharing port on a Mac.
 pub const fn host_mac_port() -> u16 {
     5910

@@ -30,6 +30,7 @@ pub const PLATFORM: &str = "windows";
 
 const WM_EVENT: u32 = WM_APP + 20;
 const WM_TRAY: u32 = WM_APP + 21;
+const WM_QUIT_APP: u32 = WM_APP + 22;
 const TRAY_OPEN: usize = 1;
 const TRAY_QUIT: usize = 2;
 const TRAY_SHARE: usize = 3;
@@ -54,6 +55,11 @@ fn hwnd() -> HWND {
 }
 
 /// Have the UI thread drain the queue.
+/// Close the home window for good, which ends the app (also from the tray mode).
+pub fn quit() {
+    unsafe { PostMessageW(hwnd(), WM_QUIT_APP, 0, 0) };
+}
+
 pub fn wake() {
     unsafe { PostMessageW(hwnd(), WM_EVENT, 0, 0) };
 }
@@ -570,6 +576,7 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
     match m {
         WM_SIZE => resize_webview(h),
         WM_EVENT => drain(),
+        WM_QUIT_APP => { DestroyWindow(h); }
         WM_COPYDATA => {
             let cd = &*(lp as *const windows_sys::Win32::System::DataExchange::COPYDATASTRUCT);
             if cd.dwData == 1 && !cd.lpData.is_null() && cd.cbData < 4096 {

@@ -144,7 +144,7 @@ function onMessage(m) {
   if (window.ItdaFiles && window.ItdaFiles.message(m)) return;
   switch (m.type) {
     case 'state':
-      Object.assign(S, { accounts: m.accounts || [], hosts: m.hosts, settings: m.settings, sessions: m.sessions || {}, fileWindows: m.file_windows || [], online: m.online || {}, found: m.found || [], version: m.version, sysDark: !!m.dark, sshOk: m.ssh_ok, tailnet: m.tailnet });
+      Object.assign(S, { accounts: m.accounts || [], hosts: m.hosts, settings: m.settings, sessions: m.sessions || {}, fileWindows: m.file_windows || [], online: m.online || {}, found: m.found || [], version: m.version, sysDark: !!m.dark, sshOk: m.ssh_ok, tailnet: m.tailnet, update: m.update || null });
       applyTheme();
       render();
       window.ItdaFiles?.boot();
@@ -263,6 +263,17 @@ function onMessage(m) {
       break;
     case 'new':
       if (!topModal()) openEdit();
+      break;
+    case 'update':
+      // A newer release: offered in the sidebar and Settings; installing always asks first.
+      if (m.stage) { S.updateStage = m.stage; toast(`업데이트: ${m.stage}`, 'E896'); }
+      else if (m.error) { S.updateStage = ''; toast(`업데이트하지 못했습니다 — ${m.error}`, 'E7BA', true); }
+      else {
+        S.update = m.available || null;
+        if (m.found && S.update) toast(`Itda ${S.update.version}을(를) 설치할 수 있습니다 — 설정에서 업데이트하세요`, 'E896');
+        if (m.checked) toast(S.update ? `Itda ${S.update.version}을(를) 설치할 수 있습니다` : '최신 버전을 사용하고 있습니다', S.update ? 'E896' : 'E73E');
+      }
+      render();
       break;
     case 'hp': {
       // ⚡ high-performance mode being set up from a connection's editor (or window).
@@ -795,6 +806,10 @@ function renderSettings() {
     ${setting('EA8F', '알림', '연결이 끊기거나 다시 연결될 때 알려 줍니다', toggle('notify', st.notify))}
     ${setting('E91B', '미리보기 저장', `마지막 화면을 ${HERE}에만 작게 저장해 주소록에 표시합니다`, toggle('thumbnails', st.thumbnails), true)}
 
+    <div class="group-title">업데이트</div>
+    ${setting('E896', S.update ? `새 버전 ${esc(S.update.version)}` : `Itda ${esc(S.version)}`, S.updateStage ? esc(S.updateStage) : S.update ? `지금 버전은 ${esc(S.version)}입니다. 업데이트하면 Itda가 다시 시작되고 열린 연결이 끊깁니다.${S.update.page ? ' <a href="' + esc(S.update.page) + '" data-ext>변경 사항</a>' : ''}` : '새 버전이 있는지 확인합니다', S.update ? `<button class="btn primary" data-act="update-install" ${S.updateStage ? 'disabled' : ''}>${I('E896')}업데이트</button>` : `<button class="btn" data-act="update-check">${I('E72C')}업데이트 확인</button>`)}
+    ${setting('E823', '새 버전 자동 확인', '실행할 때와 하루에 한 번 GitHub 릴리스를 확인합니다. 설치는 항상 직접 고릅니다', toggle('auto_update', st.auto_update !== false), true)}
+
     <div class="group-title">정보</div>
     <div class="setting last"><div class="logo" style="width:36px;height:36px"></div><div class="txt"><b>Itda ${esc(S.version)}</b><span>내 기기를 잇다 — 가볍고 빠른 원격 데스크톱</span></div>
       <button class="btn" data-act="onboard">${I('E768')}시작 안내</button>
@@ -889,6 +904,8 @@ function morphNode(old, b) {
 
 function render() {
   renderNav();
+  const nu = $('#nav-update');
+  if (nu) { nu.hidden = !S.update; nu.title = S.update ? `Itda ${S.update.version} 설치 가능` : ''; }
   renderTop();
   const c = $('#content');
   const focusId = document.activeElement && document.activeElement.closest && document.activeElement.closest('[data-id]') && c.contains(document.activeElement) ? document.activeElement.closest('[data-id]').dataset.id : null;
@@ -1588,6 +1605,12 @@ function act(a, el) {
       return confirmDialog('새 공유 암호를 만들까요?', '지금 이 PC를 보고 있는 기기는 연결이 끊기고, 다음부터 새 암호가 필요합니다.', '새 암호 만들기', false, () => { S.share = {}; send('share_reset_pw'); toast('새 공유 암호를 만들었습니다', 'E72C'); });
     case 'share-kick': return send('share_kick');
     case 'onboard': return showOnboarding();
+    case 'update-check': toast('새 버전을 확인하는 중…', 'E72C'); return send('update_check');
+    case 'update-install': {
+      if (!S.update) return send('update_check');
+      const open = Object.keys(S.sessions || {}).length;
+      return confirmDialog(`Itda ${esc(S.update.version)}로 업데이트할까요?`, `내려받아 확인한 뒤 Itda를 다시 시작합니다.${open ? ` 열려 있는 연결 ${open}개가 끊깁니다.` : ''}`, '업데이트', false, () => { S.updateStage = '준비 중…'; render(); send('update_install'); });
+    }
     case 'permission-helper': return send('permission_helper');
     case 'sys-sharing': return send('url', { url: 'x-apple.systempreferences:com.apple.Sharing-Settings.extension' });
     case 'share-all-on':
