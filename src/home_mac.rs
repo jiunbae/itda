@@ -174,6 +174,49 @@ pub fn open(target: &str) {
     let _ = Command::new("/usr/bin/open").arg(target).spawn();
 }
 
+/// Build a password-free URL for Apple's separate Screen Sharing client.
+fn apple_screen_sharing_url(address: &str, user: &str) -> Result<String, String> {
+    let address = address.trim();
+    let explicit_port = if let Some(rest) = address.strip_prefix('[') {
+        let (_, suffix) = rest.split_once(']').ok_or_else(|| "화면 공유 주소를 확인하세요".to_string())?;
+        if suffix.is_empty() { None } else { Some(suffix.strip_prefix(':').ok_or_else(|| "화면 공유 포트를 확인하세요".to_string())?) }
+    } else if address.matches(':').count() == 1 { address.rsplit_once(':').map(|(_, port)| port) } else { None };
+    if explicit_port.is_some_and(|port| port.is_empty() || port.parse::<u16>().map_or(true, |p| p == 0)) {
+        return Err("화면 공유 포트를 확인하세요".into());
+    }
+    let (host, port) = crate::tunnel::split_host(address, 5900);
+    if host.is_empty() || port == 0 || !host.bytes().all(|c| c.is_ascii_alphanumeric() || b".-_:%".contains(&c)) {
+        return Err("화면 공유 주소를 확인하세요".into());
+    }
+    let host = if host.contains(':') {
+        let (ip, zone) = host.split_once('%').map_or((host.as_str(), None), |(ip, zone)| (ip, Some(zone)));
+        if ip.parse::<std::net::Ipv6Addr>().is_err() || zone.is_some_and(|z| z.is_empty() || !z.bytes().all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))) {
+            return Err("화면 공유 IPv6 주소를 확인하세요".into());
+        }
+        format!("[{}]", host.replace('%', "%25"))
+    } else {
+        if host.contains('%') { return Err("화면 공유 주소를 확인하세요".into()); }
+        host
+    };
+    let user: String = user.bytes().map(|c| if c.is_ascii_alphanumeric() || b"-._~".contains(&c) { (c as char).to_string() } else { format!("%{c:02X}") }).collect();
+    Ok(format!("vnc://{}{}:{port}", if user.is_empty() { String::new() } else { format!("{user}@") }, host))
+}
+fn apple_screen_sharing(id: &str) {
+    let target = home(|m| {
+        let h = m.hosts.iter().find(|h| h.id == id && matches!(h.os.as_str(), "mac" | "macos") && !h.is_rdp())
+            .ok_or_else(|| "Mac 연결을 선택하세요".to_string())?;
+        let user = m.accounts.iter().find(|a| !h.account.is_empty() && a.id == h.account).map_or(h.user.as_str(), |a| a.user.as_str());
+        apple_screen_sharing_url(&h.host, user)
+    });
+    let id = id.to_string();
+    std::thread::spawn(move || {
+        let result = target.and_then(|url| Command::new("/usr/bin/open").args(["-b", "com.apple.ScreenSharing", &url]).status()
+            .map_err(|e| format!("Apple 화면 공유 앱을 열 수 없습니다: {e}"))
+            .and_then(|status| if status.success() { Ok(()) } else { Err("Apple 화면 공유 앱을 열 수 없습니다".into()) }));
+        super::post(Event::Page(json!({"type":"apple_screen_sharing_result","id":id,"ok":result.is_ok(),"error":result.err()})));
+    });
+}
+
 pub fn minimize() {
     with_home(|p| p.window.set_minimized(true));
 }
@@ -288,6 +331,7 @@ fn open_window(target: &EventLoopWindowTarget<Wake>, id: String, url: String, ti
         .with_background_color((24, 24, 24, 255))
         .with_ipc_handler(move |req| {
             let Ok(v) = serde_json::from_str::<Value>(req.body()) else { return };
+            if v["ev"] == "apple-screen-sharing" { apple_screen_sharing(&sid); return; }
             if v["ev"] == "monitor-close" || v["ev"] == "monitor-remove" {
                 let screen = if v["ev"] == "monitor-remove" { v["screen"].as_u64().and_then(|n| u32::try_from(n).ok()) } else { None };
                 let _ = MONITOR_CLOSE.try_with(|q| q.borrow_mut().push((sid.clone(), screen)));
@@ -597,6 +641,7 @@ fn home_view(window: &Window, dark: bool, file: Option<&str>, file_window: Optio
             // Handled after this callback returns, like every other event.
             Ok(v) => {
                 match v["cmd"].as_str() {
+                    Some("apple_screen_sharing") => { apple_screen_sharing(v["id"].as_str().unwrap_or("")); return; }
                     Some("files_system_edit") => {native_files::system_edit(v["action"].as_str().unwrap_or(""));return;}
                     Some("files_native_copy") => { native_files::copy(v); return; }
                     Some("files_native_paste") => { native_files::paste(v); return; }
@@ -759,4 +804,19 @@ pub fn run(quick: Option<String>) {
         }
         flush(target);
     });
+}
+
+#[cfg(test)]
+mod apple_screen_sharing_tests {
+    use super::apple_screen_sharing_url;
+    #[test]
+    fn urls_keep_ports_ipv6_and_encoded_usernames_without_passwords() {
+        assert_eq!(apple_screen_sharing_url("mac.local", "june").unwrap(), "vnc://june@mac.local:5900");
+        assert_eq!(apple_screen_sharing_url("mac.local:5901", "a:b@한글").unwrap(), "vnc://a%3Ab%40%ED%95%9C%EA%B8%80@mac.local:5901");
+        assert_eq!(apple_screen_sharing_url("[fe80::1%en0]:5902", "").unwrap(), "vnc://[fe80::1%25en0]:5902");
+        assert_eq!(apple_screen_sharing_url("::1", "").unwrap(), "vnc://[::1]:5900");
+        for address in ["", "mac/path", "user:password@mac", "mac?x", "mac#x", "mac\n--args", "https://mac", "mac:0", "mac:no", "mac:65536", "[::1]oops", "[::1]:bad"] {
+            assert!(apple_screen_sharing_url(address, "user").is_err(), "accepted {address}");
+        }
+    }
 }

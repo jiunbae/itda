@@ -147,6 +147,9 @@ function onMessage(m) {
       if (m.quick) quickConnect(m.quick);
       else if (!S.settings.onboarded && !S.hosts.length && !topModal()) showOnboarding();
       break;
+    case 'apple_screen_sharing_result':
+      toast(m.ok ? 'Apple 화면 공유 앱에 연결을 요청했습니다' : m.error || 'Apple 화면 공유 앱을 열 수 없습니다', 'E7F4', !m.ok);
+      break;
     case 'hosts':
       S.hosts = m.hosts;
       if (m.file_windows) S.fileWindows = m.file_windows;
@@ -1391,6 +1394,7 @@ function showCtx(id, x, y) {
   if (!s) items.push(['connect', 'E768', '연결']);
   else if (s.state === 'connecting') items.push(['cancel', 'E711', '연결 취소']);
   else items.push(['focus', 'E8A7', '창으로 이동'], ['disconnect', 'E711', '연결 끊기']);
+  if (MAC && ['mac', 'macos'].includes(h.os) && h.kind !== 'rdp') items.push(['apple-screen-sharing', 'E7F4', 'Apple 화면 공유 앱에서 열기']);
   items.push(['files', 'E8B7', '파일 열기']);
   items.push('-', ['edit', 'E70F', '편집'], ['dup', 'E8C8', '복제'], ['fav', h.favorite ? 'E8D9' : 'E734', h.favorite ? '즐겨찾기 해제' : '즐겨찾기에 추가']);
   if (h.has_pw) items.push(['forget', 'E8D7', '저장된 암호 지우기']);
@@ -1431,6 +1435,9 @@ function scan() {
 function act(a, el) {
   const id = el.dataset.id;
   switch (a) {
+    case 'apple-screen-sharing':
+      if (MAC && ['mac', 'macos'].includes(hostById(id)?.os) && hostById(id)?.kind !== 'rdp') send('apple_screen_sharing', { id });
+      return;
     case 'files': return window.ItdaFiles.launch(hostById(id));
     case 'connect': return connect(id);
     case 'focus': return send('focus', { id });
