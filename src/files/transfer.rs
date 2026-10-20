@@ -435,7 +435,7 @@ pub(super) fn export_batch(files: &[super::export::File], targets: &[PathBuf], e
     let control=Arc::new(Control::default());
     let job=crate::store::new_id();
     jobs().lock().unwrap().insert(job.clone(),(file.id.clone(),control.clone()));
-    emit(json!({"type":"files_job","id":file.id,"job":job,"state":"queued","file":file.name}));
+    emit(json!({"type":"files_job","id":file.id,"job":job,"state":"queued","kind":"export","file":file.name}));
     let result: io::Result<()>=(|| {
         let _slot=slot(&control)?;
         let mut src=if file.remote { Endpoint::new(true,&*connection(&file.id)?,&control)? } else { Endpoint{sftp:None,cfg:None} };
@@ -446,17 +446,19 @@ pub(super) fn export_batch(files: &[super::export::File], targets: &[PathBuf], e
         Ok(())
     })();
     jobs().lock().unwrap().remove(&job);
+    super::cleanup_retired(&file.id);
     emit(json!({"type":"files_job","id":file.id,"job":job,"state":if result.is_ok(){"completed"}else if control.cancel.load(Ordering::Relaxed){"cancelled"}else{"failed"},"error":result.as_ref().err().map(|e|e.to_string())}));
     result
 }
 pub fn start(v: Value, host: Host, emit: Emit) {
     let id = host.id.clone();
+    let key = super::scoped_id(&id, &v["window"]);
     let job = crate::store::new_id();
     let control = Arc::new(Control::default());
     jobs()
         .lock()
         .unwrap()
-        .insert(job.clone(), (id.clone(), control.clone()));
+        .insert(job.clone(), (key.clone(), control.clone()));
     {
         let mut q = jobs().lock().unwrap();
         if q.len() > 32 {
@@ -471,7 +473,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
     std::thread::spawn(move || {
         let result = (|| -> io::Result<()> {
             let _slot = slot(&control)?;
-            let c = connection(&id)?;
+            let c = connection(&key)?;
             let from_remote = v["from"] == "remote";
             let to_remote = v["to"] == "remote";
             if !(v["from"] == "remote" || v["from"] == "local")
@@ -628,6 +630,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
             Ok(())
         })();
         jobs().lock().unwrap().remove(&job);
+        super::cleanup_retired(&key);
         let cancelled = control.cancel.load(Ordering::Relaxed);
         // A cancel ends the job's SSH sessions, so the error may only be their broken pipe.
         let error = result.err().map(|e| {

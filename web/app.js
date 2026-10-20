@@ -310,6 +310,7 @@ function renderTop() {
   $('#viewToggle').style.visibility = listy && page !== 'files' ? '' : 'hidden';
   $('#search').placeholder = page === 'files' ? '폴더 또는 위치 검색' : '검색하거나 주소를 입력해 바로 연결';
   $('#newBtn .label-text').textContent = page === 'files' ? '새 기기' : '새 연결';
+  $('#newBtn').title = page === 'files' ? '새 기기' : `새 연결 (${MOD}N)`;
   $$('#viewToggle button').forEach((b) => b.classList.toggle('on', b.dataset.view === (S.settings.view || 'grid')));
 }
 

@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "itda"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "aes 0.8.4",
  "block2",

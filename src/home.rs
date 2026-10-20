@@ -72,7 +72,8 @@ enum Event {
 
 static QUEUE: Mutex<Vec<Event>> = Mutex::new(Vec::new());
 
-fn post(e: Event) {
+fn post(mut e: Event) {
+    if let Event::Page(v) = &mut e { crate::files::route_event(v); }
     QUEUE.lock().unwrap().push(e);
     plat::wake();
 }
@@ -312,8 +313,17 @@ fn on_ipc(v: Value) {
         #[cfg(windows)]
         "files_native_drag" => plat::native_file_drag(v),
         "files_window" => {
-            if id == crate::files::locations::NETWORK || home(|m| m.hosts.iter().any(|h| h.id == id)) { plat::files_window(&id, v["close"] == true); }
+            if v["close"] == true { plat::files_window(v["window"].as_str().unwrap_or(&id), true); }
+            else if id == crate::files::locations::NETWORK || home(|m| m.hosts.iter().any(|h| h.id == id)) {
+                if v["new"] == true { plat::files_new_window_at(&id, v["path"].as_str()); } else { plat::files_window(&id, false); }
+            }
         }
+        "files_window_context" => {
+            if id == crate::files::locations::NETWORK || home(|m| m.hosts.iter().any(|h| h.id == id)) {
+                plat::files_window_context(s(&v, "window").as_str(), &id, s(&v, "page").as_str());
+            }
+        }
+        "files_release_page" => crate::files::release_page(s(&v, "page").as_str()),
         "file_locations" => {
             let hosts = home(|m| m.hosts.clone());
             let reveal = v["reveal"] != false;
@@ -329,14 +339,14 @@ fn on_ipc(v: Value) {
             if v["op"] == "finder" {
                 std::thread::spawn(move || {
                     let result = crate::files::native_target(&host).and_then(|target| crate::files::open_native(&target));
-                    post(Event::Page(json!({"type":"files_result","op":"finder","id":id,"ok":result.is_ok(),"error":result.err().map(|e|e.to_string())})));
+                    post(Event::Page(json!({"type":"files_result","op":"finder","id":id,"window":v["window"],"ok":result.is_ok(),"error":result.err().map(|e|e.to_string())})));
                 });
                 return;
             }
             if v["op"] == "connect" {
                 let options = match serde_json::from_value::<crate::files::Options>(v["options"].clone()) {
                     Ok(o) if ["auto", "sftp", "smb"].contains(&o.method.as_str()) => o,
-                    _ => { send(json!({"type":"files_result","id":id,"op":"connect","ok":false,"error":"파일 연결 설정을 확인하세요"})); return; }
+                    _ => { send(json!({"type":"files_result","id":id,"window":v["window"],"op":"connect","ok":false,"error":"파일 연결 설정을 확인하세요"})); return; }
                 };
                 {
                     host.files = options;
@@ -347,7 +357,7 @@ fn on_ipc(v: Value) {
                 if host.files.method == "smb" || (host.files.method == "auto" && !host.files.share.is_empty()) {
                     std::thread::spawn(move || {
                         let result = crate::files::native_target(&host).and_then(|target| crate::files::open_native(&target));
-                        post(Event::Page(json!({"type":"files_result","op":"native","id":id,"ok":result.is_ok(),"error":result.err().map(|e|e.to_string())})));
+                        post(Event::Page(json!({"type":"files_result","op":"native","id":id,"window":v["window"],"ok":result.is_ok(),"error":result.err().map(|e|e.to_string())})));
                     });
                     return;
                 }
@@ -363,7 +373,7 @@ fn on_ipc(v: Value) {
                     Some(store::resolve(&selected, &m.accounts))
                 } else { None }
             });
-            let Some(login) = login else { send(json!({"type":"files_result","id":id,"op":"connect","ok":false,"error":"저장 계정이 삭제되었습니다. 사용할 계정을 다시 선택하세요"})); return; };
+            let Some(login) = login else { send(json!({"type":"files_result","id":id,"window":v["window"],"op":"connect","ok":false,"error":"저장 계정이 삭제되었습니다. 사용할 계정을 다시 선택하세요"})); return; };
             crate::files::dispatch(v, host, login, std::sync::Arc::new(|v| post(Event::Page(v))));
         }
         "cancel" | "disconnect" => stop_session(&id),
@@ -1087,19 +1097,19 @@ mod test_bridge {
     use std::time::Duration;
 
     static ACTIVE: AtomicBool = AtomicBool::new(false);
-    static OUTBOX: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static OUTBOX: Mutex<Vec<(String, Vec<String>)>> = Mutex::new(Vec::new());
     static READY: Condvar = Condvar::new();
 
-    const SHIM: &str = "window.ipc={postMessage:m=>fetch('/ipc',{method:'POST',body:m})};\
-        (async()=>{for(;;){try{const r=await fetch('/poll');for(const m of await r.json())window.itda&&itda.recv(m)}\
-        catch(e){await new Promise(r=>setTimeout(r,300))}}})();";
+    const SHIM: &str = "(()=>{const client=crypto.randomUUID();window.ipc={postMessage:m=>fetch('/ipc?client='+client,{method:'POST',body:m})};\
+        (async()=>{for(;;){try{const r=await fetch('/poll?client='+client);for(const m of await r.json())window.itda&&itda.recv(m)}\
+        catch(e){await new Promise(r=>setTimeout(r,300))}}})();})();";
 
     pub fn active() -> bool {
         ACTIVE.load(Relaxed)
     }
 
     pub fn push(msg: String) {
-        OUTBOX.lock().unwrap().push(msg);
+        for (_, outbox) in OUTBOX.lock().unwrap().iter_mut() { outbox.push(msg.clone()); }
         READY.notify_all();
     }
 
@@ -1134,6 +1144,11 @@ mod test_bridge {
         let mut body = vec![0; len];
         r.read_exact(&mut body)?;
         let path = line.split_whitespace().nth(1).unwrap_or("/").split('?').next().unwrap_or("/").to_string();
+        let client = line.split_whitespace().nth(1).and_then(|p| p.split("?client=").nth(1)).unwrap_or("legacy").to_string();
+        if path == "/poll" || path == "/ipc" {
+            let mut outboxes = OUTBOX.lock().unwrap();
+            if !outboxes.iter().any(|(id,_)| id == &client) { outboxes.push((client.clone(), Vec::new())); }
+        }
         let (status, mime, data): (&str, &str, Vec<u8>) = match (line.starts_with("POST"), path.as_str()) {
             (true, "/ipc") => {
                 if let Ok(v) = serde_json::from_slice(&body) {
@@ -1153,8 +1168,8 @@ mod test_bridge {
             }
             (false, "/poll") => {
                 let g = OUTBOX.lock().unwrap();
-                let (mut g, _) = READY.wait_timeout_while(g, Duration::from_secs(10), |o| o.is_empty()).unwrap();
-                let msgs: Vec<String> = std::mem::take(&mut *g);
+                let (mut g, _) = READY.wait_timeout_while(g, Duration::from_secs(10), |o| o.iter().find(|(id,_)| id == &client).is_none_or(|(_,q)| q.is_empty())).unwrap();
+                let msgs: Vec<String> = std::mem::take(&mut g.iter_mut().find(|(id,_)| id == &client).unwrap().1);
                 ("200 OK", "application/json", format!("[{}]", msgs.join(",")).into_bytes())
             }
             (false, p) => match super::asset(p) {

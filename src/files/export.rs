@@ -31,7 +31,7 @@ pub fn selection(v: &Value) -> io::Result<Vec<File>> {
                 return Err(error("중복된 파일 이름입니다"));
             }
             Ok(File {
-                id: get(v, "id"),
+                id: super::scoped_id(&get(v, "id"), &v["window"]),
                 remote: side == "remote",
                 source: get(v, "path"),
                 name: n,

@@ -32,7 +32,7 @@ fn emitter() -> files::Emit {
 }
 
 pub fn copy(v: Value) {
-    let id = v["id"].clone();
+    let id = files::scoped_id(v["id"].as_str().unwrap_or(""), &v["window"]);
     let seq = v["seq"].clone();
     let selection = match files::export::selection(&v) {
         Ok(s) => s,
@@ -112,7 +112,7 @@ pub fn paste(v: Value) {
         }
     }
     emit(
-        json!({"type":"files_native_paste","id":v["id"],"internal":internal,"paths":paths,"side":v["side"],"path":v["path"]}),
+        json!({"type":"files_native_paste","id":files::scoped_id(v["id"].as_str().unwrap_or(""), &v["window"]),"internal":internal,"paths":paths,"side":v["side"],"path":v["path"]}),
     );
 }
 
@@ -285,7 +285,7 @@ pub fn drag(nsview: &NSView, v: Value) -> Result<(), String> {
     let state = Source::alloc(mtm).set_ivars(DragState {
         drag: token.clone(),
         tokens,
-        id: v["id"].as_str().unwrap_or("").into(),
+        id: files::scoped_id(v["id"].as_str().unwrap_or(""), &v["window"]),
     });
     let source: Retained<Source> = unsafe { msg_send![super(state), init] };
     let timestamp = NSApp(mtm).currentEvent().map_or(0., |e| e.timestamp());
