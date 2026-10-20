@@ -868,6 +868,7 @@ function render() {
 }
 
 function go(page) {
+  if (page === 'files' && !window.ITDA_FILE_HOST) return send('files_window', { id: '__network' });
   S.page = page;
   S.query = '';
   $('#search').value = '';

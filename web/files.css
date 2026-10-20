@@ -980,3 +980,11 @@ body:has(.files-layer) #modals .scrim { z-index: 3800; }
 .files-layer.mac .files-status { justify-content:space-between; gap:16px; padding:2px 12px; min-width:0; }
 .files-layer.mac .files-status [data-footer-path] { display:block; flex:1; min-width:0; }
 .files-layer.mac .files-status .files-path { height:24px; min-height:24px; padding:0; border:0; min-width:0; }
+
+/* Keep each sidebar group separate, with matching heading/row insets. */
+.files-sidebar .files-current-places { padding-top: 18px; }
+.files-layer.mac .files-sidebar .files-current-places > h4:first-child { margin-top: 0; }
+.files-sidebar .files-current-places > .btn { display:flex; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.files-sidebar .files-current-places > .btn .i { flex:0 0 18px; text-align:center; }
+.files-layer.mac .files-sidebar .files-current-places > .btn { padding:0 9px; gap:8px; line-height:20px; }
+.files-column .files-note { padding:12px 10px; }

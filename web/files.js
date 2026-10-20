@@ -80,18 +80,20 @@
     tabBar();
   }
   function columnHTML(side) {
-    const p = panes[side], paths = [p.path];
+    const p = panes[side], target = (p.busy && p.pendingPath) || p.path, paths = [target];
     while (paths.length < 8 && paths[0] !== p.home && parent(paths[0]) !== paths[0]) paths.unshift(parent(paths[0]));
     return `<div class="files-columns">${paths.map((path, n) => {
-      const current = path === p.path, k = cacheKey(side, path);
-      const entries = current ? visible(side) : folderCache.get(k);
-      if (!entries && ![...columnRequests.values()].some(r => r.key === k)) {
+      const loading = p.busy && path === target;
+      const current = path === p.path && !p.busy, k = cacheKey(side, path);
+      const entries = loading ? null : current ? visible(side) : folderCache.get(k);
+      const shown = entries?.filter(e => hidden || !e.name.startsWith("."));
+      if (!loading && !entries && ![...columnRequests.values()].some(r => r.key === k)) {
         const seq = ++sequence;
         columnRequests.set(seq, { key: k, side });
         call("list", { side, path, seq });
       }
       const next = paths[n + 1];
-      return `<section class="files-column" data-column="${esc(path)}"><header>${esc(path.split(/[\\/]/).filter(Boolean).pop() || "/")}</header>${entries ? entries.filter(e => hidden || !e.name.startsWith(".")).map((e, i) => current ? `<div class="files-item ${p.selected.has(e.name) ? "selected" : ""}" data-index="${i}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</div>` : `<button class="files-column-entry ${child(path,e.name) === next ? "on" : ""}" data-column-folder="${esc(e.dir ? child(path,e.name) : path)}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</button>`).join("") : '<p class="files-note">읽는 중…</p>'}</section>`;
+      return `<section class="files-column" data-column="${esc(path)}"><header>${esc(path.split(/[\\/]/).filter(Boolean).pop() || "/")}</header>${shown?.length ? shown.map((e, i) => current ? `<div class="files-item ${p.selected.has(e.name) ? "selected" : ""}" data-index="${i}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</div>` : `<button class="files-column-entry ${child(path,e.name) === next ? "on" : ""}" data-column-folder="${esc(e.dir ? child(path,e.name) : path)}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</button>`).join("") : `<p class="files-note">${loading || !entries ? "폴더를 읽는 중…" : "표시할 항목이 없습니다"}</p>`}</section>`;
     }).join("")}</div>`;
   }
   function previewTarget() {
@@ -227,6 +229,7 @@
       desc: false,
       seq: 0,
       busy: false,
+      pendingPath: null,
     };
   }
   const call = (op, data = {}) => send("files", { id: host.id, window: pageToken, op, ...data });
@@ -364,21 +367,25 @@
             `<article class="files-network-device"><div class="files-network-machine">${I("E7F4")}</div><strong>${esc(f.name)}</strong><small>${esc(f.dns || f.host || f.ip)}</small><span class="files-network-state">${kind === "peer" ? "Tailscale 기기" : "주변에서 발견"}</span><button class="btn sm" data-found-device="${i}" data-found-kind="${kind}">추가</button></article>`,
         )
         .join("");
-    return { html: `<section class="files-network" aria-label="네트워크 기기"><header><div><h2>네트워크</h2><p>파일과 화면에 접근할 기기를 선택하세요.</p></div><div class="files-network-actions"><button class="btn sm" data-action="scan">${I("E72C")}기기 찾기</button><button class="btn sm" data-action="add-device">${I("E710")}새 기기</button>${MAC ? '<button class="btn sm" data-action="locations">Finder 연결 폴더</button>' : ""}</div></header><h3>저장된 기기 <span>${devices.length}</span></h3><div class="files-network-grid">${devices.map((h) => `<article class="files-network-device" data-device-card="${esc(h.id)}" data-id="network-device-${esc(h.id)}"><button class="files-network-machine" data-device="${esc(h.id)}" aria-label="${esc(label(h))} 파일 열기">${I("E7F4")}</button><strong>${esc(label(h))}</strong><small>${esc(h.host)}</small><span class="files-network-state">${esc(deviceState(h))}</span><div class="files-network-buttons"><button class="btn sm" data-device="${esc(h.id)}">파일 열기</button><button class="btn sm" data-screen-device="${esc(h.id)}">화면</button><button class="btn sm" data-native-device="${esc(h.id)}">${nativeName}</button></div></article>`).join("") || '<p class="files-note">저장된 기기가 없습니다. 새 기기를 추가하거나 주변 기기를 찾아보세요.</p>'}</div>${found.length ? `<h3>주변 Itda 기기</h3><div class="files-network-grid" data-found-list>${discovered(found, "nearby")}</div>` : ""}${peers.length ? `<h3>Tailscale 기기</h3><div class="files-network-grid" data-peer-list>${discovered(peers, "peer")}</div>` : ""}<p class="files-network-hint">파일은 화면 공유를 켜지 않아도 연결할 수 있습니다. Finder·탐색기로 열려면 상대 기기의 파일 공유가 켜져 있어야 합니다.</p></section>`, devices, found, peers };
+    return { html: `<section class="files-network" aria-label="네트워크 기기"><header><div><h2>네트워크</h2><p>파일과 화면에 접근할 기기를 선택하세요.</p></div><div class="files-network-actions"><button class="btn sm" data-action="scan">${I("E72C")}기기 찾기</button><button class="btn sm" data-action="add-device">${I("E710")}새 기기</button>${MAC ? '<button class="btn sm" data-action="locations">Finder 연결 폴더</button>' : ""}</div></header><section aria-label="최근 폴더"><h3>최근 폴더</h3>${recentFolderRows(query)}</section><h3>저장된 기기 <span>${devices.length}</span></h3><div class="files-network-grid">${devices.map((h) => `<article class="files-network-device" data-device-card="${esc(h.id)}" data-id="network-device-${esc(h.id)}"><button class="files-network-machine" data-device="${esc(h.id)}" aria-label="${esc(label(h))} 파일 열기">${I("E7F4")}</button><strong>${esc(label(h))}</strong><small>${esc(h.host)}</small><span class="files-network-state">${esc(deviceState(h))}</span><div class="files-network-buttons"><button class="btn sm" data-device="${esc(h.id)}">파일 열기</button><button class="btn sm" data-screen-device="${esc(h.id)}">화면</button><button class="btn sm" data-native-device="${esc(h.id)}">${nativeName}</button></div></article>`).join("") || '<p class="files-note">저장된 기기가 없습니다. 새 기기를 추가하거나 주변 기기를 찾아보세요.</p>'}</div>${found.length ? `<h3>주변 Itda 기기</h3><div class="files-network-grid" data-found-list>${discovered(found, "nearby")}</div>` : ""}${peers.length ? `<h3>Tailscale 기기</h3><div class="files-network-grid" data-peer-list>${discovered(peers, "peer")}</div>` : ""}<p class="files-network-hint">파일은 화면 공유를 켜지 않아도 연결할 수 있습니다. Finder·탐색기로 열려면 상대 기기의 파일 공유가 켜져 있어야 합니다.</p></section>`, devices, found, peers };
   }
-  function renderBrowser() {
-    // Finder-like start: the devices as tiles, then recent folders as a list.
-    const folders = recentFolders().filter(x => !S.query || `${x.path} ${label(hostById(x.id))}`.toLowerCase().includes(S.query.toLowerCase()));
-    const devices = networkData(S.query).devices;
-    const status = (h) => S.online[h.id] === true ? '<i class="files-dot on" title="응답함"></i>' : S.online[h.id] === false ? '<i class="files-dot" title="응답 없음"></i>' : "";
-    const tile = (h) => `<button class="files-home-device" data-device="${esc(h.id)}" title="${esc(label(h))} 파일 열기 · ${MOD}+클릭: 새 창"><span class="files-home-os">${osIcon(h)}</span><span class="files-home-name">${status(h)}<span>${esc(label(h))}</span></span><small>${esc(deviceState(h) === "저장된 기기" ? h.host : deviceState(h))}</small></button>`;
+  const matchingFolders = query => recentFolders().filter(x => !query || `${x.path} ${label(hostById(x.id))}`.toLowerCase().includes(query.toLowerCase()));
+  function recentFolderRows(query) {
+    const folders = matchingFolders(query);
     const row = (f, i) => {
       const name = f.path.split(/[\\/]/).filter(Boolean).pop() || "/";
       return `<button class="files-home-recent" data-recent="${i}" title="${esc(f.path)}">${icon(true)}<strong>${esc(name)}</strong><span>${esc(label(hostById(f.id)))}</span><small>${esc(f.path)}</small></button>`;
     };
+    return folders.length ? `<div class="files-home-recents">${folders.map(row).join("")}</div>` : `<p class="files-home-empty">${query ? "검색어와 일치하는 최근 폴더가 없습니다." : "아직 연 폴더가 없습니다. 기기를 고르면 저장된 계정으로 파일을 엽니다."}</p>`;
+  }
+  function renderBrowser() {
+    // Finder-like start: the devices as tiles, then recent folders as a list.
+    const devices = networkData(S.query).devices;
+    const status = (h) => S.online[h.id] === true ? '<i class="files-dot on" title="응답함"></i>' : S.online[h.id] === false ? '<i class="files-dot" title="응답 없음"></i>' : "";
+    const tile = (h) => `<button class="files-home-device" data-device="${esc(h.id)}" title="${esc(label(h))} 파일 열기 · ${MOD}+클릭: 새 창"><span class="files-home-os">${osIcon(h)}</span><span class="files-home-name">${status(h)}<span>${esc(label(h))}</span></span><small>${esc(deviceState(h) === "저장된 기기" ? h.host : deviceState(h))}</small></button>`;
     return `<div class="files-home files-start">
       <section><h3>기기</h3><div class="files-home-devices">${devices.map(tile).join("")}<button class="files-home-device add" data-action="add-device"><span class="files-home-os">${I("E710")}</span><span class="files-home-name">위치 추가</span><small>Mac · Windows · Linux</small></button></div></section>
-      <section><h3>최근 폴더</h3>${folders.length ? `<div class="files-home-recents">${folders.map(row).join("")}</div>` : `<p class="files-home-empty">${S.query ? "검색어와 일치하는 최근 폴더가 없습니다." : "아직 연 폴더가 없습니다. 위에서 기기를 고르면 저장된 계정으로 파일을 엽니다."}</p>`}</section>
+      <section><h3>최근 폴더</h3>${recentFolderRows(S.query)}</section>
     </div>`;
   }
   function renderNetwork() {
@@ -435,7 +442,7 @@
     );
   }
   function browserClick(e) {
-    if (S.page !== "files" || !e.target.closest(".files-home")) return;
+    if (S.page !== "files" || e.target.closest(".files-layer") || !e.target.closest(".files-home")) return;
     const recent = e.target.closest("[data-recent]");
     if (recent) {
       const f = recentFolders().filter(x => !S.query || `${x.path} ${label(hostById(x.id))}`.toLowerCase().includes(S.query.toLowerCase()))[Number(recent.dataset.recent)];
@@ -627,7 +634,7 @@
     undo.length = 0;
     layer = document.createElement("div");
     previewKey = ""; queuedPreview = null; ++previewSeq;
-    fileTabs.length = 0; currentTab = ++tabId; fileTabs.push({ id: currentTab }); folderCache.clear();
+    fileTabs.length = 0; currentTab = ++tabId; fileTabs.push({ id: currentTab }); folderCache.clear(); columnRequests.clear();
     layer.className = `files-layer ${MAC ? "mac" : "windows"}`;
     const tool = (action, glyph, text) =>
       `<button class="btn sm" data-action="${action}" title="${text}" aria-label="${text}">${I(glyph)}</button>`;
@@ -840,7 +847,7 @@
         const list = visible(side);
         const cell = (e, i) =>
           `data-index="${i}" class="files-item ${p.selected.has(e.name) ? "selected" : ""}" aria-selected="${p.selected.has(e.name)}"`;
-        return `<section class="files-pane ${side === active ? "active" : ""}" data-pane="${side}">${MAC ? "" : pathHTML(side)}<div class="files-list" tabindex="0" role="grid" aria-label="${side === "local" ? "내 기기" : "원격 기기"} 파일">${p.busy ? '<div class="files-note">폴더를 읽는 중…</div>' : !list.length ? '<div class="files-note">표시할 항목이 없습니다</div>' : view === "columns" ? columnHTML(side) : ["grid", "gallery"].includes(view) ? `<div class="files-grid ${view === "gallery" ? "files-gallery-strip" : ""}">${list.map((e, i) => `<div ${cell(e, i)}>${icon(e.dir, e.name)}<span>${esc(e.name)}${e.link ? " ↗" : ""}</span></div>`).join("")}</div>` : `<table><colgroup>${[47, 25, 12, 16].map((w, i) => `<col style="width:${columnWidths[side]?.[i] ? `${columnWidths[side][i]}px` : `${w}%`}">`).join("")}</colgroup><thead><tr>${[["name", "이름"], ["modified", "수정한 날짜"], ["size", "크기"], ["kind", "종류"]].map(([key, title], i) => `<th data-sort="${key}">${title}${p.sort === key ? (p.desc ? " ▾" : " ▴") : ""}${i < 3 ? `<span data-resize-column="${i}" role="separator" aria-label="${title} 열 너비" aria-orientation="vertical" tabindex="0"></span>` : ""}</th>`).join("")}</tr></thead><tbody>${rows(side)}</tbody></table>`}</div></section>`;
+        return `<section class="files-pane ${side === active ? "active" : ""}" data-pane="${side}">${MAC ? "" : pathHTML(side)}<div class="files-list" tabindex="0" role="grid" aria-label="${side === "local" ? "내 기기" : "원격 기기"} 파일">${view === "columns" ? columnHTML(side) : p.busy ? '<div class="files-note">폴더를 읽는 중…</div>' : !list.length ? '<div class="files-note">표시할 항목이 없습니다</div>' : ["grid", "gallery"].includes(view) ? `<div class="files-grid ${view === "gallery" ? "files-gallery-strip" : ""}">${list.map((e, i) => `<div ${cell(e, i)}>${icon(e.dir, e.name)}<span>${esc(e.name)}${e.link ? " ↗" : ""}</span></div>`).join("")}</div>` : `<table><colgroup>${[47, 25, 12, 16].map((w, i) => `<col style="width:${columnWidths[side]?.[i] ? `${columnWidths[side][i]}px` : `${w}%`}">`).join("")}</colgroup><thead><tr>${[["name", "이름"], ["modified", "수정한 날짜"], ["size", "크기"], ["kind", "종류"]].map(([key, title], i) => `<th data-sort="${key}">${title}${p.sort === key ? (p.desc ? " ▾" : " ▴") : ""}${i < 3 ? `<span data-resize-column="${i}" role="separator" aria-label="${title} 열 너비" aria-orientation="vertical" tabindex="0"></span>` : ""}</th>`).join("")}</tr></thead><tbody>${rows(side)}</tbody></table>`}</div></section>`;
       })
       .join("");
     layer
@@ -898,6 +905,7 @@
     folderCache.set(cacheKey(side, p.path), p.entries);
     p.seq = ++sequence;
     p.busy = true;
+    p.pendingPath = path;
     if (history) {
       p.start = 0;
       p.scroll = 0;
@@ -969,6 +977,12 @@
     if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopPropagation(); return; }
     const close = e.target.closest("[data-close-tab]");
     if (close) return closeTab(Number(close.dataset.closeTab));
+    const recent = e.target.closest("[data-recent]");
+    if (recent) {
+      const folder = matchingFolders(search)[Number(recent.dataset.recent)];
+      if (folder) launch(hostById(folder.id), inNewWindow(e), folder.path);
+      return;
+    }
     const tab = e.target.closest("[data-tab]");
     if (tab) return switchTab(Number(tab.dataset.tab));
     const column = e.target.closest("[data-column-folder]");
@@ -1064,7 +1078,7 @@
     if (e.target.closest(".files-preview-content img")) { zoomBy(1, e.clientX, e.clientY, zoom === null ? 1 : 0); return; }
     const item = e.target.closest("[data-index]");
     const pane = e.target.closest("[data-pane]");
-    if (!item || !pane) return;
+    if (!item || !pane || panes[pane.dataset.pane].busy) return;
     const entry = visible(pane.dataset.pane)[Number(item.dataset.index)];
     if (entry.dir)
       nav(pane.dataset.pane, child(panes[pane.dataset.pane].path, entry.name));
@@ -1761,6 +1775,7 @@
         const p = panes[m.side];
         if (m.seq !== p.seq) return true;
         p.busy = false;
+        p.pendingPath = null;
         renderPanes();
       }
       fail(m.error || "파일 작업에 실패했습니다");
@@ -1792,6 +1807,7 @@
         Math.max(0, (p.entries.length - 1) * rowHeight),
       );
       p.busy = false;
+      p.pendingPath = null;
       renderPanes();
       return true;
     }
