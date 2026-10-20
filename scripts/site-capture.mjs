@@ -31,7 +31,8 @@ await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const base=`http://127.0.0.1:${server.address().port}`;
 const browser=await pw.chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
 try{
-  const context=await browser.newContext({viewport:{width:1440,height:900},deviceScaleFactor:1,userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'});
+  const context=await browser.newContext({viewport:{width:1440,height:900},deviceScaleFactor:1,locale:'ko-KR',timezoneId:'Asia/Seoul',userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'});
+  await context.clock.install({time:new Date('2026-10-20T06:00:00Z')});
   await context.addInitScript(({hosts,entries})=>{
     window.fixtureHosts=hosts;window.fixtureEntries=entries;
     window.ipc={postMessage:raw=>{
@@ -63,7 +64,7 @@ try{
   await page.screenshot({path:path.join(out,'share.png')});
   await context.close();
   for(const [name,width,height]of [['phone-list',390,780],['tablet-view',1024,768]]){
-    const p=await browser.newPage({viewport:{width,height},deviceScaleFactor:2,colorScheme:'light',isMobile:true,hasTouch:true});
+    const p=await browser.newPage({viewport:{width,height},deviceScaleFactor:2,colorScheme:'light',locale:'ko-KR',timezoneId:'Asia/Seoul',isMobile:true,hasTouch:true});
     await p.goto(base+'/viewer/');await p.locator('.host[data-id="a1"]').waitFor();await p.evaluate(()=>document.fonts.ready);
     await p.screenshot({path:path.join(out,name+'.png')});await p.close();
   }

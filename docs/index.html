@@ -40,6 +40,8 @@
     <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></symbol>
     <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.4"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></symbol>
     <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L19 4M15.5 7.5l2.5 2.5M17.5 5.5L20 8"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M3 7V5h6l2 2h10v13H3z"/></symbol>
+    <symbol id="i-displays" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><rect x="2" y="3" width="13" height="10" rx="1.5"/><path d="M7 13v4M4 17h6"/><rect x="10" y="10" width="12" height="9" rx="1.5"/><path d="M16 19v3M13 22h6"/></symbol>
     <symbol id="i-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.4"/><path d="M2.8 19.5c.8-3.2 3.3-5 6.2-5s5.4 1.8 6.2 5"/><path d="M16 4.9a3.2 3.2 0 0 1 0 6.2M18 14.8c1.7.7 2.8 2.3 3.2 4.7"/></symbol>
     <symbol id="i-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-8.5 8.5"/><path d="M18 14v4.5A1.5 1.5 0 0 1 16.5 20h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10"/></symbol>
     <symbol id="i-net" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M11 7l-5 9M13 7l5 9M7.2 18h9.6"/></symbol>
@@ -165,12 +167,12 @@
           <p><span lang="ko">공유기 설정 없이 집 밖에서도. Tailscale 기기를 자동으로 찾고 HTTPS 주소도 만들어 줍니다.</span><span lang="en">No port forwarding. Tailscale devices show up automatically, and Itda can mint an HTTPS address.</span></p>
         </article>
         <article class="feature reveal" style="--ic:#5ea8ff">
-          <div class="ic"><svg><use href="#i-users"/></svg></div>
+          <div class="ic"><svg><use href="#i-folder"/></svg></div>
           <h3><span lang="ko">별도 창에서 파일 탐색</span><span lang="en">A window for your files</span></h3>
           <p><span lang="ko">화면 공유 없이 SSH/SFTP로 폴더를 열고 복사·이동하세요. 탭과 미리보기, Mac의 열·갤러리 보기도 지원합니다.</span><span lang="en">Browse and transfer over SSH/SFTP without opening a remote screen. Use tabs and previews, plus column and gallery views on Mac.</span></p>
         </article>
         <article class="feature reveal" style="--ic:var(--coral);--c:var(--glow-2)">
-          <div class="ic"><svg><use href="#i-share"/></svg></div>
+          <div class="ic"><svg><use href="#i-displays"/></svg></div>
           <h3><span lang="ko">여러 모니터, 여러 창</span><span lang="en">More displays, more windows</span></h3>
           <p><span lang="ko">원격 기기가 보고하는 모니터를 선택하거나 각각의 창으로 분리하세요. 모니터 정보를 제공하지 않는 연결은 수동 분할로 배치합니다.</span><span lang="en">Choose a reported remote display or open displays in separate windows. Use manual splits when the server does not report its monitors.</span></p>
         </article>
@@ -185,7 +187,7 @@
         <div class="show-copy">
           <span class="kicker"><span lang="ko">주소록</span><span lang="en">Address book</span></span>
           <h2><span lang="ko">연결은 카드 한 번 클릭</span><span lang="en">One click to connect</span></h2>
-          <p><span lang="ko">마지막 연결 화면, 온라인 표시, 즐겨찾기, 그룹, 검색. 카드에 직접 고른 이미지를 쓰거나 계정을 여러 기기에 재사용할 수 있습니다.</span><span lang="en">Last-session previews, online indicators, favourites, groups and search — or type an address. You can also choose a custom card image.</span></p>
+          <p><span lang="ko">마지막 연결 화면, 온라인 표시, 즐겨찾기, 그룹, 검색. 카드에 직접 고른 이미지를 쓰거나 계정을 여러 기기에 재사용할 수 있습니다.</span><span lang="en">Last-session previews, online indicators, favourites, groups and search. Choose a custom card image and reuse saved accounts across devices.</span></p>
           <ul>
             <li><svg><use href="#i-check"/></svg><span lang="ko"><b>주변 기기 자동 검색</b> — 같은 Wi-Fi의 Mac(Bonjour), Itda가 켜진 PC·Mac, Tailscale 기기</span><span lang="en"><b>Finds nearby devices</b> — Macs on your Wi-Fi (Bonjour), any PC or Mac running Itda, and your Tailscale devices</span></li>
             <li><svg><use href="#i-check"/></svg><span lang="ko"><b>창마다 하나의 연결</b> — 툴바, 전체 화면, 1:1 보기, 스크린샷, 자동 재연결</span><span lang="en"><b>A window per connection</b> — toolbar, full screen, 1:1, screenshots, auto-reconnect</span></li>
@@ -250,7 +252,7 @@
         <p><span lang="ko">Windows·Mac 앱은 상대 기기에 연결하고, 웹 뷰어는 Itda를 실행 중인 컴퓨터를 통해 화면을 전달합니다.</span><span lang="en">The Windows and Mac apps connect to your remote devices. The web viewer relays their screens through your own computer running Itda.</span></p>
       </div>
       <div class="flow reveal">
-        <div class="scroller" tabindex="0" role="group" aria-label="diagram"><svg class="diagram" viewBox="0 0 960 330" role="img" aria-labelledby="dg-t">
+        <div class="scroller" tabindex="0" role="group" aria-label="연결 구조" data-ko-label="연결 구조" data-en-label="Connection diagram"><svg class="diagram" viewBox="0 0 960 330" role="img" aria-label="휴대폰·태블릿 브라우저 → Windows·Mac의 Itda → 저장된 기기" data-ko-label="휴대폰·태블릿 브라우저 → Windows·Mac의 Itda → 저장된 기기" data-en-label="Phone or tablet browser → Itda on Windows or Mac → saved devices">
           <title id="dg-t">휴대폰·태블릿 브라우저 → Windows·Mac의 Itda → 저장된 기기</title>
           <defs>
             <linearGradient id="g-in" x1="0" x2="1"><stop offset="0" stop-color="#ff6a43"/><stop offset="1" stop-color="#a4a1ff"/></linearGradient>
@@ -292,7 +294,7 @@
             </g>
             <g transform="translate(720 133)">
               <rect class="box" width="200" height="64" rx="16"/>
-              <text x="62" y="30" font-size="16" font-weight="700">Windows · macOS</text><text x="62" y="49" font-size="12.5" class="muted">RDP · Itda</text>
+              <text x="62" y="30" font-size="16" font-weight="700">Windows</text><text x="62" y="49" font-size="12.5" class="muted">RDP · Itda</text>
               <path d="M16 20l10-1.4v10H16zM28 18.4l12-1.6v12H28zM16 30.6h10v10L16 39.2zM28 30.6h12v12l-12-1.6z" fill="#33d1c2"/>
             </g>
             <g transform="translate(720 214)">
@@ -358,8 +360,8 @@
         <details class="reveal"><summary><span lang="ko">Mac에 무엇을 설치해야 하나요?</span><span lang="en">What do I install on the Mac?</span></summary><div><p><span lang="ko">기본 화면 연결을 받는 Mac에는 별도 앱이 필요 없습니다. 시스템 설정 → 일반 → 공유에서 ‘화면 공유’를 켜세요. 파일 브라우저나 SSH 터널을 쓰려면 ‘원격 로그인’도 켜고 계정 접근을 허용해야 합니다.</span><span lang="en">The remote Mac needs no additional app for basic screen access. Enable Screen Sharing in System Settings → General → Sharing. Enable Remote Login and allow your account for file browsing or an SSH tunnel.</span></p></div></details>
         <details class="reveal"><summary><span lang="ko">Mac·iPhone에서는 어떻게 쓰나요?</span><span lang="en">How do I use Itda on Mac or iPhone?</span></summary><div><p><span lang="ko"><b>Mac</b>: 전용 앱을 사용하세요. <a href="https://github.com/jiunbae/itda/releases/latest">릴리스</a>에서 <code>Itda-macos-universal.zip</code>을 받아 압축을 풀고, 처음 열 때 ‘Apple이 확인할 수 없습니다’가 뜨면 <b>완료</b>를 누르고, <b>시스템 설정 → 개인정보 보호 및 보안</b> 아래쪽의 <b>그래도 열기</b>를 누르세요 (<a href="https://support.apple.com/ko-kr/102445">Apple의 현재 안내</a>). 다른 Mac, Windows PC(원격 데스크톱 포함), Linux를 바로 엽니다. <b>iPhone</b>: Windows 또는 Mac의 Itda에서 웹 뷰어를 켜고 Safari로 열어 홈 화면에 추가하세요.</span><span lang="en"><b>Mac</b>: use the dedicated app. Download <code>Itda-macos-universal.zip</code> from <a href="https://github.com/jiunbae/itda/releases/latest">Releases</a>, unzip it. If macOS says it can't check Itda, click <b>Done</b>, then <b>Open Anyway</b> near the bottom of <b>System Settings → Privacy &amp; Security</b> (<a href="https://support.apple.com/en-us/102445">current Apple guidance</a>). It opens other Macs, Windows PCs (Remote Desktop included) and Linux directly. <b>iPhone</b>: turn on the web viewer in Itda on Windows or Mac, open it in Safari and add it to your Home Screen.</span></p></div></details>
         <details class="reveal"><summary><span lang="ko">Microsoft 계정으로 로그인하는 PC에 원격 데스크톱으로 들어가려면?</span><span lang="en">Remote Desktop into a PC that signs in with a Microsoft account?</span></summary><div><p><span lang="ko">계정에 <b>이메일 주소</b>, 암호에 그 <b>Microsoft 계정 암호</b>를 넣으세요. 로그인 화면의 숫자 PIN이나 얼굴 인식은 원격 접속에 쓸 수 없습니다. 계속 실패하면 Microsoft 계정 암호와 해당 계정의 원격 데스크톱 접근 권한을 확인하세요. Windows · Itda로 추가한 PC는 Windows 암호가 아니라 그 PC의 <b>공유 암호</b>(8글자)를 씁니다.</span><span lang="en">Use the <b>email address</b> as the account and the <b>Microsoft account password</b> — the sign-in PIN or face unlock won't work remotely. If it keeps failing, verify the Microsoft account password and that the account is allowed to use Remote Desktop. A PC added as Windows · Itda uses its 8-character <b>share password</b> instead.</span></p></div></details>
-        <details class="reveal"><summary><span lang="ko">Windows Home 에디션도 연결되나요?</span><span lang="en">Does Windows Home work?</span></summary><div><p><span lang="ko">네. Windows Home에는 원격 데스크톱 서버가 없지만, 그 PC에 Itda를 설치하고 ‘이 PC 공유’를 켜면 Home을 포함한 지원 Windows 에디션에서 연결할 수 있습니다.</span><span lang="en">Yes. Home has no Remote Desktop host, but install Itda on it and turn on Share this PC — that works on every edition.</span></p></div></details>
-        <details class="reveal"><summary><span lang="ko">집 밖에서는 어떻게 연결하나요?</span><span lang="en">How do I connect from outside?</span></summary><div><p><span lang="ko">모든 기기에 Tailscale을 설치하고 같은 계정으로 로그인하세요. Itda가 Tailscale 기기를 자동으로 보여 주고, 웹 뷰어의 Tailscale 주소·HTTPS 주소도 만들어 줍니다.</span><span lang="en">Install Tailscale on every device and sign in with the same account . Itda lists your Tailscale devices and shows the web viewer's Tailscale/HTTPS address.</span></p></div></details>
+        <details class="reveal"><summary><span lang="ko">Windows Home 에디션도 연결되나요?</span><span lang="en">Does Windows Home work?</span></summary><div><p><span lang="ko">네. Windows Home에는 원격 데스크톱 서버가 없지만, 그 PC에 Itda를 설치하고 ‘이 PC 공유’를 켜면 Home을 포함한 지원 Windows 에디션에서 연결할 수 있습니다.</span><span lang="en">Yes. Home has no Remote Desktop host, but install Itda on it and turn on Share this PC — that works on every supported edition, including Home.</span></p></div></details>
+        <details class="reveal"><summary><span lang="ko">집 밖에서는 어떻게 연결하나요?</span><span lang="en">How do I connect from outside?</span></summary><div><p><span lang="ko">모든 기기에 Tailscale을 설치하고 같은 계정으로 로그인하세요. Itda가 Tailscale 기기를 자동으로 보여 주고, 웹 뷰어의 Tailscale 주소·HTTPS 주소도 만들어 줍니다.</span><span lang="en">Install Tailscale on every device and sign in with the same account. Itda lists your Tailscale devices and shows the web viewer's Tailscale/HTTPS address.</span></p></div></details>
         <details class="reveal"><summary><span lang="ko">Windows가 “PC를 보호했습니다”라고 해요.</span><span lang="en">Windows says “Windows protected your PC”.</span></summary><div><p><span lang="ko">아직 코드 서명이 없는 새 앱이라 SmartScreen이 경고합니다. ‘추가 정보’ → ‘실행’을 누르세요. 소스와 빌드 방법은 GitHub에 공개되어 있습니다.</span><span lang="en">The app isn't code-signed yet, so SmartScreen warns about it. Click “More info” → “Run anyway”. Source and build steps are on GitHub.</span></p></div></details>
         <details class="reveal"><summary><span lang="ko">RealVNC·TeamViewer와 무엇이 다른가요?</span><span lang="en">How is it different from RealVNC or TeamViewer?</span></summary><div><p><span lang="ko">계정·클라우드 없이 Mac의 기본 화면 공유와 Windows 원격 데스크톱 같은 표준 프로토콜을 그대로 씁니다. 기본 Mac 화면 공유와 RDP는 상대 기기의 기존 서버를 사용하고, Windows의 Itda 공유는 상대 PC에도 Itda가 필요합니다.</span><span lang="en">No accounts or cloud: Itda speaks the standard protocols your devices already have — Mac Screen Sharing, Windows Remote Desktop, VNC. Built-in Mac Screen Sharing and RDP use the remote device’s existing server; Itda’s Windows sharing requires Itda on that PC.</span></p></div></details>
       </div>
@@ -385,7 +387,7 @@
   <div class="wrap">
     <div>
       <a class="brand" href="./"><img src="favicon.svg" alt="" width="32" height="32">Itda<small>잇다</small></a>
-      <p><span lang="ko">내 기기를 잇다 — 가볍고 빠른 원격 데스크톱.</span><span lang="en">Connect your devices — a light, fast remote desktop.</span></p>
+      <p><span lang="ko">내 기기를 잇다 — 화면과 파일을 잇는 오픈 소스 앱.</span><span lang="en">Connect your devices — an open-source app for screens and files.</span></p>
     </div>
     <div>
       <h4><span lang="ko">제품</span><span lang="en">Product</span></h4>

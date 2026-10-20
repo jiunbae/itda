@@ -709,7 +709,7 @@ function renderShareMac() {
   return `<div class="page share-page">
     ${hero}
     <div class="group-title" id="web-viewer">${I('E774')} 브라우저로 보기 — 웹 뷰어 <span class="pill ok">추천</span><a href="#" class="help-link" data-help="phone">자세히</a></div>
-    ${setting('E8EA', '웹 뷰어', 'iPhone·Android·PC의 브라우저로 이 Mac에 저장된 Mac·Windows PC·Linux를 엽니다. 설치할 앱이 없고, 암호는 이 Mac 밖으로 나가지 않습니다.', toggle('on', web.on, 'web'), !web.on)}
+    ${setting('E8EA', '웹 뷰어', 'iPhone·Android·PC의 브라우저로 이 Mac에 저장된 Mac·Windows PC·Linux를 엽니다. 브라우저에 앱을 설치할 필요가 없고, 저장된 기기 암호를 브라우저에 전달하지 않습니다.', toggle('on', web.on, 'web'), !web.on)}
     ${web.on ? webPanel(web) : ''}
     <div class="group-title" id="share-pc">${I('E7F4')} 이 Mac 화면 공유 — macOS 화면 공유<a href="#" class="help-link" data-help="share">자세히</a></div>
     <div class="setting">${I('E7F4')}<div class="txt"><b>이 Mac은 macOS에 들어 있는 ‘화면 공유’로 공유합니다</b>

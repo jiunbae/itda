@@ -12,6 +12,8 @@ try{
   for(const width of [360,390,768,1024,1440]) for(const colorScheme of ['light','dark']) for(const lang of ['ko','en']){
     const context=await browser.newContext({viewport:{width,height:1100},colorScheme,reducedMotion:'reduce'});
     const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
+    page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
+    page.on('requestfailed',r=>errors.push(r.url()+': '+r.failure()?.errorText));
     for(const name of ['', 'start.html']){
       await page.goto(base+name+'?lang='+lang,{waitUntil:'networkidle'});
       await page.evaluate(async()=>{await document.fonts.ready;for(const image of document.images){image.loading='eager';await image.decode().catch(()=>{});}});
@@ -19,6 +21,7 @@ try{
       assert((await page.locator('meta[name="description"]').getAttribute('content')).includes(lang==='ko'?'파일 브라우저':'file browser'),'Description language stale');
       const broken=await page.evaluate(()=>[...document.images].filter(i=>!i.complete||!i.naturalWidth).map(i=>i.currentSrc));
       assert(!broken.length,`Broken images: ${broken}`);
+      assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Document overflow');
       const overflow=await page.evaluate(()=>[...document.querySelectorAll('.nav .wrap,.hero-copy,.device-scene,.device-phone,.device-tablet,.show-copy,.features,.paths,.phone-row,.final')].filter(e=>{const r=e.getBoundingClientRect();return r.width&& (r.left < -2||r.right>innerWidth+2);}).map(e=>e.className));
       assert(!overflow.length,`Overflow ${width}/${colorScheme}/${lang}/${name}: ${overflow}`);
       const dead=await page.evaluate(()=>[...document.querySelectorAll('a[href^="#"]')].filter(a=>a.hash.length>1&&!document.getElementById(decodeURIComponent(a.hash.slice(1)))).map(a=>a.hash));
