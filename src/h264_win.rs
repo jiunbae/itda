@@ -6,7 +6,7 @@ use crate::server::{Video, VideoEncode};
 use std::io;
 use std::sync::OnceLock;
 use windows::Win32::Media::MediaFoundation::*;
-use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
+use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
 
 const FPS: u64 = 60;
 const TICKS: i64 = 10_000_000 / FPS as i64; // 100 ns units per frame
@@ -34,10 +34,21 @@ fn startup() -> bool {
     *OK.get_or_init(|| unsafe { MFStartup(MF_VERSION, MFSTARTUP_LITE).is_ok() })
 }
 
+/// COM on this (viewer) thread, once, released when the thread ends — after its encoders,
+/// which the pump drops before returning.
+struct Com(bool);
+impl Drop for Com {
+    fn drop(&mut self) {
+        if self.0 {
+            unsafe { CoUninitialize() };
+        }
+    }
+}
+thread_local!(static COM: Com = Com(unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok()));
+
 fn open(w: usize, h: usize, bitrate: u32) -> windows::core::Result<Mft> {
+    COM.with(|_| {});
     unsafe {
-        // The viewer's thread: COM for the encoder (S_FALSE when it already was).
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         let t: IMFTransform = CoCreateInstance(&CLSID_MSH264EncoderMFT, None, CLSCTX_INPROC_SERVER)?;
         if let Ok(a) = t.GetAttributes() {
             let _ = a.SetUINT32(&MF_LOW_LATENCY, 1);
@@ -155,6 +166,19 @@ impl H264 {
                     b.Unlock()?;
                 }
             }
+            // An IDR without parameter sets in-band: take them from the output type
+            // (MF_MT_MPEG_SEQUENCE_HEADER), so a decoder can start here.
+            let nal = |t: u8| out.windows(5).any(|w| w[..4] == [0, 0, 0, 1] && w[4] & 31 == t);
+            if nal(5) && !nal(7) {
+                if let Ok(mt) = self.mft.t.GetOutputCurrentType(0) {
+                    if let Ok(n) = mt.GetBlobSize(&MF_MT_MPEG_SEQUENCE_HEADER) {
+                        let mut seq = vec![0u8; n as usize];
+                        if mt.GetBlob(&MF_MT_MPEG_SEQUENCE_HEADER, &mut seq, None).is_ok() {
+                            out.splice(0..0, seq);
+                        }
+                    }
+                }
+            }
             Ok(out)
         }
     }
@@ -189,7 +213,10 @@ mod tests {
     /// first frame is an IDR with SPS/PPS and a nearly unchanged frame is small.
     #[test]
     fn encodes_annex_b() {
-        let Ok(mut e) = H264::new(640, 360, 4_000_000) else { return };
+        let mut e = match H264::new(640, 360, 4_000_000) {
+            Ok(e) => e,
+            Err(why) => return eprintln!("skipped: no Media Foundation H.264 encoder here ({why})"),
+        };
         let mut px: Vec<u32> = (0..640 * 360).map(|i| (i as u32).wrapping_mul(2654435761) & 0xff_ffff).collect();
         let first = e.encode(&px, 640, true).unwrap();
         let types: Vec<u8> = first.windows(4).enumerate().filter(|(_, w)| *w == [0, 0, 0, 1]).map(|(i, _)| first[i + 4] & 31).collect();

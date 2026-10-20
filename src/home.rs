@@ -818,8 +818,8 @@ fn hp_upgrade(id: &str) {
         let id = host.id.clone();
         let source = std::env::var("ITDA_HP_BUNDLE").map(|p| Source::Bundle(p.into())).unwrap_or_else(|_| Source::Release(VERSION.into()));
         let progress = |stage: &str| post(Event::Page(json!({"type":"hp","id":id,"stage":stage})));
-        // A password typed for this connection (not saved) signs in to SSH too.
-        let pass = login.pass.clone().or_else(|| crate::gateway::typed(&id)).unwrap_or_default();
+        // A password typed for this connection signs in to SSH first (a saved one may be stale).
+        let pass = crate::gateway::typed(&id).or_else(|| login.pass.clone()).unwrap_or_default();
         match upgrade(&crate::hp_upgrade::ssh_cfg_with(&host, &login, pass), &source, &progress) {
             Ok(r) => {
                 store::set_password(&password_key(&id), Some(&r.password));
@@ -835,7 +835,7 @@ fn hp_upgrade(id: &str) {
 fn hp_status(id: &str) {
     let Some((host, login)) = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| (h.clone(), store::resolve(h, &m.accounts)))) else { return };
     std::thread::spawn(move || {
-        let pass = login.pass.clone().or_else(|| crate::gateway::typed(&host.id)).unwrap_or_default();
+        let pass = crate::gateway::typed(&host.id).or_else(|| login.pass.clone()).unwrap_or_default();
         let r = crate::hp_upgrade::status(&crate::hp_upgrade::ssh_cfg_with(&host, &login, pass));
         post(Event::Page(match r {
             Ok((screen, access)) => json!({"type":"hp","id":host.id,"status":true,"screen":screen,"access":access}),

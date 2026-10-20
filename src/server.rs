@@ -516,6 +516,11 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
             Some(v) if full || prev[..] != frame[..] => {
                 let (vw, vh) = v.size();
                 match v.encode(frame, w, reset || !incremental) {
+                    // Nothing out for this frame (an encoder still buffering): send it losslessly
+                    // and keep any pending reset for the first real picture.
+                    Ok(data) if data.is_empty() => {
+                        enc.changes(&mut u, frame, &prev, w, h, full, |x, y, tw, th| demand.covers(x, y, tw, th), &pf, zrle)?;
+                    }
                     Ok(data) => {
                         u.h264(0, 0, vw as u16, vh as u16, if reset { crate::enc::H264_RESET } else { 0 }, &data);
                         reset = false;
