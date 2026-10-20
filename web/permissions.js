@@ -34,6 +34,7 @@
   document.querySelector('#next-step').textContent=next==='screen'?'1. 화면 및 시스템 오디오 기록 설정':'2. 키보드·마우스 조작 설정';
   document.querySelector('.app-path').textContent=m.app_path||'';
   document.querySelector('.app-drag').disabled=!m.app_path;
+  if(m.notice)document.querySelector('.progress').textContent=m.notice;
   const close=document.querySelector('[data-action="close"]');close.textContent=ready?'완료':'나중에';
   if(ready){clearInterval(timer);deadline=0;}
  }};

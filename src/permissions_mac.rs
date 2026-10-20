@@ -601,11 +601,21 @@ fn advance(permission: &str, target: &EventLoopWindowTarget<Wake>) {
         return;
     }
     if !crate::host_mac::permissions().0 {
-        guide_reply(json!({"type":"guide","done":"모두 허용됐어요. 적용하려고 Itda를 다시 여는 중…"}));
-        GUIDE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if let Err(e) = restart_app() {
-            guide_reply(json!({"type":"guide","state":e,"error":true}));
+        // Relaunching closes every Itda window: only when nothing else is open in it.
+        let busy = super::super::home(|m| m.sessions.len()) + super::file_windows().len();
+        if busy == 0 {
+            guide_reply(json!({"type":"guide","done":"모두 허용됐어요. 적용하려고 Itda를 다시 여는 중…"}));
+            match restart_app() {
+                Ok(()) => { GUIDE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst); return; }
+                Err(e) => { close_guide(); let _ = open(target); let mut v = state(); v["error"] = json!(format!("Itda를 다시 열지 못했어요: {e}")); reply(v); return; }
+            }
         }
+        // The helper offers "Itda 다시 열기" itself, naming what will close.
+        close_guide();
+        let _ = open(target);
+        let mut v = state();
+        v["notice"] = json!(format!("모두 허용됐어요. 열려 있는 Itda 창 {busy}개를 닫은 뒤 ‘Itda 다시 열기’를 누르면 적용돼요."));
+        reply(v);
         return;
     }
     close_guide();
