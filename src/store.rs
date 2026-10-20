@@ -122,7 +122,10 @@ pub struct Host {
     /// Address, optionally with :port.
     pub host: String,
     pub user: String,
+    /// The groups joined with ", " (what versions before `groups` read and wrote).
     pub group: String,
+    /// Groups this connection is listed under (any number).
+    pub groups: Vec<String>,
     pub favorite: bool,
     /// Unix seconds of the last successful connection (0 = never).
     pub last_used: u64,
@@ -153,6 +156,15 @@ pub struct Hp {
 }
 
 impl Host {
+    /// Groups from `groups`, else from the old comma-separated `group`: trimmed, without
+    /// empties or repeats; `group` follows them.
+    pub fn normalize_groups(&mut self) {
+        let from = if self.groups.is_empty() { self.group.split(',').map(str::to_string).collect() } else { std::mem::take(&mut self.groups) };
+        let mut seen = std::collections::HashSet::new();
+        self.groups = from.into_iter().map(|g| g.trim().chars().take(40).collect::<String>()).filter(|g| !g.is_empty() && seen.insert(g.to_lowercase())).collect();
+        self.group = self.groups.join(", ");
+    }
+
     pub fn is_rdp(&self) -> bool {
         self.kind == "rdp"
     }
@@ -335,7 +347,10 @@ pub fn save_settings(s: &Settings) {
 
 pub fn load_hosts() -> Vec<Host> {
     match std::fs::read(dir().join("hosts.json")) {
-        Ok(b) => serde_json::from_slice(&b).unwrap_or_else(|e| {
+        Ok(b) => serde_json::from_slice::<Vec<Host>>(&b).map(|mut hs| {
+            hs.iter_mut().for_each(Host::normalize_groups);
+            hs
+        }).unwrap_or_else(|e| {
             // Never let the next save silently replace an address book we failed to read.
             let bad = dir().join(format!("hosts.json.bad-{}", now()));
             crate::log!("hosts.json unreadable ({e}); kept as {}", bad.display());
@@ -598,6 +613,21 @@ pub fn set_password(id: &str, pass: Option<&str>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn groups_from_old_comma_field() {
+        let mut h = super::Host { group: " 집, 회사,,집 ".into(), ..Default::default() };
+        h.normalize_groups();
+        assert_eq!(h.groups, ["집", "회사"]);
+        assert_eq!(h.group, "집, 회사");
+        h.groups = vec![];
+        h.group = String::new();
+        h.normalize_groups();
+        assert!(h.groups.is_empty() && h.group.is_empty());
+        let mut h = super::Host { group: "old".into(), groups: vec!["A".into(), "a".into(), " B ".into()], ..Default::default() };
+        h.normalize_groups();
+        assert_eq!((h.groups.clone(), h.group.as_str()), (vec!["A".to_string(), "B".to_string()], "A, B"));
+    }
+
     use super::*;
 
     // (Keychain access needs the user's GUI login session, so this only runs on Windows.)

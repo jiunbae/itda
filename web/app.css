@@ -706,3 +706,18 @@ details.raw code { display: block; margin-top: 6px; padding: 8px 10px; border-ra
   .share-hero { flex-wrap: wrap; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* Group chips in the connection editor: add with Enter/comma, remove with × or Backspace. */
+.chips.input { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; height: auto; min-height: 34px; padding: 4px 6px; cursor: text; }
+.chips.input input { flex: 1; min-width: 120px; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; padding: 2px 4px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 4px 0 10px; border-radius: 12px; background: var(--accent-soft, var(--surface-3)); color: var(--text); font-size: 12px; font-weight: 600; max-width: 100%; }
+.chip-x { border: 0; background: transparent; color: var(--text-2); width: 18px; height: 18px; border-radius: 9px; cursor: pointer; font-size: 14px; line-height: 1; padding: 0; }
+.chip-x:hover { background: var(--surface-3); color: var(--text); }
+.chips.input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+/* The connection tab's performance block (high-performance mode). */
+.hp-box { margin-top: 14px; }
+.hp-box .opt { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.hp-box .hp-ico { width: 20px; text-align: center; font-size: 16px; }
+.hp-box .txt { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.hp-box .txt span { color: var(--text-2); font-size: 12px; }
