@@ -15,9 +15,9 @@
 <meta property="og:title" content="시작하기 — Itda" data-ko-content="시작하기 — Itda" data-en-content="Get started — Itda">
 <meta property="og:description" content="Windows·Mac 화면 공유와 SSH/SFTP 파일 브라우저. 휴대폰 웹 뷰어, 탭과 미리보기, 다중 모니터를 지원하는 무료 오픈 소스 앱 Itda." data-ko-content="Windows·Mac 화면 공유와 SSH/SFTP 파일 브라우저. 휴대폰 웹 뷰어, 탭과 미리보기, 다중 모니터를 지원하는 무료 오픈 소스 앱 Itda." data-en-content="Itda connects screens and files on Windows and Mac, with an SSH/SFTP file browser, mobile web viewer, tabs, previews and multiple monitors. Free and open source.">
 <meta property="og:url" content="https://jiun.dev/itda/start.html">
-<meta property="og:image" content="https://jiun.dev/itda/img/og.png?v=2">
+<meta property="og:image" content="https://jiun.dev/itda/img/og.png?v=3">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:image" content="https://jiun.dev/itda/img/og.png?v=2">
+<meta name="twitter:image" content="https://jiun.dev/itda/img/og.png?v=3">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
 <link rel="stylesheet" href="style.css">
@@ -104,7 +104,7 @@
       <section class="step" id="tour">
         <div class="step-head"><span class="step-num">2</span><h2><span lang="ko">첫 화면 둘러보기</span><span lang="en">A first look</span></h2></div>
         <p><span lang="ko">왼쪽에는 <b>모든 연결 · 즐겨찾기 · 최근 사용 · 파일 브라우저 · 계정 · 주변 기기 · 공유</b>가 있고, 가운데에는 저장한 기기가 카드로 보입니다. 위쪽 검색칸에 주소를 바로 입력해 연결할 수도 있습니다.</span><span lang="en">The sidebar has <b>All · Favourites · Recent · File browser · Accounts · Nearby · Share</b>; your saved devices appear as cards. You can also type an address straight into the search box.</span></p>
-        <div class="shot"><picture><source srcset="img/home-light.png" media="(prefers-color-scheme: light)"><img src="img/home-dark.png" width="1440" height="900" loading="lazy" alt="Itda 홈 화면" data-ko-alt="Itda 홈 화면" data-en-alt="Itda home screen"></picture></div>
+        <a class="shot zoomable" href="img/home-dark.png" data-preview data-full-light="img/home-light.png" data-full-dark="img/home-dark.png"><picture><source srcset="img/home-light.png" media="(prefers-color-scheme: light)" width="1440" height="900"><img src="img/home-dark.png" loading="lazy" alt="Itda 홈 화면" data-ko-alt="Itda 홈 화면" data-en-alt="Itda home screen" width="1440" height="900"></picture><span class="zoom-hint"><span lang="ko">크게 보기 ↗</span><span lang="en">Enlarge ↗</span></span></a>
         <p class="cap"><span lang="ko">초록 점은 지금 연결할 수 있다는 뜻입니다. <kbd>Ctrl</kbd> (Mac은 <kbd>⌘</kbd>)와 <kbd>+</kbd> / <kbd>−</kbd>로 앱 화면 크기를 바꿀 수 있습니다.</span><span lang="en">A green dot means the device is reachable right now. Use <kbd>Ctrl</kbd> (<kbd>⌘</kbd> on Mac) and <kbd>+</kbd> / <kbd>−</kbd> to zoom the app.</span></p>
       </section>
 
@@ -117,7 +117,7 @@
           <li><span lang="ko">화면 공유 옆 ⓘ에서 <b>접근 허용</b>에 내 계정이 있는지 확인합니다.</span><span lang="en">Click ⓘ next to Screen Sharing and check your account is in <b>Allow access for</b>.</span></li>
           <li><span lang="ko">Itda의 <b>주변 기기</b>에서 Mac 옆 <b>추가</b>를 누르고, <b>Mac 계정 이름(짧은 이름)</b>과 로그인 암호를 넣은 뒤 <b>저장 후 연결</b>. Apple ID가 아닙니다.</span><span lang="en">In Itda's <b>Nearby</b>, click <b>Add</b> next to the Mac, enter the <b>Mac account short name</b> and login password, then <b>Save &amp; connect</b>. Not your Apple ID.</span></li>
         </ol>
-        <div class="shot"><img src="img/editor.png" width="1440" height="900" loading="lazy" alt="연결 편집 창: 종류, 주소, 계정, SSH" data-ko-alt="연결 편집 창: 종류, 주소, 계정, SSH" data-en-alt="Connection editor: kind, address, account, SSH"></div>
+        <a class="shot zoomable" href="img/editor.png" data-preview><img src="img/editor.png" loading="lazy" alt="연결 편집 창: 종류, 주소, 계정, SSH" data-ko-alt="연결 편집 창: 종류, 주소, 계정, SSH" data-en-alt="Connection editor: kind, address, account, SSH" width="1440" height="900"><span class="zoom-hint"><span lang="ko">크게 보기 ↗</span><span lang="en">Enlarge ↗</span></span></a>
         <p class="cap"><span lang="ko">계정 이름이 헷갈리면 Mac 터미널에서 <code>whoami</code>. 여러 Mac에 같은 계정을 쓰면 <b>계정</b>을 만들어 고르기만 하세요.</span><span lang="en">Unsure of the short name? Run <code>whoami</code> in Terminal. Same account on several Macs? Create an <b>Account</b> once and pick it.</span></p>
         <div class="callout ok"><svg><use href="#i-check"/></svg><div><span lang="ko"><b>밖에서도 쓸 거라면</b> 같은 공유 화면에서 <b>원격 로그인</b>도 켜고, 연결 편집에서 <b>SSH로 암호화해서 연결</b>을 켜세요.</span><span lang="en"><b>Using it away from home?</b> Also turn on <b>Remote Login</b> on the Mac and switch on <b>Encrypt with SSH</b> in the connection editor.</span></div></div>
       </section>
@@ -154,7 +154,7 @@
           <li><span lang="ko">Itda 메인 화면의 <b>파일 브라우저</b>를 누르면 별도 파일 창이 열립니다. 기기를 고르고 저장 계정이나 파일 연결 계정을 선택하세요. 화면 공유 세션은 필요하지 않습니다.</span><span lang="en">Open <b>File browser</b> in the main window to get a separate file window. Choose a device and its saved or file-connection account. No screen-sharing session is required.</span></li>
           <li><span lang="ko">탭과 경로 표시로 폴더를 탐색하고 복사·이동하세요. 기기 선택은 같은 창에서 이동하며, <kbd>⌘</kbd> / <kbd>Ctrl</kbd> + 클릭 또는 <kbd>⌘N</kbd> / <kbd>Ctrl+N</kbd>은 명시적으로 새 파일 창을 엽니다.</span><span lang="en">Browse using tabs and the path bar, then copy or move files. Device selections stay in the same window; <kbd>⌘</kbd> / <kbd>Ctrl</kbd>-click or <kbd>⌘N</kbd> / <kbd>Ctrl+N</kbd> explicitly opens another file window.</span></li>
         </ol>
-        <div class="shot"><picture><source srcset="img/files-light.png" media="(prefers-color-scheme: light)"><img src="img/files-dark.png" width="1440" height="900" loading="lazy" alt="예시 파일이 표시된 Mac 파일 브라우저" data-ko-alt="예시 파일이 표시된 Mac 파일 브라우저" data-en-alt="Mac file browser with example files"></picture></div>
+        <a class="shot zoomable" href="img/files-dark.png" data-preview data-full-light="img/files-light.png" data-full-dark="img/files-dark.png"><picture><source srcset="img/files-light.png" media="(prefers-color-scheme: light)" width="1440" height="900"><img src="img/files-dark.png" loading="lazy" alt="예시 파일이 표시된 Mac 파일 브라우저" data-ko-alt="예시 파일이 표시된 Mac 파일 브라우저" data-en-alt="Mac file browser with example files" width="1440" height="900"></picture><span class="zoom-hint"><span lang="ko">크게 보기 ↗</span><span lang="en">Enlarge ↗</span></span></a>
         <p class="cap"><span lang="ko">Mac의 아이콘·목록·열·갤러리 보기와 미리보기를 지원합니다. SMB 공유 폴더를 Finder·탐색기로 여는 동작은 상대 기기의 파일 공유 설정을 사용합니다.</span><span lang="en">Mac supports icon, list, column and gallery views with previews. Opening SMB shares in Finder or Explorer uses the remote device’s file-sharing settings.</span></p>
       </section>
 
@@ -174,7 +174,7 @@
           <li><span lang="ko">휴대폰 카메라로 QR을 찍거나 Mac 브라우저에 주소를 입력하고 PIN을 넣습니다.</span><span lang="en">Scan the QR with your phone's camera (or type the address on a Mac) and enter the PIN.</span></li>
           <li><span lang="ko">기기를 눌러 엽니다. 기기 추가·편집·계정 관리도 여기서 됩니다.</span><span lang="en">Tap a device to open it. You can add and edit devices and accounts here too.</span></li>
         </ol>
-        <div class="shot"><img src="img/share.png" width="1440" height="900" loading="lazy" alt="공유 페이지의 QR 코드와 PIN" data-ko-alt="공유 페이지의 QR 코드와 PIN" data-en-alt="QR code and PIN on the Share page"></div>
+        <a class="shot zoomable" href="img/share.png" data-preview><img src="img/share.png" loading="lazy" alt="공유 페이지의 QR 코드와 PIN" data-ko-alt="공유 페이지의 QR 코드와 PIN" data-en-alt="QR code and PIN on the Share page" width="1440" height="900"><span class="zoom-hint"><span lang="ko">크게 보기 ↗</span><span lang="en">Enlarge ↗</span></span></a>
         <p class="cap"><span lang="ko">예시 화면입니다. 실제 접속 주소와 PIN은 자신의 Itda 공유 페이지에서 확인하세요.</span><span lang="en">Example screen. Use the address and PIN shown in your own Itda Share page.</span></p>
         <div class="phone-row" style="margin-top:24px">
           <div>
@@ -187,7 +187,7 @@
             <p class="cap"><span lang="ko">Chrome·Edge·Android의 설치는 https:// 주소에서만 됩니다 — 아래 Tailscale HTTPS 주소를 쓰세요.</span><span lang="en">Chrome, Edge and Android only install from an https:// address — use the Tailscale HTTPS address below.</span></p>
             <div class="callout"><svg><use href="#i-info"/></svg><div><span lang="ko">터치: <b>탭</b> = 클릭, <b>두 손가락 탭</b> = 오른쪽 클릭, <b>두 손가락 끌기</b> = 스크롤. 위쪽 도구 막대에서 키보드(한글 가능), ⌘·Ctrl+Alt+Del 키, 클립보드를 씁니다.</span><span lang="en">Touch: <b>tap</b> = click, <b>two-finger tap</b> = right-click, <b>two-finger drag</b> = scroll. The toolbar has the keyboard, ⌘ / Ctrl+Alt+Del keys and the clipboard.</span></div></div>
           </div>
-          <div class="device-phone"><div class="phone-screen"><div class="mobile-status" aria-hidden="true"><span>9:41</span><span class="camera-island"></span><span class="status-icons">▮▮▮ <i></i></span></div><img src="img/phone-list.png" width="780" height="1560" loading="lazy" alt="예시 기기가 보이는 휴대폰 웹 뷰어" data-ko-alt="예시 기기가 보이는 휴대폰 웹 뷰어" data-en-alt="The actual phone web viewer with example devices"></div></div>
+          <div class="device-phone"><div class="phone-screen"><div class="mobile-status" aria-hidden="true"><span>9:41</span><span class="camera-island"></span><span class="status-icons"><svg viewBox="0 0 28 12"><path d="M1 10V8h2v2zm4 0V6h2v4zm4 0V4h2v6zm4 0V2h2v8z"/><rect x="19" y="3" width="7" height="6" rx="1" fill="none" stroke="currentColor"/><path d="M20 4h5v4h-5zM27 5h1v2h-1z"/></svg></span></div><div class="browser-chrome" aria-hidden="true"><span>‹</span><span class="browser-address">192.0.2.10:8780</span><span>↻</span></div><a class="phone-preview" href="img/phone-list.png" data-preview><img src="img/phone-list.png" loading="lazy" alt="예시 기기가 보이는 휴대폰 웹 뷰어" data-ko-alt="예시 기기가 보이는 휴대폰 웹 뷰어" data-en-alt="The actual phone web viewer with example devices" width="780" height="1440"></a><div class="home-indicator" aria-hidden="true"></div></div></div>
         </div>
       </section>
 
@@ -200,7 +200,7 @@
           <li><span lang="ko">Itda <b>주변 기기</b>의 <b>Tailscale — 어디서나</b>에서 기기를 추가합니다.</span><span lang="en">Add devices from <b>Tailscale — anywhere</b> in Itda's <b>Nearby</b>.</span></li>
           <li><span lang="ko">웹 뷰어의 QR을 <b>Tailscale</b>로 바꾸면 밖에서 쓸 주소가 나옵니다. Tailscale 관리 콘솔 → DNS에서 <b>HTTPS Certificates</b>를 켜면 <b>HTTPS 주소 만들기</b>도 됩니다.</span><span lang="en">Switch the web viewer's QR to <b>Tailscale</b> for the away-from-home address. Turn on <b>HTTPS Certificates</b> under DNS in the Tailscale admin console to get an <b>HTTPS address</b>.</span></li>
         </ol>
-        <div class="shot"><img src="img/nearby.png" width="1440" height="900" loading="lazy" alt="주변 기기의 Tailscale 목록" data-ko-alt="주변 기기의 Tailscale 목록" data-en-alt="Tailscale devices in Nearby"></div>
+        <a class="shot zoomable" href="img/nearby.png" data-preview><img src="img/nearby.png" loading="lazy" alt="주변 기기의 Tailscale 목록" data-ko-alt="주변 기기의 Tailscale 목록" data-en-alt="Tailscale devices in Nearby" width="1440" height="900"><span class="zoom-hint"><span lang="ko">크게 보기 ↗</span><span lang="en">Enlarge ↗</span></span></a>
       </section>
 
       <!-- trouble -->

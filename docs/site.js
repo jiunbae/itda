@@ -29,6 +29,45 @@
     apply(b.dataset.set);
   });
 
+  // Product captures open in a keyboard-accessible viewer; the original link works without JS.
+  var viewer, lastPreview;
+  document.addEventListener('click', function (e) {
+    var link = e.target.closest && e.target.closest('[data-preview]');
+    if (!link || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if (!window.HTMLDialogElement) return;
+    e.preventDefault();
+    if (!viewer) {
+      viewer = document.createElement('dialog');
+      viewer.className = 'image-dialog';
+      viewer.setAttribute('aria-labelledby', 'preview-caption');
+      viewer.innerHTML = '<header><p id="preview-caption"></p><button type="button" data-image-size></button><button type="button" data-image-close></button></header><div class="image-scroll"><img alt=""></div>';
+      document.body.appendChild(viewer);
+      viewer.querySelector('[data-image-close]').addEventListener('click', function () { viewer.close(); });
+      viewer.querySelector('[data-image-size]').addEventListener('click', function () {
+        viewer.classList.toggle('actual');
+        this.setAttribute('aria-pressed', String(viewer.classList.contains('actual')));
+      });
+      viewer.addEventListener('close', function () { if (lastPreview) lastPreview.focus({preventScroll:true}); });
+      viewer.addEventListener('click', function (event) {
+        var box = viewer.getBoundingClientRect();
+        if (event.target === viewer && (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom)) viewer.close();
+      });
+    }
+    lastPreview = link;
+    var img = link.querySelector('img');
+    var dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    viewer.querySelector('img').src = link.dataset[dark ? 'fullDark' : 'fullLight'] || link.dataset.full || link.href;
+    viewer.querySelector('img').alt = img ? img.alt : '';
+    viewer.querySelector('p').textContent = img ? img.alt : (lang === 'ko' ? '화면 크게 보기' : 'Screenshot');
+    viewer.querySelector('[data-image-close]').textContent = lang === 'ko' ? '닫기' : 'Close';
+    var size = viewer.querySelector('[data-image-size]');
+    size.textContent = lang === 'ko' ? '원본 크기' : 'Actual size';
+    size.setAttribute('aria-pressed', 'false');
+    viewer.classList.remove('actual');
+    viewer.showModal();
+    viewer.querySelector('[data-image-close]').focus();
+  });
+
   // ---- nav border once scrolled
   var nav = document.querySelector('.nav');
   function onScroll() { if (nav) nav.classList.toggle('scrolled', window.scrollY > 8); }

@@ -22,17 +22,37 @@ try{
       const broken=await page.evaluate(()=>[...document.images].filter(i=>!i.complete||!i.naturalWidth).map(i=>i.currentSrc));
       assert(!broken.length,`Broken images: ${broken}`);
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Document overflow');
-      const overflow=await page.evaluate(()=>[...document.querySelectorAll('.nav .wrap,.hero-copy,.device-scene,.device-phone,.device-tablet,.show-copy,.features,.paths,.phone-row,.final')].filter(e=>{const r=e.getBoundingClientRect();return r.width&& (r.left < -2||r.right>innerWidth+2);}).map(e=>e.className));
+      const overflow=await page.evaluate(()=>[...document.querySelectorAll('.nav .wrap,.hero-copy,.device-scene,.device-phone,.device-tablet,.show-copy,.features,.paths,.phone-row,.final,.product-visual,.discovery-detail,.capture-heading')].filter(e=>{const r=e.getBoundingClientRect();return r.width&& (r.left < -2||r.right>innerWidth+2);}).map(e=>e.className));
       assert(!overflow.length,`Overflow ${width}/${colorScheme}/${lang}/${name}: ${overflow}`);
+      const readable=await page.evaluate(()=>[...document.querySelectorAll('img[data-ui-font]')].map(i=>({src:i.currentSrc,size:Number(i.dataset.uiFont)*i.getBoundingClientRect().width/i.naturalWidth})).filter(i=>i.size<11.5));
+      assert(!readable.length,`Product detail text too small: ${JSON.stringify(readable)}`);
+      const wrongPreview=await page.evaluate(()=>[...document.querySelectorAll("[data-preview]")].filter(a=>{const img=a.querySelector("img");if(!img)return false;const family=s=>new URL(s,location.href).pathname.split("/").pop().split(/[.-]/)[0];const target=a.dataset.full||a.dataset.fullLight||a.href;return family(img.currentSrc)!==family(target);}).map(a=>a.href));
+      assert(!wrongPreview.length,`Screenshot opens unrelated image: ${wrongPreview}`);
+      const preview=page.locator('[data-preview]').first();
+      if(await preview.count()){
+        await preview.click();
+        const dialog=page.locator('.image-dialog');
+        assert(await dialog.evaluate(d=>d.open),'Screenshot viewer did not open');
+        await dialog.locator('img').evaluate(i=>i.decode());
+        await dialog.locator('[data-image-size]').click();
+        assert(await dialog.evaluate(d=>d.classList.contains('actual')),'Actual-size toggle failed');
+        await page.keyboard.press('Escape');
+        assert(await preview.evaluate(a=>document.activeElement===a),'Viewer did not restore focus');
+        await preview.evaluate(a=>a.blur());
+      }
       const dead=await page.evaluate(()=>[...document.querySelectorAll('a[href^="#"]')].filter(a=>a.hash.length>1&&!document.getElementById(decodeURIComponent(a.hash.slice(1)))).map(a=>a.hash));
       assert(!dead.length,`Broken anchors: ${dead}`);
       const ratios=await page.evaluate(()=>[...document.querySelectorAll('.device-laptop img,.device-tablet img,.device-phone img')].map(i=>{const r=i.getBoundingClientRect();return Math.abs(r.width/r.height-i.naturalWidth/i.naturalHeight);}));
       assert(ratios.every(d=>d<.01),`Device image distortion at${width}/${name}`);
       if(width===390||width===1440){
         await page.screenshot({path:path.join(out,`${name?'guide':'landing'}-${width}-${colorScheme}-${lang}.png`)});
+        if(!name&&lang==='ko'&&colorScheme==='light'){
+          const stories=page.locator('.show');
+          for(let i=0;i<await stories.count();i++)await stories.nth(i).screenshot({path:path.join(out,`story-${i}-${width}.png`)});
+        }
         if(!name&&width===1440&&lang==='ko'){
           await page.locator('.stage').screenshot({path:path.join(out,`devices-${colorScheme}.png`)});
-          await page.locator('.browser-devices').screenshot({path:path.join(out,`tablet-${colorScheme}.png`)});
+          await page.locator('.browser-devices').screenshot({path:path.join(out,`phone-feature-${colorScheme}.png`)});
         }
       }
     }
@@ -41,5 +61,5 @@ try{
     assert(await page.evaluate(()=>document.documentElement.lang)!==lang,'Language control not interactive');
     await context.close();
   }
-  console.log('PASS: 40 landing/guide layouts, 5 widths, KO/EN, light/dark, images, anchors, device ratios and language controls');
+  console.log('PASS: 40 landing/guide layouts, 5 widths, KO/EN, light/dark, images, anchors, device ratios, readable details, image viewer and language controls');
 }finally{await browser.close();}
