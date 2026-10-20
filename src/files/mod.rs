@@ -116,6 +116,7 @@ fn connecting() -> &'static Mutex<HashMap<String, Arc<Control>>> {
 type Jobs = HashMap<String, (String, Arc<Control>)>;
 static JOBS: OnceLock<Mutex<Jobs>> = OnceLock::new();
 /// Transfers queued or running, also those whose file window was already closed.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn active_jobs() -> usize {
     jobs().lock().unwrap().len()
 }
@@ -284,6 +285,17 @@ fn local_entry(p: &Path) -> io::Result<Entry> {
             .map_or(0, |t| t.as_secs()),
         mode: local_mode(&m),
     })
+}
+/// Windows' "This PC": the drives that are there (an empty optical drive is not).
+fn drives() -> Vec<Entry> {
+    if !cfg!(windows) {
+        return Vec::new();
+    }
+    (b'A'..=b'Z')
+        .map(|l| format!("{}:", l as char))
+        .filter(|d| Path::new(&format!("{d}\\")).is_dir())
+        .map(|name| Entry { name, dir: true, link: false, size: 0, modified: 0, mode: None })
+        .collect()
 }
 /// The folder's entries. One that can't be shown or copied (a name that isn't UTF-8, or
 /// that name() refuses, like macOS's "Icon\r") is left out rather than failing the folder.
@@ -613,9 +625,16 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                     }
                     Ok(json!({"preview":v["side"]=="remote"}))
                 }
+                // This computer's home, for a window that has no device connected yet.
+                "local_home" => {
+                    let home = local_home().to_string_lossy().into_owned();
+                    Ok(json!({"path":home,"entries":local_list(&home)?}))
+                }
                 "list" => {
                     let p = get(&v, "path");
-                    if v["side"] == "local" {
+                    if v["side"] == "local" && p.is_empty() && cfg!(windows) {
+                        Ok(json!({"path":"","entries":drives()}))
+                    } else if v["side"] == "local" {
                         Ok(
                             json!({"path":canonical(&p)?,"entries":local_list(&p)?}),
                         )
@@ -1056,6 +1075,14 @@ pub fn shutdown() {
 
 #[cfg(test)]
 mod tests {
+    /// This PC: the system drive is listed as a folder named like Explorer's drive letter.
+    #[cfg(windows)]
+    #[test]
+    fn drives_list_the_system_drive() {
+        let d = drives();
+        assert!(d.iter().any(|e| e.name == "C:" && e.dir), "{:?}", d.iter().map(|e| &e.name).collect::<Vec<_>>());
+    }
+
     use super::*;
 
     #[test]

@@ -410,7 +410,11 @@ fn on_ipc(v: Value) {
             });
         }
         "files" => {
-            let Some(mut host) = home(|m| m.hosts.iter().find(|h| h.id == id).cloned()) else { return };
+            // The device-less file window still browses this computer's own files.
+            let local_only = id == crate::files::locations::NETWORK
+                && (v["op"] == "local_home" || (v["side"] == "local" && v["op"] != "transfer"));
+            let found = home(|m| m.hosts.iter().find(|h| h.id == id).cloned());
+            let Some(mut host) = found.or_else(|| local_only.then(|| Host { id: id.clone(), ..Default::default() })) else { return };
             if v["op"] == "finder" {
                 std::thread::spawn(move || {
                     let result = crate::files::native_target(&host).and_then(|target| crate::files::open_native(&target));
