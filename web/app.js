@@ -59,7 +59,7 @@ function send(cmd, data = {}) {
   try {
     window.ipc.postMessage(JSON.stringify({ cmd, ...data }));
   } catch (e) {
-    console.log('ipc (no host)', cmd, data);
+    console.log('ipc (no host)', cmd);
   }
 }
 
@@ -265,6 +265,7 @@ function onMessage(m) {
     case 'new':
       if (!topModal()) openEdit();
       break;
+    case 'remote_setup': return window.ItdaRemoteSetup?.message(m);
     case 'update':
       // A newer release: offered in the sidebar and Settings; installing always asks first.
       if (m.stage) { S.updateStage = m.stage; toast(`업데이트: ${m.stage}`, 'E896'); }
@@ -808,6 +809,7 @@ function renderSettings() {
     ${setting('E91B', '미리보기 저장', `마지막 화면을 ${HERE}에만 작게 저장해 주소록에 표시합니다`, toggle('thumbnails', st.thumbnails), true)}
 
     <div class="group-title">업데이트</div>
+    ${setting('E896', '원격 기기에 설치·설정 공유', 'SSH로 Itda를 설치하고 선택한 연결 프로필과 계정 설정을 전달합니다', `<button class="btn" data-act="remote-setup">원격 설치 열기</button>`)}
     ${setting('E896', S.update ? `새 버전 ${esc(S.update.version)}` : `Itda ${esc(S.version)}`, S.updateStage ? esc(S.updateStage) : S.update ? `지금 버전은 ${esc(S.version)}입니다. 업데이트하면 Itda가 다시 시작되고 열린 연결이 끊깁니다.${S.update.page ? ' <a href="' + esc(S.update.page) + '" data-ext>변경 사항</a>' : ''}` : '새 버전이 있는지 확인합니다', S.update ? `<button class="btn primary" data-act="update-install" ${S.updateStage ? 'disabled' : ''}>${I('E896')}업데이트</button>` : `<button class="btn" data-act="update-check">${I('E72C')}업데이트 확인</button>`)}
     ${setting('E823', '새 버전 자동 확인', '실행할 때와 하루에 한 번 GitHub 릴리스를 확인합니다. 설치는 항상 직접 고릅니다', toggle('auto_update', st.auto_update !== false), true)}
 
@@ -950,7 +952,7 @@ function openModal(key, html, opts = {}) {
 }
 
 function closeModal(key) {
-  $$(`#modals .scrim${key ? `[data-key="${key}"]` : ''}`).forEach((m) => m.remove());
+  $$(`#modals .scrim${key ? `[data-key="${key}"]` : ''}`).forEach((m) => {m.dispatchEvent(new Event('itda-modal-close'));m.remove();});
 }
 
 function topModal() {
@@ -1509,6 +1511,7 @@ function showCtx(id, x, y) {
   else items.push(['focus', 'E8A7', '창으로 이동'], ['disconnect', 'E711', '연결 끊기']);
   if (MAC && ['mac', 'macos'].includes(h.os) && h.kind !== 'rdp') items.push(['apple-screen-sharing', 'E7F4', 'Apple 화면 공유 앱에서 열기']);
   items.push(['files', 'E8B7', '파일 열기']);
+  if(h.os!=='linux')items.push(['remote-setup','E896','Itda 설치·설정 공유…']);
   items.push('-', ['edit', 'E70F', '편집'], ['dup', 'E8C8', '복제'], ['fav', h.favorite ? 'E8D9' : 'E734', h.favorite ? '즐겨찾기 해제' : '즐겨찾기에 추가']);
   items.push(['thumb-pick', 'E91B', '미리보기 이미지 지정…']);
   if (h.custom_thumb) items.push(['thumb-reset', 'E72C', '미리보기를 마지막 화면으로']);
@@ -1554,6 +1557,7 @@ function act(a, el) {
       if (MAC && ['mac', 'macos'].includes(hostById(id)?.os) && hostById(id)?.kind !== 'rdp') send('apple_screen_sharing', { id });
       return;
     case 'files': return window.ItdaFiles.launch(hostById(id));
+    case 'remote-setup': return window.ItdaRemoteSetup.open({id,hosts:S.hosts,accounts:S.accounts,send,modal:openModal,close:closeModal,toast,esc});
     case 'connect': return connect(id);
     case 'focus': return send('focus', { id });
     case 'cancel': return send('cancel', { id });

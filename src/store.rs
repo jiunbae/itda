@@ -454,17 +454,21 @@ fn w(s: &str) -> Vec<u16> {
 }
 
 #[cfg(windows)]
-fn cred_read(target: &str) -> Option<String> {
+fn cred_read_checked(target: &str) -> std::io::Result<Option<String>> {
     unsafe {
         let mut p: *mut CREDENTIALW = std::ptr::null_mut();
         if CredReadW(w(target).as_ptr(), CRED_TYPE_GENERIC, 0, &mut p) == 0 {
-            return None;
+            let code=windows_sys::Win32::Foundation::GetLastError();
+            if code==windows_sys::Win32::Foundation::ERROR_NOT_FOUND {return Ok(None);}
+            return Err(std::io::Error::other("Windows 자격 증명 관리자에서 기존 로그인 정보를 읽지 못했습니다"));
         }
         let c = &*p;
-        let blob = std::slice::from_raw_parts(c.CredentialBlob as *const u16, c.CredentialBlobSize as usize / 2);
-        let s = String::from_utf16_lossy(blob);
+        let result=if c.CredentialBlobSize==0 {Ok(String::new())} else {
+            let blob=std::slice::from_raw_parts(c.CredentialBlob as *const u16,c.CredentialBlobSize as usize/2);
+            String::from_utf16(blob).map_err(|_|std::io::Error::other("저장된 로그인 정보의 문자를 읽지 못했습니다"))
+        };
         CredFree(p as _);
-        Some(s)
+        result.map(Some)
     }
 }
 
@@ -501,14 +505,31 @@ fn security(args: &[&str]) -> Option<std::process::Output> {
 }
 
 #[cfg(not(windows))]
-fn cred_read(target: &str) -> Option<String> {
-    let o = security(&["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", target, "-w"])?;
-    if !o.status.success() {
-        return None;
+fn security_password(printed:&str)->std::io::Result<String> {
+    let value=printed.lines().find_map(|line|line.strip_prefix("password: ")).ok_or_else(||std::io::Error::other("키체인의 응답을 읽지 못했습니다"))?;
+    if let Some(hex)=value.strip_prefix("0x") {
+        let hex=hex.split_whitespace().next().unwrap_or("");
+        if hex.len()%2!=0 || !hex.is_ascii(){return Err(std::io::Error::other("키체인의 비밀번호 형식이 올바르지 않습니다"));}
+        let bytes=zeroize::Zeroizing::new((0..hex.len()).step_by(2).map(|i|u8::from_str_radix(&hex[i..i+2],16)).collect::<Result<Vec<_>,_>>().map_err(|_|std::io::Error::other("키체인의 비밀번호 형식이 올바르지 않습니다"))?);
+        return std::str::from_utf8(&bytes).map(str::to_owned).map_err(|_|std::io::Error::other("저장된 로그인 정보의 문자를 읽지 못했습니다"));
     }
-    let s = String::from_utf8_lossy(&o.stdout);
-    Some(s.strip_suffix('\n').unwrap_or(&s).to_string())
+    if value.is_empty(){return Ok(String::new());}
+    value.strip_prefix('"').and_then(|v|v.strip_suffix('"')).map(str::to_owned).ok_or_else(||std::io::Error::other("키체인의 비밀번호 형식이 올바르지 않습니다"))
 }
+
+#[cfg(not(windows))]
+fn cred_read_checked(target: &str)->std::io::Result<Option<String>> {
+    // -w prints non-ASCII/control bytes as unmarked hex. -g has an explicit
+    // 0x prefix, so Korean passwords and literal hex strings remain distinct.
+    let mut o=security(&["find-generic-password","-s",KEYCHAIN_SERVICE,"-a",target,"-g"]).ok_or_else(||std::io::Error::other("Mac 키체인을 열지 못했습니다"))?;
+    let result=if o.status.success(){security_password(&String::from_utf8_lossy(&o.stderr)).map(Some)}
+        // errSecItemNotFound (-25300), returned as an eight-bit process status.
+        else if o.status.code()==Some(44){Ok(None)}
+        else {Err(std::io::Error::other("Mac 키체인의 기존 로그인 정보를 읽지 못했습니다. 키체인을 잠금 해제한 뒤 다시 시도하세요"))};
+    use zeroize::Zeroize;o.stdout.zeroize();o.stderr.zeroize();result
+}
+
+fn cred_read(target:&str)->Option<String> {cred_read_checked(target).ok().flatten()}
 
 #[cfg(not(windows))]
 fn cred_delete(target: &str) {
@@ -516,12 +537,21 @@ fn cred_delete(target: &str) {
 }
 
 #[cfg(not(windows))]
+fn security_arg(value:&str)->String {
+    format!("\"{}\"",value.replace('\\',"\\\\").replace('"',"\\\""))
+}
+
+#[cfg(not(windows))]
 fn cred_write(target: &str, pass: &str) {
     use std::io::Write;
     // The secret goes through stdin (`security -i`), hex-encoded (-X), so it never shows up
     // in the process list. -U updates an existing item.
-    let hex: String = pass.bytes().map(|b| format!("{b:02x}")).collect();
-    let line = format!("add-generic-password -U -s {KEYCHAIN_SERVICE} -a \"{target}\" -l \"Itda ({target})\" -X {hex}\n");
+    let hex=zeroize::Zeroizing::new(pass.bytes().map(|b|format!("{b:02x}")).collect::<String>());
+    if target.chars().any(char::is_control) { return; }
+    let line=zeroize::Zeroizing::new(format!("add-generic-password -U -s {KEYCHAIN_SERVICE} -a {} -l {} -X \"{}\"\n",security_arg(target),security_arg(&format!("Itda ({target})")),&*hex));
+    // Apple's interactive parser has a 4096-byte line buffer. Never let a
+    // truncated line replace a valid stored password with partial bytes.
+    if line.len()>=4096 {return;}
     let child = std::process::Command::new("/usr/bin/security")
         .arg("-i")
         .stdin(std::process::Stdio::piped())
@@ -614,8 +644,50 @@ pub fn set_password(id: &str, pass: Option<&str>) {
     }
 }
 
+/// A locked/inaccessible vault must not be treated as an absent rollback value.
+pub fn get_password_checked(id:&str)->std::io::Result<Option<String>> {
+    match cred_read_checked(&target(id))? {
+        Some(value)=>Ok(Some(value)),
+        None=>cred_read_checked(&format!("mvnc/{id}")),
+    }
+}
+
+/// Configuration provisioning must not report success when the OS vault rejected a write.
+pub fn set_password_checked(id: &str, pass: Option<&str>) -> std::io::Result<()> {
+    if id.chars().any(char::is_control) {return Err(std::io::Error::other("로그인 식별자에 제어 문자가 있습니다"));}
+    #[cfg(not(windows))]
+    if pass.is_some_and(|p|p.len().saturating_mul(2)+format!("add-generic-password -U -s {KEYCHAIN_SERVICE} -a {} -l {} -X \"\"\n",security_arg(&target(id)),security_arg(&format!("Itda ({})",target(id)))).len()>=4096) {
+        return Err(std::io::Error::other("비밀번호가 이 Mac의 보안 저장소 입력 한도를 초과했습니다. 해당 항목을 제외하고 다시 시도하세요"));
+    }
+    set_password(id,pass);
+    let mut got=cred_read_checked(&target(id))?;
+    let ok=got.as_deref()==pass;
+    if let Some(value)=got.as_mut() {use zeroize::Zeroize;value.zeroize();}
+    if ok {
+        Ok(())
+    } else {
+        #[cfg(not(windows))]
+        let message="Mac 키체인에 로그인 정보를 저장하지 못했습니다. 로그인 키체인을 잠금 해제한 후 다시 시도하세요";
+        #[cfg(windows)]
+        let message="Windows 자격 증명 관리자에 로그인 정보를 저장하지 못했습니다. 비밀번호 공유를 해제하면 프로필만 가져올 수 있습니다";
+        Err(std::io::Error::other(message))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(not(windows))]
+    #[test]
+    fn keychain_password_format_preserves_unicode_quotes_and_literal_hex() {
+        assert_eq!(super::security_password("password: \"70617373\"\n").unwrap(),"70617373");
+        assert_eq!(super::security_password("password: \"a\"b\"\n").unwrap(),"a\"b");
+        assert_eq!(super::security_password("password: \n").unwrap(),"");
+        let value="한글\\line\n끝";
+        let hex:String=value.bytes().map(|b|format!("{b:02X}")).collect();
+        assert_eq!(super::security_password(&format!("password: 0x{hex}  \"escaped hint\"\n")).unwrap(),value);
+        assert!(super::security_password("password: 0xZZ\n").is_err());
+        assert_eq!(super::security_arg("a\\b\"c"),"\"a\\\\b\\\"c\"");
+    }
     #[test]
     fn groups_from_old_comma_field() {
         let mut h = super::Host { group: " 집, 회사,,집 ".into(), ..Default::default() };

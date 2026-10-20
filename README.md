@@ -64,6 +64,12 @@ Under the hood each connection window is the web viewer (noVNC) against a privat
 
 > Itda's interface is in Korean. The [website](https://jiun.dev/itda/) has an English version of the guide, and there is a [Korean README](README.ko.md).
 
+### Install on another device over SSH
+
+First connect to the destination through Itda SSH file browsing or an SSH screen connection, then open **설정 → 원격 기기에 설치·설정 공유**, or the same action in a saved device's menu. Select a saved SSH account or enter an address, then choose the connection profiles and portable app preferences to send. A confirmation shows the destination and selected scope before installation. The destination needs macOS Remote Login or Windows OpenSSH Server; installation uses the SSH user's permissions and does not enable remote access services.
+
+Installation requires an existing trusted SSH host key and uses strict checking; its SHA256 fingerprints appear in the confirmation. A newer destination app is never deliberately downgraded. Passwords and explicitly assigned account SSH private keys are separate, unchecked options. They travel over SSH stdin into the destination's OS credential store and private key folder. Default `~/.ssh` contents, agent keys, host trust records, sharing/public-web settings, and macOS permission grants are excluded. Existing destination profiles remain; sharing again updates only the imported profiles. Configuration backups are retained under `Itda/configuration-backups`. An already running destination app must be closed before applying; the optional cooperative close can be refused and never force-kills the app. On Windows, credential sharing is checked with a disposable test entry before installation; SSH logons without credential-vault access must omit passwords and key passphrases. An SSH session without an interactive desktop installs successfully but asks you to open Itda directly on the destination.
+
 ## 📁 Files without a screen connection
 
 The main window's **파일 브라우저 (File browser)** entry opens a separate file window, leaving the main screen available. Selecting a device or recent folder navigates in the current window using its saved account. **Cmd-click** on macOS or **Ctrl-click** on Windows opens another file window; **Cmd/Ctrl+N** opens the current location in a new window. Multiple windows can show the same device with independent browsing and transfers. The macOS path bar and item/selection count share one footer row.

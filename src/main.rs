@@ -14,6 +14,7 @@ mod h264_mac;
 mod host_mac;
 mod hp_upgrade;
 mod update;
+mod remote_setup;
 /// Itda's high-performance sharing port on a Mac.
 pub const fn host_mac_port() -> u16 {
     5910
@@ -90,6 +91,7 @@ fn askpass_mode() {
 #[cfg(not(windows))]
 fn main() {
     askpass_mode();
+    if remote_setup::import_mode() { return; }
     // Read-only check in a fresh instance of the same executable. Do not initialize
     // sharing, the home window, or a permission request in this mode.
     #[cfg(target_os = "macos")]
@@ -116,6 +118,10 @@ fn main() {
     }
     log::init(if cfg!(debug_assertions) && std::env::var_os("ITDA_NATIVE_VIEWER_TEST").is_some() { "monitor-test" } else { "" });
     std::panic::set_hook(Box::new(|p| crate::log!("PANIC: {p}\n{}", std::backtrace::Backtrace::force_capture())));
+    #[cfg(target_os="macos")]
+    let _configuration_lock=match remote_setup::application_lock() {
+        Ok(lock)=>lock,Err(e)=>{crate::log!("configuration: {e}");return;}
+    };
     #[cfg(target_os = "macos")]
     if host_mac::enabled() {
         host_mac::start_background();
@@ -129,6 +135,7 @@ fn main() {
 #[cfg(windows)]
 fn main() {
     askpass_mode();
+    if remote_setup::import_mode() { return; }
     let mut args = std::env::args().skip(1).peekable();
     let managed = args.peek().map(String::as_str) == Some("--session");
     log::init(if managed { "session" } else { "" });
