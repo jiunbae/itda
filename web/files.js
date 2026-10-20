@@ -204,6 +204,7 @@
   const undo = [];
   const panes = { local: emptyPane(), remote: emptyPane() };
   const jobs = new Map();
+  let showTransferHistory = false;
   const extension = (name = "") => name.includes(".") ? name.split(".").pop().toLowerCase() : "";
   const kind = (e) => e.link ? "심볼릭 링크" : e.dir ? "폴더" : ({ txt: "텍스트 문서", md: "Markdown 문서", pdf: "PDF 문서", png: "PNG 이미지", jpg: "JPEG 이미지", jpeg: "JPEG 이미지", heic: "HEIF 이미지", zip: "ZIP 아카이브", mp4: "MPEG-4 동영상", mp3: "MP3 오디오" }[extension(e.name)] || (extension(e.name) ? `${extension(e.name).toUpperCase()} 문서` : "문서"));
   const icon = (dir, name = "") => {
@@ -1011,7 +1012,7 @@
     }
 
     removeMenu();
-    if (e.target.closest("[data-cancel-job]")) return;
+    if (e.target.closest("[data-cancel-job], [data-dismiss-job]")) return;
     const action = e.target.closest("[data-action]");
     if (action) {
       act(action.dataset.action);
@@ -1130,8 +1131,8 @@
         render();
         return;
       case "transfers":
-        layer.querySelector(".files-jobs").hidden =
-          !layer.querySelector(".files-jobs").hidden;
+        showTransferHistory = !showTransferHistory;
+        renderJobs();
         return;
       case "more": {
         const rect = layer.querySelector('[data-action="more"]').getBoundingClientRect();
@@ -1291,9 +1292,10 @@
   function renderJobs() {
     if (!layer) return;
     const current = [...jobs.values()]
-      .filter((j) => j.id === host.id && ["queued", "running", "failed"].includes(j.state))
+      .filter((j) => j.id === host.id && (showTransferHistory || ["queued", "running", "failed"].includes(j.state)))
       .slice(-12);
-    layer.querySelector(".files-jobs").hidden = current.length === 0;
+    layer.querySelector(".files-jobs").hidden = current.length === 0 && !showTransferHistory;
+    layer.querySelectorAll('[data-action="transfers"]').forEach(b => b.setAttribute("aria-pressed", String(showTransferHistory)));
     layer.querySelector(".files-jobs").innerHTML = current
       .map((j) => {
         const live = ["queued", "running"].includes(j.state);
@@ -1304,7 +1306,7 @@
           failed: "실패",
           cancelled: "취소됨",
         }[j.state];
-        return `<div class="files-job"><span>${j.engine === "rsync" ? "증분" : "파일"}</span><span class="job-label" title="${esc(j.error || j.file || "")}">${esc(j.file || "파일 전송")} · ${esc(text)}${j.error ? ` · ${esc(j.error)}` : ""}</span>${live ? `<progress ${j.total ? `max="${j.total}" value="${j.bytes || 0}"` : ""}></progress><button class="btn sm" data-cancel-job="${esc(j.job)}">취소</button>` : ""}</div>`;
+        return `<div class="files-job"><span>${j.engine === "rsync" ? "증분" : "파일"}</span><span class="job-label" title="${esc(j.error || j.file || "")}">${esc(j.file || "파일 전송")} · ${esc(text)}${j.error ? ` · ${esc(j.error)}` : ""}</span>${live ? `<progress ${j.total ? `max="${j.total}" value="${j.bytes || 0}"` : ""}></progress><button class="btn sm" data-cancel-job="${esc(j.job)}">취소</button>` : `<button class="btn sm" data-dismiss-job="${esc(j.job)}" aria-label="전송 알림 닫기">닫기</button>`}</div>`;
       })
       .join("");
     layer
@@ -1312,6 +1314,8 @@
       .forEach(
         (b) => (b.onclick = () => call("cancel", { job: b.dataset.cancelJob })),
       );
+    layer.querySelectorAll("[data-dismiss-job]").forEach(b => b.onclick = () => { jobs.delete(b.dataset.dismissJob); renderJobs(); });
+    if (!current.length && showTransferHistory) layer.querySelector(".files-jobs").textContent = "최근 전송 내역이 없습니다";
   }
   function context(e) {
     if (!layer) return;
@@ -1697,7 +1701,7 @@
       jobs.set(m.job, { ...previous, ...m });
       if (m.state === "completed" && previous.state !== "completed") {
         const device = hostById(m.id);
-        toast(`${device ? `${label(device)} · ` : ""}${previous.moving || m.moving ? "파일 이동 완료" : "파일 복사 완료"}`, "E8B7");
+        toast(`${device ? `${label(device)} · ` : ""}${previous.kind === "export" || m.kind === "export" ? "파일 내보내기 완료" : previous.moving || m.moving ? "파일 이동 완료" : "파일 복사 완료"}`, "E8B7");
       }
       if (jobs.size > 200) {
         const old = [...jobs].find(([, j]) =>

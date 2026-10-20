@@ -435,7 +435,7 @@ pub(super) fn export_batch(files: &[super::export::File], targets: &[PathBuf], e
     let control=Arc::new(Control::default());
     let job=crate::store::new_id();
     jobs().lock().unwrap().insert(job.clone(),(file.id.clone(),control.clone()));
-    emit(json!({"type":"files_job","id":file.id,"job":job,"state":"queued","file":file.name}));
+    emit(json!({"type":"files_job","id":file.id,"job":job,"state":"queued","kind":"export","file":file.name}));
     let result: io::Result<()>=(|| {
         let _slot=slot(&control)?;
         let mut src=if file.remote { Endpoint::new(true,&*connection(&file.id)?,&control)? } else { Endpoint{sftp:None,cfg:None} };

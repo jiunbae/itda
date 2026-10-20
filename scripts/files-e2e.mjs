@@ -340,7 +340,10 @@ try {
       await page.locator('#toasts .toast').filter({hasText:'파일 복사 완료'}).waitFor({state:'detached',timeout:5000});
       await page.evaluate(() => ItdaFiles.message({type:'files_job',id:'files-fixture',window:ItdaFiles.windowToken,job:'failed-notice-check',state:'failed',error:'fixture failure'}));
       assert(await page.locator('.files-jobs').isVisible() && await page.locator('.files-job').filter({hasText:'fixture failure'}).count() === 1, "Failed transfer details were hidden");
-      await page.evaluate(() => ItdaFiles.message({type:'files_job',id:'files-fixture',window:ItdaFiles.windowToken,job:'failed-notice-check',state:'cancelled'}));
+      await page.locator('[data-dismiss-job="failed-notice-check"]').click();
+      assert(await page.locator('.files-jobs').isHidden(), "Dismissed error kept the footer expanded");
+      await action("transfers");
+      assert(await page.locator('.files-job').filter({hasText:'완료'}).count() === 1, "Explicit history did not show the completed transfer");
       console.log('Transfer completion: transient deduplicated toast, collapsed footer and persistent failure passed');
       // Two real pages of the same host: results and disconnect must stay isolated.
       const originalPath = await page.locator('[data-path="remote"]').inputValue();
@@ -523,6 +526,7 @@ try {
       await page.locator('.files-prompt [name="path"]').fill(remote);
       await page.locator('[data-choice="ok"]').click();
     }
+    if (!platform.startsWith("Mac")) await action("transfers");
     const folder = page
       .locator('[data-pane="remote"] [data-index]')
       .filter({ hasText: "Folder" });
