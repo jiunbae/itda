@@ -520,6 +520,22 @@ try {
       if (process.env.SCREENSHOT_DIR) await page.screenshot({path: path.join(process.env.SCREENSHOT_DIR, 'files-columns.png')});
       await action('up');
       await page.locator('.files-column:last-child [data-index]').filter({ hasText: '한글 문서.txt' }).waitFor();
+      let releaseOldList;
+      const oldListGate = new Promise(resolve => { releaseOldList = resolve; });
+      await page.route('**/ipc*', async route => {
+        const body = route.request().postDataJSON();
+        if (body.cmd === 'files' && body.op === 'list' && body.path === path.join(remote,'Folder')) await oldListGate;
+        await route.continue();
+      });
+      await page.locator('.files-column:last-child [data-index]').filter({hasText:'Folder'}).click();
+      await page.locator('.files-device-link[data-device="files-second"]').click();
+      await page.locator('.files-device-link.on[data-device="files-second"]').waitFor();
+      assert(await page.locator('.files-column').last().getAttribute('data-column') === await page.locator('[data-path="remote"]').inputValue(), "Old pending folder leaked into the new device");
+      releaseOldList();
+      await page.unroute('**/ipc*');
+      await page.locator('.files-device-link[data-device="files-fixture"]').click();
+      await page.locator('.files-device-link.on[data-device="files-fixture"]').waitFor();
+      console.log('Switching devices during column loading clears the old destination');
       await page.keyboard.press('Meta+2');
       assert(await page.locator('[data-pane="remote"] .files-list').evaluate(el => getComputedStyle(el).userSelect === 'none'), "File rows permit text selection");
       const row = page.locator('[data-pane="remote"] tr[data-index]').first();
@@ -729,6 +745,12 @@ try {
     const previousPath = await page
       .locator('[data-path="remote"]')
       .inputValue();
+    await page.locator('[data-action="network"]').first().click();
+    const recentIndex = await page.locator('.files-layer [data-recent]').evaluateAll((rows, path) => rows.find(row => row.title === path)?.dataset.recent, previousPath);
+    assert(recentIndex !== undefined, "Dedicated file window lost recent folders");
+    await page.locator(`.files-layer [data-recent="${recentIndex}"]`).click();
+    await page.locator('[data-path="remote"]').waitFor();
+    assert(await page.locator('[data-path="remote"]').inputValue() === previousPath, "Recent folder navigated to the wrong location");
     await page.locator('[data-action="network"]').first().click();
     if (platform.startsWith("Mac")) {
       await page.evaluate(() => document.activeElement.blur());
