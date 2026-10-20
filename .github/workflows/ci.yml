@@ -32,6 +32,10 @@ jobs:
 
   macos:
     runs-on: macos-latest
+    env:
+      # A step's `if` cannot read secrets; these say whether they are configured.
+      HAS_SIGNING: ${{ secrets.MACOS_CERT_P12_B64 != '' }}
+      HAS_NOTARY: ${{ secrets.NOTARY_KEY_P8_B64 != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -42,8 +46,45 @@ jobs:
         run: node scripts/raw-decoder-test.mjs
       - name: Test
         run: cargo test --release
+      - name: Signing keychain
+        id: sign
+        env:
+          P12: ${{ secrets.MACOS_CERT_P12_B64 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          KC="$RUNNER_TEMP/sign.keychain-db"; KPW=$(openssl rand -hex 16)
+          security create-keychain -p "$KPW" "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$KPW" "$KC"
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KPW" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          echo "keychain=$KC" >> "$GITHUB_OUTPUT"
+      - name: Notary key
+        id: notary
+        env:
+          P8: ${{ secrets.NOTARY_KEY_P8_B64 }}
+        # Notarizing takes minutes: only the main builds that become releases.
+        if: env.HAS_NOTARY == 'true' && steps.sign.outputs.keychain != '' && github.event_name == 'push'
+        run: |
+          printf '%s' "$P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          echo "key=$RUNNER_TEMP/notary.p8" >> "$GITHUB_OUTPUT"
       - name: Bundle (universal)
+        env:
+          MACOS_SIGN_IDENTITY: "${{ steps.sign.outputs.keychain && 'Developer ID Application: Jiun Bae (728FW73BS8)' || '' }}"
+          MACOS_KEYCHAIN: ${{ steps.sign.outputs.keychain }}
+          NOTARY_KEY: ${{ steps.notary.outputs.key }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
         run: scripts/macos-bundle.sh universal
+      - name: Remove signing material
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/notary.p8"
+          [ -f "$RUNNER_TEMP/sign.keychain-db" ] && security delete-keychain "$RUNNER_TEMP/sign.keychain-db" || true
       - uses: actions/upload-artifact@v4
         with:
           name: itda-macos-universal
@@ -66,6 +107,8 @@ jobs:
           SCREENSHOT_DIR: test-artifacts/file-ui
       - name: Tabs on different devices
         run: node scripts/files-tabs-e2e.mjs
+      - name: Self-update UI
+        run: node scripts/update-e2e.mjs
       - name: Permission helper regression
         run: node scripts/permissions-e2e.mjs
         env:

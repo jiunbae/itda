@@ -156,6 +156,66 @@ fn started() {
     }
     announce();
     start_discovery();
+    start_update_checks();
+}
+
+/// A newer release found by the background check, offered to the page.
+static UPDATE: Mutex<Option<crate::update::Release>> = Mutex::new(None);
+/// Why the last update's swap failed (from the helper), told to the page once.
+static UPDATE_FAILED: Mutex<Option<String>> = Mutex::new(None);
+static UPDATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn update_json(r: &Option<crate::update::Release>) -> Value {
+    r.as_ref().map_or(Value::Null, |r| json!({"version": r.version, "page": r.page}))
+}
+fn start_update_checks() {
+    crate::update::cleanup();
+    *UPDATE_FAILED.lock().unwrap() = crate::update::take_failure();
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(20));
+        loop {
+            if home(|m| m.settings.auto_update) {
+                if let Ok(Some(r)) = crate::update::check() {
+                    let fresh = UPDATE.lock().unwrap().as_ref() != Some(&r);
+                    *UPDATE.lock().unwrap() = Some(r.clone());
+                    if fresh { post(Event::Page(json!({"type": "update", "available": update_json(&Some(r)), "found": true}))); }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_secs(24 * 3600));
+        }
+    });
+}
+fn update_check() {
+    std::thread::spawn(|| {
+        let v = match crate::update::check() {
+            Ok(r) => {
+                *UPDATE.lock().unwrap() = r.clone();
+                json!({"type": "update", "checked": true, "available": update_json(&r)})
+            }
+            Err(e) => json!({"type": "update", "checked": true, "error": e.to_string()}),
+        };
+        post(Event::Page(v));
+    });
+}
+fn update_install() {
+    let Some(r) = UPDATE.lock().unwrap().clone() else { return update_check() };
+    if UPDATING.swap(true, std::sync::atomic::Ordering::SeqCst) { return; }
+    std::thread::spawn(move || {
+        let stage = |s: &str| post(Event::Page(json!({"type": "update", "stage": s})));
+        match crate::update::install(&r, &stage) {
+            Ok(()) => {
+                crate::log!("update: installing {}, quitting", r.version);
+                stage("다시 시작하는 중…");
+                let ids: Vec<String> = home(|m| m.sessions.keys().cloned().collect());
+                for id in ids { stop_session(&id); }
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                plat::quit();
+            }
+            Err(e) => {
+                UPDATING.store(false, std::sync::atomic::Ordering::SeqCst);
+                post(Event::Page(json!({"type": "update", "error": e.to_string()})));
+            }
+        }
+    });
 }
 
 fn asset(path: &str) -> Option<(Cow<'static, [u8]>, &'static str)> {
@@ -281,6 +341,8 @@ fn send_state() {
             "ssh_ok": crate::tunnel::ssh_exe().is_some(),
             "tailnet": *TAILNET.lock().unwrap(),
             "quick": m.pending_quick.take(),
+            "update": update_json(&UPDATE.lock().unwrap()),
+            "update_failed": UPDATE_FAILED.lock().unwrap().take(),
         })
     });
     send(v);
@@ -593,6 +655,8 @@ fn on_ipc(v: Value) {
         // "고성능 모드": set up Itda's own sharing on this Mac over SSH; the next connection
         // uses it. Progress and the outcome go to the pages as {type:"hp"}.
         "hp_upgrade" => hp_upgrade(&id),
+        "update_check" => update_check(),
+        "update_install" => update_install(),
         "hp_status" => hp_status(&id),
         "hp_permissions" => hp_permissions(&id,v["permission"].as_str().map(str::to_string)),
         #[cfg(target_os = "macos")]
