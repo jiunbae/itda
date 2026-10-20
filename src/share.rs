@@ -1,23 +1,17 @@
-//! "Share this PC": a small VNC server so other devices (Itda on another PC, the web
-//! viewer, macOS Screen Sharing, any VNC client) can see and control this Windows PC.
+//! "Share this PC": what Windows provides to the VNC server in server.rs, so other devices
+//! (Itda on another PC, the web viewer, macOS Screen Sharing, any VNC client) can see and
+//! control this PC.
 //!
 //! One capture of the whole virtual desktop (all monitors; Desktop Duplication, else GDI)
-//! shared by all viewers, 64×64 tile diffing, ZRLE (solid/raw tiles over one zlib
-//! stream), SendInput for mouse and keyboard, clipboard both
-//! ways, VNC-password auth plus an on-screen "allow?" prompt, and DNS-SD (Bonjour)
-//! registration so nearby Itdas list this PC.
+//! shared by all viewers, SendInput for mouse and keyboard, the clipboard, and the
+//! on-screen "allow?" prompt.
 
-use crate::demand::{self, Demand};
-use crate::enc::{ext_desktop_size, screens_in, Encoder, PixelFormat, Screen, Update, ENC_EXT_DESKTOP_SIZE, ENC_ZRLE};
-use crate::outbox::Outbox;
-use crate::rfb::{vnc_response, PIXEL_FORMAT};
+pub use crate::server::{kick_all, open_local, running, start, stop, viewers, Config, ON_CHANGE};
 use std::collections::HashMap;
-use std::io::{self, BufReader, Read, Write};
-use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::net::SocketAddr;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -26,175 +20,23 @@ use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, 
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-#[derive(Clone, Debug)]
-pub struct Config {
-    pub port: u16,
-    pub password: String,
-    /// Ask the person at this PC before each viewer gets in.
-    pub ask: bool,
-    /// ...but not viewers on this network or this tailnet (see `near`).
-    pub trust_near: bool,
-    /// A Mac's ⌘ (Super) acts as Ctrl here, so ⌘C/⌘V copy and paste.
-    pub cmd_as_ctrl: bool,
-    pub view_only: bool,
+pub(crate) const KIND: &str = "PC";
+pub(crate) const MDNS_TXT: &[(&str, &str)] = &[("itda", "1"), ("os", "windows")];
+
+pub(crate) fn name() -> String {
+    std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows".into())
 }
 
-struct Running {
-    port: u16,
-    cfg: Arc<Config>,
-    stop: Arc<AtomicBool>,
-    thread: std::thread::JoinHandle<()>,
-    mdns: Option<crate::mdns::Registration>,
+pub(crate) fn clipboard_seq() -> u64 {
+    unsafe { GetClipboardSequenceNumber() as u64 }
 }
 
-#[derive(Clone, serde::Serialize)]
-pub struct Viewer {
-    pub peer: String,
-    pub since: u64,
+/// No hardware video encoder here yet: viewers get ZRLE.
+pub(crate) fn video(_w: usize, _h: usize) -> Option<crate::server::Video> {
+    None
 }
 
-static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
-static VIEWERS: Mutex<Vec<(u64, Viewer, TcpStream)>> = Mutex::new(Vec::new());
-/// Called (on a worker thread) when viewers come or go; the home turns it into a message.
-pub static ON_CHANGE: OnceLock<fn()> = OnceLock::new();
-
-fn changed() {
-    if let Some(f) = ON_CHANGE.get() {
-        f();
-    }
-}
-
-pub fn running() -> Option<u16> {
-    RUNNING.lock().unwrap().as_ref().map(|r| r.port)
-}
-
-pub fn viewers() -> Vec<Viewer> {
-    VIEWERS.lock().unwrap().iter().map(|(_, v, _)| v.clone()).collect()
-}
-
-pub fn kick_all() {
-    for (_, _, s) in VIEWERS.lock().unwrap().iter() {
-        let _ = s.shutdown(Shutdown::Both);
-    }
-}
-
-pub fn start(cfg: Config) -> io::Result<()> {
-    stop();
-    let l = TcpListener::bind(("0.0.0.0", cfg.port)).map_err(|e| io::Error::new(e.kind(), format!("포트 {}을(를) 열 수 없습니다: {e}", cfg.port)))?;
-    let stop = Arc::new(AtomicBool::new(false));
-    let flag = stop.clone();
-    let cfg = Arc::new(cfg);
-    let port = l.local_addr()?.port(); // the real one, also when cfg.port is 0
-    let c2 = cfg.clone();
-    // Blocking accept, so a viewer is served at once; `stop()` wakes it with a connect.
-    let thread = std::thread::spawn(move || {
-        while !flag.load(Relaxed) {
-            match l.accept() {
-                Ok(_) if flag.load(Relaxed) => break,
-                Ok((s, peer)) => {
-                    let (cfg, flag) = (c2.clone(), flag.clone());
-                    std::thread::spawn(move || {
-                        if let Err(e) = serve(s, peer, &cfg, &flag) {
-                            crate::log!("share {peer}: {e}");
-                        }
-                    });
-                }
-                Err(e) => {
-                    crate::log!("share accept: {e}");
-                    std::thread::sleep(Duration::from_millis(500));
-                }
-            }
-        }
-    });
-    let mdns = crate::mdns::register("_rfb._tcp", port, &[("itda", "1"), ("os", "windows")]);
-    crate::log!("sharing this PC on port {port} (bonjour {})", mdns.is_some());
-    *RUNNING.lock().unwrap() = Some(Running { port, cfg, stop, thread, mdns });
-    Ok(())
-}
-
-/// The web viewer's way in to this PC: the person already signed in with the web PIN, so
-/// there's no on-screen prompt. Still a normal VNC login, over a private loopback socket.
-/// `peer` is the browser (shown in the viewer list).
-pub fn open_local(peer: SocketAddr) -> io::Result<crate::rfb::Raw> {
-    let (cfg, stop) = {
-        let r = RUNNING.lock().unwrap();
-        let r = r.as_ref().ok_or_else(|| io::Error::new(io::ErrorKind::ConnectionRefused, "이 PC 공유가 꺼져 있습니다"))?;
-        (Config { ask: false, ..(*r.cfg).clone() }, r.stop.clone())
-    };
-    let l = TcpListener::bind(("127.0.0.1", 0))?;
-    let addr = l.local_addr()?;
-    let pass = cfg.password.clone();
-    std::thread::spawn(move || {
-        if let Ok((s, _)) = l.accept() {
-            if let Err(e) = serve(s, peer, &cfg, &stop) {
-                crate::log!("share {peer} (web): {e}");
-            }
-        }
-    });
-    crate::rfb::open(&addr.to_string(), &crate::rfb::Creds { user: String::new(), pass })
-}
-
-pub fn stop() {
-    let r = RUNNING.lock().unwrap().take();
-    if let Some(r) = r {
-        r.stop.store(true, Relaxed);
-        // Wake the blocked accept; if that fails the thread can't be joined, so leave it.
-        let woke = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], r.port)), Duration::from_secs(1));
-        match woke {
-            Ok(_) => {
-                let _ = r.thread.join();
-            }
-            Err(e) => crate::log!("share stop: accept not woken: {e}"),
-        }
-        drop(r.mdns);
-        kick_all();
-        crate::log!("sharing stopped");
-    }
-}
-
-// ---------------------------------------------------------------- one viewer
-
-enum Msg {
-    Format(PixelFormat),
-    Encodings(Vec<i32>),
-    Request { incremental: bool },
-    /// EnableContinuousUpdates, Fence.
-    Ext(demand::Ext),
-    /// SetDesktopSize: this PC's displays can't be resized from here; it gets an answer.
-    Resize,
-}
-
-fn rd<const N: usize>(r: &mut impl Read) -> io::Result<[u8; N]> {
-    let mut b = [0u8; N];
-    r.read_exact(&mut b)?;
-    Ok(b)
-}
-
-/// A viewer on this local network (private, link-local or loopback address) or on this PC's
-/// tailnet (Tailscale's 100.64/10 and fd7a:115c:a1e0::/48): the user's own devices. The share
-/// port isn't something people forward from the internet, so these can't be strangers'.
-fn near(ip: std::net::IpAddr) -> bool {
-    use std::net::IpAddr;
-    let ip = match ip {
-        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-            Some(v4) => IpAddr::V4(v4),
-            None => IpAddr::V6(v6),
-        },
-        v4 => v4,
-    };
-    match ip {
-        IpAddr::V4(v4) => {
-            let o = v4.octets();
-            v4.is_private() || v4.is_loopback() || v4.is_link_local() || (o[0] == 100 && o[1] & 0xc0 == 64)
-        }
-        IpAddr::V6(v6) => {
-            let s = v6.segments();
-            v6.is_loopback() || s[0] & 0xffc0 == 0xfe80 || s[0] & 0xfe00 == 0xfc00 // link-local, ULA (Tailscale's too)
-        }
-    }
-}
-
-fn ask_user(peer: &SocketAddr) -> bool {
+pub(crate) fn ask_user(peer: &SocketAddr) -> bool {
     let text = format!(
         "{}에서 이 PC의 화면을 보고 조작하려고 합니다.\n\n허용할까요?\n\n(허용하면 연결이 끝날 때까지 화면과 입력이 공유됩니다. 알림 영역의 Itda에서 언제든 끊을 수 있습니다.)",
         peer.ip()
@@ -204,296 +46,11 @@ fn ask_user(peer: &SocketAddr) -> bool {
     unsafe { MessageBoxW(null_mut(), t.as_ptr(), title.as_ptr(), MB_YESNO | MB_ICONQUESTION | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL) == IDYES }
 }
 
-fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) -> io::Result<()> {
-    c.set_nodelay(true)?;
-    c.set_read_timeout(Some(Duration::from_secs(30)))?;
-    c.write_all(b"RFB 003.008\n")?;
-    let v: [u8; 12] = rd(&mut c)?;
-    let minor: u32 = std::str::from_utf8(&v[8..11]).ok().and_then(|s| s.parse().ok()).unwrap_or(3);
-    if minor >= 7 {
-        c.write_all(&[1, 2])?;
-        if rd::<1>(&mut c)?[0] != 2 {
-            return Err(io::Error::other("client didn't pick VNC auth"));
-        }
-    } else {
-        c.write_all(&2u32.to_be_bytes())?;
-    }
-    let mut challenge = [0u8; 16];
-    let _ = getrandom::getrandom(&mut challenge);
-    c.write_all(&challenge)?;
-    let resp: [u8; 16] = rd(&mut c)?;
-    let deny = |c: &mut TcpStream, why: &str| -> io::Result<()> {
-        c.write_all(&1u32.to_be_bytes())?;
-        if minor >= 8 {
-            c.write_all(&(why.len() as u32).to_be_bytes())?;
-            c.write_all(why.as_bytes())?;
-        }
-        Ok(())
-    };
-    let expected = vnc_response(&challenge, &cfg.password);
-    if expected.iter().zip(resp).fold(0u8, |a, (x, y)| a | (x ^ y)) != 0 {
-        crate::log!("share {peer}: wrong password");
-        std::thread::sleep(Duration::from_secs(1)); // slow down guessing
-        return deny(&mut c, "Authentication failed");
-    }
-    let trusted = cfg.trust_near && near(peer.ip());
-    if trusted && cfg.ask {
-        crate::log!("share {peer}: nearby device, no prompt");
-    }
-    if cfg.ask && !trusted && !ask_user(&peer) {
-        crate::log!("share {peer}: refused by the user");
-        return deny(&mut c, "The person at this PC declined");
-    }
-    c.write_all(&0u32.to_be_bytes())?;
-    let _shared: [u8; 1] = rd(&mut c)?;
-    c.set_read_timeout(None)?;
-
-    let cap = capture();
-    let size = {
-        let mut c = cap.lock().unwrap();
-        c.fit();
-        (c.w, c.h)
-    };
-    let name = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows".into());
-    let mut init = Vec::new();
-    init.extend_from_slice(&(size.0 as u16).to_be_bytes());
-    init.extend_from_slice(&(size.1 as u16).to_be_bytes());
-    init.extend_from_slice(&PIXEL_FORMAT);
-    init.extend_from_slice(&(name.len() as u32).to_be_bytes());
-    init.extend_from_slice(name.as_bytes());
-    c.write_all(&init)?;
-    crate::log!("share {peer}: viewer in ({}x{})", size.0, size.1);
-
-    let id = {
-        let mut b = [0u8; 8];
-        let _ = getrandom::getrandom(&mut b);
-        u64::from_le_bytes(b)
-    };
-    VIEWERS.lock().unwrap().push((id, Viewer { peer: peer.ip().to_string(), since: crate::store::now() }, c.try_clone()?));
-    changed();
-
-    let (tx, rx) = channel();
-    let reader = c.try_clone()?;
-    let cfg2 = cfg.clone();
-    std::thread::spawn(move || {
-        let mut input = Input::new(cfg2.cmd_as_ctrl, cfg2.view_only);
-        let _ = read_client(BufReader::new(reader), &tx, &mut input);
-        input.release_all();
-    });
-    let r = Outbox::new(c.try_clone()?).and_then(|out| pump(&out, &rx, &cap, size, stop));
-    let _ = c.shutdown(Shutdown::Both);
-    VIEWERS.lock().unwrap().retain(|(i, _, _)| *i != id);
-    changed();
-    crate::log!("share {peer}: viewer left");
-    r
-}
-
-/// Client → server messages. Input is applied right here; the rest goes to the pump.
-fn read_client(mut r: BufReader<TcpStream>, tx: &Sender<Msg>, input: &mut Input) -> io::Result<()> {
-    loop {
-        // A held Ctrl/Alt/Win must not outlive the person holding it: a phone that goes to
-        // sleep mid-gesture keeps the socket open but silent, and the PC would keep zooming
-        // every app on Ctrl+wheel. Release modifiers after a quiet spell or a long hold.
-        if input.modifiers_held() && input.last_key.elapsed() > MOD_HOLD_MAX {
-            input.release_modifiers("held too long");
-        }
-        let wait = r.buffer().is_empty() && input.modifiers_held();
-        r.get_ref().set_read_timeout(wait.then_some(MOD_QUIET))?;
-        let t = match rd::<1>(&mut r) {
-            Ok(b) => b[0],
-            Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {
-                input.release_modifiers("viewer went quiet");
-                continue;
-            }
-            Err(e) => return Err(e),
-        };
-        if wait {
-            r.get_ref().set_read_timeout(None)?;
-        }
-        match t {
-            0 => {
-                let b: [u8; 19] = rd(&mut r)?;
-                let _ = tx.send(Msg::Format(PixelFormat::parse(&b[3..])));
-            }
-            2 => {
-                let b: [u8; 3] = rd(&mut r)?;
-                let n = u16::from_be_bytes([b[1], b[2]]) as usize;
-                let mut e = vec![0u8; n * 4];
-                r.read_exact(&mut e)?;
-                let _ = tx.send(Msg::Encodings(e.chunks_exact(4).map(|c| i32::from_be_bytes([c[0], c[1], c[2], c[3]])).collect()));
-            }
-            3 => {
-                let b: [u8; 9] = rd(&mut r)?;
-                let _ = tx.send(Msg::Request { incremental: b[0] != 0 });
-            }
-            4 => {
-                let b: [u8; 7] = rd(&mut r)?;
-                input.key(b[0] != 0, u32::from_be_bytes([b[3], b[4], b[5], b[6]]));
-            }
-            5 => {
-                let b: [u8; 5] = rd(&mut r)?;
-                input.pointer(b[0], u16::from_be_bytes([b[1], b[2]]), u16::from_be_bytes([b[3], b[4]]));
-            }
-            6 => {
-                let b: [u8; 7] = rd(&mut r)?;
-                let n = i32::from_be_bytes([b[3], b[4], b[5], b[6]]);
-                let mut d = vec![0u8; n.unsigned_abs().min(16 << 20) as usize];
-                r.read_exact(&mut d)?;
-                if n > 0 {
-                    let text = String::from_utf8(d).unwrap_or_else(|e| e.into_bytes().iter().map(|&b| b as char).collect());
-                    clipboard_set(&text);
-                }
-            }
-            251 => {
-                // SetDesktopSize: we can't resize the PC's screens; the pump says so.
-                let b: [u8; 7] = rd(&mut r)?;
-                let mut d = vec![0u8; b[5] as usize * 16];
-                r.read_exact(&mut d)?;
-                let _ = tx.send(Msg::Resize);
-            }
-            t @ (demand::MSG_CONTINUOUS | demand::MSG_FENCE) => {
-                let _ = tx.send(Msg::Ext(demand::read(t, &mut r)?));
-            }
-            other => return Err(io::Error::other(format!("unknown client message {other}"))),
-        }
-    }
-}
-
-const ENC_DESKTOP_SIZE: i32 = -223;
-
-/// Shortest time between two updates (~30 fps).
-const FRAME: Duration = Duration::from_millis(33);
-
-/// Server → client: capture, diff, encode, send.
-fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<Capture>, mut size: (usize, usize), stop: &AtomicBool) -> io::Result<()> {
-    let mut pf = PixelFormat::parse(&PIXEL_FORMAT);
-    let mut encs: Vec<i32> = Vec::new();
-    let mut demand = Demand::default();
-    // The displays the viewer was last told about (ExtendedDesktopSize), re-read every
-    // second; and an unanswered SetDesktopSize.
-    let mut told: Option<Vec<Screen>> = None;
-    let mut screens: Vec<Screen> = Vec::new();
-    let mut screens_read = Instant::now() - Duration::from_secs(10);
-    let mut refuse_resize = false;
-    let mut last_capture = Instant::now() - FRAME;
-    let mut prev: Vec<u32> = Vec::new();
-    let mut enc = Encoder::new();
-    let mut u = Update::default();
-    let mut clip_seq = unsafe { GetClipboardSequenceNumber() };
-    let mut clip_check = Instant::now();
-    loop {
-        if stop.load(Relaxed) {
-            return Ok(());
-        }
-        if out.dead() {
-            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "viewer connection lost"));
-        }
-        // Wake for the viewer's messages, the next capture when an update is due, or a
-        // clipboard check. Captures stay FRAME apart also when the screen doesn't change.
-        let wait = match demand.due() {
-            Some(_) if out.room() => FRAME.saturating_sub(last_capture.elapsed()),
-            _ => FRAME,
-        };
-        let mut next = match rx.recv_timeout(wait.max(Duration::from_millis(1))) {
-            Ok(m) => Some(m),
-            Err(RecvTimeoutError::Timeout) => None,
-            Err(RecvTimeoutError::Disconnected) => return Ok(()),
-        };
-        let mut reply = Vec::new();
-        while let Some(m) = next {
-            match m {
-                Msg::Format(p) => {
-                    pf = p;
-                    prev.clear();
-                }
-                Msg::Encodings(e) => {
-                    demand.encodings(&e, &mut reply);
-                    encs = e;
-                    told = None; // (re)introduce the displays
-                }
-                Msg::Resize => refuse_resize = true,
-                Msg::Request { incremental } => demand.request(incremental),
-                Msg::Ext(m) => {
-                    if demand.ext(m, size.0, size.1, &mut reply) {
-                        prev.clear();
-                    }
-                }
-            }
-            next = rx.try_recv().ok();
-        }
-        out.send(reply)?;
-        // Local clipboard changed → offer it to the viewer.
-        if clip_check.elapsed() > Duration::from_millis(500) {
-            clip_check = Instant::now();
-            let seq = unsafe { GetClipboardSequenceNumber() };
-            if seq != clip_seq {
-                clip_seq = seq;
-                if let Some(t) = clipboard_get() {
-                    let b = t.replace("\r\n", "\n").into_bytes();
-                    let mut m = vec![3, 0, 0, 0];
-                    m.extend_from_slice(&(b.len() as u32).to_be_bytes());
-                    m.extend_from_slice(&b);
-                    out.send(m)?;
-                }
-            }
-        }
-        if demand.stalled() {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "viewer stopped acknowledging updates"));
-        }
-        let Some(incremental) = demand.due() else { continue };
-        if last_capture.elapsed() < FRAME || !out.room() {
-            continue; // (a viewer that's behind gets the changes together later)
-        }
-        last_capture = Instant::now();
-        // The size this viewer was last given (another viewer's capture may have resized it).
-        let (w0, h0) = size;
-        let mut cap = cap.lock().unwrap();
-        cap.fit(); // (grab does too) the virtual desktop's corner, read before the frame borrows cap
-        let (ox, oy) = (cap.x, cap.y);
-        let (w, h, frame) = cap.grab();
-        size = (w, h);
-        u.start();
-        let ext = encs.contains(&ENC_EXT_DESKTOP_SIZE);
-        if ext && ((w, h) != (w0, h0) || screens_read.elapsed() >= Duration::from_secs(1)) {
-            screens_read = Instant::now();
-            screens = screens_in(ox, oy, w, h, &monitors());
-        }
-        if ext && (told.as_ref() != Some(&screens) || (w, h) != (w0, h0) || refuse_resize) {
-            // Each display of this PC, so the viewer can show one of them (or one window each).
-            // Reason 1 / status 1 answers a SetDesktopSize: resizing isn't allowed here.
-            let answer = u16::from(refuse_resize);
-            ext_desktop_size(&mut u.buf, answer, answer, w as u16, h as u16, &screens);
-            u.rects += 1;
-            told = Some(screens.clone());
-            refuse_resize = false;
-            if (w, h) != (w0, h0) {
-                prev.clear();
-            }
-        } else if (w, h) != (w0, h0) && encs.contains(&ENC_DESKTOP_SIZE) {
-            u.buf.extend_from_slice(&[0, 0, 0, 0]);
-            u.buf.extend_from_slice(&(w as u16).to_be_bytes());
-            u.buf.extend_from_slice(&(h as u16).to_be_bytes());
-            u.buf.extend_from_slice(&ENC_DESKTOP_SIZE.to_be_bytes());
-            u.rects += 1;
-            prev.clear();
-        }
-        let full = !incremental || prev.len() != frame.len();
-        enc.changes(&mut u, frame, &prev, w, h, full, |x, y, tw, th| demand.covers(x, y, tw, th), &pf, encs.contains(&ENC_ZRLE))?;
-        if !u.finish() {
-            continue; // nothing changed: keep the request pending
-        }
-        demand.sent(u.buf.len(), &mut u.buf);
-        out.send(std::mem::replace(&mut u.buf, out.buffer()))?;
-        prev.clear();
-        prev.extend_from_slice(frame);
-    }
-}
-
 // ---------------------------------------------------------------- capture
 
 /// This PC's displays in desktop coordinates: (id, left, top, right, bottom). The id is a
 /// hash of the display's device name, so it stays with the display when the layout changes.
-fn monitors() -> Vec<(u32, i32, i32, i32, i32)> {
+pub(crate) fn monitors() -> Vec<(u32, i32, i32, i32, i32)> {
     unsafe extern "system" fn each(m: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> BOOL {
         let list = &mut *(data as *mut Vec<(u32, i32, i32, i32, i32)>);
         let mut info: MONITORINFOEXW = std::mem::zeroed();
@@ -513,7 +70,7 @@ fn monitors() -> Vec<(u32, i32, i32, i32, i32)> {
 /// The one capture all viewers share: a display can be duplicated only once per process,
 /// and one capture is cheaper anyway. Each viewer diffs it against its own last frame.
 /// Released (duplication included) when the last viewer leaves.
-fn capture() -> Arc<Mutex<Capture>> {
+pub(crate) fn capture() -> Arc<Mutex<Capture>> {
     static SHARED: Mutex<std::sync::Weak<Mutex<Capture>>> = Mutex::new(std::sync::Weak::new());
     let mut g = SHARED.lock().unwrap();
     g.upgrade().unwrap_or_else(|| {
@@ -523,11 +80,11 @@ fn capture() -> Arc<Mutex<Capture>> {
     })
 }
 
-struct Capture {
-    x: i32,
-    y: i32,
-    w: usize,
-    h: usize,
+pub(crate) struct Capture {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) w: usize,
+    pub(crate) h: usize,
     mdc: HDC,
     bmp: HBITMAP,
     bits: *mut u32,
@@ -551,7 +108,7 @@ impl Capture {
     }
 
     /// (Re)size to the virtual desktop (all monitors).
-    fn fit(&mut self) {
+    pub(crate) fn fit(&mut self) {
         let (x, y, w, h) = unsafe {
             (
                 GetSystemMetrics(SM_XVIRTUALSCREEN),
@@ -581,7 +138,7 @@ impl Capture {
         self.under = None;
     }
 
-    fn grab(&mut self) -> (usize, usize, &[u32]) {
+    pub(crate) fn grab(&mut self) -> (usize, usize, &[u32]) {
         self.fit();
         unsafe {
             let (w, h) = (self.w, self.h);
@@ -698,17 +255,17 @@ impl Drop for Capture {
 
 /// Longest a modifier may stay down without any other key, and how long a silent viewer
 /// may hold one (see `read_client`).
-const MOD_HOLD_MAX: Duration = Duration::from_secs(15);
-const MOD_QUIET: Duration = Duration::from_secs(4);
+pub(crate) const MOD_HOLD_MAX: Duration = Duration::from_secs(15);
+pub(crate) const MOD_QUIET: Duration = Duration::from_secs(4);
 
-struct Input {
+pub(crate) struct Input {
     cmd_as_ctrl: bool,
     view_only: bool,
     buttons: u8,
     /// keysym → what we pressed for it, so the release matches.
     down: HashMap<u32, Pressed>,
     /// Last key event, for releasing forgotten modifiers.
-    last_key: Instant,
+    pub(crate) last_key: Instant,
 }
 
 #[derive(Clone, Copy)]
@@ -736,7 +293,7 @@ fn key_input(vk: u16, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
 }
 
 impl Input {
-    fn new(cmd_as_ctrl: bool, view_only: bool) -> Input {
+    pub(crate) fn new(cmd_as_ctrl: bool, view_only: bool) -> Input {
         Input { cmd_as_ctrl, view_only, buttons: 0, down: HashMap::new(), last_key: Instant::now() }
     }
 
@@ -744,7 +301,7 @@ impl Input {
         matches!(p, Pressed::Vk(vk, _) if [VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU, VK_LWIN, VK_RWIN, VK_LSHIFT, VK_RSHIFT].contains(vk))
     }
 
-    fn release_modifiers(&mut self, why: &str) {
+    pub(crate) fn release_modifiers(&mut self, why: &str) {
         let held: Vec<u32> = self.down.iter().filter(|(_, p)| Self::is_modifier(p)).map(|(s, _)| *s).collect();
         for s in held {
             if let Some(p) = self.down.remove(&s) {
@@ -798,11 +355,11 @@ impl Input {
         })
     }
 
-    fn modifiers_held(&self) -> bool {
+    pub(crate) fn modifiers_held(&self) -> bool {
         self.down.values().any(|p| matches!(p, Pressed::Vk(vk, _) if [VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU, VK_LWIN, VK_RWIN].contains(vk)))
     }
 
-    fn key(&mut self, down: bool, sym: u32) {
+    pub(crate) fn key(&mut self, down: bool, sym: u32) {
         if self.view_only {
             return;
         }
@@ -852,7 +409,7 @@ impl Input {
         }
     }
 
-    fn pointer(&mut self, mask: u8, x: u16, y: u16) {
+    pub(crate) fn pointer(&mut self, mask: u8, x: u16, y: u16) {
         if self.view_only {
             return;
         }
@@ -888,7 +445,7 @@ impl Input {
         send(&[i]);
     }
 
-    fn release_all(&mut self) {
+    pub(crate) fn release_all(&mut self) {
         for (_, p) in self.down.drain() {
             Self::release(p);
         }
@@ -902,7 +459,7 @@ impl Input {
 
 const CF_UNICODETEXT: u32 = 13;
 
-fn clipboard_get() -> Option<String> {
+pub(crate) fn clipboard_get() -> Option<String> {
     unsafe {
         if OpenClipboard(null_mut()) == 0 {
             return None;
@@ -925,7 +482,7 @@ fn clipboard_get() -> Option<String> {
     }
 }
 
-fn clipboard_set(text: &str) {
+pub(crate) fn clipboard_set(text: &str) {
     let t = text.replace("\r\n", "\n").replace('\n', "\r\n");
     let w: Vec<u16> = t.encode_utf16().chain(Some(0)).collect();
     unsafe {
@@ -944,16 +501,3 @@ fn clipboard_set(text: &str) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn nearby_devices_are_this_network_or_tailnet() {
-        let near = |s: &str| super::near(s.parse().unwrap());
-        for ip in ["192.168.0.54", "10.0.0.7", "172.20.1.2", "127.0.0.1", "169.254.3.4", "100.101.10.3", "fe80::1c2d:3e4f:5a6b:7c8d", "fd7a:115c:a1e0::1", "::ffff:192.168.0.9"] {
-            assert!(near(ip), "{ip}");
-        }
-        for ip in ["8.8.8.8", "100.128.0.1", "211.234.10.1", "2001:db8::1", "::ffff:1.2.3.4"] {
-            assert!(!near(ip), "{ip}");
-        }
-    }
-}

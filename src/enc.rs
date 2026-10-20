@@ -231,6 +231,25 @@ pub struct Screen {
 /// An ExtendedDesktopSize rectangle: `reason` 0 = the server changed, 1 = answer to this
 /// client's SetDesktopSize (with `status`: 0 done, 1 not allowed, …), the framebuffer size
 /// and its displays.
+/// "Open H.264" (RFB encoding 50): a rectangle of Annex B H.264, as noVNC decodes it.
+pub const ENC_H264: i32 = 50;
+/// Reset the decoder context of this rectangle before decoding (flags of an H.264 rectangle).
+pub const H264_RESET: u32 = 1;
+
+impl Update {
+    /// An H.264 rectangle: `data` is one or more Annex B access units for the context (x, y, w, h).
+    pub fn h264(&mut self, x: u16, y: u16, w: u16, h: u16, flags: u32, data: &[u8]) {
+        for v in [x, y, w, h] {
+            self.buf.extend_from_slice(&v.to_be_bytes());
+        }
+        self.buf.extend_from_slice(&ENC_H264.to_be_bytes());
+        self.buf.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        self.buf.extend_from_slice(&flags.to_be_bytes());
+        self.buf.extend_from_slice(data);
+        self.rects += 1;
+    }
+}
+
 pub fn ext_desktop_size(out: &mut Vec<u8>, reason: u16, status: u16, w: u16, h: u16, screens: &[Screen]) {
     out.extend_from_slice(&reason.to_be_bytes());
     out.extend_from_slice(&status.to_be_bytes());

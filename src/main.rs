@@ -10,6 +10,8 @@
 mod cu_e2e;
 #[cfg(target_os = "macos")]
 mod h264_mac;
+#[cfg(target_os = "macos")]
+mod host_mac;
 #[cfg(all(test, target_os = "macos"))]
 mod h264_e2e;
 mod demand;
@@ -42,6 +44,8 @@ mod keys;
 mod net;
 #[cfg(windows)]
 mod session;
+#[cfg(any(windows, target_os = "macos"))]
+mod server;
 #[cfg(windows)]
 mod share;
 #[cfg(windows)]
@@ -78,6 +82,13 @@ fn askpass_mode() {
 #[cfg(not(windows))]
 fn main() {
     askpass_mode();
+    // Itda's high-performance sharing on this Mac (started by another Itda over SSH, or by hand).
+    #[cfg(target_os = "macos")]
+    if std::env::args().nth(1).as_deref() == Some("--hp-server") {
+        log::init("hp-server");
+        let port = std::env::args().nth(2).and_then(|p| p.parse().ok()).unwrap_or(host_mac::PORT);
+        host_mac::serve_forever(port);
+    }
     #[cfg(target_os = "macos")]
     if std::env::args().nth(1).as_deref() == Some("--export-file-locations") {
         let root = files::locations::folder();
