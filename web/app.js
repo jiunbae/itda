@@ -149,6 +149,7 @@ function onMessage(m) {
       render();
       window.ItdaFiles?.boot();
       if (window.ITDA_FILE_HOST) break;
+      if (m.update_failed) toast(`지난 업데이트를 마치지 못했습니다 — ${m.update_failed}`, 'E7BA', true);
       if (m.quick) quickConnect(m.quick);
       else if (!S.settings.onboarded && !S.hosts.length && !topModal()) showOnboarding();
       break;

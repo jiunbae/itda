@@ -179,14 +179,31 @@ fn stage(app: &Path, dir: &Path, zip: &Path) -> io::Result<PathBuf> {
     Ok(new)
 }
 
+/// $1 pid to wait for, $2 app, $3 new bundle, $4 download dir, $5 launch (1/0), $6 failure note.
+/// The current app is only removed after it was moved aside; any failure leaves (or puts back)
+/// the current app, keeps the download for inspection, writes the note and still relaunches.
+#[cfg(target_os = "macos")]
+const HELPER: &str = r#"pid=$1 app=$2 new=$3 dl=$4 launch=$5 note=$6
+while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
+fail() { printf '%s\n' "$1" > "$note"; [ "$launch" = 1 ] && /usr/bin/open "$app"; exit 1; }
+if [ -e "$app.old" ]; then rm -rf "$app.old" || fail "이전 백업($app.old)을 지우지 못해 업데이트하지 않았습니다"; fi
+[ -e "$app.old" ] && fail "이전 백업($app.old)을 지우지 못해 업데이트하지 않았습니다"
+mv "$app" "$app.old" || fail "$app 을(를) 옮기지 못해 업데이트하지 않았습니다"
+if ! /usr/bin/ditto "$new" "$app"; then
+  rm -rf "$app"
+  mv "$app.old" "$app" || { printf '%s\n' "업데이트에 실패했고 이전 앱을 되돌리지 못했습니다. $app.old 를 $app 으로 옮겨 주세요" > "$note"; exit 1; }
+  fail "새 버전을 복사하지 못해 이전 버전을 유지했습니다"
+fi
+rm -rf "$app.old" "$dl"
+[ "$launch" = 1 ] && /usr/bin/open "$app"
+exit 0"#;
+
 /// Once `pid` has exited, swap the bundles (restoring the old one if that fails) and start it.
 #[cfg(target_os = "macos")]
 fn replace_after(pid: u32, app: &Path, new: &Path, dir: &Path, launch: bool) -> io::Result<()> {
-    let script = r#"while kill -0 "$1" 2>/dev/null; do sleep 0.2; done
-rm -rf "$2.old"
-if mv "$2" "$2.old" && /usr/bin/ditto "$3" "$2"; then rm -rf "$2.old"; else rm -rf "$2"; mv "$2.old" "$2"; fi
-[ "$5" = 1 ] && /usr/bin/open "$2"
-rm -rf "$4""#;
+    let note = failure_note();
+    let _ = std::fs::remove_file(&note);
+    let script = HELPER;
     Command::new("/usr/bin/nohup")
         .args(["/bin/sh", "-c", script, "itda-update"])
         .arg(pid.to_string())
@@ -194,6 +211,7 @@ rm -rf "$4""#;
         .arg(new)
         .arg(dir)
         .arg(if launch { "1" } else { "0" })
+        .arg(&note)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -214,20 +232,38 @@ fn swap(dir: &Path, new: &Path) -> io::Result<()> {
         return Err(e);
     }
     let _ = std::fs::remove_dir_all(dir);
+    // A script file: `-File` binds the arguments to its parameters (a `-Command` string would
+    // swallow them as more source text).
+    let helper = std::env::temp_dir().join("itda-update-restart.ps1");
+    std::fs::write(&helper, "param([int]$ProcessId, [string]$Exe)\r\nWait-Process -Id $ProcessId -ErrorAction SilentlyContinue\r\nStart-Process -FilePath $Exe\r\n")?;
     let mut c = Command::new("powershell.exe");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0800_0000);
     }
-    c.args(["-NoProfile", "-NonInteractive", "-Command", "param($p,$e) Wait-Process -Id $p -ErrorAction SilentlyContinue; Start-Process -FilePath $e"])
+    c.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&helper)
+        .arg("-ProcessId")
         .arg(std::process::id().to_string())
+        .arg("-Exe")
         .arg(&exe)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
     Ok(())
+}
+
+/// Where the macOS helper explains a failed swap; read (and removed) at the next launch.
+pub fn failure_note() -> std::path::PathBuf {
+    crate::store::dir().join("update-failed")
+}
+pub fn take_failure() -> Option<String> {
+    let note = failure_note();
+    let text = std::fs::read_to_string(&note).ok()?;
+    let _ = std::fs::remove_file(&note);
+    Some(text.trim().to_string()).filter(|t| !t.is_empty())
 }
 
 /// Leftovers of a finished update.
@@ -303,6 +339,39 @@ mod tests {
         assert!(plist.contains(&format!("<string>{}</string>", r.version)), "new bundle not in place");
         assert!(!app.join("Contents/marker").exists() && !root.join("Apps/Itda.app.old").exists());
         assert!(Command::new("/usr/bin/codesign").args(["--verify", "--deep", "--strict"]).arg(&app).status().unwrap().success());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The swap helper itself, on scratch bundles: success, a stuck old backup, a failed copy.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn helper_never_loses_the_current_app() {
+        let root = std::env::temp_dir().join(format!("itda-helper-test-{}", std::process::id()));
+        let run = |case: &str, setup: &dyn Fn(&Path)| -> (bool, String, Option<String>, bool) {
+            let d = root.join(case);
+            let (app, new, dl, note) = (d.join("Itda.app"), d.join("stage/Itda.app"), d.join("dl"), d.join("note"));
+            std::fs::create_dir_all(&app).unwrap();
+            std::fs::write(app.join("who"), "current").unwrap();
+            std::fs::create_dir_all(&new).unwrap();
+            std::fs::write(new.join("who"), "new").unwrap();
+            std::fs::create_dir_all(&dl).unwrap();
+            setup(&d);
+            let ok = Command::new("/bin/sh").args(["-c", HELPER, "t", "2147483646"]).arg(&app).arg(&new).arg(&dl).arg("0").arg(&note).status().unwrap().success();
+            let who = std::fs::read_to_string(app.join("who")).unwrap_or_default();
+            (ok, who, std::fs::read_to_string(&note).ok(), dl.exists())
+        };
+        let (ok, who, note, dl) = run("normal", &|_| {});
+        assert!(ok && who == "new" && note.is_none() && !dl, "normal swap");
+        let (ok, who, note, dl) = run("stale", &|d| {
+            let old = d.join("Itda.app.old");
+            std::fs::create_dir_all(&old).unwrap();
+            std::fs::write(old.join("who"), "stale").unwrap();
+            Command::new("/bin/chmod").arg("0500").arg(&old).status().unwrap();
+        });
+        assert!(!ok && who == "current" && note.is_some() && dl, "stuck backup must keep the current app: ok={ok} who={who} note={note:?} dl={dl}");
+        let (ok, who, note, _) = run("copy", &|d| { std::fs::remove_dir_all(d.join("stage")).unwrap(); });
+        assert!(!ok && who == "current" && note.is_some(), "failed copy must restore the current app: {who}");
+        Command::new("/bin/chmod").arg("-R").arg("u+w").arg(&root).status().unwrap();
         let _ = std::fs::remove_dir_all(&root);
     }
 

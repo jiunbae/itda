@@ -161,12 +161,15 @@ fn started() {
 
 /// A newer release found by the background check, offered to the page.
 static UPDATE: Mutex<Option<crate::update::Release>> = Mutex::new(None);
+/// Why the last update's swap failed (from the helper), told to the page once.
+static UPDATE_FAILED: Mutex<Option<String>> = Mutex::new(None);
 static UPDATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 fn update_json(r: &Option<crate::update::Release>) -> Value {
     r.as_ref().map_or(Value::Null, |r| json!({"version": r.version, "page": r.page}))
 }
 fn start_update_checks() {
     crate::update::cleanup();
+    *UPDATE_FAILED.lock().unwrap() = crate::update::take_failure();
     std::thread::spawn(|| {
         std::thread::sleep(std::time::Duration::from_secs(20));
         loop {
@@ -339,6 +342,7 @@ fn send_state() {
             "tailnet": *TAILNET.lock().unwrap(),
             "quick": m.pending_quick.take(),
             "update": update_json(&UPDATE.lock().unwrap()),
+            "update_failed": UPDATE_FAILED.lock().unwrap().take(),
         })
     });
     send(v);
