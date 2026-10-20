@@ -438,8 +438,8 @@ pub(super) fn export_batch(files: &[super::export::File], targets: &[PathBuf], e
     emit(json!({"type":"files_job","id":file.id,"job":job,"state":"queued","file":file.name}));
     let result: io::Result<()>=(|| {
         let _slot=slot(&control)?;
-        let mut src=if file.remote { Endpoint::new(true,&*connection(&file.id)?,&control)? } else { Endpoint{sftp:None} };
-        let mut dst=Endpoint{sftp:None};
+        let mut src=if file.remote { Endpoint::new(true,&*connection(&file.id)?,&control)? } else { Endpoint{sftp:None,cfg:None} };
+        let mut dst=Endpoint{sftp:None,cfg:None};
         let mut cx=Context{control:control.clone(),emit:emit.clone(),id:file.id.clone(),job:job.clone(),
             policy:"exclusive".into(),moving:false,modes:true,done:0,last:Instant::now()-Duration::from_secs(1)};
         for(file,target)in files.iter().zip(targets){cx.copy(&mut src,&mut dst,&file.path()?.to_string_lossy(),&target.to_string_lossy(),0)?;}
