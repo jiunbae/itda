@@ -96,6 +96,7 @@
     if (name) name.textContent = label(h);
     const place = layer.querySelector('.files-current-places [data-side="remote"]');
     if (place) place.innerHTML = `${I("E7F4")}${esc(label(h))}`;
+    renderJobs();
   }
   function releaseUnused(h) {
     if (!h || h.id === NETWORK || h.id === host?.id || fileTabs.some(t => t.host?.id === h.id)) return;
@@ -1435,7 +1436,7 @@
       }
     }
   }
-  async function transfer(from, source, names, to, destination, move = false) {
+  async function transfer(from, source, names, to, destination, move = false, id = host.id) {
     if (!names.length) return;
     const dest = panes[to];
     const collisions =
@@ -1451,7 +1452,7 @@
       ],
     );
     if (r.choice === "ok")
-      call("transfer", {
+      send("files", { id, window: pageToken, op: "transfer",
         from,
         source,
         names,
@@ -1461,6 +1462,10 @@
         policy: r.policy,
         engine: r.engine,
       });
+  }
+  function previewDone() {
+    previewInFlight = false;
+    if (queuedPreview) { const request = queuedPreview; queuedPreview = null; if (request.seq === previewSeq) { previewInFlight = true; call("preview", request); } }
   }
   function renderJobs() {
     if (!layer) return;
@@ -1485,7 +1490,7 @@
     layer
       .querySelectorAll("[data-cancel-job]")
       .forEach(
-        (b) => (b.onclick = () => call("cancel", { job: b.dataset.cancelJob })),
+        (b) => (b.onclick = () => send("files", { id: jobs.get(b.dataset.cancelJob)?.id || host.id, window: pageToken, op: "cancel", job: b.dataset.cancelJob })),
       );
     layer.querySelectorAll("[data-dismiss-job]").forEach(b => b.onclick = () => { jobs.delete(b.dataset.dismissJob); renderJobs(); });
     if (!current.length && showTransferHistory) layer.querySelector(".files-jobs").textContent = "최근 전송 내역이 없습니다";
@@ -1758,7 +1763,7 @@
       names: panes[side].selected.has(entry.name)
         ? [...panes[side].selected]
         : [entry.name],
-      live: false, capture:item, pointer:e.pointerId,
+      live: false, capture:item, pointer:e.pointerId, host: host.id,
     };
   }
   document.addEventListener("pointermove", (e) => {
@@ -1809,9 +1814,14 @@
       setTimeout(() => { suppressClick = false; }, 0);
       const target = document.elementFromPoint(e.clientX, e.clientY),
         pane = target?.closest("[data-pane]");
+      const tab = target?.closest("[data-tab]");
+      if (d.host !== host.id && d.side === "remote" && !tab) {
+        // The tab changed device during the drag; its remote files are not here.
+        fail("다른 기기의 파일은 이 탭으로 바로 옮길 수 없습니다. 먼저 이 컴퓨터로 복사하세요");
+        return;
+      }
       if (!pane) {
         const bookmark = target?.closest("[data-bookmark]");
-        const tab = target?.closest("[data-tab]");
         if (bookmark) {
           const p = panes[active];
           const to = bookmark.dataset.bookmark === "home" ? p.home : child(p.home, bookmark.dataset.bookmark);
@@ -1820,7 +1830,12 @@
           const t = fileTabs.find(t => t.id === Number(tab.dataset.tab));
           const side = t.id === currentTab ? active : t.active;
           const to = t.id === currentTab ? panes[side].path : t.panes[side].path;
-          if (d.side !== side || d.path !== to) transfer(d.side, d.path, d.names, side, to, e.shiftKey);
+          const target = t.id === currentTab ? host : t.host || host;
+          if (target.id !== d.host) {
+            // Only this computer's files can go to another device's tab; the transfer runs on that device.
+            if (d.side === "remote") fail("다른 기기의 파일은 이 탭으로 바로 옮길 수 없습니다. 먼저 이 컴퓨터로 복사하세요");
+            else transfer("local", d.path, d.names, side, to, e.shiftKey, target.id);
+          } else if (d.side !== side || d.path !== to) transfer(d.side, d.path, d.names, side, to, e.shiftKey);
         }
         return;
       }
@@ -1920,14 +1935,15 @@
     }
     if (m.type !== "files_result") return false;
     if (!host || m.id !== host.id) {
-      // The tab moved to another device; let its folder be asked for again on return.
+      // The tab moved to another device; let its folder be asked for again on return,
+      // and free the preview slot so this device's previews are requested.
       if (m.op === "list") columnRequests.delete(m.seq);
+      if (m.op === "preview") previewDone();
       return true;
     }
     if (m.op === "preview") {
-      previewInFlight = false;
       previewResult(m);
-      if (queuedPreview) { const request = queuedPreview; queuedPreview = null; if (request.seq === previewSeq) { previewInFlight = true; call("preview", request); } }
+      previewDone();
       return true;
     }
     if (m.op === "list" && columnRequests.has(m.seq)) {

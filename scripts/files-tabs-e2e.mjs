@@ -27,7 +27,7 @@ try{
    const homes={studio:'/Users/alex',build:'/home/dev'};
    const tree={'/Users/alex':[entry('Docs',true),entry('Alpha-A.txt')],'/Users/alex/Docs':[entry('Inside-A.txt')],'/home/dev':[entry('Beta-B.txt')],'/local':[entry('Local.txt')]};
    window.testPackets=[];
-   window.ipc={postMessage:raw=>{const m=JSON.parse(raw);if(m.cmd!=='files')return;testPackets.push({id:m.id,op:m.op,side:m.side,path:m.path});
+   window.ipc={postMessage:raw=>{const m=JSON.parse(raw);if(m.cmd!=='files')return;testPackets.push(m);
     const result={...m,type:'files_result',ok:true};
     if(m.op==='connect'){if(!homes[m.id])return;result.data={path:homes[m.id],entries:tree[homes[m.id]],local_path:'/local',local_entries:tree['/local'],rsync:true};}
     else if(m.op==='list')result.data={path:m.path,entries:tree[m.path]||[]};
@@ -52,6 +52,12 @@ try{
   assert(await count('studio','release')===0&&await count('studio','disconnect')===0,'First device was released when another tab opened a device');
   assert((await layer.locator('[data-tab]').nth(0).getAttribute('title')).startsWith('Studio Mac'),'First tab lost its device');
   assert((await layer.locator('[data-tab]').nth(1).getAttribute('title')).startsWith('Build Server'),'Second tab is not on the new device');
+  // A remote file dropped on another device's tab must not run on its own device.
+  const src=await row('Beta-B.txt').boundingBox(),dst=await layer.locator('[data-tab]').nth(0).boundingBox();
+  await p.mouse.move(src.x+60,src.y+src.height/2);await p.mouse.down();await p.mouse.move(dst.x+40,dst.y+dst.height/2,{steps:12});await p.mouse.up();
+  assert(!await p.locator('.files-prompt').count(),'Cross-device drop offered a transfer');
+  assert(!(await packets()).some(x=>x.op==='transfer'),'Cross-device drop sent a transfer');
+  assert((await layer.locator('.files-error').textContent()).includes('다른 기기'),'Cross-device drop was not explained');
   // Back to the first tab: same device, same connection, no reconnect.
   await layer.locator('[data-tab]').nth(0).click();
   await row('Alpha-A.txt').waitFor();
@@ -65,6 +71,25 @@ try{
   await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+v`);
   assert((await layer.locator('.files-error').textContent()).includes('다른 기기'),'Cross-device paste was not refused');
   assert(!(await packets()).some(x=>x.op==='transfer'),'Cross-device paste started a transfer');
+  await layer.locator('[data-tab]').nth(0).click();await row('Inside-A.txt').waitFor();
+  // Transfers show on their own device's tabs and cancel on that device.
+  await p.evaluate(()=>itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job:'job-A',state:'running',file:'A-copy'}));
+  await layer.locator('.files-jobs').filter({hasText:'A-copy'}).waitFor();
+  await layer.locator('[data-tab]').nth(1).click();await row('Beta-B.txt').waitFor();
+  assert(!(await layer.locator('.files-jobs').textContent()).includes('A-copy'),"Another device's transfer is shown in this tab");
+  await layer.locator('[data-tab]').nth(0).click();await row('Inside-A.txt').waitFor();
+  await layer.locator('[data-cancel-job="job-A"]').click();
+  assert((await packets()).filter(x=>x.op==='cancel').at(-1)?.id==='studio','Cancel went to the wrong device');
+  await p.evaluate(()=>itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job:'job-A',state:'cancelled',file:'A-copy'}));
+  // A preview answered after the tab moved to another device must not block that device's previews.
+  await row('Inside-A.txt').click();
+  if(platform==='mac')await layer.locator('[data-action="preview"]').click();else{await layer.locator('.files-list').focus();await p.keyboard.press('Alt+p');}
+  await p.waitForFunction(()=>testPackets.some(x=>x.op==='preview'&&x.id==='studio'));
+  const old=(await packets()).filter(x=>x.op==='preview').at(-1);
+  await layer.locator('[data-tab]').nth(1).click();await row('Beta-B.txt').waitFor();await row('Beta-B.txt').click();
+  await p.evaluate(m=>itda.recv({...m,type:'files_result',ok:true,data:{mime:'text/plain',text:'A-preview'}}),old);
+  await p.waitForFunction(()=>testPackets.some(x=>x.op==='preview'&&x.id==='build'),null,{timeout:3000}).catch(()=>{throw Error('Preview stayed blocked after a device change');});
+  await layer.locator('[data-action="close-preview"]').click();
   await layer.locator('[data-tab]').nth(0).click();await row('Inside-A.txt').waitFor();
   // Cancel while another device is connecting: the tab returns to its device.
   await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+t`);
