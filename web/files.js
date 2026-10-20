@@ -1765,6 +1765,8 @@
         : [entry.name],
       live: false, capture:item, pointer:e.pointerId, host: host.id,
     };
+    // Captured now: the drag may end after the window switched to another tab or device.
+    drag.items = exportItems(side, drag.names);
   }
   document.addEventListener("pointermove", (e) => {
     if (!drag || !layer) return;
@@ -1778,10 +1780,10 @@
       document.body.append(tag);
     }
     if (drag.live && nativeDrag() && (e.clientX<=1 || e.clientY<=1 || e.clientX>=innerWidth-1 || e.clientY>=innerHeight-1)) {
-      const d=drag,items=exportItems(d.side,d.names);
+      const d=drag,items=d.items;
       try{d.capture.releasePointerCapture(d.pointer);}catch{}
       clearDrag(); suppressClick=true; setTimeout(()=>{suppressClick=false;},0);
-      send("files_native_drag",{id:host.id,window:pageToken,side:d.side,path:d.path,items});
+      send("files_native_drag",{id:d.host,window:pageToken,side:d.side,path:d.path,items});
       return;
     }
     if (drag.live) {
@@ -1835,7 +1837,7 @@
             // Only this computer's files can go to another device's tab; the transfer runs on that device.
             if (d.side === "remote") fail("다른 기기의 파일은 이 탭으로 바로 옮길 수 없습니다. 먼저 이 컴퓨터로 복사하세요");
             else transfer("local", d.path, d.names, side, to, e.shiftKey, target.id);
-          } else if (d.side !== side || d.path !== to) transfer(d.side, d.path, d.names, side, to, e.shiftKey);
+          } else if (d.side !== side || d.path !== to) transfer(d.side, d.path, d.names, side, to, e.shiftKey, target.id);
         }
         return;
       }

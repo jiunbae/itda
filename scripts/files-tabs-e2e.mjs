@@ -107,6 +107,19 @@ try{
   assert(await count('build','release')===1,'Closing the last tab on a device did not release it');
   await row('Inside-A.txt').waitFor();
   assert(await layer.locator('[data-tab]').count()===1,'Tab count after closing');
+  // A same-device drop after the active tab moved to another device still runs on the dragged file's device.
+  await layer.locator('.files-list').focus();await p.keyboard.press(platform==='mac'?'Meta+ArrowUp':'Alt+ArrowUp');await row('Alpha-A.txt').waitFor();
+  await p.keyboard.press(`${mod}+t`);await layer.locator('[data-device="build"]').first().click();await row('Beta-B.txt').waitFor();
+  await layer.locator('[data-tab]').nth(0).click();await row('Alpha-A.txt').waitFor();
+  await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+t`);await row('Docs').dblclick();await row('Inside-A.txt').waitFor();
+  const from=await row('Inside-A.txt').boundingBox();
+  await p.mouse.move(from.x+60,from.y+from.height/2);await p.mouse.down();await p.mouse.move(from.x+90,from.y+from.height/2,{steps:4});
+  await p.keyboard.press('Control+Tab');await p.keyboard.press('Control+Tab');await row('Beta-B.txt').waitFor();
+  const home=await layer.locator('[data-tab]').nth(0).boundingBox();
+  await p.mouse.move(home.x+40,home.y+home.height/2,{steps:12});await p.mouse.up();
+  await p.locator('.files-prompt [data-choice="ok"]').click();
+  const sent=(await packets()).filter(x=>x.op==='transfer').at(-1);
+  assert(sent?.id==='studio'&&sent.source==='/Users/alex/Docs'&&sent.destination==='/Users/alex','Same-device tab drop ran on the active device: '+JSON.stringify(sent));
   assert(!errors.length,errors.join('\n'));
   await c.close();
  }
