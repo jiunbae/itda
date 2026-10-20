@@ -8,6 +8,10 @@
 // Portable core: protocols, storage, discovery, the web gateway.
 #[cfg(test)]
 mod cu_e2e;
+#[cfg(target_os = "macos")]
+mod h264_mac;
+#[cfg(all(test, target_os = "macos"))]
+mod h264_e2e;
 mod demand;
 mod enc;
 mod files;
