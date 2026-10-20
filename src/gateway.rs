@@ -124,7 +124,7 @@ pub fn set_typed(id: &str, pass: Option<String>) {
     }
 }
 
-fn typed(id: &str) -> Option<String> {
+pub(crate) fn typed(id: &str) -> Option<String> {
     TYPED.lock().unwrap().iter().find(|(k, _)| k == id).map(|(_, p)| p.clone())
 }
 
@@ -785,7 +785,7 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
     // Itda's high-performance sharing on this Mac: through SSH to its loopback port. If it
     // can't be reached (Itda not running there, SSH refused), fall back to the usual way.
     if host.hp.on {
-        match open_hp(host, login) {
+        match open_hp(host, login, &pass) {
             Ok((t, raw)) => {
                 *tunnel = Some(t);
                 return Ok(raw);
@@ -814,9 +814,10 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
     }
 }
 
-pub(crate) fn open_hp(host: &store::Host, login: &store::Login) -> io::Result<(Arc<Tunnel>, rfb::Raw)> {
+/// The connection's password for SSH (saved, or typed for it); the server's own for VNC.
+pub(crate) fn open_hp(host: &store::Host, login: &store::Login, ssh_pass: &str) -> io::Result<(Arc<Tunnel>, rfb::Raw)> {
     let pass = store::get_password(&crate::hp_upgrade::password_key(&host.id)).ok_or_else(|| io::Error::other("no high-performance password"))?;
-    let t = Tunnel::open(crate::hp_upgrade::ssh_cfg(host, login))?;
+    let t = Tunnel::open(crate::hp_upgrade::ssh_cfg_with(host, login, ssh_pass.to_string()))?;
     let raw = rfb::open(&t.addr()?, &Creds { user: String::new(), pass })?;
     Ok((t, raw))
 }

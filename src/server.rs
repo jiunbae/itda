@@ -428,8 +428,10 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
                 }
                 Msg::Encodings(e) => {
                     demand.encodings(&e, &mut reply);
-                    if !e.contains(&ENC_H264) {
-                        video = None; // back to ZRLE; a later switch starts a new stream
+                    if !e.contains(&ENC_H264) && video.take().is_some() {
+                        // Back to ZRLE while the viewer shows a lossy picture: repaint it all.
+                        prev.clear();
+                        exact.clear();
                     }
                     reset = true;
                     encs = e;
@@ -519,6 +521,8 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
                         reset = false;
                         lossless = false;
                         last_change = Instant::now();
+                        // The whole picture is now lossy: the still repaint must cover it all.
+                        exact.clear();
                     }
                     Err(e) => {
                         crate::log!("video encoder failed, back to ZRLE: {e}");

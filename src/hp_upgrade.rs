@@ -33,14 +33,15 @@ pub struct Ready {
 
 /// SSH to this Mac: its SSH settings, else the file connection's account, else the Mac
 /// account it signs in with (the same password works for Remote Login).
-pub fn ssh_cfg(host: &crate::store::Host, login: &crate::store::Login) -> SshCfg {
+/// `pass`: the connection's password (saved, or typed for it and not saved).
+pub fn ssh_cfg_with(host: &crate::store::Host, login: &crate::store::Login, pass: String) -> SshCfg {
     let (h, _) = crate::tunnel::split_host(&host.host, 5900);
     let user = [&host.ssh.user, &host.files.user, &login.user].into_iter().find(|u| !u.is_empty()).cloned().unwrap_or_default();
     SshCfg {
         host: if host.files.host.is_empty() { h } else { host.files.host.clone() },
         port: [host.ssh.port, host.files.port].into_iter().find(|p| *p != 0).unwrap_or(22),
         user,
-        pass: login.pass.clone().unwrap_or_default(),
+        pass,
         vnc_port: if host.hp.port == 0 { crate::host_mac_port() } else { host.hp.port },
         key: login.ssh_key.clone(),
         key_pass: login.key_pass.clone().unwrap_or_default(),
@@ -166,7 +167,7 @@ got=$(shasum -a 256 "$T/Itda.zip" | cut -c1-64)
     let out = run(cfg, &format!(r#"
 set -e
 data="$HOME/Library/Application Support/Itda"
-mkdir -p "$data"; echo 1 > "$data/hp-sharing"; rm -f "$data/hp-status"
+mkdir -p "$data"; echo 1 > "$data/hp-sharing"; since=$(mktemp /tmp/itda-hp-since.XXXX)
 app=""
 for a in /Applications/Itda.app "$HOME/Applications/Itda.app"; do [ -d "$a" ] && {{ app=$a; break; }}; done
 [ -n "$app" ] || {{ echo "error=Itda가 설치되어 있지 않습니다"; exit 5; }}
@@ -175,8 +176,10 @@ if pgrep -f "$app/Contents/MacOS/" >/dev/null && ! nc -z 127.0.0.1 5910 2>/dev/n
   osascript -e 'tell application id "{BUNDLE_ID}" to quit' >/dev/null 2>&1 || true; sleep 2; pkill -f "$app/Contents/MacOS/" || true
 fi
 pgrep -f "$app/Contents/MacOS/" >/dev/null || open -g -j "$app"
-for i in $(seq 1 60); do [ -f "$data/hp-status" ] && [ -f "$data/hp-password" ] && break; sleep 0.5; done
-[ -f "$data/hp-status" ] || {{ echo "error=Itda가 고성능 공유를 시작하지 못했습니다"; exit 6; }}
+# A status written after this point: the serving Itda is alive (it rewrites it every 2 s).
+for i in $(seq 1 60); do [ "$data/hp-status" -nt "$since" ] && [ -f "$data/hp-password" ] && break; sleep 0.5; done
+[ "$data/hp-status" -nt "$since" ] || {{ rm -f "$since"; echo "error=Itda가 고성능 공유를 시작하지 못했습니다"; exit 6; }}
+rm -f "$since"
 cat "$data/hp-status"
 echo "password=$(cat "$data/hp-password")"
 "#), None)?;
@@ -218,15 +221,21 @@ mod tests {
             Err(_) => Source::Release(env!("CARGO_PKG_VERSION").into()),
         };
         let r = upgrade(&cfg, &source, &|s| println!("progress: {s}")).unwrap();
-        let password = r.password.clone();
+        let (password, r_screen) = (r.password.clone(), r.screen);
         println!("{:?}", Ready { password: "<hidden>".into(), ..r });
 
         // Then the viewer's way in: the gateway's SSH tunnel + VNC password, asking for H.264.
         use std::io::{Read, Write};
         let host = crate::store::Host { id: format!("hp-test-{}", crate::store::new_id()), host: host.into(), os: "mac".into(), ssh: crate::store::Ssh { on: false, user: user.into(), port: 0 }, hp: crate::store::Hp { on: true, port: 0 }, ..Default::default() };
         crate::store::set_password(&password_key(&host.id), Some(&password));
-        let opened = crate::gateway::open_hp(&host, &crate::store::Login::default());
+        let opened = crate::gateway::open_hp(&host, &crate::store::Login::default(), "");
         crate::store::set_password(&password_key(&host.id), None);
+        if !r_screen {
+            // Until Screen Recording is allowed there, it refuses (the viewer stays on Screen Sharing).
+            let e = opened.err().expect("must refuse without Screen Recording");
+            assert!(e.to_string().contains("Screen Recording"), "{e}");
+            return;
+        }
         let (_tunnel, raw) = opened.expect("open_hp");
         let (mut r, mut w) = (raw.reader, raw.writer);
         println!("server init {}x{} {:?}", raw.width, raw.height, raw.name);

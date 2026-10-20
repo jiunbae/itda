@@ -324,6 +324,8 @@ pub(crate) struct Input {
     flags: CGEventFlags,
     pub(crate) last_key: Instant,
     last_click: (Instant, u16, u16, i64),
+    /// Where the pointer is now (button releases on cleanup happen here).
+    at: (u16, u16),
 }
 
 /// Mac key codes (ANSI layout) for X keysyms; the bool marks modifiers (with their flag).
@@ -378,7 +380,7 @@ fn post(e: Option<CFRetained<CGEvent>>) {
 
 impl Input {
     pub(crate) fn new(_cmd_as_ctrl: bool, view_only: bool) -> Input {
-        Input { view_only, buttons: 0, down: HashMap::new(), flags: CGEventFlags(0), last_key: Instant::now(), last_click: (Instant::now() - Duration::from_secs(5), 0, 0, 0) }
+        Input { view_only, buttons: 0, down: HashMap::new(), flags: CGEventFlags(0), last_key: Instant::now(), last_click: (Instant::now() - Duration::from_secs(5), 0, 0, 0), at: (0, 0) }
     }
 
     pub(crate) fn modifiers_held(&self) -> bool {
@@ -417,13 +419,14 @@ impl Input {
                 return;
             }
         };
-        if let Some(f) = flag {
-            self.flags = if down { CGEventFlags(self.flags.0 | f.0) } else { CGEventFlags(self.flags.0 & !f.0) };
-        }
         if down {
             self.down.insert(sym, code);
         } else if self.down.remove(&sym).is_none() && flag.is_none() {
             return; // a release for a key we never pressed
+        }
+        if flag.is_some() {
+            // From the modifiers still held: releasing Left Shift keeps Right Shift's flag.
+            self.flags = CGEventFlags(self.down.keys().filter_map(|s| keycode(*s).and_then(|k| k.1)).fold(0, |a, f| a | f.0));
         }
         let e = CGEvent::new_keyboard_event(None, code, down);
         CGEvent::set_flags(e.as_deref(), self.flags);
@@ -435,6 +438,7 @@ impl Input {
             return;
         }
         let at = CGPoint { x: x as f64, y: y as f64 };
+        self.at = (x, y);
         let changed = mask ^ self.buttons;
         let mouse = |kind: CGEventType, button: CGMouseButton, clicks: i64| {
             let e = CGEvent::new_mouse_event(None, kind, at, button);
@@ -462,8 +466,16 @@ impl Input {
             }
         }
         if !sent {
-            let kind = if mask & 1 != 0 { CGEventType::LeftMouseDragged } else if mask & 4 != 0 { CGEventType::RightMouseDragged } else { CGEventType::MouseMoved };
-            mouse(kind, if mask & 4 != 0 { CGMouseButton::Right } else { CGMouseButton::Left }, 0);
+            let (kind, button) = if mask & 1 != 0 {
+                (CGEventType::LeftMouseDragged, CGMouseButton::Left)
+            } else if mask & 4 != 0 {
+                (CGEventType::RightMouseDragged, CGMouseButton::Right)
+            } else if mask & 2 != 0 {
+                (CGEventType::OtherMouseDragged, CGMouseButton::Center)
+            } else {
+                (CGEventType::MouseMoved, CGMouseButton::Left)
+            };
+            mouse(kind, button, 0);
         }
         // Wheel: buttons 4/5 (up/down) and 6/7 (left/right) are clicks.
         for (bit, dy, dx) in [(8u8, 3, 0), (16, -3, 0), (32, 0, 3), (64, 0, -3)] {
@@ -480,7 +492,7 @@ impl Input {
             self.key(false, s);
         }
         if self.buttons & 7 != 0 {
-            self.pointer(0, self.last_click.1, self.last_click.2);
+            self.pointer(0, self.at.0, self.at.1);
         }
     }
 }
@@ -535,17 +547,12 @@ pub fn start_background() {
         let (screen, access) = request_permissions();
         crate::log!("hp sharing: screen recording {screen}, accessibility {access}");
         write_status(screen, access);
-        // Keep the status current while the person grants what's missing.
-        std::thread::spawn(move || {
-            let mut last = (screen, access);
-            while last != (true, true) {
-                std::thread::sleep(Duration::from_secs(2));
-                let now = permissions();
-                if now != last {
-                    write_status(now.0, now.1);
-                    last = now;
-                }
-            }
+        // Rewritten every 2 s while it serves: an Itda setting this up over SSH waits for a
+        // fresh one (also when sharing was already running), and sees permissions granted.
+        std::thread::spawn(|| loop {
+            std::thread::sleep(Duration::from_secs(2));
+            let (screen, access) = permissions();
+            write_status(screen, access);
         });
         // Consent: it listens on this Mac only, so every viewer has already signed in to this
         // Mac's account over SSH and knows the 0600 password; no extra "allow?" dialog.

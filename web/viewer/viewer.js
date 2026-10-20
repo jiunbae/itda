@@ -621,7 +621,8 @@ window.itdaHp = (m) => {
     return toast(`고성능 모드를 켜지 못했습니다 — ${m.error}`, 9000);
   }
   if (m.ready || m.status) {
-    if (m.screen) return switchNow();
+    // Both: without Accessibility the screen would show but not take input.
+    if (m.screen && m.access) return switchNow();
     // Waiting for the person to allow Screen Recording (and Accessibility) on that Mac.
     if (m.ready) toast('이 Mac 화면에 뜬 요청에서 Itda의 "화면 기록"과 "손쉬운 사용"을 허용해 주세요. 허용하면 "종료 후 다시 열기"를 누르면 됩니다. 그러면 고성능으로 전환합니다.', 15000);
     S.hpTries = m.ready ? 0 : (S.hpTries || 0) + 1;
