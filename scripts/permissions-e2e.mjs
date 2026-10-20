@@ -37,6 +37,13 @@ try{
  await p.clock.fastForward(181000);const count=await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_status').length);await p.clock.fastForward(10000);assert(await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_status').length)===count,'Guide polling did not stop');
  await p.locator('[data-request="access"]').click();await p.evaluate(()=>permissionState.access=true);await p.clock.fastForward(1600);await p.getByText('✓ 연결할 준비가 됐어요').waitFor();assert(await p.locator('[data-action="close"]').textContent()==='완료','Guide completion missing');
  await p.setViewportSize({width:360,height:640});const footer=await p.locator('footer').boundingBox();assert(footer.y>=0&&footer.y+footer.height<=640,'Helper actions fall below window');assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Helper overflows narrow window');
+ // A guide opened without a deep link still polls, recovering a lost initial IPC reply.
+ const recovery=await browser.newPage();await recovery.clock.install();
+ await recovery.addInitScript(()=>{window.reads=0;window.ipc={postMessage:raw=>{if(JSON.parse(raw).cmd==='permission_status'&&++reads>1)queueMicrotask(()=>itda.recv({type:'permissions',screen:false,access:false,requested:null,requested_seq:0,app_path:'/Applications/Itda.app'}));}};});
+ await recovery.goto(`http://127.0.0.1:${server.address().port}/permissions.html`);await recovery.clock.fastForward(6100);
+ assert(await recovery.evaluate(()=>reads)>=2,'Lost first IPC reply permanently blocked checks');
+ const recoveredReads=await recovery.evaluate(()=>reads);await recovery.clock.fastForward(1600);
+ assert(await recovery.evaluate(()=>reads)>recoveredReads,'Guide without a requested permission did not poll');await recovery.close();
  // The remote panel must not confuse a stale report with a running server.
  await p.goto(`http://127.0.0.1:${server.address().port}/index.html`);await p.evaluate(()=>{window.remoteEvents=[];window.done=0;window.cancelled=0;const screen=document.createElement('div');screen.id='existing-session';screen.textContent='connected';document.body.append(screen);ItdaHpSetup.begin({id:'remote',name:'Studio Mac',send:(op,extra)=>remoteEvents.push({op,...extra}),done:()=>done++,cancel:()=>cancelled++});});
  await p.evaluate(()=>ItdaHpSetup.message({id:'other',ready:true,screen:true,access:true}));assert(await p.evaluate(()=>done)===0,'Other device completed setup');

@@ -20,7 +20,8 @@
   document.querySelector('.progress').textContent=ready?'✓ 연결할 준비가 됐어요':restart?ungranted.length?'권한 변경을 확인했어요 · 남은 권한을 허용해 주세요':'설정 변경이 확인됐어요 · Itda를 다시 열어 주세요':`${count}/2 완료 · ${!m.screen?'화면 보기':'키보드·마우스 조작'}를 허용해 주세요`;
   for(const key of ['screen','access']){const row=document.querySelector(`[data-permission="${key}"]`),done=!!m[key];row.classList.toggle('done',done);row.classList.toggle('pending',restartKeys.includes(key));row.classList.toggle('next',!done&&key===next);row.querySelector('.badge').textContent=done?'✓ 허용됨':restartKeys.includes(key)?'재시작 필요':'허용 필요';row.querySelector('button').disabled=done||restartKeys.includes(key);}
   document.querySelector('.recovery').hidden=ready;
-  document.querySelector('.recovery-message').textContent=restart?ungranted.length?'허용한 권한이 실행 중인 Itda에 아직 반영되지 않았어요. 남은 권한을 설정한 후 Itda를 다시 열어 주세요.':'새로 실행한 Itda는 변경된 권한을 확인했어요. 현재 실행 중인 Itda에도 반영하려면 다시 열어 주세요.':'권한을 켰어도 실행 중인 Itda에 바로 반영되지 않을 수 있어요. Itda를 다시 열어 확인해 주세요.';
+  document.querySelector('.recovery h2').textContent=restart?'변경한 권한 적용':'설정에서 이미 허용했나요?';
+  document.querySelector('.recovery-message').textContent=restart?ungranted.length?'허용한 권한이 실행 중인 Itda에 아직 반영되지 않았어요. 남은 권한을 설정한 후 Itda를 다시 열어 주세요.':'권한 변경을 확인했어요. 현재 실행 중인 Itda에 반영하려면 다시 열어 주세요.':'권한을 켰어도 실행 중인 Itda에 바로 반영되지 않을 수 있어요. Itda를 다시 열어 확인해 주세요.';
   document.querySelector('.current-app').textContent=`Itda ${m.version||''} · ${m.app_path||'앱 위치를 확인할 수 없습니다'}`;
   document.querySelector('[data-action="restart"]').disabled=!m.app_path;
   const instructions=document.querySelector('.instructions');instructions.hidden=ready||!requested||(restart&&!ungranted.length);
