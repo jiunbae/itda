@@ -18,6 +18,9 @@
   requested=m.requested||requested;
   if(m.requested_seq&&m.requested_seq!==seenRequest){seenRequest=m.requested_seq;if(!ready)watch();}
   const next=ungranted.includes(requested)?requested:ungranted[0]||restartKeys[0]||'access';
+  document.querySelector('h1').textContent=ready?'설정이 끝났어요':'이 Mac을 연결할 준비';
+  document.querySelector('.intro').textContent=ready?'화면 보기와 키보드·마우스 조작이 모두 허용됐어요. 이제 다른 기기에서 이 Mac을 고성능으로 보고 조작할 수 있어요.':'두 가지 권한을 허용하면 다른 기기에서 이 Mac의 화면을 보고 조작할 수 있어요.';
+  document.body.classList.toggle('complete',!!ready);
   document.querySelector('.progress').textContent=ready?'✓ 연결할 준비가 됐어요':restart?ungranted.length?'권한 변경을 확인했어요 · 남은 권한을 허용해 주세요':'설정 변경이 확인됐어요 · Itda를 다시 열어 주세요':`${count}/2 완료 · ${!m.screen?'화면 보기':'키보드·마우스 조작'}를 허용해 주세요`;
   for(const key of ['screen','access']){const row=document.querySelector(`[data-permission="${key}"]`),done=!!m[key];row.classList.toggle('done',done);row.classList.toggle('pending',restartKeys.includes(key));row.classList.toggle('next',!done&&key===next);row.querySelector('.badge').textContent=done?'✓ 허용됨':restartKeys.includes(key)?'재시작 필요':'허용 필요';row.querySelector('button').disabled=done||restartKeys.includes(key);}
   document.querySelector('.recovery').hidden=ready;
@@ -31,6 +34,7 @@
   document.querySelector('#next-step').textContent=next==='screen'?'1. 화면 및 시스템 오디오 기록 설정':'2. 키보드·마우스 조작 설정';
   document.querySelector('.app-path').textContent=m.app_path||'';
   document.querySelector('.app-drag').disabled=!m.app_path;
+  if(m.notice)document.querySelector('.progress').textContent=m.notice;
   const close=document.querySelector('[data-action="close"]');close.textContent=ready?'완료':'나중에';
   if(ready){clearInterval(timer);deadline=0;}
  }};

@@ -6,3 +6,5 @@ main{padding-bottom:110px}footer{position:fixed;bottom:0;left:0;right:0;max-widt
 
 .permission.pending p,.permission.pending button{display:none}.permission.pending{padding-block:12px}.permission.pending .badge{color:var(--accent)}
 .recovery ol{padding-left:20px;font-size:12px;line-height:1.7;color:var(--muted)}.recovery li{margin:8px 0}
+body.complete header img{animation:pop .5s ease-out}body.complete .progress{color:var(--ok);font-size:14px}
+@keyframes pop{0%{transform:scale(.8)}60%{transform:scale(1.08)}100%{transform:scale(1)}}

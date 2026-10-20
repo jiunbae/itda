@@ -1,0 +1,15 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Itda 권한 도우미</title><link rel="stylesheet" href="permission-guide.css"><body><main>
+<p class="step" id="step"></p>
+<h1 id="title"></h1>
+<p class="lead" id="lead"></p>
+<div class="pull"><span class="arrow" id="arrow" aria-hidden="true">←</span><div><b id="switch-line">목록에서 <span class="name">Itda</span> 스위치를 켜세요</b><span>목록에 Itda가 없으면 아래 아이콘을 끌어다 옆 목록에 놓으세요.</span></div></div>
+<button class="app" id="app" aria-label="Itda 앱 아이콘. 옆 시스템 설정 창의 목록으로 끌어다 놓으세요" title="누른 채로 옆 설정 창의 목록에 끌어다 놓으세요"><img src="icon.svg" alt="" draggable="false"><b>Itda</b><small id="path"></small></button>
+<ol class="notes">
+<li>암호나 Touch ID를 물으면 Mac 로그인 방법으로 승인하세요.</li>
+<li>‘종료 후 다시 열기’가 나오면 선택하세요. Itda가 다시 열리고 이 안내가 이어집니다.</li>
+</ol>
+<details><summary>Itda가 켜져 있는데도 안 되나요?</summary><p>예전 버전의 항목일 수 있어요. 목록에서 <b>Itda</b>를 선택하고 <b>−</b> 버튼으로 지운 뒤, 위 아이콘을 다시 끌어다 놓고 켜세요.</p></details>
+<details><summary>드래그가 안 되나요?</summary><p>목록 아래의 <b>+</b> 버튼을 누르고 응용 프로그램에서 Itda를 고르세요.</p><div class="row"><button data-act="reveal">Finder에서 Itda 보기</button><button data-act="copy">앱 위치 복사</button></div></details>
+<p class="state" id="state" role="status" aria-live="polite"></p>
+<div class="done" id="done" hidden><span>✓</span><b id="done-text">허용됐어요</b></div>
+</main><script src="permission-guide.js"></script></body></html>

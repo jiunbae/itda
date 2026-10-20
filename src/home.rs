@@ -258,6 +258,9 @@ fn asset(path: &str) -> Option<(Cow<'static, [u8]>, &'static str)> {
         "permissions.html" => include_str!("../web/permissions.html"),
         "permissions.css" => include_str!("../web/permissions.css"),
         "permissions.js" => include_str!("../web/permissions.js"),
+        "permission-guide.html" => include_str!("../web/permission-guide.html"),
+        "permission-guide.css" => include_str!("../web/permission-guide.css"),
+        "permission-guide.js" => include_str!("../web/permission-guide.js"),
         _ => return None,
     };
     Some((Cow::Borrowed(body.as_bytes()), mime))
