@@ -66,6 +66,15 @@ jobs:
           SCREENSHOT_DIR: test-artifacts/file-ui
       - name: Tabs on different devices
         run: node scripts/files-tabs-e2e.mjs
+      - name: Permission helper regression
+        run: node scripts/permissions-e2e.mjs
+        env:
+          SCREENSHOT_DIR: test-artifacts/permissions
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: permission-helper-ui
+          path: test-artifacts/permissions
       - uses: actions/upload-artifact@v4
         if: always()
         with:

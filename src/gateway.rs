@@ -674,6 +674,8 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
     let p = req.path.as_str();
     match (req.method.as_str(), p) {
         ("GET", "/" | "/index.html") => asset(&mut c, &req, "text/html; charset=utf-8", INDEX.as_bytes()),
+        ("GET", "/hp-setup.css") => asset(&mut c, &req, "text/css; charset=utf-8", include_bytes!("../web/hp-setup.css")),
+        ("GET", "/hp-setup.js") => asset(&mut c, &req, "text/javascript; charset=utf-8", include_bytes!("../web/hp-setup.js")),
         ("GET", "/viewer.css") => asset(&mut c, &req, "text/css; charset=utf-8", CSS.as_bytes()),
         ("GET", "/viewer.js") => asset(&mut c, &req, "text/javascript; charset=utf-8", JS.as_bytes()),
         ("GET", "/interaction.js") => asset(&mut c, &req, "text/javascript; charset=utf-8", INTERACTION.as_bytes()),

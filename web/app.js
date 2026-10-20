@@ -268,15 +268,17 @@ function onMessage(m) {
       // ⚡ high-performance mode being set up from a connection's editor (or window).
       const h = S.hosts.find((x) => x.id === m.id);
       const name = h ? label(h) : '';
+      const guided=window.ItdaHpSetup?.message(m);
+      if(m.helper)return;
       // Only the open editor of this very connection reflects it.
       const ed = document.querySelector(`#modals [data-key="edit"][data-host="${CSS.escape(m.id || '')}"]`);
       const btn = ed && ed.querySelector('#hp-enable');
-      if (m.stage) toast(`${name} 고성능 모드: ${m.stage}`, 'E72C');
+      if (m.stage && !guided) toast(`${name} 고성능 모드: ${m.stage}`, 'E72C');
       else if (m.error && !m.status) {
-        toast(`${name} 고성능 모드를 켜지 못했습니다 — ${m.error}`, 'E7BA');
+        if(!guided) toast(`${name} 고성능 모드를 켜지 못했습니다 — ${m.error}`, 'E7BA');
         if (btn) { btn.disabled = false; btn.textContent = '켜기'; }
       } else if (m.ready) {
-        toast(m.screen && m.access ? `${name} 고성능 모드를 켰습니다 — 다음 연결부터 사용합니다` : `${name} 고성능 모드를 켰습니다. 그 Mac에서 Itda의 화면 기록·손쉬운 사용 권한을 허용하세요.`, 'E73E');
+        if(!guided) toast(m.screen && m.access ? `${name} 고성능 모드를 켰습니다 — 다음 연결부터 사용합니다` : `${name} 고성능 모드를 켰습니다. 그 Mac에서 Itda의 화면 기록·손쉬운 사용 권한을 허용하세요.`, 'E73E');
         const st = ed && ed.querySelector('#hp-state');
         if (st) st.textContent = '켜짐 — 이 Mac의 Itda 고성능 공유로 연결합니다 (SSH 터널).';
         if (btn) btn.remove();
@@ -735,6 +737,8 @@ function renderShareMac() {
     <div class="group-title" id="web-viewer">${I('E774')} 브라우저로 보기 — 웹 뷰어 <span class="pill ok">추천</span><a href="#" class="help-link" data-help="phone">자세히</a></div>
     ${setting('E8EA', '웹 뷰어', 'iPhone·Android·PC의 브라우저로 이 Mac에 저장된 Mac·Windows PC·Linux를 엽니다. 브라우저에 앱을 설치할 필요가 없고, 저장된 기기 암호를 브라우저에 전달하지 않습니다.', toggle('on', web.on, 'web'), !web.on)}
     ${web.on ? webPanel(web) : ''}
+    <div class="group-title">${I('E945')} 고성능 모드 권한</div>
+    <div class="setting last">${I('E73E')}<div class="txt"><b>이 Mac의 화면 보기·키보드·마우스 조작 권한</b><span>권한 도우미에서 설정을 열고, 허용된 항목을 한곳에서 확인할 수 있어요.</span></div><button class="btn" data-act="permission-helper">권한 도우미 열기</button></div>
     <div class="group-title" id="share-pc">${I('E7F4')} 이 Mac 화면 공유 — macOS 화면 공유<a href="#" class="help-link" data-help="share">자세히</a></div>
     <div class="setting">${I('E7F4')}<div class="txt"><b>이 Mac은 macOS에 들어 있는 ‘화면 공유’로 공유합니다</b>
         <span><strong>시스템 설정 → 일반 → 공유 → 화면 공유</strong>를 켜면 다른 기기의 Itda, Mac의 화면 공유 앱, VNC 앱에서 이 Mac을 보고 조작할 수 있습니다.</span></div>
@@ -1086,7 +1090,7 @@ function openEdit(init = {}, mode = {}) {
   const hpBox = MAC ? `<div class="field hp-box" ${h.kind !== 'rdp' && (h.os || 'mac') === 'mac' ? '' : 'hidden'}><label>성능</label>
       <div class="opt"><span class="hp-ico" aria-hidden="true">⚡</span><div class="txt"><b>고성능 모드 (H.264)</b><span id="hp-state">${hp.on ? '켜짐 — 이 Mac의 Itda 고성능 공유로 연결합니다 (SSH 터널). 연결할 수 없으면 기본 화면 공유를 씁니다.' : '꺼짐 — 기본 화면 공유(ZRLE)로 연결합니다. 켜면 SSH로 이 Mac에 Itda를 설치하고 고성능 공유를 켭니다.'}</span></div>
         ${hp.on ? '<label class="switch"><input type="checkbox" id="f-hp" checked><span></span></label>' : (existing ? '<button type="button" class="btn sm" id="hp-enable">켜기</button>' : '')}</div>
-      <span class="hint">원격 로그인(SSH)이 켜져 있고, 그 Mac 화면에 로그인한 계정으로 연결해야 합니다. 켜는 동안 그 Mac에 화면 기록·손쉬운 사용 권한 요청이 뜹니다.</span></div>` : '';
+      <span class="hint">원격 로그인(SSH)이 켜져 있고, 그 Mac 화면에 로그인한 계정으로 연결해야 합니다. 그 Mac의 권한 도우미에서 화면 보기와 조작 권한을 한 항목씩 안내합니다.</span></div>` : '';
   const general = `<div data-pane="general">
       ${quick ? '' : `<div class="field"><label>종류</label><div class="seg kind-seg">
           ${Object.entries(KINDS).map(([k, d]) => `<button type="button" data-kind="${k}" class="${k === K0 ? 'on' : ''}">${d.label}</button>`).join('')}</div>
@@ -1181,6 +1185,7 @@ ${quick ? sshBox : ''}
   if (hpEnable) hpEnable.onclick = () => {
     hpEnable.disabled = true;
     hpEnable.textContent = '준비 중…';
+    window.ItdaHpSetup.begin({id:h.id,name:label(h),send:(op,extra={})=>send(`hp_${op}`,{id:h.id,...extra}),done:()=>toast(`${label(h)} 고성능 모드가 준비됐습니다`, 'E73E'),cancel:()=>{if(hpEnable.isConnected){hpEnable.disabled=false;hpEnable.textContent='다시 확인';}}});
     send('hp_upgrade', { id: h.id });
   };
   const pass = m.querySelector('#f-pass');
@@ -1580,6 +1585,7 @@ function act(a, el) {
       return confirmDialog('새 공유 암호를 만들까요?', '지금 이 PC를 보고 있는 기기는 연결이 끊기고, 다음부터 새 암호가 필요합니다.', '새 암호 만들기', false, () => { S.share = {}; send('share_reset_pw'); toast('새 공유 암호를 만들었습니다', 'E72C'); });
     case 'share-kick': return send('share_kick');
     case 'onboard': return showOnboarding();
+    case 'permission-helper': return send('permission_helper');
     case 'sys-sharing': return send('url', { url: 'x-apple.systempreferences:com.apple.Sharing-Settings.extension' });
     case 'share-all-on':
       if (MAC) return act('web-on', el);

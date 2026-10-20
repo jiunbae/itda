@@ -571,6 +571,7 @@ for (const t of ['gesturestart', 'gesturemove', 'gestureend']) {
 }
 
 function close(notifyNative=true) {
+  window.ItdaHpSetup?.close(); S.hpBusy=false;
   wheel.reset();
   monitors.disconnect(notifyNative);
   if (S.rfb) { const r = S.rfb; S.rfb = null; try { r.disconnect(); } catch (_) {} }
@@ -591,7 +592,6 @@ function leave() {
 // answers macOS's permission prompts on that Mac through this very connection, and then this
 // window reconnects to it. If it can't be reached, the app falls back to Screen Sharing.
 const hpCapable = () => APP && macHost(S.host) && S.host?.kind !== 'rdp';
-let hpWait;
 function hpToggle() {
   if (!hpCapable() || S.hpBusy) return;
   if (S.host.hp?.on) {
@@ -600,37 +600,15 @@ function hpToggle() {
     toast('고성능 모드를 껐습니다 — 기본 화면 공유로 다시 연결합니다');
     return open(S.host);
   }
-  S.hpBusy = true;
-  renderTools();
+  S.hpBusy = true; renderTools();
+  const id=S.host.id;
+  window.ItdaHpSetup.begin({id,name:S.host.label||S.host.name||S.host.remote_name||S.host.host,send:(op,extra={})=>post({ev:`hp-${op}`,...extra}),
+    done:()=>{if(S.host?.id!==id)return;S.hpBusy=false;S.host.hp={...(S.host.hp||{}),on:true};toast('고성능 모드로 전환합니다');open(S.host);},
+    cancel:()=>{S.hpBusy=false;renderTools();}
+  });
   post({ ev: 'hp-upgrade' });
-  toast('고성능 모드를 준비하는 중…', 8000);
 }
-window.itdaHp = (m) => {
-  if (!S.host || m.id !== S.host.id) return;
-  if (m.stage) return toast(`고성능 모드: ${m.stage}`, 8000);
-  const switchNow = () => {
-    clearTimeout(hpWait);
-    S.hpBusy = false;
-    S.host.hp = { ...(S.host.hp || {}), on: true };
-    toast('고성능 모드로 전환합니다');
-    open(S.host);
-  };
-  if (m.error && !m.status) {
-    S.hpBusy = false;
-    renderTools();
-    return toast(`고성능 모드를 켜지 못했습니다 — ${m.error}`, 9000);
-  }
-  if (m.ready || m.status) {
-    // Both: without Accessibility the screen would show but not take input.
-    if (m.screen && m.access) return switchNow();
-    // Waiting for the person to allow Screen Recording (and Accessibility) on that Mac.
-    if (m.ready) toast('이 Mac 화면에 뜬 요청에서 Itda의 "화면 기록"과 "손쉬운 사용"을 허용해 주세요. 허용하면 "종료 후 다시 열기"를 누르면 됩니다. 그러면 고성능으로 전환합니다.', 15000);
-    S.hpTries = m.ready ? 0 : (S.hpTries || 0) + 1;
-    if (S.hpTries > 75) { S.hpBusy = false; renderTools(); return toast('권한이 허용되지 않아 기본 화면 공유를 계속 씁니다. 다시 시도하려면 ⚡를 누르세요.', 9000); }
-    clearTimeout(hpWait);
-    hpWait = setTimeout(() => post({ ev: 'hp-status' }), 4000);
-  }
-};
+window.itdaHp = (m) => {if(S.host?.id===m.id)window.ItdaHpSetup?.message(m);};
 
 // ---------------------------------------------------------------- toolbar
 

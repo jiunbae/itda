@@ -65,12 +65,10 @@ pub fn permissions() -> (bool, bool) {
 }
 
 /// Ask for whatever is missing: macOS shows its own prompts (and System Settings).
-pub fn request_permissions() -> (bool, bool) {
+pub fn request_permission(kind: &str) {
     let (screen, access) = permissions();
-    if !screen {
-        CGRequestScreenCaptureAccess();
-    }
-    if !access {
+    if kind == "screen" && !screen { CGRequestScreenCaptureAccess(); }
+    if kind == "access" && !access {
         unsafe {
             use objc2_core_foundation::{CFBoolean, CFDictionary, CFString};
             let key: &CFString = &*(kAXTrustedCheckOptionPrompt as *const CFString);
@@ -78,7 +76,9 @@ pub fn request_permissions() -> (bool, bool) {
             AXIsProcessTrustedWithOptions(CFRetained::as_ptr(&d).as_ptr() as *const c_void);
         }
     }
-    permissions()
+}
+pub fn request_permissions() -> (bool, bool) {
+    request_permission("screen"); request_permission("access"); permissions()
 }
 
 /// Can this Mac's screen be served: Screen Recording granted to this (re)launched app.
@@ -544,8 +544,16 @@ fn write_status(screen: bool, access: bool) {
 /// Start serving in the background of the running app (when `enabled`).
 pub fn start_background() {
     std::thread::spawn(|| {
-        let (screen, access) = request_permissions();
+        let (screen, access) = permissions();
         crate::log!("hp sharing: screen recording {screen}, accessibility {access}");
+        // Consent: it listens on this Mac only, so every viewer has already signed in to this
+        // Mac's account over SSH and knows the 0600 password; no extra "allow?" dialog.
+        let cfg = crate::server::Config { port: PORT, password: password(), ask: false, trust_near: false, cmd_as_ctrl: false, view_only: false, local_only: true };
+        if let Err(e) = crate::server::start(cfg) {
+            let _=std::fs::remove_file(crate::store::dir().join("hp-status"));
+            crate::log!("hp sharing: {e}");
+            return;
+        }
         write_status(screen, access);
         // Rewritten every 2 s while it serves: an Itda setting this up over SSH waits for a
         // fresh one (also when sharing was already running), and sees permissions granted.
@@ -554,12 +562,7 @@ pub fn start_background() {
             let (screen, access) = permissions();
             write_status(screen, access);
         });
-        // Consent: it listens on this Mac only, so every viewer has already signed in to this
-        // Mac's account over SSH and knows the 0600 password; no extra "allow?" dialog.
-        let cfg = crate::server::Config { port: PORT, password: password(), ask: false, trust_near: false, cmd_as_ctrl: false, view_only: false, local_only: true };
-        if let Err(e) = crate::server::start(cfg) {
-            crate::log!("hp sharing: {e}");
-        }
+
     });
 }
 

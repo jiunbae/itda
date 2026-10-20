@@ -29,6 +29,7 @@ pub struct Ready {
     pub access: bool,
     /// Version installed by this run (None: the Mac already had a good one).
     pub installed: Option<String>,
+    pub helper_error: Option<String>,
 }
 
 /// SSH to this Mac: its SSH settings, else the file connection's account, else the Mac
@@ -98,11 +99,32 @@ fn q(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// (Screen Recording, Accessibility) as the Mac's Itda last reported them.
-pub fn status(cfg: &SshCfg) -> io::Result<(bool, bool)> {
-    let out = run(cfg, r#"cat "$HOME/Library/Application Support/Itda/hp-status" 2>/dev/null; true"#, None)?;
-    let kv = |k: &str| out.split_whitespace().any(|p| p == format!("{k}=1"));
-    Ok((kv("screen"), kv("access")))
+/// Permission reports are trusted only while a live server is updating them.
+#[derive(Debug, PartialEq)]
+pub struct Status { pub screen: bool, pub access: bool, pub running: bool }
+pub fn status(cfg: &SshCfg) -> io::Result<Status> {
+    let port=if cfg.vnc_port==0 {crate::host_mac_port()} else {cfg.vnc_port};
+    let out = run(cfg, &format!(r#"
+p="$HOME/Library/Application Support/Itda/hp-status"
+cat "$p" 2>/dev/null || true
+age=$(( $(date +%s) - $(stat -f%m "$p" 2>/dev/null || echo 0) ))
+if [ "$age" -ge 0 ] && [ "$age" -le 15 ] && lsof -nP -a -c itda -iTCP:{port} -sTCP:LISTEN -t >/dev/null 2>&1; then echo running=1; else echo running=0; fi
+"#), None)?;
+    let yes = |k: &str| out.split_whitespace().any(|p| p == format!("{k}=1"));
+    Ok(Status {screen:yes("screen"),access:yes("access"),running:yes("running")})
+}
+
+/// The guide and system settings open on the remote Mac, never on the viewer's computer.
+pub fn show_permissions(cfg: &SshCfg, permission: Option<&str>) -> io::Result<()> {
+    let suffix=match permission {None=>"",Some("screen")=>"/screen",Some("access")=>"/access",_=>return Err(io::Error::other("설정할 권한을 확인해 주세요"))};
+    run(cfg,&format!(r#"
+set -e
+[ "$(id -un)" = "$(stat -f%Su /dev/console)" ] || {{ echo 'error=이 Mac 화면에 로그인한 계정으로 연결해 주세요'; exit 3; }}
+app=""
+for a in /Applications/Itda.app "$HOME/Applications/Itda.app"; do [ -d "$a" ] && {{ app=$a; break; }}; done
+[ -n "$app" ] || {{ echo 'error=원격 Mac에 Itda가 설치되어 있지 않습니다'; exit 5; }}
+open -a "$app" 'itda://permissions{suffix}'
+"#),None).map(|_|())
 }
 
 pub fn upgrade(cfg: &SshCfg, source: &Source, progress: &dyn Fn(&str)) -> io::Result<Ready> {
@@ -177,8 +199,8 @@ if pgrep -f "$app/Contents/MacOS/" >/dev/null && ! nc -z 127.0.0.1 5910 2>/dev/n
 fi
 pgrep -f "$app/Contents/MacOS/" >/dev/null || open -g -j "$app"
 # A status written after this point: the serving Itda is alive (it rewrites it every 2 s).
-for i in $(seq 1 60); do [ "$data/hp-status" -nt "$since" ] && [ -f "$data/hp-password" ] && break; sleep 0.5; done
-[ "$data/hp-status" -nt "$since" ] || {{ rm -f "$since"; echo "error=Itda가 고성능 공유를 시작하지 못했습니다"; exit 6; }}
+for i in $(seq 1 60); do [ "$data/hp-status" -nt "$since" ] && [ -f "$data/hp-password" ] && nc -z -w 1 127.0.0.1 5910 2>/dev/null && break; sleep 0.5; done
+[ "$data/hp-status" -nt "$since" ] && nc -z -w 1 127.0.0.1 5910 2>/dev/null || {{ rm -f "$since"; echo "error=Itda가 고성능 공유를 시작하지 못했습니다"; exit 6; }}
 rm -f "$since"
 cat "$data/hp-status"
 echo "password=$(cat "$data/hp-password")"
@@ -192,6 +214,7 @@ echo "password=$(cat "$data/hp-password")"
     if ready.password.len() < 6 {
         return Err(io::Error::other("고성능 공유 암호를 읽지 못했습니다"));
     }
+    if !ready.screen || !ready.access { ready.helper_error=show_permissions(cfg,None).err().map(|e|e.to_string()); }
     std::thread::sleep(Duration::from_millis(200));
     Ok(ready)
 }
@@ -199,6 +222,16 @@ echo "password=$(cat "$data/hp-password")"
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Read-only live status diagnostic; never installs, restarts, or requests permissions.
+    #[test]
+    #[ignore]
+    fn read_existing_status() {
+        let spec=std::env::var("ITDA_HP_TEST_HOST").expect("ITDA_HP_TEST_HOST");
+        let (user,host)=spec.split_once('@').expect("user@ssh-alias");
+        let cfg=SshCfg{host:host.into(),port:22,user:user.into(),pass:String::new(),vnc_port:crate::host_mac_port(),key:String::new(),key_pass:String::new()};
+        println!("{:?}",status(&cfg).expect("read-only status"));
+    }
 
     #[test]
     fn versions_and_fields() {
