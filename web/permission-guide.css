@@ -1,0 +1,15 @@
+:root{color-scheme:light dark;--bg:#f6f6f8;--card:#fff;--text:#1d1d1f;--muted:#626269;--line:#dedee3;--accent:#086bdc;--soft:#eaf3ff;--ok:#167443;font:13px -apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--text)}
+*{box-sizing:border-box}body{margin:0;user-select:none;-webkit-user-select:none}main{padding:16px 16px 18px}
+.step{margin:0;font-size:11px;font-weight:600;color:var(--accent)}h1{font-size:16px;margin:4px 0 6px;line-height:1.35}.lead{margin:0 0 12px;color:var(--muted);font-size:12px;line-height:1.55}
+.pull{display:flex;gap:10px;align-items:center;padding:11px 12px;border-radius:11px;background:var(--soft)}.pull b{display:block;font-size:13px;margin-bottom:3px}.pull span{font-size:11.5px;color:var(--muted);line-height:1.5}.pull .name{color:var(--text);font-size:inherit}
+.arrow{font-size:26px;color:var(--accent);animation:nudge 1.2s ease-in-out infinite}.arrow.right{animation-name:nudge-r}
+@keyframes nudge{50%{transform:translateX(-5px)}}@keyframes nudge-r{50%{transform:translateX(5px)}}
+.app{display:flex;flex-direction:column;align-items:center;gap:4px;width:100%;margin:12px 0;padding:14px 10px 10px;border:1.5px dashed var(--accent);border-radius:14px;background:var(--card);color:var(--text);cursor:grab;font:inherit;touch-action:none;-webkit-user-drag:none}
+.app:active{cursor:grabbing}.app img{width:72px;height:72px;pointer-events:none}.app b{font-size:14px}.app small{font-size:10px;color:var(--muted);overflow-wrap:anywhere;text-align:center}
+.notes{margin:0 0 10px;padding-left:18px;color:var(--muted);font-size:11.5px;line-height:1.55}
+details{font-size:12px;margin:6px 0}summary{cursor:pointer;color:var(--accent)}details p{color:var(--muted);line-height:1.55;margin:6px 0}.row{display:flex;gap:6px;flex-wrap:wrap}
+.row button{font:inherit;font-size:11px;border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:7px;padding:6px 9px;cursor:pointer}
+.state{min-height:1em;margin:8px 0 0;font-size:11.5px;color:var(--muted)}.state.error{color:#b52b27}
+.done{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:var(--bg)}.done span{font-size:42px;color:var(--ok)}.done b{font-size:15px;text-align:center;padding:0 18px}
+[hidden]{display:none!important}
+@media(prefers-color-scheme:dark){:root{--bg:#222225;--card:#2d2d31;--text:#f5f5f7;--muted:#b2b2b9;--line:#49494e;--accent:#4b9dff;--soft:#23354b;--ok:#6ad59a}}
