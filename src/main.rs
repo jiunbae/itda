@@ -90,6 +90,14 @@ fn askpass_mode() {
 #[cfg(not(windows))]
 fn main() {
     askpass_mode();
+    // Read-only check in a fresh instance of the same executable. Do not initialize
+    // sharing, the home window, or a permission request in this mode.
+    #[cfg(target_os = "macos")]
+    if std::env::args().nth(1).as_deref() == Some("--permission-status") {
+        let (screen, access) = host_mac::permissions();
+        println!("{}", serde_json::json!({"screen":screen,"access":access}));
+        return;
+    }
     // Itda's high-performance sharing on this Mac (started by another Itda over SSH, or by hand).
     #[cfg(target_os = "macos")]
     if std::env::args().nth(1).as_deref() == Some("--hp-server") {

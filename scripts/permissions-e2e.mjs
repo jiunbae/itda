@@ -11,12 +11,29 @@ try{
  const initialReads=await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_status').length);await p.clock.fastForward(1600);assert(await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_status').length)>initialReads,'Deep-link guide did not automatically read permission status');
  assert(await p.locator('img').evaluateAll(xs=>xs.every(i=>i.complete&&i.naturalWidth)),'Guide icons missing');
  assert(!await p.evaluate(()=>sent.some(m=>m.cmd==='permission_request')),'Guide requested permissions without a user action');
+ // A fresh-process grant is not a usable grant in the running app until restart.
+ await p.evaluate(()=>{permissionState.configured_screen=true;itda.recv({type:'permissions',...permissionState});});
+ assert(await p.locator('[data-permission="screen"] .badge').textContent()==='재시작 필요','Fresh grant still shown as denied');
+ assert(await p.locator('[data-permission="access"]').evaluate(e=>e.classList.contains('next')),'Granted-but-stale screen trapped the user on the wrong step');
+ await p.evaluate(()=>{permissionState.configured_access=true;itda.recv({type:'permissions',...permissionState});});
+ assert(await p.locator('.progress').textContent()==='설정 변경이 확인됐어요 · Itda를 다시 열어 주세요','Restart state missing');
+ assert(await p.locator('[data-action="close"]').textContent()==='나중에','Cached denial was falsely completed');
+ await p.setViewportSize({width:360,height:640});
+ const restartBox=await p.locator('[data-action="restart"]').boundingBox(),restartFooter=await p.locator('footer').boundingBox();
+ assert(restartBox.y>=0&&restartBox.y+restartBox.height<=restartFooter.y,'Restart action is hidden under fixed footer');
+ await p.screenshot({path:path.join(out,'helper-restart-required.png')});
+ await p.setViewportSize({width:420,height:720});
+
+ await p.locator('[data-action="restart"]').click();assert(await p.evaluate(()=>sent.at(-1).cmd)==='permission_restart','Restart action not routed');
+ await p.locator('[data-action="status"]').click();assert(await p.evaluate(()=>sent.some(m=>m.cmd==='permission_status'&&m.refresh===true)),'Manual check did not request fresh verification');
+ await p.evaluate(()=>{permissionState.configured_screen=false;permissionState.configured_access=false;itda.recv({type:'permissions',...permissionState});});
+
  await p.locator('[data-request="screen"]').click();assert(await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_request').map(m=>m.permission).join())==='screen','Requested both permissions at once');
  await p.evaluate(()=>permissionState.screen=true);await p.clock.fastForward(1600);await p.getByText('1/2 완료',{exact:false}).waitFor();assert(await p.locator('[data-request="screen"]').isDisabled(),'Granted screen permission not recognized');
- await p.locator('summary').click();await p.locator('summary').focus();await p.clock.fastForward(1600);assert(await p.locator('summary').evaluate(e=>e===document.activeElement),'Status polling stole helper focus');await p.locator('[data-action="reveal"]').click();assert(await p.evaluate(()=>sent.at(-1).cmd)==='permission_reveal','Reveal app failed');
+ await p.locator('.instructions summary').click();await p.locator('.instructions summary').focus();await p.clock.fastForward(1600);assert(await p.locator('.instructions summary').evaluate(e=>e===document.activeElement),'Status polling stole helper focus');await p.locator('.instructions [data-action="reveal"]').click();assert(await p.evaluate(()=>sent.at(-1).cmd)==='permission_reveal','Reveal app failed');
  await p.locator('[data-action="copy"]').click();assert(await p.evaluate(()=>sent.at(-1).cmd)==='permission_copy','Copy app location failed');
  const drag=await p.locator('.app-drag').boundingBox();await p.mouse.move(drag.x+30,drag.y+20);await p.mouse.down();await p.mouse.move(drag.x+55,drag.y+20);await p.mouse.up();assert(await p.evaluate(()=>sent.some(m=>m.cmd==='permission_drag')),'Native app drag handoff missing');
- await p.locator('summary').click();await p.evaluate(()=>scrollTo(0,0));await p.screenshot({path:path.join(out,'helper-light.png')});await p.emulateMedia({colorScheme:'dark'});await p.screenshot({path:path.join(out,'helper-dark.png')});
+ await p.locator('.instructions summary').click();await p.evaluate(()=>scrollTo(0,0));await p.screenshot({path:path.join(out,'helper-light.png')});await p.emulateMedia({colorScheme:'dark'});await p.screenshot({path:path.join(out,'helper-dark.png')});
  await p.clock.fastForward(181000);const count=await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_status').length);await p.clock.fastForward(10000);assert(await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_status').length)===count,'Guide polling did not stop');
  await p.locator('[data-request="access"]').click();await p.evaluate(()=>permissionState.access=true);await p.clock.fastForward(1600);await p.getByText('✓ 연결할 준비가 됐어요').waitFor();assert(await p.locator('[data-action="close"]').textContent()==='완료','Guide completion missing');
  await p.setViewportSize({width:360,height:640});const footer=await p.locator('footer').boundingBox();assert(footer.y>=0&&footer.y+footer.height<=640,'Helper actions fall below window');assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Helper overflows narrow window');
