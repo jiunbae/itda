@@ -353,6 +353,35 @@ try {
       await page.waitForFunction(() => document.querySelector('.files-preview img')?.naturalWidth > 1);
       await page.locator('.files-preview footer').filter({ hasText: '첫 페이지' }).waitFor();
       if (process.env.SCREENSHOT_DIR) await page.screenshot({path: path.join(process.env.SCREENSHOT_DIR, 'files-pdf.png')});
+      // Fitted inside the preview, then a pinch (ctrl+wheel) zooms the picture, not the window.
+      const box = () => page.evaluate(() => { const c = document.querySelector('.files-preview-content').getBoundingClientRect(), i = document.querySelector('.files-preview img').getBoundingClientRect(); return { c: [c.left, c.top, c.right, c.bottom], i: [i.left, i.top, i.right, i.bottom, i.width] }; });
+      const fitted = await box();
+      assert(fitted.i[0] >= fitted.c[0] - 1 && fitted.i[1] >= fitted.c[1] - 1 && fitted.i[2] <= fitted.c[2] + 1 && fitted.i[3] <= fitted.c[3] + 1, `Preview not fitted: ${JSON.stringify(fitted)}`);
+      assert(await page.locator('.files-preview .files-zoom').textContent() === '맞춤', "Zoom label not 맞춤");
+      const center = { x: (fitted.i[0] + fitted.i[2]) / 2, y: (fitted.i[1] + fitted.i[3]) / 2 };
+      await page.mouse.move(center.x, center.y);
+      await page.keyboard.down('Control');
+      for (let k = 0; k < 6; k++) await page.mouse.wheel(0, -40);
+      await page.keyboard.up('Control');
+      const zoomed = await box();
+      assert(zoomed.i[4] > fitted.i[4] * 1.5, `Pinch did not zoom the preview: ${fitted.i[4]} -> ${zoomed.i[4]}`);
+      assert(/^\d+%$/.test(await page.locator('.files-preview .files-zoom').textContent()), "Zoom label not a percentage");
+      assert(!await page.locator('.toast').filter({ hasText: '화면 크기' }).count(), "Pinch zoomed the whole window");
+      await page.keyboard.press('Meta+0');
+      assert(await page.locator('.files-preview .files-zoom').textContent() === '맞춤', "⌘0 did not fit again");
+      await page.locator('.files-preview img').dblclick();
+      assert(await page.locator('.files-preview .files-zoom').textContent() === '100%', "Double-click did not show actual size");
+      await page.locator('.files-preview img').dblclick();
+      assert(await page.locator('.files-preview .files-zoom').textContent() === '맞춤', "Double-click did not fit again");
+      if (process.env.SCREENSHOT_DIR) await page.screenshot({path: path.join(process.env.SCREENSHOT_DIR, 'files-tabs.png'), clip: { x: 0, y: 0, width: 1440, height: 140 }});
+      // Outside the preview, a pinch does nothing (Finder doesn't zoom its window either).
+      await page.mouse.move(300, 500);
+      await page.keyboard.down('Control');
+      await page.mouse.wheel(0, -100);
+      await page.keyboard.up('Control');
+      await delay(300);
+      assert(!await page.locator('.toast').filter({ hasText: '화면 크기' }).count(), "Pinch in the file list zoomed the whole window");
+      assert(await page.locator('.files-tab-add').isVisible(), "New tab button missing");
       await page.keyboard.press('Escape');
       await documentRow.click();
       await page.keyboard.press('Meta+4');

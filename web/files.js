@@ -39,7 +39,7 @@
     if (!layer) return;
     const bar = layer.querySelector(".files-tabs");
     bar.hidden = host.id === NETWORK;
-    bar.innerHTML = fileTabs.map(t => `<div role="tab" aria-selected="${t.id === currentTab}" class="files-tab ${t.id === currentTab ? "on" : ""}" data-tab="${t.id}" tabindex="${t.id === currentTab ? 0 : -1}"><span>${icon(true)}${esc((t.id === currentTab ? panes[active].path : t.panes[t.active].path).split(/[\\/]/).filter(Boolean).pop() || "/")}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`).join("") + '<button class="btn sm" data-action="new-tab" aria-label="새 탭" title="새 탭 (⌘T)">+</button>';
+    bar.innerHTML = fileTabs.map(t => `<div role="tab" aria-selected="${t.id === currentTab}" class="files-tab ${t.id === currentTab ? "on" : ""}" data-tab="${t.id}" tabindex="${t.id === currentTab ? 0 : -1}"><span>${icon(true)}${esc((t.id === currentTab ? panes[active].path : t.panes[t.active].path).split(/[\\/]/).filter(Boolean).pop() || "/")}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`).join("") + `<button class="files-tab-add" data-action="new-tab" aria-label="새 탭" title="새 탭 (${MAC ? "⌘T" : "Ctrl+T"})"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>`;
   }
   function newTab(path, side) {
     if (host.id === NETWORK) return;
@@ -105,7 +105,8 @@
     previewKey = identity;
     clearTimeout(previewTimer);
     previewSeq = ++sequence;
-    el.innerHTML = `<header><strong>미리보기</strong><button class="btn sm" data-action="close-preview" aria-label="미리보기 닫기">×</button></header><div class="files-preview-content">${entry ? icon(entry.dir,entry.name) : ""}<p>${entry ? esc(entry.name) : "미리볼 파일을 선택하세요"}</p></div>${entry ? `<footer>${esc(kind(entry))} · ${entry.dir ? "폴더" : bytes(entry.size)}</footer>` : ""}`;
+    zoom = null;
+    el.innerHTML = `<header><strong>미리보기</strong><span class="spacer"></span><button class="btn sm subtle files-zoom" data-action="zoom-fit" title="확대/축소: 핀치·${MAC ? "⌘" : "Ctrl+"}+/−, 두 번 클릭 또는 ${MAC ? "⌘" : "Ctrl+"}0으로 맞춤" hidden></button><button class="btn sm" data-action="close-preview" aria-label="미리보기 닫기">×</button></header><div class="files-preview-content">${entry ? icon(entry.dir,entry.name) : ""}<p>${entry ? esc(entry.name) : "미리볼 파일을 선택하세요"}</p></div>${entry ? `<footer>${esc(kind(entry))} · ${entry.dir ? "폴더" : bytes(entry.size)}</footer>` : ""}`;
     if (!entry || entry.dir || entry.link) return;
     const seq = previewSeq, side = active, path = child(panes[active].path, entry.name);
     el.querySelector(".files-preview-content").insertAdjacentHTML("beforeend", '<small>미리보기 불러오는 중…</small>');
@@ -131,6 +132,64 @@
       if (d.first_page) layer.querySelector(".files-preview footer").textContent += " · 첫 페이지";
       el.innerHTML = d.mime.startsWith("image/") ? `<img alt="${esc(entry?.name || "미리보기")}" src="${src}">` : `<${d.mime.startsWith("video/") ? "video" : "audio"} controls src="${src}"></${d.mime.startsWith("video/") ? "video" : "audio"}>`;
     }
+    zoom = null;
+    const img = el.querySelector("img");
+    if (img) img.onload = () => applyZoom();
+    applyZoom();
+    if (!zoomWatch) {
+      zoomWatch = new ResizeObserver(() => { if (zoom === null) applyZoom(); });
+    }
+    zoomWatch.disconnect();
+    zoomWatch.observe(el);
+  }
+
+  // Preview zoom, like Quick Look: images open fitted (never enlarged past actual size);
+  // a pinch (ctrl+wheel in the webview), ⌘+/−/0 or a double-click zooms the picture or
+  // the text — never the whole window. zoom: null = fitted, else the scale (1 = actual
+  // size; for text, 1 = the normal font size).
+  let zoom = null, zoomWatch = null;
+  function zoomTarget() {
+    const c = layer?.querySelector(".files-preview:not([hidden]) .files-preview-content");
+    const img = c?.querySelector("img"), pre = c?.querySelector("pre");
+    return c && (img?.naturalWidth || pre) ? { c, img, pre } : null;
+  }
+  function fitScale(t) {
+    if (!t.img) return 1;
+    const cs = getComputedStyle(t.c), padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight), padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    return Math.min(1, (t.c.clientWidth - padX) / t.img.naturalWidth, (t.c.clientHeight - padY) / t.img.naturalHeight);
+  }
+  function applyZoom() {
+    const t = zoomTarget(), label = layer?.querySelector(".files-preview .files-zoom");
+    if (label) label.hidden = !t;
+    if (!t) return;
+    t.c.classList.toggle("zoomed", zoom !== null && !!t.img);
+    if (t.img) {
+      // Fitted too gets an explicit size: WebKit doesn't always resolve max-height:100% in
+      // the flex column, which left tall pictures cut off instead of fitted.
+      const scale = zoom ?? fitScale(t);
+      t.img.style.width = `${Math.max(1, Math.round(t.img.naturalWidth * scale))}px`;
+      t.img.style.height = `${Math.max(1, Math.round(t.img.naturalHeight * scale))}px`;
+    } else t.pre.style.fontSize = zoom === null ? "" : `${(12 * zoom).toFixed(1)}px`;
+    if (label) label.textContent = zoom === null ? (t.img ? "맞춤" : "100%") : `${Math.round(zoom * 100)}%`;
+  }
+  /** Zoom by `factor` (or to `to`) keeping the point under (x, y) where it is. */
+  function zoomBy(factor, x, y, to) {
+    const t = zoomTarget();
+    if (!t) return false;
+    const fit = fitScale(t), cur = zoom ?? fit;
+    let next = to ?? cur * factor;
+    next = Math.min(t.img ? 8 : 4, Math.max(t.img ? fit : 0.5, next));
+    const r = t.c.getBoundingClientRect();
+    x ??= r.left + r.width / 2; y ??= r.top + r.height / 2;
+    const box = (t.img || t.pre).getBoundingClientRect();
+    const fx = box.width ? (x - box.left) / box.width : 0.5, fy = box.height ? (y - box.top) / box.height : 0.5;
+    zoom = t.img && next <= fit * 1.001 ? null : (Math.abs(next - 1) < 0.02 && !t.img ? null : next);
+    applyZoom();
+    if (t.img && zoom !== null) {
+      t.c.scrollLeft = t.img.offsetLeft + fx * t.img.offsetWidth - (x - r.left);
+      t.c.scrollTop = t.img.offsetTop + fy * t.img.offsetHeight - (y - r.top);
+    }
+    return true;
   }
   const NETWORK = "__network";
   const nativePending = new Set();
@@ -583,6 +642,24 @@
     layer.addEventListener("pointerdown", resizeStart, true);
     layer.addEventListener("click", click);
     layer.addEventListener("dblclick", dblclick);
+    // A pinch arrives as ctrl+wheel: zoom the preview under it, and never the whole window
+    // (the home's own ctrl+wheel zoom stays outside the file browser).
+    let wheelPinch = 0, gestureScale = 1;
+    layer.addEventListener("wheel", e => {
+      if (!e.ctrlKey) return;
+      e.preventDefault(); e.stopPropagation();
+      wheelPinch = performance.now();
+      if (e.target.closest(".files-preview-content")) zoomBy(Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.01)), e.clientX, e.clientY);
+    }, { passive: false });
+    // WebKit may report a pinch as gesture events instead (used only when no ctrl+wheel came).
+    layer.addEventListener("gesturestart", e => { e.preventDefault(); gestureScale = 1; });
+    layer.addEventListener("gesturechange", e => {
+      e.preventDefault();
+      if (performance.now() - wheelPinch < 200 || !e.target.closest?.(".files-preview-content")) return;
+      zoomBy(e.scale / gestureScale, e.clientX, e.clientY);
+      gestureScale = e.scale;
+    });
+    layer.addEventListener("gestureend", e => e.preventDefault());
     layer.addEventListener("contextmenu", context);
     layer.addEventListener("pointerdown", pointerDown);
     layer.addEventListener("dragstart", e => { if (!e.target.closest("input,textarea")) e.preventDefault(); });
@@ -954,6 +1031,7 @@
     }
   }
   function dblclick(e) {
+    if (e.target.closest(".files-preview-content img")) { zoomBy(1, e.clientX, e.clientY, zoom === null ? 1 : 0); return; }
     const item = e.target.closest("[data-index]");
     const pane = e.target.closest("[data-pane]");
     if (!item || !pane) return;
@@ -970,6 +1048,7 @@
   }
   async function act(action) {
     if (action === "new-tab") return newTab();
+    if (action === "zoom-fit") { if (zoom === null) zoomBy(1, undefined, undefined, 1); else { zoom = null; applyZoom(); } return; }
     if (action === "preview") { previewOn = !previewOn; previewKey = ""; renderPanes(); return; }
     if (action === "close-preview") { previewOn = false; previewModal = false; if (view === "gallery") view = "list"; previewKey = ""; renderPanes(); return; }
     if (action === "network") return network();
@@ -1297,6 +1376,12 @@
         e.preventDefault();
         nav(input.dataset.path, input.value);
       }
+      return;
+    }
+    const zoomKey = (MAC ? e.metaKey : e.ctrlKey) && !e.altKey && ["=", "+", "-", "0"].includes(e.key);
+    if (zoomKey && zoomTarget()) {
+      e.preventDefault();
+      if (e.key === "0") { zoom = null; applyZoom(); } else zoomBy(e.key === "-" ? 1 / 1.25 : 1.25);
       return;
     }
     if (e.code === "Space" || e.key === " ") { e.preventDefault(); previewModal = !previewModal; previewKey = ""; updatePreview(); return; }
