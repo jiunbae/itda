@@ -97,6 +97,13 @@ fn q(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// (Screen Recording, Accessibility) as the Mac's Itda last reported them.
+pub fn status(cfg: &SshCfg) -> io::Result<(bool, bool)> {
+    let out = run(cfg, r#"cat "$HOME/Library/Application Support/Itda/hp-status" 2>/dev/null; true"#, None)?;
+    let kv = |k: &str| out.split_whitespace().any(|p| p == format!("{k}=1"));
+    Ok((kv("screen"), kv("access")))
+}
+
 pub fn upgrade(cfg: &SshCfg, source: &Source, progress: &dyn Fn(&str)) -> io::Result<Ready> {
     progress("Mac 확인 중");
     let probe = run(cfg, &format!(r#"

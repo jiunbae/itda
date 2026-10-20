@@ -27,6 +27,10 @@ pub(crate) fn name() -> String {
     std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows".into())
 }
 
+pub(crate) fn ready() -> Result<(), String> {
+    Ok(())
+}
+
 pub(crate) fn clipboard_seq() -> u64 {
     unsafe { GetClipboardSequenceNumber() as u64 }
 }

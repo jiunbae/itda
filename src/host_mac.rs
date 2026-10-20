@@ -81,6 +81,15 @@ pub fn request_permissions() -> (bool, bool) {
     permissions()
 }
 
+/// Can this Mac's screen be served: Screen Recording granted to this (re)launched app.
+pub(crate) fn ready() -> Result<(), String> {
+    if CGPreflightScreenCaptureAccess() {
+        Ok(())
+    } else {
+        Err("Screen Recording permission is not granted on this Mac yet".into())
+    }
+}
+
 // ---------------------------------------------------------------- consent and clipboard
 
 pub(crate) fn ask_user(peer: &SocketAddr) -> bool {

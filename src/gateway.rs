@@ -425,6 +425,7 @@ fn hosts_json() -> serde_json::Value {
                 "remote_size": h.remote_size,
                 "remote_name": h.remote_name,
                 "opts": h.opts,
+                "hp": h.hp,
                 "last_used": h.last_used,
                 // The preview's version (its time), 0 = none: part of its URL, so it's cached
                 // until it changes.

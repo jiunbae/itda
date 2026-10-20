@@ -235,6 +235,12 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
         crate::log!("share {peer}: refused by the user");
         return deny(&mut c, "The person at this PC declined");
     }
+    // A platform that can't show the screen yet (macOS: Screen Recording not granted) says so
+    // instead of sending black: the viewer's Itda falls back to the usual way in.
+    if let Err(why) = platform::ready() {
+        crate::log!("share {peer}: not ready: {why}");
+        return deny(&mut c, &why);
+    }
     c.write_all(&0u32.to_be_bytes())?;
     let _shared: [u8; 1] = rd(&mut c)?;
     c.set_read_timeout(None)?;

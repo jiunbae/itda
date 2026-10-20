@@ -641,3 +641,6 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
     }
     0
 }
+
+/// The native Windows viewer has no web page to tell (high-performance mode is Mac-to-Mac).
+pub(super) fn session_eval(_id: &str, _js: &str) {}
