@@ -1137,6 +1137,25 @@ pub fn install(token: &str, progress: &dyn Fn(&str)) -> io::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn windows_bootstrap_is_valid_powershell_without_executing_it() {
+        let command = win_install("0.9.99", true, true);
+        let encoded = command.split_whitespace().last().unwrap();
+        let mut child=std::process::Command::new("powershell.exe").args(["-NoProfile","-NonInteractive","-Command",r#"$s=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd()));$t=$null;$e=$null;[Management.Automation.Language.Parser]::ParseInput($s,[ref]$t,[ref]$e)|Out-Null;if($e.Count){$e|ForEach-Object {[Console]::Error.WriteLine($_.Message)};exit 1}"#]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(encoded.as_bytes())
+            .unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
     #[test]
     fn installers_keep_secrets_on_stdin_and_windows_command_fits_cmd_limit() {
         let win = win_install("0.9.99", true, true);
