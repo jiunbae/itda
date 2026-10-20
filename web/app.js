@@ -269,7 +269,10 @@ function onMessage(m) {
       const h = S.hosts.find((x) => x.id === m.id);
       const name = h ? label(h) : '';
       const guided=window.ItdaHpSetup?.message(m);
-      if(m.helper)return;
+      if(m.helper){
+        if(!guided && m.error) toast(`${name} 권한 도우미를 열지 못했습니다 — ${m.error}`, 'E7BA');
+        return;
+      }
       // Only the open editor of this very connection reflects it.
       const ed = document.querySelector(`#modals [data-key="edit"][data-host="${CSS.escape(m.id || '')}"]`);
       const btn = ed && ed.querySelector('#hp-enable');
