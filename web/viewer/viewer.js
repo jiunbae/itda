@@ -591,6 +591,7 @@ function renderTools() {
     ...(APP ? [] : [['back', 'back', '목록으로'], 'sep', ['keyboard', 'keyboard', '키보드']]),
     ['keys', 'command', `${isWin(S.host) ? 'Windows' : 'Mac'} 특수 키`],
     ...(macHost(S.host) ? [['mac-actions', 'mission', 'Mac 화면 동작 — Mission Control · Exposé']] : []),
+    ...(APP && /Mac/.test(navigator.platform) && !IOS && ['mac', 'macos'].includes(S.host?.os) && S.host?.kind !== 'rdp' ? [['apple-screen-sharing', 'monitor', 'Apple 화면 공유 앱에서 열기 · 별도 앱으로 직접 연결']] : []),
     ...(APP ? [] : [['clip', 'clip', '클립보드']]),
     'sep',
     ['monitors', 'monitor', '모니터 선택 및 창 배치'],
@@ -617,6 +618,12 @@ $('#tools').addEventListener('click', (e) => {
     case 'keyboard': return toggleKeyboard();
     case 'keys': return toggleSheet('keys');
     case 'mac-actions': return toggleSheet('mac-actions');
+    case 'apple-screen-sharing':
+      if (APP && /Mac/.test(navigator.platform) && !IOS && ['mac', 'macos'].includes(S.host?.os) && S.host?.kind !== 'rdp') {
+        post({ev:'apple-screen-sharing'});
+        toast('Apple 화면 공유 앱에 연결을 요청했습니다. 이 세션은 유지됩니다.');
+      }
+      return;
     case 'monitors': return toggleSheet('monitors');
     case 'clip': return toggleSheet('clip');
     case 'scale':
