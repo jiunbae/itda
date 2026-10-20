@@ -664,6 +664,10 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                     let p = get(&v, "path");
                     let n = get(&v, "name");
                     name(&n)?;
+                    // "" is Windows' This PC (the drive list), never a folder to change.
+                    if v["side"] == "local" && p.is_empty() {
+                        return Err(error("내 PC에서는 드라이브를 열 수만 있습니다"));
+                    }
                     let mut undo = Value::Null;
                     if v["side"] == "local" {
                         let source = Path::new(&p).join(&n);

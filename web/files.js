@@ -42,7 +42,7 @@
   }
   function saveTab() {
     const t = fileTabs.find(t => t.id === currentTab);
-    if (t) Object.assign(t, { host, panes: structuredClone(panes), active, view, search, hidden, split });
+    if (t) Object.assign(t, { host, panes: structuredClone(panes), active, view, search, hidden, split, returnPage });
   }
   function tabBar() {
     if (!layer) return;
@@ -72,6 +72,7 @@
     currentTab = id;
     Object.assign(panes, structuredClone(t.panes));
     ({ active, view, search, hidden, split } = t);
+    returnPage = t.returnPage || null;
     if (t.host && t.host.id !== host.id) useHost(t.host);
     layer.querySelector("[data-search]").value = search;
     previewKey = "";
@@ -720,6 +721,7 @@
     setup?.remove();
     setup = null;
     networkMode = false;
+    returnPage = null;
     Object.assign(panes.remote, emptyPane(), { path: data.path, home: data.path, entries: data.entries, history: [data.path], at: 0 });
     if (!panes.local.home) Object.assign(panes.local, emptyPane(), { path: data.local_path, home: data.local_path, entries: data.local_entries, history: [data.local_path], at: 0 });
     active = "remote";
@@ -757,6 +759,7 @@
     active = "remote";
     split = false;
     search = "";
+    returnPage = null;
     clipboard = null;
     undo.length = 0;
     layer = document.createElement("div");
@@ -1029,7 +1032,8 @@
       p.path.split(/[\\/]/).filter(Boolean).pop() || p.path;
     layer.querySelector('[data-action="paste"]').disabled = !clipboard && !nativeFiles();
     for (const a of ["copy", "cut", "rename", "trash"])
-      layer.querySelector(`[data-action="${a}"]`).disabled = a === "rename" && !MAC ? p.selected.size !== 1 : !p.selected.size;
+      layer.querySelector(`[data-action="${a}"]`).disabled = thisPC() || (a === "rename" && !MAC ? p.selected.size !== 1 : !p.selected.size);
+    if (thisPC()) for (const a of ["paste", "new", "mkdir"]) layer.querySelector(`[data-action="${a}"]`)?.setAttribute("disabled", "");
     if (!MAC) {
       layer.querySelector('[data-action="back"]').disabled = p.at <= 0 && !returnPage;
       layer.querySelector('[data-action="forward"]').disabled = p.at + 1 >= p.history.length;
@@ -1069,6 +1073,9 @@
   // "" is Windows' This PC (the drives); a drive root goes up to it.
   const child = (p, n) =>
     p === "" && /^[A-Za-z]:$/.test(n) ? n + "\\" : p.replace(/[\\/]+$/, "") + (p.includes("\\") ? "\\" : "/") + n;
+  const thisPC = () => !MAC && active === "local" && panes.local.path === "" && !networkMode;
+  // Only drive navigation happens on This PC: nothing there can be created, moved or pasted.
+  const VIRTUAL_BLOCKED = ["mkdir", "new", "rename", "trash", "paste", "paste-internal", "cut", "copy", "undo"];
   const driveRoot = (side, path) => !MAC && side === "local" && /^[A-Za-z]:[\\/]?$/.test(path);
   const up = (side, path) => driveRoot(side, path) ? "" : parent(path);
   function select(side, index, e) {
@@ -1282,6 +1289,7 @@
     )
       return;
     const p = panes[active];
+    if (thisPC() && VIRTUAL_BLOCKED.includes(action)) { fail("내 PC에서는 드라이브를 열 수만 있어요"); return; }
     if (action.startsWith("mode-")) { const mode = action.slice(5); if (viewModes.includes(mode)) {view = mode; renderPanes();} return; }
     if (action.startsWith("sort-")) { const value = action.slice(5); if (["name","modified","size","kind"].includes(value)) p.sort = value; else if (["ascending","descending"].includes(value)) p.desc = value === "descending"; p.start = 0; p.scroll = 0; renderPanes(); return; }
     fail("");
@@ -1451,6 +1459,14 @@
   }
   async function transfer(from, source, names, to, destination, move = false, id = host.id) {
     if (!names.length) return;
+    if (id === NETWORK) {
+      fail("기기를 고르지 않은 창에서는 아직 파일을 복사·이동할 수 없어요. 기기 창에서 하거나 탐색기를 사용해 주세요");
+      return;
+    }
+    if (to === "local" && destination === "" && !MAC) {
+      fail("내 PC에는 파일을 놓을 수 없어요. 드라이브나 폴더를 열고 놓아 주세요");
+      return;
+    }
     const dest = panes[to];
     const collisions =
       dest.path === destination
@@ -1979,8 +1995,12 @@
       return true;
     }
     if (m.op === "local_home") {
-      if (!layer || panes.local.home) return true;
-      Object.assign(panes.local, emptyPane(), { path: m.data.path, home: m.data.path, entries: m.data.entries, history: [m.data.path], at: 0 });
+      if (!layer) return true;
+      // Only the home is new; a pane already browsing (This PC, a drive) keeps its place.
+      const fresh = !panes.local.path && !(panes.local.entries || []).length && !panes.local.busy;
+      for (const t of fileTabs) if (t.panes?.local && !t.panes.local.home) t.panes.local.home = m.data.path;
+      if (fresh) Object.assign(panes.local, emptyPane(), { path: m.data.path, home: m.data.path, entries: m.data.entries, history: [m.data.path], at: 0 });
+      else panes.local.home ||= m.data.path;
       saveTab();
       renderPanes();
       return true;

@@ -27,10 +27,11 @@ try{
     window.testPackets=[];
     window.ipc={postMessage:raw=>{const m=JSON.parse(raw);if(m.cmd!=='files')return;testPackets.push(m);
       const r={...m,type:'files_result',ok:true};
-      if(m.op==='local_home')r.data={path:home,entries:tree[home]};
+      if(m.op==='connect')r.data={path:'/remote',entries:[entry('remote.txt')],local_path:home,local_entries:tree[home]};
+      else if(m.op==='local_home')r.data={path:home,entries:tree[home]};
       else if(m.op==='list')r.data={path:m.path,entries:tree[m.path]||[]};
       else return;
-      setTimeout(()=>itda.recv(r),10);
+      setTimeout(()=>itda.recv(r),m.op==='local_home'?(window.slowHome||10):10);
     }};
   });
   const p=await c.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
@@ -62,7 +63,51 @@ try{
   await layer.locator('[data-action="up"]').click();await row('D:').waitFor();
   // Back through the history: C:\ → C:\Users → … then the page before.
   await layer.locator('[data-action="back"]').click();await row('Windows').waitFor();
+  // This PC is a list of drives, not a folder: nothing can be created, pasted or moved there.
+  await layer.locator('[data-action="up"]').click();await row('C:').waitFor();
+  for(const a of ['new','paste','cut','copy','rename','trash'])assert(await layer.locator(`[data-action="${a}"]`).isDisabled(),`${a} enabled on This PC`);
+  await layer.locator('.files-list').focus();await p.keyboard.press('Control+Shift+n');
+  assert(!(await p.evaluate(()=>testPackets)).some(x=>x.op==='mkdir'),'A folder was created on This PC');
+  // Copying without a device is explained instead of silently dropped.
+  await row('C:').dblclick();await row('Users').waitFor();await row('Users').click();await p.keyboard.press('Control+c');
+  await layer.locator('[data-network-sidebar] [data-bookmark="Downloads"]').click();await row('setup.exe').waitFor();
+  await layer.locator('.files-list').focus();await p.keyboard.press('Control+v');
+  assert((await layer.locator('.files-error').textContent()).includes('기기를 고르지 않은 창'),'Device-less copy not explained');
+  assert(!(await p.evaluate(()=>testPackets)).some(x=>x.op==='transfer'),'Device-less copy sent a transfer');
   assert(!errors.length,errors.join('\n'));
+  // A slow home answer must not pull an already opened This PC back to the home folder.
+  {
+    const q=await c.newPage();
+    if(process.platform!=='win32')await q.route('**/icons.js',route=>route.fulfill({contentType:'text/javascript',body:fs.readFileSync(path.join(root,'web/icons.js'),'utf8').replace('if (/Windows/.test(navigator.userAgent)) return;','')}));
+    await q.goto(base+'/web/');
+    await q.evaluate(()=>{window.slowHome=700;S.hosts=[];S.settings={...S.settings,onboarded:true,theme:'light'};render();ItdaFiles.network();});
+    const l=q.locator('.files-layer');
+    await l.locator('[data-network-sidebar] [data-side="local"]').click();
+    await l.locator('[data-index]').filter({hasText:'C:'}).first().waitFor();
+    await q.waitForTimeout(1000);
+    assert(await l.locator('[data-index]').filter({hasText:'D:'}).count()===1&&await l.locator('[data-index]').filter({hasText:'note.txt'}).count()===0,'Late home answer replaced This PC');
+    await l.locator('[data-network-sidebar] [data-bookmark="Desktop"]:not([disabled])').waitFor();
+    await q.close();
+  }
+  // Each tab returns to its own page.
+  {
+    const q=await c.newPage();
+    if(process.platform!=='win32')await q.route('**/icons.js',route=>route.fulfill({contentType:'text/javascript',body:fs.readFileSync(path.join(root,'web/icons.js'),'utf8').replace('if (/Windows/.test(navigator.userAgent)) return;','')}));
+    await q.goto(base+'/web/');
+    await q.evaluate(()=>{S.hosts=[{id:'studio',name:'Studio Mac',host:'studio.local',os:'mac',kind:'vnc',login_user:'alex',has_pw:true,files:{method:'sftp',user:'alex'}}];S.settings={...S.settings,onboarded:true,theme:'light'};render();ItdaFiles.launch(S.hosts[0]);});
+    const l=q.locator('.files-layer'),r=n=>l.locator('[data-index]').filter({hasText:n}).first();
+    await r('remote.txt').waitFor();
+    await l.locator('[data-action="network"]').click();
+    await l.locator('[data-network-sidebar] [data-bookmark="Desktop"]').click();await r('on-desktop.txt').waitFor();
+    await l.locator('.files-list').focus();await q.keyboard.press('Control+t');
+    await l.locator('[data-action="explorer-home"]').click();
+    await l.locator('[data-network-sidebar] [data-bookmark="Downloads"]').click();await r('setup.exe').waitFor();
+    await l.locator('[data-tab]').first().click();await r('on-desktop.txt').waitFor();
+    await l.locator('[data-action="back"]').click();
+    await l.locator('.files-network h2').waitFor();
+    assert((await l.locator('.files-network h2').textContent())==='네트워크','Another tab changed this tab\'s Back');
+    await q.close();
+  }
   await c.close();
-  console.log('PASS: device-less file window: places, This PC drives, Up to This PC, Back to Network');
+  console.log('PASS: device-less file window: places, This PC drives (read-only), Up/Back, slow home answer, per-tab Back, device-less copy explained');
 }finally{await browser.close();server.closeAllConnections();await new Promise(r=>server.close(r));}
