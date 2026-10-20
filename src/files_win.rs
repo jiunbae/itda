@@ -492,8 +492,11 @@ mod tests {
                 String::from_utf16_lossy(&b[..k as usize])
             }).collect();
             ReleaseStgMedium(&mut m);
-            let want: Vec<String> = ["a.txt", "b c.txt"].iter().map(|n| root.join(n).to_string_lossy().into_owned()).collect();
-            assert_eq!(paths, want);
+            // (The temp folder may be given in its 8.3 form; compare the files themselves.)
+            let real = |p: &str| std::fs::canonicalize(p).unwrap();
+            let got: Vec<_> = paths.iter().map(|p| real(p)).collect();
+            let want: Vec<_> = ["a.txt", "b c.txt"].iter().map(|n| real(&root.join(n).to_string_lossy())).collect();
+            assert_eq!(got, want);
         }
         std::fs::remove_dir_all(root).unwrap();
     }

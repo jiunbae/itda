@@ -200,10 +200,14 @@ mod tests {
         r.read_exact(&mut first).unwrap();
         drop(r);
         assert_eq!(read("one.txt"), b"one");
-        // Names Windows can't store are refused while planning.
-        std::fs::write(root.join("Folder/bad:name"), b"x").unwrap();
-        let e = remote.plan(&[file("Folder", true)]).unwrap_err();
-        assert!(e.to_string().contains("Folder/bad:name"), "{e}");
+        // Names Windows can't store are refused while planning (on Windows such a file
+        // can't exist: "bad:name" is a stream of "bad").
+        #[cfg(not(windows))]
+        {
+            std::fs::write(root.join("Folder/bad:name"), b"x").unwrap();
+            let e = remote.plan(&[file("Folder", true)]).unwrap_err();
+            assert!(e.to_string().contains("Folder/bad:name"), "{e}");
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 }
