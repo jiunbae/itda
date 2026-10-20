@@ -216,11 +216,18 @@ try {
       await page.locator('.nav-item[data-page="files"]').click();
       await page.locator(".files-home.files-start").waitFor();
       assert(await page.locator('.files-home [data-device-card]').count() === 0, "File home still shows machine cards");
-      assert(await page.locator('.files-home section h2').innerText() === "최근 폴더", "File home is not folder oriented");
+      assert((await page.locator('.files-home section h3').allInnerTexts()).includes("최근 폴더"), "File home is not folder oriented");
+      assert(await page.locator('.files-home .files-home-device.add').isVisible(), "File home has no add-location tile");
+      if (process.env.SCREENSHOT_DIR) {
+        await page.screenshot({path: path.join(process.env.SCREENSHOT_DIR, 'files-home-light.png')});
+        await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+        await page.screenshot({path: path.join(process.env.SCREENSHOT_DIR, 'files-home-dark.png')});
+        await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+      }
       assert(await page.locator('.nav-item[data-page="files"].active').count(), "File browser nav is not selected");
       await page.locator('.files-home [data-device="files-second"]').waitFor();
       assert(
-        (await page.locator(".files-home aside [data-device]").count()) === 2,
+        (await page.locator(".files-home .files-home-devices [data-device]").count()) === 2,
         "Saved network devices are missing",
       );
       await page.locator('.files-home [data-device="files-second"]').first().focus();
@@ -235,7 +242,7 @@ try {
       assert(await page.locator('.files-view-switch').isHidden(), "Network shows view controls with no alternate view");
       await page.locator("#search").fill("Travel");
       assert(
-        (await page.locator(".files-home aside [data-device]").count()) === 1,
+        (await page.locator(".files-home .files-home-devices [data-device]").count()) === 1,
         "Network search did not filter devices",
       );
       await page.locator('#search').press('Enter');
@@ -251,7 +258,7 @@ try {
       await page.locator('#modals [data-key="edit"] #f-name').fill("Not saved");
       await page.keyboard.press("Escape");
       await page.locator('#modals [data-key="edit"]').waitFor({ state: "detached" });
-      assert((await page.locator('.files-home aside [data-device]').count()) === 2, "Cancelled editor changed the device list");
+      assert((await page.locator('.files-home .files-home-devices [data-device]').count()) === 2, "Cancelled editor changed the device list");
       if (process.env.SCREENSHOT_DIR) {
         fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
         await page.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, 'files-browser-mac.png') });
