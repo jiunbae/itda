@@ -1083,7 +1083,7 @@ function openEdit(init = {}, mode = {}) {
         ${S.sshOk === false ? `<p class="warn-note" id="ssh-missing" ${ssh.on ? '' : 'hidden'}>${I('E7BA')} 이 PC에 OpenSSH 클라이언트가 없습니다. 설정 → 시스템 → 선택적 기능에서 ‘OpenSSH 클라이언트’를 추가하세요.</p>` : ''}
       </div>`;
   const hp = h.hp || {};
-  const hpBox = h.kind !== 'rdp' && (h.os || 'mac') === 'mac' && MAC ? `<div class="field hp-box"><label>성능</label>
+  const hpBox = MAC ? `<div class="field hp-box" ${h.kind !== 'rdp' && (h.os || 'mac') === 'mac' ? '' : 'hidden'}><label>성능</label>
       <div class="opt"><span class="hp-ico" aria-hidden="true">⚡</span><div class="txt"><b>고성능 모드 (H.264)</b><span id="hp-state">${hp.on ? '켜짐 — 이 Mac의 Itda 고성능 공유로 연결합니다 (SSH 터널). 연결할 수 없으면 기본 화면 공유를 씁니다.' : '꺼짐 — 기본 화면 공유(ZRLE)로 연결합니다. 켜면 SSH로 이 Mac에 Itda를 설치하고 고성능 공유를 켭니다.'}</span></div>
         ${hp.on ? '<label class="switch"><input type="checkbox" id="f-hp" checked><span></span></label>' : (existing ? '<button type="button" class="btn sm" id="hp-enable">켜기</button>' : '')}</div>
       <span class="hint">원격 로그인(SSH)이 켜져 있고, 그 Mac 화면에 로그인한 계정으로 연결해야 합니다. 켜는 동안 그 Mac에 화면 기록·손쉬운 사용 권한 요청이 뜹니다.</span></div>` : '';
@@ -1151,7 +1151,10 @@ ${quick ? sshBox : ''}
     const gin = chips.querySelector('#f-group');
     const current = () => [...chips.querySelectorAll('[data-chip]')].map((c) => c.dataset.chip);
     const add = (raw) => {
-      for (const g of raw.split(',').map((x) => x.trim().slice(0, 40)).filter(Boolean)) {
+      const known = groups();
+      for (let g of raw.split(',').map((x) => x.trim().slice(0, 40)).filter(Boolean)) {
+        // A group other connections already have keeps their spelling ("home" joins "Home").
+        g = known.find((k) => k.toLowerCase() === g.toLowerCase()) || g;
         if (current().some((x) => x.toLowerCase() === g.toLowerCase())) continue;
         gin.insertAdjacentHTML('beforebegin', chipList([g]));
       }
@@ -1163,7 +1166,7 @@ ${quick ? sshBox : ''}
       // Enter that finishes Korean composition only commits the syllable.
       if (e.key === 'Enter' && (e.isComposing || e.keyCode === 229)) { e.stopPropagation(); return; }
       if ((e.key === 'Enter' && gin.value.trim() || e.key === ',') && !e.isComposing) { e.preventDefault(); e.stopPropagation(); add(gin.value); }
-      else if (e.key === 'Backspace' && !gin.value) { const last = [...chips.querySelectorAll('[data-chip]')].pop(); if (last) { last.remove(); gin.placeholder = current().length ? '' : '없음 — 예: 집, 회사'; } }
+      else if (e.key === 'Backspace' && !gin.value && !e.isComposing && e.keyCode !== 229) { const last = [...chips.querySelectorAll('[data-chip]')].pop(); if (last) { last.remove(); gin.placeholder = current().length ? '' : '없음 — 예: 집, 회사'; } }
     });
     gin.addEventListener('input', () => { if (gin.value.includes(',')) add(gin.value); });
     // Picking a suggestion from the list adds it right away.
@@ -1272,7 +1275,8 @@ ${quick ? sshBox : ''}
   const del = m.querySelector('[data-x="delete"]');
   if (del) del.onclick = () => { closeModal('edit'); askDelete(h.id); };
   m.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') { e.preventDefault(); submit('connect'); }
+    // (Enter that finishes Korean/Japanese composition only commits the text.)
+    if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') { e.preventDefault(); submit('connect'); }
   });
 }
 
