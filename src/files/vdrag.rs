@@ -129,6 +129,17 @@ pub struct Reader {
     at: usize,
     done: bool,
 }
+impl Reader {
+    /// These bytes, in chunks of `chunk` (tests).
+    #[cfg(test)]
+    pub(crate) fn of(bytes: &[u8], chunk: usize) -> Reader {
+        let (tx, rx) = sync_channel(bytes.len() / chunk.max(1) + 2);
+        for c in bytes.chunks(chunk.max(1)) {
+            tx.send(Ok(c.to_vec())).unwrap();
+        }
+        Reader { rx, buf: Vec::new(), at: 0, done: false }
+    }
+}
 impl Read for Reader {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         while self.at == self.buf.len() {

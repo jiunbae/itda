@@ -30,13 +30,24 @@ use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
 /// Start the drag (the mouse button is still down: the page hands over at its edge). The
 /// outcome is posted as files_native_drag_end; Err: it couldn't start.
 pub fn drag(v: &Value, post: fn(Value)) -> Result<(), String> {
+    ole()?;
     let files = export::selection(v).map_err(|e| e.to_string())?;
     let id = v["id"].clone();
     let data: IDataObject = if files.iter().all(|f| !f.remote) { local(&files)? } else { remote(files, post)? };
     let mut effect = DROPEFFECT_NONE;
     let hr = unsafe { DoDragDrop(&data, &IDropSource::from(Source), DROPEFFECT_COPY, &mut effect) };
+    if hr.is_err() {
+        return Err(format!("끌어 놓기를 시작할 수 없습니다 ({})", windows::core::Error::from(hr)));
+    }
     post(json!({"type":"files_native_drag_end","id":id,"dropped":hr == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE}));
     Ok(())
+}
+
+/// DoDragDrop needs OLE (not just COM) on this thread: initialized once, for the thread's
+/// life (S_FALSE: it already was, which also counts once).
+fn ole() -> Result<(), String> {
+    thread_local!(static OLE: std::cell::OnceCell<Result<(), String>> = const { std::cell::OnceCell::new() });
+    OLE.with(|o| o.get_or_init(|| unsafe { OleInitialize(None) }.map_err(|e| format!("OLE을 시작할 수 없습니다 ({e})"))).clone())
 }
 
 // ---------------------------------------------------------------- this PC's files
@@ -71,28 +82,37 @@ fn local(files: &[export::File]) -> Result<IDataObject, String> {
 fn remote(files: Vec<export::File>, post: fn(Value)) -> Result<IDataObject, String> {
     let source = vdrag::Remote::of(&files).map_err(|e| e.to_string())?;
     let id = files[0].id.clone();
-    // Made in the multithreaded apartment and handed to this thread as a proxy.
-    let (tx, rx) = std::sync::mpsc::channel::<Result<usize, String>>();
-    mta();
-    std::thread::spawn(move || unsafe {
-        let r = (|| {
-            CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
-            let obj: IDataObject = Virtual::new(files, source, id, post).into();
-            let s = CoMarshalInterThreadInterfaceInStream(&IDataObject::IID, &obj)?;
-            CoUninitialize();
-            Ok::<_, windows::core::Error>(s.into_raw() as usize)
-        })();
-        let _ = tx.send(r.map_err(|e| e.to_string()));
-    });
-    let raw = rx.recv().map_err(|e| e.to_string())??;
-    let stream = unsafe { IStream::from_raw(raw as *mut _) };
-    unsafe { CoGetInterfaceAndReleaseStream::<_, IDataObject>(&stream) }.map_err(|e| e.to_string())
+    in_mta(move || Virtual::new(files, source, id, post).into()).map_err(|e| e.to_string())
 }
 
-/// Keep the multithreaded apartment alive for objects made in it.
-fn mta() {
-    static COOKIE: OnceLock<usize> = OnceLock::new();
-    COOKIE.get_or_init(|| unsafe { CoIncrementMTAUsage().map(|c| c.0 as usize).unwrap_or(0) });
+/// Make a data object in the multithreaded apartment and hand it to this thread as a proxy.
+fn in_mta(make: impl FnOnce() -> IDataObject + Send + 'static) -> windows::core::Result<IDataObject> {
+    mta()?;
+    let (tx, rx) = std::sync::mpsc::channel::<windows::core::Result<usize>>();
+    std::thread::spawn(move || unsafe {
+        let r = CoInitializeEx(None, COINIT_MULTITHREADED).ok().and_then(|()| {
+            let obj = make();
+            let r = CoMarshalInterThreadInterfaceInStream(&IDataObject::IID, &obj).map(|s| s.into_raw() as usize);
+            drop(obj);
+            CoUninitialize();
+            r
+        });
+        let _ = tx.send(r);
+    });
+    let raw = rx.recv().map_err(|_| windows::core::Error::from(E_FAIL))??;
+    // CoGetInterfaceAndReleaseStream consumes the stream's one reference, success or not:
+    // the Rust wrapper must not release it again.
+    let stream = std::mem::ManuallyDrop::new(unsafe { IStream::from_raw(raw as *mut _) });
+    unsafe { CoGetInterfaceAndReleaseStream::<_, IDataObject>(&*stream) }
+}
+
+/// Keep the multithreaded apartment alive (for this process's life) for objects made in it.
+fn mta() -> windows::core::Result<()> {
+    static COOKIE: OnceLock<Result<usize, HRESULT>> = OnceLock::new();
+    match COOKIE.get_or_init(|| unsafe { CoIncrementMTAUsage().map(|c| c.0 as usize).map_err(|e| e.code()) }) {
+        Ok(_) => Ok(()),
+        Err(hr) => Err((*hr).into()),
+    }
 }
 
 fn format(name: &str) -> u16 {
@@ -104,6 +124,11 @@ fn global(bytes: &[u8]) -> windows::core::Result<HGLOBAL> {
     unsafe {
         let h = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes.len().max(1))?;
         let p = GlobalLock(h) as *mut u8;
+        if p.is_null() {
+            let e = windows::core::Error::from_thread();
+            let _ = GlobalFree(Some(h));
+            return Err(e);
+        }
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
         let _ = GlobalUnlock(h);
         Ok(h)
@@ -180,6 +205,9 @@ impl Virtual {
 impl IDataObject_Impl for Virtual_Impl {
     fn GetData(&self, f: *const FORMATETC) -> windows::core::Result<STGMEDIUM> {
         let f = unsafe { &*f };
+        if f.dwAspect != DVASPECT_CONTENT.0 || (f.cfFormat != self.contents && f.lindex != -1) {
+            return Err(DV_E_FORMATETC.into());
+        }
         let medium = |tymed: TYMED, u: STGMEDIUM_0| STGMEDIUM { tymed: tymed.0 as u32, u, pUnkForRelease: std::mem::ManuallyDrop::new(None) };
         if f.cfFormat == self.group && f.tymed & TYMED_HGLOBAL.0 as u32 != 0 {
             let items = self.items().map_err(|_| windows::core::Error::from(E_FAIL))?;
@@ -205,6 +233,9 @@ impl IDataObject_Impl for Virtual_Impl {
 
     fn QueryGetData(&self, f: *const FORMATETC) -> HRESULT {
         let f = unsafe { &*f };
+        if f.dwAspect != DVASPECT_CONTENT.0 || (f.cfFormat != self.contents && f.lindex != -1) {
+            return DV_E_FORMATETC;
+        }
         match self.formats().iter().find(|x| x.cfFormat == f.cfFormat) {
             Some(x) if x.tymed & f.tymed != 0 => S_OK,
             Some(_) => DV_E_TYMED,
@@ -289,6 +320,15 @@ struct Stream {
 
 impl ISequentialStream_Impl for Stream_Impl {
     fn Read(&self, pv: *mut core::ffi::c_void, cb: u32, read: *mut u32) -> HRESULT {
+        if !read.is_null() {
+            unsafe { *read = 0 };
+        }
+        if cb == 0 {
+            return S_OK;
+        }
+        if pv.is_null() {
+            return STG_E_INVALIDPOINTER;
+        }
         let out = unsafe { std::slice::from_raw_parts_mut(pv as *mut u8, cb as usize) };
         let mut r = self.reader.lock().unwrap();
         let mut n = 0;
@@ -298,6 +338,11 @@ impl ISequentialStream_Impl for Stream_Impl {
                 Ok(k) => n += k,
                 Err(e) => {
                     crate::log!("drag out: read failed: {e}");
+                    // What was read still counts, so the position stays right.
+                    self.at.fetch_add(n as u64, Relaxed);
+                    if !read.is_null() {
+                        unsafe { *read = n as u32 };
+                    }
                     return E_FAIL;
                 }
             }
@@ -347,9 +392,18 @@ impl IStream_Impl for Stream_Impl {
                 break;
             }
             total_r += got as u64;
-            let mut put = 0u32;
-            unsafe { to.Write(buf.as_ptr() as _, got, Some(&mut put)) }.ok()?;
-            total_w += put as u64;
+            // A destination may take less than offered: write the rest, and fail rather
+            // than report a copy whose bytes didn't all arrive.
+            let mut off = 0usize;
+            while off < got as usize {
+                let mut put = 0u32;
+                unsafe { to.Write(buf[off..].as_ptr() as _, got - off as u32, Some(&mut put)) }.ok()?;
+                if put == 0 {
+                    return Err(STG_E_WRITEFAULT.into());
+                }
+                off += put as usize;
+                total_w += put as u64;
+            }
         }
         unsafe {
             if !read.is_null() {
@@ -426,15 +480,7 @@ mod tests {
         let src = format!("/{}", root.to_string_lossy().replace('\\', "/"));
         let file = |n: &str, dir: bool| export::File { id: String::new(), remote: true, source: src.clone(), name: n.into(), dir };
         let files = vec![file("Folder", true), file("한글.txt", false)];
-        mta();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || unsafe {
-            CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap();
-            let obj: IDataObject = Virtual::new(files, source, String::new(), |_| {}).into();
-            let s = CoMarshalInterThreadInterfaceInStream(&IDataObject::IID, &obj).unwrap();
-            tx.send(s.into_raw() as usize).unwrap();
-        });
-        let data: IDataObject = unsafe { CoGetInterfaceAndReleaseStream(&IStream::from_raw(rx.recv().unwrap() as *mut _)).unwrap() };
+        let data = in_mta(move || Virtual::new(files, source, String::new(), |_| {}).into()).unwrap();
         let fmt = |cf: u16, tymed: TYMED, lindex: i32| FORMATETC { cfFormat: cf, ptd: std::ptr::null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex, tymed: tymed.0 as u32 };
         unsafe {
             let mut m = data.GetData(&fmt(format("FileGroupDescriptorW"), TYMED_HGLOBAL, -1)).unwrap();
@@ -469,6 +515,78 @@ mod tests {
         // Only "copy" is ever offered.
         drop(data);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn stream(bytes: &[u8]) -> IStream {
+        Stream { reader: Mutex::new(vdrag::Reader::of(bytes, 7)), size: bytes.len() as u64, at: AtomicU64::new(0) }.into()
+    }
+
+    #[test]
+    fn stream_read_contract() {
+        let data: Vec<u8> = (0..100u8).collect();
+        let s = stream(&data);
+        unsafe {
+            let mut n = 99u32;
+            assert_eq!(s.Read(std::ptr::null_mut(), 0, Some(&mut n)), S_OK);
+            assert_eq!(n, 0);
+            assert_eq!(s.Read(std::ptr::null_mut(), 5, Some(&mut n)), STG_E_INVALIDPOINTER);
+            let mut buf = [0u8; 60];
+            assert_eq!(s.Read(buf.as_mut_ptr() as _, 60, Some(&mut n)), S_OK);
+            assert_eq!((n, &buf[..]), (60, &data[..60]));
+            assert_eq!(s.Read(buf.as_mut_ptr() as _, 60, Some(&mut n)), S_FALSE);
+            assert_eq!((n, &buf[..40]), (40, &data[60..]));
+            assert_eq!(s.Read(buf.as_mut_ptr() as _, 60, Some(&mut n)), S_FALSE);
+            assert_eq!(n, 0);
+            let mut at = 0u64;
+            s.Seek(0, STREAM_SEEK_CUR, Some(&mut at)).unwrap();
+            assert_eq!(at, 100);
+            assert!(s.Seek(0, STREAM_SEEK_SET, None).is_err(), "no rewinding a forward-only stream");
+        }
+    }
+
+    /// A destination that takes at most `max` bytes per Write (0: none).
+    #[implement(IStream)]
+    struct Sink {
+        got: Mutex<Vec<u8>>,
+        max: usize,
+    }
+    impl ISequentialStream_Impl for Sink_Impl {
+        fn Read(&self, _: *mut core::ffi::c_void, _: u32, _: *mut u32) -> HRESULT {
+            E_NOTIMPL
+        }
+        fn Write(&self, pv: *const core::ffi::c_void, cb: u32, done: *mut u32) -> HRESULT {
+            let n = (cb as usize).min(self.max);
+            self.got.lock().unwrap().extend_from_slice(unsafe { std::slice::from_raw_parts(pv as *const u8, n) });
+            unsafe { *done = n as u32 };
+            S_OK
+        }
+    }
+    impl IStream_Impl for Sink_Impl {
+        fn Seek(&self, _: i64, _: STREAM_SEEK, _: *mut u64) -> windows::core::Result<()> { Err(E_NOTIMPL.into()) }
+        fn SetSize(&self, _: u64) -> windows::core::Result<()> { Err(E_NOTIMPL.into()) }
+        fn CopyTo(&self, _: Ref<IStream>, _: u64, _: *mut u64, _: *mut u64) -> windows::core::Result<()> { Err(E_NOTIMPL.into()) }
+        fn Commit(&self, _: &STGC) -> windows::core::Result<()> { Ok(()) }
+        fn Revert(&self) -> windows::core::Result<()> { Err(E_NOTIMPL.into()) }
+        fn LockRegion(&self, _: u64, _: u64, _: &LOCKTYPE) -> windows::core::Result<()> { Err(E_NOTIMPL.into()) }
+        fn UnlockRegion(&self, _: u64, _: u64, _: u32) -> windows::core::Result<()> { Err(E_NOTIMPL.into()) }
+        fn Stat(&self, _: *mut STATSTG, _: &STATFLAG) -> windows::core::Result<()> { Err(E_NOTIMPL.into()) }
+        fn Clone(&self) -> windows::core::Result<IStream> { Err(E_NOTIMPL.into()) }
+    }
+
+    #[test]
+    fn copy_to_writes_everything_or_fails() {
+        let data: Vec<u8> = (0..300_000u32).map(|i| (i % 253) as u8).collect();
+        // Short writes: every byte still arrives, and the counts agree.
+        use windows::core::ComObjectInner;
+        let sink = Sink { got: Mutex::new(Vec::new()), max: 1000 }.into_object();
+        let to: IStream = sink.to_interface();
+        let (mut r, mut w) = (0u64, 0u64);
+        unsafe { stream(&data).CopyTo(&to, u64::MAX, Some(&mut r), Some(&mut w)) }.unwrap();
+        assert_eq!((r, w), (data.len() as u64, data.len() as u64));
+        assert_eq!(*sink.got.lock().unwrap(), data);
+        // A destination that takes nothing: an error, not a "successful" empty copy.
+        let to: IStream = Sink { got: Mutex::new(Vec::new()), max: 0 }.into();
+        assert!(unsafe { stream(&data).CopyTo(&to, u64::MAX, None, None) }.is_err());
     }
 
     /// Files on this PC go as the shell's own data object, with the originals' paths.
