@@ -19,8 +19,8 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
-const W: usize = 640;
-const H: usize = 360;
+pub(crate) const W: usize = 640;
+pub(crate) const H: usize = 360;
 const FRAME: Duration = Duration::from_millis(33);
 const SERVER_DELAY: Duration = Duration::from_millis(100);
 const SLOW_RATE: usize = 100_000;
@@ -34,7 +34,7 @@ enum Mode {
 /// The square moves for MOVING, then the screen stands still until SESSION.
 const MOVING: Duration = Duration::from_secs(5);
 const SESSION: Duration = Duration::from_secs(8);
-const NOVNC: &str = include_str!("../web/viewer/novnc.min.js");
+pub(crate) const NOVNC: &str = include_str!("../web/viewer/novnc.min.js");
 
 const PAGE: &str = r#"<!doctype html><meta charset=utf-8><div id=screen style="width:640px;height:360px"></div>
 <script type=module>
@@ -57,7 +57,7 @@ setTimeout(async () => {
 
 /// Panels in three colours (packed-palette tiles) above, a moving square below y = 150:
 /// red, or noise that changes every frame (incompressible).
-fn frame(t: Duration, f: &mut [u32], noisy: bool) {
+pub(crate) fn frame(t: Duration, f: &mut [u32], noisy: bool) {
     for y in 0..H {
         for x in 0..W {
             f[y * W + x] = still(x, y);
@@ -75,7 +75,7 @@ fn frame(t: Duration, f: &mut [u32], noisy: bool) {
     }
 }
 
-fn still(x: usize, y: usize) -> u32 {
+pub(crate) fn still(x: usize, y: usize) -> u32 {
     [0x4744b0, 0xf3f3f3, 0x202020][(x / 40 + y / 30) % 3]
 }
 
@@ -92,7 +92,7 @@ struct Stats {
     max_queued: usize,
 }
 
-enum In {
+pub(crate) enum In {
     Format(PixelFormat),
     Encodings(Vec<i32>),
     Request(bool),
@@ -100,10 +100,10 @@ enum In {
 }
 
 /// The browser's WebSocket messages as one byte stream.
-struct WsRead {
-    rx: ws::Receiver,
-    buf: Vec<u8>,
-    pos: usize,
+pub(crate) struct WsRead {
+    pub(crate) rx: ws::Receiver,
+    pub(crate) buf: Vec<u8>,
+    pub(crate) pos: usize,
 }
 
 impl Read for WsRead {
@@ -121,7 +121,7 @@ impl Read for WsRead {
     }
 }
 
-fn read_client(mut r: WsRead, tx: Sender<In>) -> io::Result<()> {
+pub(crate) fn read_client(mut r: WsRead, tx: Sender<In>) -> io::Result<()> {
     let mut b1 = [0u8];
     loop {
         r.read_exact(&mut b1)?;

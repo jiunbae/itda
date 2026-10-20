@@ -124,7 +124,7 @@ pub fn set_typed(id: &str, pass: Option<String>) {
     }
 }
 
-fn typed(id: &str) -> Option<String> {
+pub(crate) fn typed(id: &str) -> Option<String> {
     TYPED.lock().unwrap().iter().find(|(k, _)| k == id).map(|(_, p)| p.clone())
 }
 
@@ -425,6 +425,7 @@ fn hosts_json() -> serde_json::Value {
                 "remote_size": h.remote_size,
                 "remote_name": h.remote_name,
                 "opts": h.opts,
+                "hp": h.hp,
                 "last_used": h.last_used,
                 // The preview's version (its time), 0 = none: part of its URL, so it's cached
                 // until it changes.
@@ -781,6 +782,17 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
     if host.is_rdp() {
         return crate::rdp::open(&host.host, &login.user, &pass, size.filter(|_| host.opts.resize));
     }
+    // Itda's high-performance sharing on this Mac: through SSH to its loopback port. If it
+    // can't be reached (Itda not running there, SSH refused), fall back to the usual way.
+    if host.hp.on {
+        match open_hp(host, login, &pass) {
+            Ok((t, raw)) => {
+                *tunnel = Some(t);
+                return Ok(raw);
+            }
+            Err(e) => crate::log!("high-performance sharing on {} unavailable, using Screen Sharing: {e}", host.host),
+        }
+    }
     let creds = Creds { user: login.user.clone(), pass: pass.clone() };
     if host.ssh.on {
         let (h, vnc_port) = tunnel::split_host(&host.host, 5900);
@@ -800,6 +812,14 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
     } else {
         rfb::open(&rfb::addr(&host.host), &creds)
     }
+}
+
+/// The connection's password for SSH (saved, or typed for it); the server's own for VNC.
+pub(crate) fn open_hp(host: &store::Host, login: &store::Login, ssh_pass: &str) -> io::Result<(Arc<Tunnel>, rfb::Raw)> {
+    let pass = store::get_password(&crate::hp_upgrade::password_key(&host.id)).ok_or_else(|| io::Error::other("no high-performance password"))?;
+    let t = Tunnel::open(crate::hp_upgrade::ssh_cfg_with(host, login, ssh_pass.to_string()))?;
+    let raw = rfb::open(&t.addr()?, &Creds { user: String::new(), pass })?;
+    Ok((t, raw))
 }
 
 fn relay(c: TcpStream, raw: rfb::Raw, tx: ws::Sender, id: &str, tunnel: Option<Arc<Tunnel>>, local: bool) -> io::Result<()> {

@@ -584,6 +584,18 @@ fn on_ipc(v: Value) {
         }
         #[cfg(windows)]
         "share_kick" => crate::share::kick_all(),
+        // "고성능 모드": set up Itda's own sharing on this Mac over SSH; the next connection
+        // uses it. Progress and the outcome go to the pages as {type:"hp"}.
+        "hp_upgrade" => hp_upgrade(&id),
+        "hp_ready" | "hp_off" => {
+            let on = s(&v, "cmd") == "hp_ready";
+            let port = v["port"].as_u64().unwrap_or(0) as u16;
+            let changed = home(|m| m.hosts.iter_mut().find(|h| h.id == id).map(|h| h.hp = store::Hp { on, port: if on { port } else { h.hp.port } }).is_some());
+            if changed {
+                save_hosts();
+                send_hosts();
+            }
+        }
         "web_tailscale" => {
             let (on, port) = (v["on"].as_bool().unwrap_or(false), home_web_port());
             std::thread::spawn(move || post(Event::TsServe(crate::tailscale::serve(port, on))));
@@ -638,6 +650,7 @@ fn apply_share(s: &store::Share) {
             trust_near: s.trust_near,
             cmd_as_ctrl: s.cmd_as_ctrl,
             view_only: s.view_only,
+            local_only: false,
         })
     } else {
         crate::share::stop();
@@ -795,8 +808,47 @@ fn save_thumb(id: &str, url: &str) -> bool {
     home(|m| m.settings.thumbnails) && thumb_png(id, url).is_some_and(|png| std::fs::write(store::thumb_path(id), png).is_ok())
 }
 
+/// "고성능 모드" for host `id`: set up Itda's own sharing on that Mac over SSH (a worker
+/// thread); progress and the outcome go to the pages and the connection's window as
+/// {type:"hp"}, and the host remembers it (hp_ready).
+fn hp_upgrade(id: &str) {
+    let Some((host, login)) = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| (h.clone(), store::resolve(h, &m.accounts)))) else { return };
+    std::thread::spawn(move || {
+        use crate::hp_upgrade::{password_key, upgrade, Source};
+        let id = host.id.clone();
+        let source = std::env::var("ITDA_HP_BUNDLE").map(|p| Source::Bundle(p.into())).unwrap_or_else(|_| Source::Release(VERSION.into()));
+        let progress = |stage: &str| post(Event::Page(json!({"type":"hp","id":id,"stage":stage})));
+        // A password typed for this connection signs in to SSH first (a saved one may be stale).
+        let pass = crate::gateway::typed(&id).or_else(|| login.pass.clone()).unwrap_or_default();
+        match upgrade(&crate::hp_upgrade::ssh_cfg_with(&host, &login, pass), &source, &progress) {
+            Ok(r) => {
+                store::set_password(&password_key(&id), Some(&r.password));
+                post(Event::Session("__ipc".into(), json!({"cmd":"hp_ready","id":id,"port":r.port})));
+                post(Event::Page(json!({"type":"hp","id":id,"ready":true,"screen":r.screen,"access":r.access,"installed":r.installed})));
+            }
+            Err(e) => post(Event::Page(json!({"type":"hp","id":id,"error":e.to_string()}))),
+        }
+    });
+}
+
+/// Whether that Mac's Itda can show its screen yet (the viewer waits for the permission).
+fn hp_status(id: &str) {
+    let Some((host, login)) = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| (h.clone(), store::resolve(h, &m.accounts)))) else { return };
+    std::thread::spawn(move || {
+        let pass = crate::gateway::typed(&host.id).or_else(|| login.pass.clone()).unwrap_or_default();
+        let r = crate::hp_upgrade::status(&crate::hp_upgrade::ssh_cfg_with(&host, &login, pass));
+        post(Event::Page(match r {
+            Ok((screen, access)) => json!({"type":"hp","id":host.id,"status":true,"screen":screen,"access":access}),
+            Err(e) => json!({"type":"hp","id":host.id,"status":true,"error":e.to_string()}),
+        }));
+    });
+}
+
 fn on_session(id: &str, v: Value) {
     match s(&v, "ev").as_str() {
+        "hp-upgrade" => hp_upgrade(id),
+        "hp-status" => hp_status(id),
+        "hp-off" => on_ipc(json!({"cmd":"hp_off","id":id})),
         "stage" => {
             home(|m| {
                 if let Some(x) = m.sessions.get_mut(id) {
@@ -955,6 +1007,11 @@ fn drain() {
                 let _ = done.send(());
             }
             Event::Page(v) => {
+                if v["type"] == "hp" {
+                    if let Some(id) = v["id"].as_str() {
+                        plat::session_eval(id, &format!("window.itdaHp&&itdaHp({v})"));
+                    }
+                }
                 #[cfg(target_os = "macos")]
                 let mut v=v;
                 #[cfg(target_os = "macos")]

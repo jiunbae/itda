@@ -454,6 +454,15 @@ fn pbcopy(text: &str) {
     }
 }
 
+/// Run `js` in connection `id`'s window (its web viewer).
+pub(super) fn session_eval(id: &str, js: &str) {
+    SESSIONS.with(|s| {
+        if let Some(p) = s.borrow().get(id) {
+            let _ = p.view.evaluate_script(js);
+        }
+    });
+}
+
 /// Text copied on this Mac goes to the connection when its window comes forward.
 fn offer_clipboard(id: &str) {
     let text = output("/usr/bin/pbpaste", &[]);

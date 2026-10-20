@@ -22,6 +22,7 @@ const P = {
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/>',
   mission: '<rect x="3" y="4" width="8" height="7" rx="1"/><rect x="13" y="4" width="8" height="7" rx="1"/><rect x="7" y="13" width="10" height="7" rx="1"/>',
   monitor: '<rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M9 20h6M12 16.5V20"/>',
+  bolt: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>',
   lock: '<rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
@@ -583,6 +584,54 @@ function leave() {
   loadHosts();
 }
 
+// ---------------------------------------------------------------- high-performance mode
+
+// A Mac connected the usual way (Apple's Screen Sharing: ZRLE, ~8 fps at 1080p) can move to
+// Itda's own sharing on that Mac (hardware H.264): the app sets it up over SSH, the person
+// answers macOS's permission prompts on that Mac through this very connection, and then this
+// window reconnects to it. If it can't be reached, the app falls back to Screen Sharing.
+const hpCapable = () => APP && macHost(S.host) && S.host?.kind !== 'rdp';
+let hpWait;
+function hpToggle() {
+  if (!hpCapable() || S.hpBusy) return;
+  if (S.host.hp?.on) {
+    S.host.hp = { ...S.host.hp, on: false };
+    post({ ev: 'hp-off' });
+    toast('고성능 모드를 껐습니다 — 기본 화면 공유로 다시 연결합니다');
+    return open(S.host);
+  }
+  S.hpBusy = true;
+  renderTools();
+  post({ ev: 'hp-upgrade' });
+  toast('고성능 모드를 준비하는 중…', 8000);
+}
+window.itdaHp = (m) => {
+  if (!S.host || m.id !== S.host.id) return;
+  if (m.stage) return toast(`고성능 모드: ${m.stage}`, 8000);
+  const switchNow = () => {
+    clearTimeout(hpWait);
+    S.hpBusy = false;
+    S.host.hp = { ...(S.host.hp || {}), on: true };
+    toast('고성능 모드로 전환합니다');
+    open(S.host);
+  };
+  if (m.error && !m.status) {
+    S.hpBusy = false;
+    renderTools();
+    return toast(`고성능 모드를 켜지 못했습니다 — ${m.error}`, 9000);
+  }
+  if (m.ready || m.status) {
+    // Both: without Accessibility the screen would show but not take input.
+    if (m.screen && m.access) return switchNow();
+    // Waiting for the person to allow Screen Recording (and Accessibility) on that Mac.
+    if (m.ready) toast('이 Mac 화면에 뜬 요청에서 Itda의 "화면 기록"과 "손쉬운 사용"을 허용해 주세요. 허용하면 "종료 후 다시 열기"를 누르면 됩니다. 그러면 고성능으로 전환합니다.', 15000);
+    S.hpTries = m.ready ? 0 : (S.hpTries || 0) + 1;
+    if (S.hpTries > 75) { S.hpBusy = false; renderTools(); return toast('권한이 허용되지 않아 기본 화면 공유를 계속 씁니다. 다시 시도하려면 ⚡를 누르세요.', 9000); }
+    clearTimeout(hpWait);
+    hpWait = setTimeout(() => post({ ev: 'hp-status' }), 4000);
+  }
+};
+
 // ---------------------------------------------------------------- toolbar
 
 function renderTools() {
@@ -592,6 +641,7 @@ function renderTools() {
     ['keys', 'command', `${isWin(S.host) ? 'Windows' : 'Mac'} 특수 키`],
     ...(macHost(S.host) ? [['mac-actions', 'mission', 'Mac 화면 동작 — Mission Control · Exposé']] : []),
     ...(APP && /Mac/.test(navigator.platform) && !IOS && ['mac', 'macos'].includes(S.host?.os) && S.host?.kind !== 'rdp' ? [['apple-screen-sharing', 'monitor', 'Apple 화면 공유 앱에서 열기 · 별도 앱으로 직접 연결']] : []),
+    ...(hpCapable() ? [['hp', 'bolt', S.host.hp?.on ? '고성능 모드 켜짐 — 누르면 끕니다' : S.hpBusy ? '고성능 모드 준비 중…' : '고성능 모드 — 이 Mac에 Itda 고성능 공유를 켜고 전환합니다 (SSH)', !!S.host.hp?.on]] : []),
     ...(APP ? [] : [['clip', 'clip', '클립보드']]),
     'sep',
     ['monitors', 'monitor', '모니터 선택 및 창 배치'],
@@ -624,6 +674,7 @@ $('#tools').addEventListener('click', (e) => {
         toast('Apple 화면 공유 앱에 연결을 요청했습니다. 이 세션은 유지됩니다.');
       }
       return;
+    case 'hp': return hpToggle();
     case 'monitors': return toggleSheet('monitors');
     case 'clip': return toggleSheet('clip');
     case 'scale':
