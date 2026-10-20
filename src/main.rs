@@ -42,6 +42,8 @@ mod dxgi;
 #[cfg(windows)]
 mod fb;
 #[cfg(windows)]
+mod h264_win;
+#[cfg(windows)]
 mod files_win;
 #[cfg(windows)]
 mod keys;

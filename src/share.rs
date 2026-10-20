@@ -35,9 +35,9 @@ pub(crate) fn clipboard_seq() -> u64 {
     unsafe { GetClipboardSequenceNumber() as u64 }
 }
 
-/// No hardware video encoder here yet: viewers get ZRLE.
-pub(crate) fn video(_w: usize, _h: usize) -> Option<crate::server::Video> {
-    None
+/// Media Foundation's H.264 encoder, when this PC has it (else ZRLE).
+pub(crate) fn video(w: usize, h: usize) -> Option<crate::server::Video> {
+    crate::h264_win::video(w, h)
 }
 
 pub(crate) fn ask_user(peer: &SocketAddr) -> bool {
