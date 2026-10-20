@@ -58,9 +58,12 @@ try{
    await p.keyboard.press('Alt+ArrowLeft');await layer.locator('tbody tr').filter({hasText:'Notes.txt'}).waitFor();
    await p.keyboard.press('Alt+ArrowRight');await layer.locator('tbody tr').filter({hasText:'Alpha.txt'}).waitFor();
    await p.keyboard.press('Alt+ArrowUp');await layer.locator('tbody tr').filter({hasText:'Notes.txt'}).waitFor();
+   await p.evaluate(()=>document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'ㅣ',code:'KeyL',ctrlKey:true,bubbles:true})));assert(await layer.locator('.files-explorer-address').evaluate(e=>e.classList.contains('editing')),'Hangul Ctrl+L failed');
    await p.keyboard.press('F4');await p.keyboard.press('Escape');assert(!await layer.locator('.files-explorer-address').evaluate(e=>e.classList.contains('editing')),'Escape did not cancel address editing');
    await p.keyboard.press('Control+t');assert(await layer.locator('[data-tab]').count()===2,'New tab failed');await p.keyboard.press('Control+w');assert(await layer.locator('[data-tab]').count()===1,'Close tab failed');
-   await layer.locator('[data-action="new"]').click();await p.getByRole('menuitem',{name:'폴더',exact:true}).click();await p.getByRole('button',{name:'취소',exact:true}).click();
+   await layer.locator('[data-action="new"]').click();await p.getByRole('menuitem',{name:'폴더',exact:true}).click();
+   for(const shortcut of ['F4','Control+l','Alt+p']){await p.keyboard.press(shortcut);assert(await p.locator('.files-prompt').evaluate(e=>e.contains(document.activeElement)),`${shortcut} stole prompt focus`);assert(!await layer.locator('.files-explorer-address').evaluate(e=>e.classList.contains('editing')),'Address edited behind prompt');}
+   await p.getByRole('button',{name:'취소',exact:true}).click();
    await p.keyboard.press('Control+t');await layer.locator('[data-action="explorer-home"]').click();await p.keyboard.press('Control+w');assert(await layer.locator('[data-tab]').count()===1,'Home Ctrl+W closed workspace');
    await layer.locator('[data-action="explorer-home"]').click();assert(await layer.locator('.files-network h2').textContent()==='홈','Home failed');
    await layer.locator('[data-network-sidebar] [data-bookmark="Documents"]').click();await layer.locator('tbody tr').filter({hasText:'Alpha.txt'}).waitFor();

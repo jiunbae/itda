@@ -218,7 +218,7 @@
   const kind = (e) => e.link ? "심볼릭 링크" : e.dir ? "폴더" : ({ txt: "텍스트 문서", md: "Markdown 문서", pdf: "PDF 문서", png: "PNG 이미지", jpg: "JPEG 이미지", jpeg: "JPEG 이미지", heic: "HEIF 이미지", zip: "ZIP 아카이브", mp4: "MPEG-4 동영상", mp3: "MP3 오디오" }[extension(e.name)] || (extension(e.name) ? `${extension(e.name).toUpperCase()} 문서` : "문서"));
   const icon = (dir, name = "") => {
     const ext = extension(name), color = /^(png|jpg|jpeg|gif|heic|webp|svg)$/.test(ext) ? "image" : /^(zip|gz|tar|7z)$/.test(ext) ? "archive" : ext === "pdf" ? "pdf" : "text";
-    return `<svg class="${dir ? "folder" : `document ${color}`}" viewBox="0 0 24 24" aria-hidden="true">${dir ? '<path fill="#70c8f1" d="M2 5a2 2 0 0 1 2-2h5l3 3h8a2 2 0 0 1 2 2v11H2z"/><path fill="#40aee8" d="M2 8h20v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z"/><path stroke="#b0e8ff" d="M3 9h18"/>' : `<path fill="#fff" stroke="#9ba5af" stroke-width=".8" d="M5 2h9l5 5v15H5z"/><path fill="#e8edf2" stroke="#9ba5af" stroke-width=".8" d="M14 2v6h5"/><rect x="6" y="12" width="12" height="7" rx="1" fill="currentColor"/><text x="12" y="17.2" text-anchor="middle" fill="white" font-size="4.6" font-family="-apple-system, sans-serif" font-weight="600">${esc(ext.slice(0, 4).toUpperCase() || "DOC")}</text>`}</svg>`;
+    return `<svg class="${dir ? "folder" : `document ${color}`}" viewBox="0 0 24 24" aria-hidden="true">${dir ? !MAC ? '<path fill="#d99c16" d="M2 5a2 2 0 0 1 2-2h5l3 3h8a2 2 0 0 1 2 2v11H2z"/><path fill="#fff4ce" d="M4 7h16v12H4z"/><path fill="#f7c344" d="M2 9h20v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z"/><path stroke="#ffe08a" d="M3 10h18"/>' : '<path fill="#70c8f1" d="M2 5a2 2 0 0 1 2-2h5l3 3h8a2 2 0 0 1 2 2v11H2z"/><path fill="#40aee8" d="M2 8h20v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z"/><path stroke="#b0e8ff" d="M3 9h18"/>' : `<path fill="#fff" stroke="#9ba5af" stroke-width=".8" d="M5 2h9l5 5v15H5z"/><path fill="#e8edf2" stroke="#9ba5af" stroke-width=".8" d="M14 2v6h5"/><rect x="6" y="12" width="12" height="7" rx="1" fill="currentColor"/><text x="12" y="17.2" text-anchor="middle" fill="white" font-size="4.6" font-family="-apple-system, sans-serif" font-weight="600">${esc(ext.slice(0, 4).toUpperCase() || "DOC")}</text>`}</svg>`;
   };
   const columnWidths = {};
   function emptyPane() {
@@ -967,7 +967,7 @@
     for (const a of ["copy", "cut", "rename", "trash"])
       layer.querySelector(`[data-action="${a}"]`).disabled = a === "rename" && !MAC ? p.selected.size !== 1 : !p.selected.size;
     if (!MAC) {
-      layer.querySelector('[data-action="back"]').disabled = p.at === 0;
+      layer.querySelector('[data-action="back"]').disabled = p.at <= 0;
       layer.querySelector('[data-action="forward"]').disabled = p.at + 1 >= p.history.length;
       layer.querySelector('[data-action="up"]').disabled = parent(p.path) === p.path;
       const details = layer.querySelector('[data-action="details"]');
@@ -1493,8 +1493,8 @@
         return;
       }
     }
-    if (!MAC && !networkMode && ((e.altKey && e.key.toLowerCase() === "d") || (e.ctrlKey && e.key.toLowerCase() === "l") || e.key === "F4")) { e.preventDefault(); e.stopPropagation(); editExplorerAddress(); return; }
-    if (!MAC && !networkMode && e.altKey && e.key.toLowerCase() === "p") { e.preventDefault(); act(e.shiftKey ? "details" : "preview"); return; }
+    if (!MAC && !networkMode && ((e.altKey && (e.code === "KeyD" || e.key.toLowerCase() === "d")) || (e.ctrlKey && (e.code === "KeyL" || e.key.toLowerCase() === "l")) || e.key === "F4")) { e.preventDefault(); e.stopPropagation(); editExplorerAddress(); return; }
+    if (!MAC && !networkMode && e.altKey && (e.code === "KeyP" || e.key.toLowerCase() === "p")) { e.preventDefault(); act(e.shiftKey ? "details" : "preview"); return; }
     if (document.querySelector(".files-prompt")) return;
     e.stopPropagation();
     const focusedTab = e.target.closest("[data-tab]");
