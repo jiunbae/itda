@@ -584,6 +584,34 @@ fn on_ipc(v: Value) {
         }
         #[cfg(windows)]
         "share_kick" => crate::share::kick_all(),
+        // "고성능 모드": set up Itda's own sharing on this Mac over SSH; the next connection
+        // uses it. Progress and the outcome go to the pages as {type:"hp"}.
+        "hp_upgrade" => {
+            let Some((host, login)) = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| (h.clone(), store::resolve(h, &m.accounts)))) else { return };
+            std::thread::spawn(move || {
+                use crate::hp_upgrade::{password_key, ssh_cfg, upgrade, Source};
+                let id = host.id.clone();
+                let source = std::env::var("ITDA_HP_BUNDLE").map(|p| Source::Bundle(p.into())).unwrap_or_else(|_| Source::Release(VERSION.into()));
+                let progress = |stage: &str| post(Event::Page(json!({"type":"hp","id":id,"stage":stage})));
+                match upgrade(&ssh_cfg(&host, &login), &source, &progress) {
+                    Ok(r) => {
+                        store::set_password(&password_key(&id), Some(&r.password));
+                        post(Event::Session("__ipc".into(), json!({"cmd":"hp_ready","id":id,"port":r.port})));
+                        post(Event::Page(json!({"type":"hp","id":id,"ready":true,"screen":r.screen,"access":r.access,"installed":r.installed})));
+                    }
+                    Err(e) => post(Event::Page(json!({"type":"hp","id":id,"error":e.to_string()}))),
+                }
+            });
+        }
+        "hp_ready" | "hp_off" => {
+            let on = s(&v, "cmd") == "hp_ready";
+            let port = v["port"].as_u64().unwrap_or(0) as u16;
+            let changed = home(|m| m.hosts.iter_mut().find(|h| h.id == id).map(|h| h.hp = store::Hp { on, port: if on { port } else { h.hp.port } }).is_some());
+            if changed {
+                save_hosts();
+                send_hosts();
+            }
+        }
         "web_tailscale" => {
             let (on, port) = (v["on"].as_bool().unwrap_or(false), home_web_port());
             std::thread::spawn(move || post(Event::TsServe(crate::tailscale::serve(port, on))));
@@ -638,6 +666,7 @@ fn apply_share(s: &store::Share) {
             trust_near: s.trust_near,
             cmd_as_ctrl: s.cmd_as_ctrl,
             view_only: s.view_only,
+            local_only: false,
         })
     } else {
         crate::share::stop();

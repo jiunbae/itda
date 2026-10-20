@@ -781,6 +781,17 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
     if host.is_rdp() {
         return crate::rdp::open(&host.host, &login.user, &pass, size.filter(|_| host.opts.resize));
     }
+    // Itda's high-performance sharing on this Mac: through SSH to its loopback port. If it
+    // can't be reached (Itda not running there, SSH refused), fall back to the usual way.
+    if host.hp.on {
+        match open_hp(host, login) {
+            Ok((t, raw)) => {
+                *tunnel = Some(t);
+                return Ok(raw);
+            }
+            Err(e) => crate::log!("high-performance sharing on {} unavailable, using Screen Sharing: {e}", host.host),
+        }
+    }
     let creds = Creds { user: login.user.clone(), pass: pass.clone() };
     if host.ssh.on {
         let (h, vnc_port) = tunnel::split_host(&host.host, 5900);
@@ -800,6 +811,13 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
     } else {
         rfb::open(&rfb::addr(&host.host), &creds)
     }
+}
+
+pub(crate) fn open_hp(host: &store::Host, login: &store::Login) -> io::Result<(Arc<Tunnel>, rfb::Raw)> {
+    let pass = store::get_password(&crate::hp_upgrade::password_key(&host.id)).ok_or_else(|| io::Error::other("no high-performance password"))?;
+    let t = Tunnel::open(crate::hp_upgrade::ssh_cfg(host, login))?;
+    let raw = rfb::open(&t.addr()?, &Creds { user: String::new(), pass })?;
+    Ok((t, raw))
 }
 
 fn relay(c: TcpStream, raw: rfb::Raw, tx: ws::Sender, id: &str, tunnel: Option<Arc<Tunnel>>, local: bool) -> io::Result<()> {

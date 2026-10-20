@@ -188,6 +188,9 @@ impl Tunnel {
         // A screen tunnel carries input and frames: mark it low-delay. Without a session ssh
         // treats it as bulk, and older OpenSSH (Windows' own) sends bulk as background
         // traffic (DSCP CS1), the lowest Wi-Fi queue. (File transfers stay bulk.)
+        // Its own connection: through a ControlMaster from the user's ssh config, the forward
+        // would be requested of the master and this ssh would exit at once.
+        cmd.args(["-o", "ControlMaster=no", "-o", "ControlPath=none"]);
         cmd.args(["-v", "-N", "-o", "IPQoS=lowdelay", "-o", "ExitOnForwardFailure=yes", "-L"])
             .arg(format!("127.0.0.1:{lport}:localhost:{}", c.vnc_port))
             .arg(&target)

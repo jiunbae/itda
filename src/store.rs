@@ -140,6 +140,16 @@ pub struct Host {
     pub os: String,
     /// Files use a separate login/connection from the remote screen.
     pub files: crate::files::Options,
+    /// Itda's high-performance sharing set up on this Mac (reached over SSH).
+    pub hp: Hp,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
+#[serde(default)]
+pub struct Hp {
+    pub on: bool,
+    /// Its port on the Mac (127.0.0.1 there); 0 = 5910.
+    pub port: u16,
 }
 
 impl Host {

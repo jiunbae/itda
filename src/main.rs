@@ -12,6 +12,11 @@ mod cu_e2e;
 mod h264_mac;
 #[cfg(target_os = "macos")]
 mod host_mac;
+mod hp_upgrade;
+/// Itda's high-performance sharing port on a Mac.
+pub const fn host_mac_port() -> u16 {
+    5910
+}
 #[cfg(all(test, target_os = "macos"))]
 mod h264_e2e;
 mod demand;
@@ -100,6 +105,10 @@ fn main() {
     }
     log::init(if cfg!(debug_assertions) && std::env::var_os("ITDA_NATIVE_VIEWER_TEST").is_some() { "monitor-test" } else { "" });
     std::panic::set_hook(Box::new(|p| crate::log!("PANIC: {p}\n{}", std::backtrace::Backtrace::force_capture())));
+    #[cfg(target_os = "macos")]
+    if host_mac::enabled() {
+        host_mac::start_background();
+    }
     #[cfg(target_os = "macos")]
     home::run(None);
     #[cfg(not(target_os = "macos"))]

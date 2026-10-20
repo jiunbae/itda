@@ -36,6 +36,8 @@ pub struct Config {
     /// A Mac's ⌘ (Super) acts as Ctrl here, so ⌘C/⌘V copy and paste.
     pub cmd_as_ctrl: bool,
     pub view_only: bool,
+    /// Listen on this machine only (reached through an SSH tunnel), not the network.
+    pub local_only: bool,
 }
 
 struct Running {
@@ -79,7 +81,7 @@ pub fn kick_all() {
 
 pub fn start(cfg: Config) -> io::Result<()> {
     stop();
-    let l = TcpListener::bind(("0.0.0.0", cfg.port)).map_err(|e| io::Error::new(e.kind(), format!("포트 {}을(를) 열 수 없습니다: {e}", cfg.port)))?;
+    let l = TcpListener::bind((if cfg.local_only { "127.0.0.1" } else { "0.0.0.0" }, cfg.port)).map_err(|e| io::Error::new(e.kind(), format!("포트 {}을(를) 열 수 없습니다: {e}", cfg.port)))?;
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
     let cfg = Arc::new(cfg);
@@ -105,7 +107,7 @@ pub fn start(cfg: Config) -> io::Result<()> {
             }
         }
     });
-    let mdns = crate::mdns::register("_rfb._tcp", port, platform::MDNS_TXT);
+    let mdns = if cfg.local_only { None } else { crate::mdns::register("_rfb._tcp", port, platform::MDNS_TXT) };
     crate::log!("sharing this {} on port {port} (bonjour {})", platform::KIND, mdns.is_some());
     *RUNNING.lock().unwrap() = Some(Running { port, cfg, stop, thread, mdns });
     Ok(())

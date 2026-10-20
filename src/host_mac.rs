@@ -1,7 +1,9 @@
 //! Itda's high-performance sharing on a Mac: what macOS provides to the VNC server in
 //! server.rs. Apple's own Screen Sharing only offers ZRLE/Zlib to other clients (~8 fps at
 //! 1080p); this serves the same screen with hardware H.264 (RFB encoding 50) to viewers that
-//! ask for it, on its own port so it never takes over Apple's 5900.
+//! ask for it, on its own port so it never takes over Apple's 5900. It listens on this Mac
+//! only: viewers come through an SSH tunnel (the same SSH that set it up), so the stream is
+//! encrypted and the macOS firewall never asks about a new incoming port.
 //!
 //! - capture: ScreenCaptureKit, the main display at its size in points, up to 60 fps, the
 //!   cursor drawn in (needs Screen Recording permission);
@@ -34,7 +36,7 @@ use std::time::{Duration, Instant};
 pub(crate) const KIND: &str = "Mac";
 pub(crate) const MDNS_TXT: &[(&str, &str)] = &[("itda", "1"), ("os", "mac"), ("hp", "1")];
 /// Default port: next to Apple's 5900, which stays Apple's.
-pub const PORT: u16 = 5910;
+pub const PORT: u16 = crate::host_mac_port();
 pub(crate) const MOD_HOLD_MAX: Duration = Duration::from_secs(15);
 pub(crate) const MOD_QUIET: Duration = Duration::from_secs(4);
 
@@ -500,13 +502,58 @@ pub fn password() -> String {
     p
 }
 
+/// Itda's high-performance sharing is on for this Mac (a marker in Itda's data folder, set
+/// here or by another Itda over SSH), so the app serves it whenever it runs, including
+/// after macOS relaunches it for a newly granted Screen Recording permission.
+pub fn enabled() -> bool {
+    crate::store::dir().join("hp-sharing").exists()
+}
+
+pub fn set_enabled(on: bool) {
+    let path = crate::store::dir().join("hp-sharing");
+    let _ = if on { std::fs::write(&path, b"1") } else { std::fs::remove_file(&path) };
+}
+
+/// Where the background server reports its permissions, for an Itda setting it up over SSH:
+/// `screen=0|1 access=0|1 port=N`.
+fn write_status(screen: bool, access: bool) {
+    let _ = std::fs::write(crate::store::dir().join("hp-status"), format!("screen={} access={} port={PORT}\n", screen as u8, access as u8));
+}
+
+/// Start serving in the background of the running app (when `enabled`).
+pub fn start_background() {
+    std::thread::spawn(|| {
+        let (screen, access) = request_permissions();
+        crate::log!("hp sharing: screen recording {screen}, accessibility {access}");
+        write_status(screen, access);
+        // Keep the status current while the person grants what's missing.
+        std::thread::spawn(move || {
+            let mut last = (screen, access);
+            while last != (true, true) {
+                std::thread::sleep(Duration::from_secs(2));
+                let now = permissions();
+                if now != last {
+                    write_status(now.0, now.1);
+                    last = now;
+                }
+            }
+        });
+        // Consent: it listens on this Mac only, so every viewer has already signed in to this
+        // Mac's account over SSH and knows the 0600 password; no extra "allow?" dialog.
+        let cfg = crate::server::Config { port: PORT, password: password(), ask: false, trust_near: false, cmd_as_ctrl: false, view_only: false, local_only: true };
+        if let Err(e) = crate::server::start(cfg) {
+            crate::log!("hp sharing: {e}");
+        }
+    });
+}
+
 /// `itda --hp-server [port]`: serve this Mac until killed (asks for missing permissions).
 pub fn serve_forever(port: u16) -> ! {
     // Tests: no permission prompts and no "allow?" dialog (and loopback only, by trust).
     let quiet = std::env::var_os("ITDA_HP_TEST").is_some();
     let (screen, access) = if quiet { permissions() } else { request_permissions() };
     crate::log!("hp server: screen recording {screen}, accessibility {access}");
-    let cfg = crate::server::Config { port, password: password(), ask: !quiet, trust_near: false, cmd_as_ctrl: false, view_only: quiet };
+    let cfg = crate::server::Config { port, password: password(), ask: !quiet, trust_near: false, cmd_as_ctrl: false, view_only: quiet, local_only: true };
     if let Err(e) = crate::server::start(cfg) {
         crate::log!("hp server: {e}");
         eprintln!("{e}");
