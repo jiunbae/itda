@@ -32,6 +32,15 @@ fn pending_marker() -> PathBuf {
 pub(super) fn pending() -> bool {
     pending_marker().exists()
 }
+/// Mid-setup relaunch: the permission still to do, so the guide carries on by itself.
+pub(super) fn next_missing() -> Option<&'static str> {
+    if !pending() { return None; }
+    match crate::host_mac::permissions() {
+        (false, _) => Some("screen"),
+        (true, false) => Some("access"),
+        _ => None,
+    }
+}
 
 fn app_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
@@ -219,19 +228,7 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
                 }
             }
             "permission_restart" => {
-                let app = app_path().ok_or("응용 프로그램 폴더의 Itda 앱을 실행해 주세요")?;
-                std::process::Command::new("/bin/sh")
-                    .arg("-c")
-                    .arg(RESTART_HELPER)
-                    .arg("itda-permission-restart")
-                    .arg(std::process::id().to_string())
-                    .arg(app)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn()
-                    .map_err(|e| e.to_string())?;
-                super::quit();
+                restart_app()?;
                 return Ok(());
             }
             "show" => {
@@ -295,6 +292,24 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
         reply(v);
     }
 }
+/// Quit, then open this same app again on the helper (it reports the result there).
+fn restart_app() -> Result<(), String> {
+    let app = app_path().ok_or("응용 프로그램 폴더의 Itda 앱을 실행해 주세요")?;
+    std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(RESTART_HELPER)
+        .arg("itda-permission-restart")
+        .arg(std::process::id().to_string())
+        .arg(app)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    super::quit();
+    Ok(())
+}
+
 fn request(permission: &str) -> Result<(), String> {
     if matches!(permission, "screen" | "access") {
         let _ = std::fs::write(pending_marker(), permission);
@@ -327,7 +342,11 @@ pub(super) fn event(id: WindowId, event: &WindowEvent<'_>) -> bool {
         return false;
     }
     match event {
-        WindowEvent::CloseRequested => shutdown(),
+        // Closing the helper is the same choice as its "나중에" / "완료" buttons.
+        WindowEvent::CloseRequested => {
+            let _ = std::fs::remove_file(pending_marker());
+            shutdown()
+        }
         WindowEvent::Focused(true) => status(),
         _ => {}
     }
@@ -569,13 +588,42 @@ fn guide_granted(permission: &str) -> (bool, bool) {
     }
 }
 
+/// After one permission is on: open the other one's list right away; with both on, relaunch
+/// once if Screen Recording still needs it, else bring the helper back to say it is done.
+fn advance(permission: &str, target: &EventLoopWindowTarget<Wake>) {
+    let other = if permission == "screen" { "access" } else { "screen" };
+    if !guide_granted(other).0 {
+        let next = request(other).and_then(|()| start_guide(other, target));
+        if let Err(e) = next {
+            guide_reply(json!({"type":"guide","state":e,"error":true}));
+            close_guide();
+        }
+        return;
+    }
+    if !crate::host_mac::permissions().0 {
+        guide_reply(json!({"type":"guide","done":"모두 허용됐어요. 적용하려고 Itda를 다시 여는 중…"}));
+        GUIDE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Err(e) = restart_app() {
+            guide_reply(json!({"type":"guide","state":e,"error":true}));
+        }
+        return;
+    }
+    close_guide();
+    let _ = open(target);
+    status();
+}
+
 fn guide_tick(seq: u64, target: &EventLoopWindowTarget<Wake>) {
     if GUIDE_SEQ.load(std::sync::atomic::Ordering::SeqCst) != seq { return; }
     let now = std::time::Instant::now();
     let Some((permission, started, checked, done)) = GUIDE.with(|g| g.borrow().as_ref().map(|g| (g.permission.clone(), g.started, g.checked, g.done))) else { return };
-    if done.is_some_and(|d| now.duration_since(d).as_millis() > 1400) || (done.is_none() && now.duration_since(started).as_secs() > 180) {
+    if done.is_none() && now.duration_since(started).as_secs() > 180 {
         close_guide();
         status();
+        return;
+    }
+    if done.is_some_and(|d| now.duration_since(d).as_millis() > 1400) {
+        advance(&permission, target);
         return;
     }
     // Place (or hide) next to the Settings window.

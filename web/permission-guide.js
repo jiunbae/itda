@@ -10,7 +10,7 @@
  let drag;
  window.itda={recv(m){
   if(m.type!=='guide')return;
-  if(m.permission){const t=TEXT[m.permission]||TEXT.screen;$('step').textContent=m.step||'';$('title').textContent=t.title;$('lead').textContent=t.lead;}
+  if(m.permission){$('done').hidden=true;const t=TEXT[m.permission]||TEXT.screen;$('step').textContent=m.step||'';$('title').textContent=t.title;$('lead').textContent=t.lead;}
   if(m.side){const a=$('arrow');a.textContent=m.side==='left'?'←':'→';a.classList.toggle('right',m.side!=='left');}
   if(m.app_path!==undefined)$('path').textContent=m.app_path||'';
   if(m.state!==undefined){const s=$('state');s.textContent=m.state||'';s.classList.toggle('error',!!m.error);}
