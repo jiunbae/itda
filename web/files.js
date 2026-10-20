@@ -365,14 +365,14 @@
     const folders = recentFolders().filter(x => !S.query || `${x.path} ${label(hostById(x.id))}`.toLowerCase().includes(S.query.toLowerCase()));
     const devices = networkData(S.query).devices;
     const status = (h) => S.online[h.id] === true ? '<i class="files-dot on" title="응답함"></i>' : S.online[h.id] === false ? '<i class="files-dot" title="응답 없음"></i>' : "";
-    const tile = (h) => `<button class="files-home-device" data-device="${esc(h.id)}" title="${esc(label(h))} 파일 열기"><span class="files-home-os">${osIcon(h)}</span><span class="files-home-name">${status(h)}${esc(label(h))}</span><small>${esc(deviceState(h) === "저장된 기기" ? h.host : deviceState(h))}</small></button>`;
+    const tile = (h) => `<button class="files-home-device" data-device="${esc(h.id)}" title="${esc(label(h))} 파일 열기"><span class="files-home-os">${osIcon(h)}</span><span class="files-home-name">${status(h)}<span>${esc(label(h))}</span></span><small>${esc(deviceState(h) === "저장된 기기" ? h.host : deviceState(h))}</small></button>`;
     const row = (f, i) => {
       const name = f.path.split(/[\\/]/).filter(Boolean).pop() || "/";
       return `<button class="files-home-recent" data-recent="${i}" title="${esc(f.path)}">${icon(true)}<strong>${esc(name)}</strong><span>${esc(label(hostById(f.id)))}</span><small>${esc(f.path)}</small></button>`;
     };
     return `<div class="files-home files-start">
       <section><h3>기기</h3><div class="files-home-devices">${devices.map(tile).join("")}<button class="files-home-device add" data-action="add-device"><span class="files-home-os">${I("E710")}</span><span class="files-home-name">위치 추가</span><small>Mac · Windows · Linux</small></button></div></section>
-      <section><h3>최근 폴더</h3>${folders.length ? `<div class="files-home-recents">${folders.map(row).join("")}</div>` : `<p class="files-home-empty">아직 연 폴더가 없습니다. 위에서 기기를 고르면 저장된 계정으로 파일을 엽니다.</p>`}</section>
+      <section><h3>최근 폴더</h3>${folders.length ? `<div class="files-home-recents">${folders.map(row).join("")}</div>` : `<p class="files-home-empty">${S.query ? "검색어와 일치하는 최근 폴더가 없습니다." : "아직 연 폴더가 없습니다. 위에서 기기를 고르면 저장된 계정으로 파일을 엽니다."}</p>`}</section>
     </div>`;
   }
   function renderNetwork() {
