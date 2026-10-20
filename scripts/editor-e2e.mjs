@@ -29,7 +29,11 @@ try {
   await page.evaluate(([a, b]) => { itda.recv({ type: "state", hosts: [a, b], settings: { onboarded: true, theme: "light", defaults: {} } }); openEdit(a); }, [mac, pc]);
   // Chips: Enter and comma add, existing spelling wins, × removes.
   // openModal focuses the first field 30 ms later; let that happen before typing elsewhere.
-  const settled = () => page.waitForFunction(() => document.activeElement && document.activeElement.closest(".dialog"));
+  // (The browser's own autofocus comes first, openModal's timer after it: wait out both.)
+  const settled = async () => {
+    await page.waitForFunction(() => document.activeElement && document.activeElement.closest(".dialog"));
+    await page.waitForTimeout(150);
+  };
   await settled();
   const chips = () => page.locator("#group-chips [data-chip]").evaluateAll((e) => e.map((x) => x.dataset.chip));
   await page.locator("#f-group").fill("회사");
