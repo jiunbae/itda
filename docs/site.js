@@ -16,6 +16,7 @@
     document.querySelectorAll('[data-' + l + '-title]').forEach(function (el) { el.title = el.getAttribute('data-' + l + '-title'); });
     document.querySelectorAll('[data-' + l + '-alt]').forEach(function (el) { el.alt = el.getAttribute('data-' + l + '-alt'); });
     document.querySelectorAll('[data-' + l + '-label]').forEach(function (el) { el.setAttribute('aria-label', el.getAttribute('data-' + l + '-label')); });
+    document.querySelectorAll('[data-' + l + '-content]').forEach(function (el) { el.setAttribute('content', el.getAttribute('data-' + l + '-content')); });
     var t = document.querySelector('meta[name="title-' + l + '"]');
     if (t) document.title = t.content;
     document.querySelectorAll('.lang button').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.set === l)); });
