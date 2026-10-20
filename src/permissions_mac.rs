@@ -24,6 +24,15 @@ thread_local! {
 }
 const RESTART_HELPER: &str = "n=0; while kill -0 \"$1\" 2>/dev/null; do n=$((n+1)); [ \"$n\" -lt 150 ] || exit 1; sleep 0.1; done; /usr/bin/open -a \"$2\" itda://permissions";
 
+/// Set when a permission is opened, cleared once both are granted: a relaunch in between
+/// (macOS's "Quit & Reopen") brings the helper back to finish or to say it is done.
+fn pending_marker() -> PathBuf {
+    crate::store::dir().join("permission-setup-pending")
+}
+pub(super) fn pending() -> bool {
+    pending_marker().exists()
+}
+
 fn app_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let app = exe.parent()?.parent()?.parent()?;
@@ -51,6 +60,9 @@ fn reply(v: Value) {
 }
 fn status() {
     let v = state();
+    if v["screen"] == true && v["access"] == true {
+        let _ = std::fs::remove_file(pending_marker());
+    }
     PANE.with(|p| {
         if let Some(p) = p.borrow().as_ref() {
             // Never above System Settings while the guide beside it is up.
@@ -266,6 +278,8 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
                 return Ok(());
             }
             "permission_close" => {
+                // "나중에" / "완료": a later relaunch should not reopen it by itself.
+                let _ = std::fs::remove_file(pending_marker());
                 shutdown();
                 return Ok(());
             }
@@ -283,6 +297,7 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
 }
 fn request(permission: &str) -> Result<(), String> {
     if matches!(permission, "screen" | "access") {
+        let _ = std::fs::write(pending_marker(), permission);
         REQUESTED.with(|r| *r.borrow_mut() = Some(permission.into()));
         REQUEST_SEQ.with(|r| r.set(r.get().wrapping_add(1)));
     }

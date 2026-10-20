@@ -758,7 +758,8 @@ pub fn run(quick: Option<String>) {
     apply_theme(dark);
     crate::log!("window up");
     super::started();
-    if crate::host_mac::enabled() && crate::host_mac::permissions() != (true,true) { permission_helper(None); }
+    // Missing permissions: guide them. Back from "Quit & Reopen" mid-setup: say it is done.
+    if (crate::host_mac::enabled() && crate::host_mac::permissions() != (true,true)) || permission_guide::pending() { permission_helper(None); }
     #[cfg(debug_assertions)]
     if let Ok(url) = std::env::var("ITDA_NATIVE_VIEWER_TEST") {
         if url.parse::<http::Uri>().ok().is_some_and(|u| u.scheme_str()==Some("http") && u.host()==Some("127.0.0.1")) {
