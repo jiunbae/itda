@@ -17,6 +17,12 @@ use tao::{
 };
 use wry::{http, WebViewBuilder, WebViewExtMacOS};
 thread_local! { static PANE: RefCell<Option<Pane>> = const {RefCell::new(None)}; static REQUESTED: RefCell<Option<String>> = const {RefCell::new(None)}; static REQUEST_SEQ: Cell<u64> = const {Cell::new(0)}; }
+thread_local! {
+    static FRESH: RefCell<Option<Value>> = const { RefCell::new(None) };
+    static CHECKING: Cell<bool> = const { Cell::new(false) };
+    static CHECKED: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
+}
+const RESTART_HELPER: &str = "n=0; while kill -0 \"$1\" 2>/dev/null; do n=$((n+1)); [ \"$n\" -lt 150 ] || exit 1; sleep 0.1; done; /usr/bin/open -a \"$2\" itda://permissions";
 
 fn app_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
@@ -25,7 +31,14 @@ fn app_path() -> Option<PathBuf> {
 }
 fn state() -> Value {
     let (screen, access) = crate::host_mac::permissions();
-    json!({"type":"permissions","screen":screen,"access":access,"app_path":app_path(),"enabled":crate::host_mac::enabled(),"requested":REQUESTED.with(|r|r.borrow().clone()),"requested_seq":REQUEST_SEQ.with(Cell::get)})
+    let mut v = json!({"type":"permissions","screen":screen,"access":access,"app_path":app_path(),"version":crate::home::VERSION,"enabled":crate::host_mac::enabled(),"requested":REQUESTED.with(|r|r.borrow().clone()),"requested_seq":REQUEST_SEQ.with(Cell::get)});
+    FRESH.with(|fresh| {
+        if let Some(fresh) = fresh.borrow().as_ref() {
+            v["configured_screen"] = fresh["screen"].clone();
+            v["configured_access"] = fresh["access"].clone();
+        }
+    });
+    v
 }
 fn reply(v: Value) {
     PANE.with(|p| {
@@ -45,6 +58,61 @@ fn status() {
         }
     });
     reply(v);
+    refresh();
+}
+
+// A running process can retain a negative permission answer after the setting
+// changes. Check the same installed executable without requesting either grant.
+// Limit this to one child at a time and at most once per ten seconds.
+fn refresh() {
+    if CHECKING.with(Cell::get)
+        || CHECKED.with(|at| at.get().is_some_and(|at| at.elapsed().as_secs() < 10))
+    {
+        return;
+    }
+    CHECKING.with(|v| v.set(true));
+    CHECKED.with(|v| v.set(Some(std::time::Instant::now())));
+    std::thread::spawn(|| {
+        let result = fresh_permissions();
+        if let Some(proxy) = super::PROXY.get() {
+            let _ = proxy.lock().unwrap().send_event(Wake::Permissions(
+                json!({"cmd":"fresh_permissions","value":result}),
+            ));
+        }
+    });
+}
+
+fn fresh_permissions() -> Option<Value> {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(std::env::current_exe().ok()?)
+        .arg("--permission-status")
+        .env_remove("SSH_ASKPASS_REQUIRE")
+        .env_remove("ITDA_ASKPASS_SECRET")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(exit)) if exit.success() => break,
+            Ok(Some(_)) => return None,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) if std::time::Instant::now() >= until => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    }
+    let v: Value = serde_json::from_slice(&child.wait_with_output().ok()?.stdout).ok()?;
+    (v["screen"].is_boolean() && v["access"].is_boolean()).then_some(v)
 }
 pub(super) fn show(permission: Option<&str>) {
     if let Some(proxy) = super::PROXY.get() {
@@ -93,7 +161,7 @@ fn open(target: &EventLoopWindowTarget<Wake>) -> Result<(), String> {
                 if let Err(error)=result {let mut v=state();v["error"]=json!(error);reply(v);}
                 return;
             }
-            if matches!(v["cmd"].as_str(),Some("permission_status"|"permission_request"|"permission_reveal"|"permission_copy"|"permission_close")) {
+            if matches!(v["cmd"].as_str(),Some("permission_status"|"permission_request"|"permission_reveal"|"permission_copy"|"permission_close"|"permission_restart")) {
                 if let Some(proxy)=super::PROXY.get(){let _=proxy.lock().unwrap().send_event(Wake::Permissions(v));}
             }
         })
@@ -107,6 +175,31 @@ fn open(target: &EventLoopWindowTarget<Wake>) -> Result<(), String> {
 pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
     let result = (|| -> Result<(), String> {
         match v["cmd"].as_str().unwrap_or("") {
+            "fresh_permissions" => {
+                CHECKING.with(|v| v.set(false));
+                FRESH.with(|fresh| {
+                    *fresh.borrow_mut() = (!v["value"].is_null()).then(|| v["value"].clone())
+                });
+                if !PANE.with(|p| p.borrow().is_some()) {
+                    return Ok(());
+                }
+            }
+            "permission_restart" => {
+                let app = app_path().ok_or("응용 프로그램 폴더의 Itda 앱을 실행해 주세요")?;
+                std::process::Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(RESTART_HELPER)
+                    .arg("itda-permission-restart")
+                    .arg(std::process::id().to_string())
+                    .arg(app)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .map_err(|e| e.to_string())?;
+                super::quit();
+                return Ok(());
+            }
             "show" => {
                 open(target)?;
                 if let Some(permission) = v["permission"].as_str() {
@@ -114,6 +207,12 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
                 }
             }
             "permission_request" => request(v["permission"].as_str().unwrap_or(""))?,
+            "permission_status" => {
+                // Manual checks may be frequent; the ordinary poll remains bounded.
+                if v["refresh"] == true {
+                    CHECKED.with(|v| v.set(None));
+                }
+            }
             "permission_reveal" => {
                 let app = app_path().ok_or("응용 프로그램 폴더의 Itda 앱을 실행해 주세요")?;
                 std::process::Command::new("/usr/bin/open")
@@ -192,4 +291,54 @@ pub(super) fn shutdown() {
     REQUESTED.with(|r| *r.borrow_mut() = None);
     let pane = PANE.with(|p| p.borrow_mut().take());
     drop(pane);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn restart_waits_then_opens_the_same_app_and_guide() {
+        use std::{
+            fs,
+            process::{Command, Stdio},
+            time::{Duration, Instant},
+        };
+        let root =
+            std::env::temp_dir().join(format!("itda-permission-restart-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let stub = root.join("open-stub.sh");
+        let output = root.join("args");
+        fs::write(
+            &stub,
+            "printf '%s\\n' \"$@\" > \"$ITDA_RESTART_TEST_OUT\"\n",
+        )
+        .unwrap();
+        let app = root.join("App with spaces/Itda.app");
+        let mut old = Command::new("/bin/sleep")
+            .arg("0.3")
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let script = RESTART_HELPER.replace("/usr/bin/open", "/bin/sh \"$ITDA_RESTART_TEST_STUB\"");
+        let before = Instant::now();
+        let mut helper = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .arg("itda-permission-restart")
+            .arg(old.id().to_string())
+            .arg(&app)
+            .env("ITDA_RESTART_TEST_STUB", &stub)
+            .env("ITDA_RESTART_TEST_OUT", &output)
+            .spawn()
+            .unwrap();
+        assert!(!output.exists());
+        assert!(old.wait().unwrap().success());
+        assert!(helper.wait().unwrap().success());
+        assert!(before.elapsed() >= Duration::from_millis(250));
+        assert_eq!(
+            fs::read_to_string(&output).unwrap(),
+            format!("-a\n{}\nitda://permissions\n", app.display())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 }
