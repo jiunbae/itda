@@ -163,7 +163,7 @@ fn asset(path: &str) -> Option<(Cow<'static, [u8]>, &'static str)> {
     let path = if path.is_empty() { "index.html" } else { path };
     if let Some(id) = path.strip_prefix("thumb/").and_then(|p| p.strip_suffix(".png")) {
         if id.chars().all(|c| c.is_ascii_hexdigit()) {
-            return std::fs::read(store::thumb_path(id)).ok().map(|b| (Cow::Owned(b), "image/png"));
+            return std::fs::read(store::shown_thumb_path(id)).ok().map(|b| (Cow::Owned(b), "image/png"));
         }
         return None;
     }
@@ -210,7 +210,7 @@ fn send(v: Value) {
 }
 
 fn thumb_version(id: &str) -> u64 {
-    std::fs::metadata(store::thumb_path(id))
+    std::fs::metadata(store::shown_thumb_path(id))
         .and_then(|m| m.modified())
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -223,7 +223,12 @@ fn host_json(h: &Host, accounts: &[store::Account]) -> Value {
     v["has_pw"] = json!(login.pass.is_some());
     v["login_user"] = json!(login.user);
     v["thumb"] = json!(thumb_version(&h.id));
+    v["custom_thumb"] = json!(store::custom_thumb_path(&h.id).is_file());
     v
+}
+
+fn send_thumb(id: &str) {
+    send(json!({"type": "thumb", "id": id, "v": thumb_version(id), "custom": store::custom_thumb_path(id).is_file()}));
 }
 
 fn sessions_json(m: &Home) -> Value {
@@ -415,7 +420,7 @@ fn on_ipc(v: Value) {
             store::set_password(&format!("files-{id}"), None);
             home(|m| m.hosts.retain(|x| x.id != id));
             store::set_password(&id, None);
-            let _ = std::fs::remove_file(store::thumb_path(&id));
+            store::remove_thumbs(&id);
             save_hosts();
             send_hosts();
         }
@@ -522,6 +527,21 @@ fn on_ipc(v: Value) {
             send(json!({"type": "account_saved", "id": aid, "grouped": members.len()}));
         }
         "pick_file" => plat::pick_file(s(&v, "field")),
+        // A picture of the user's choosing for the card (a PNG data URL), or none: back to
+        // the last screen.
+        "set_thumb" => {
+            if !home(|m| m.hosts.iter().any(|h| h.id == id)) {
+                return;
+            }
+            let ok = match v["png"].as_str() {
+                Some(url) => thumb_png(&id, url).is_some_and(|png| std::fs::write(store::custom_thumb_path(&id), png).is_ok()),
+                None => std::fs::remove_file(store::custom_thumb_path(&id)).is_ok(),
+            };
+            if !ok {
+                send(json!({"type": "toast", "text": "미리보기 이미지를 저장하지 못했습니다", "err": true}));
+            }
+            send_thumb(&id);
+        }
         "forget_password" => {
             store::set_password(&id, None);
             send_hosts();
@@ -761,16 +781,18 @@ fn host_label(id: &str) -> String {
     home(|m| m.hosts.iter().find(|x| x.id == id).map(|h| h.label().to_string())).unwrap_or_default()
 }
 
+/// A PNG data URL from the page, for a card thumbnail of the connection `id`.
+fn thumb_png(id: &str, url: &str) -> Option<Vec<u8>> {
+    let b64 = url.strip_prefix("data:image/png;base64,")?;
+    if !id.chars().all(|c| c.is_ascii_hexdigit()) || b64.len() > 4 << 20 {
+        return None;
+    }
+    crate::ws::base64_decode(b64).filter(|png| png.starts_with(b"\x89PNG"))
+}
+
 /// Keep a session's last picture (a PNG data URL from the window) as the card thumbnail.
 fn save_thumb(id: &str, url: &str) -> bool {
-    let Some(b64) = url.strip_prefix("data:image/png;base64,") else { return false };
-    if !home(|m| m.settings.thumbnails) || !id.chars().all(|c| c.is_ascii_hexdigit()) || b64.len() > 4 << 20 {
-        return false;
-    }
-    match crate::ws::base64_decode(b64) {
-        Some(png) if png.starts_with(b"\x89PNG") => std::fs::write(store::thumb_path(id), png).is_ok(),
-        _ => false,
-    }
+    home(|m| m.settings.thumbnails) && thumb_png(id, url).is_some_and(|png| std::fs::write(store::thumb_path(id), png).is_ok())
 }
 
 fn on_session(id: &str, v: Value) {
@@ -854,7 +876,7 @@ fn on_session(id: &str, v: Value) {
         }
         "thumb" => {
             if v.get("png").is_none() || save_thumb(id, &s(&v, "png")) {
-                send(json!({"type": "thumb", "id": id, "v": thumb_version(id)}));
+                send_thumb(id);
             }
         }
         "closed" => {}
