@@ -85,6 +85,7 @@ try {
     local,
     data,
     path.join(remote, "Folder"),
+    path.join(remote, "Folder", "Empty"),
     path.join(local, "Downloads"),
     path.join(local, "Documents"),
     path.join(local, "Desktop"),
@@ -225,6 +226,11 @@ try {
       await page.locator('.card[data-id="files-fixture"]').waitFor();
       assert((await page.locator('.card [data-act="files"]').count()) === 0, "Screen cards still have file buttons");
       await page.locator('.nav-item[data-page="files"]').click();
+      const entryWindow = await page.evaluate(() => fileWindowRequests.splice(0));
+      assert(entryWindow.length === 1 && entryWindow[0].id === '__network', "Main Files entry did not request a dedicated window");
+      assert(await page.evaluate(() => S.page === 'all') && await page.locator('.card[data-id="files-fixture"]').isVisible(), "Opening Files replaced the main screen");
+      // Exercise the legacy folder-home renderer in this harness; native window creation is verified separately.
+      await page.evaluate(() => { S.page = 'files'; render(); });
       await page.locator(".files-home.files-start").waitFor();
       assert(await page.locator('.files-home [data-device-card]').count() === 0, "File home still shows machine cards");
       assert((await page.locator('.files-home section h3').allInnerTexts()).includes("최근 폴더"), "File home is not folder oriented");
@@ -488,10 +494,31 @@ try {
       if (process.env.SCREENSHOT_DIR) await page.screenshot({path: path.join(process.env.SCREENSHOT_DIR, 'files-gallery.png')});
       await page.keyboard.press('Meta+3');
       await page.locator('.files-columns').waitFor();
+      await page.route('**/ipc*', async route => {
+        const body = route.request().postDataJSON();
+        if (body.cmd === 'files' && body.op === 'list') await delay(350);
+        await route.continue();
+      });
       await page.locator('.files-column:last-child [data-index]').filter({ hasText: 'Folder' }).click();
+      assert(await page.locator('.files-columns').count() === 1 && await page.locator('.files-column').count() >= 2, "Columns vanished while loading a folder");
+      assert((await page.locator('.files-column:last-child').innerText()).includes('읽는 중'), "Loading feedback escaped its column");
+
       await page.locator('.files-column:last-child [data-index]').filter({ hasText: 'nested.txt' }).waitFor();
+      await page.locator('.files-column:last-child [data-index]').filter({hasText:'Empty'}).click();
+      await page.locator('.files-column:last-child .files-note').filter({hasText:'표시할 항목이 없습니다'}).waitFor();
+      assert(await page.locator('.files-columns').count() === 1 && await page.locator('.files-column').count() >= 3, "Empty folder replaced the column browser");
+      await page.locator('.files-column-entry').filter({hasText:'Folder'}).last().click();
+      await page.locator('.files-column:last-child [data-index]').filter({hasText:'nested.txt'}).waitFor();
+      const favoriteSpacing = await page.evaluate(() => {
+        const group = document.querySelector('.files-current-places'), previous = group.previousElementSibling;
+        const heading = group.querySelector('h4').getBoundingClientRect(), row = group.querySelector('[data-bookmark]').getBoundingClientRect();
+        return {gap:heading.top - previous.getBoundingClientRect().bottom, inset:heading.left-row.left, height:row.height, padding:getComputedStyle(group.querySelector('[data-bookmark]')).paddingTop};
+      });
+      assert(favoriteSpacing.gap >= 16 && Math.abs(favoriteSpacing.inset - 10) <= 1 && favoriteSpacing.height === 28 && favoriteSpacing.padding === '0px', "Favorites sidebar spacing regressed");
+      await page.unroute('**/ipc*');
+      console.log('Column loading/empty/sibling navigation preserves columns; favorites spacing passed');
       if (process.env.SCREENSHOT_DIR) await page.screenshot({path: path.join(process.env.SCREENSHOT_DIR, 'files-columns.png')});
-      await page.keyboard.press('Meta+[');
+      await action('up');
       await page.locator('.files-column:last-child [data-index]').filter({ hasText: '한글 문서.txt' }).waitFor();
       await page.keyboard.press('Meta+2');
       assert(await page.locator('[data-pane="remote"] .files-list').evaluate(el => getComputedStyle(el).userSelect === 'none'), "File rows permit text selection");

@@ -80,18 +80,19 @@
     tabBar();
   }
   function columnHTML(side) {
-    const p = panes[side], paths = [p.path];
+    const p = panes[side], target = p.pendingPath || p.path, paths = [target];
     while (paths.length < 8 && paths[0] !== p.home && parent(paths[0]) !== paths[0]) paths.unshift(parent(paths[0]));
     return `<div class="files-columns">${paths.map((path, n) => {
-      const current = path === p.path, k = cacheKey(side, path);
-      const entries = current ? visible(side) : folderCache.get(k);
-      if (!entries && ![...columnRequests.values()].some(r => r.key === k)) {
+      const loading = p.busy && path === target;
+      const current = path === p.path && !p.busy, k = cacheKey(side, path);
+      const entries = loading ? null : current ? visible(side) : folderCache.get(k);
+      if (!loading && !entries && ![...columnRequests.values()].some(r => r.key === k)) {
         const seq = ++sequence;
         columnRequests.set(seq, { key: k, side });
         call("list", { side, path, seq });
       }
       const next = paths[n + 1];
-      return `<section class="files-column" data-column="${esc(path)}"><header>${esc(path.split(/[\\/]/).filter(Boolean).pop() || "/")}</header>${entries ? entries.filter(e => hidden || !e.name.startsWith(".")).map((e, i) => current ? `<div class="files-item ${p.selected.has(e.name) ? "selected" : ""}" data-index="${i}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</div>` : `<button class="files-column-entry ${child(path,e.name) === next ? "on" : ""}" data-column-folder="${esc(e.dir ? child(path,e.name) : path)}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</button>`).join("") : '<p class="files-note">읽는 중…</p>'}</section>`;
+      return `<section class="files-column" data-column="${esc(path)}"><header>${esc(path.split(/[\\/]/).filter(Boolean).pop() || "/")}</header>${entries?.length ? entries.filter(e => hidden || !e.name.startsWith(".")).map((e, i) => current ? `<div class="files-item ${p.selected.has(e.name) ? "selected" : ""}" data-index="${i}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</div>` : `<button class="files-column-entry ${child(path,e.name) === next ? "on" : ""}" data-column-folder="${esc(e.dir ? child(path,e.name) : path)}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</button>`).join("") : `<p class="files-note">${loading || !entries ? "폴더를 읽는 중…" : "표시할 항목이 없습니다"}</p>`}</section>`;
     }).join("")}</div>`;
   }
   function previewTarget() {
@@ -840,7 +841,7 @@
         const list = visible(side);
         const cell = (e, i) =>
           `data-index="${i}" class="files-item ${p.selected.has(e.name) ? "selected" : ""}" aria-selected="${p.selected.has(e.name)}"`;
-        return `<section class="files-pane ${side === active ? "active" : ""}" data-pane="${side}">${MAC ? "" : pathHTML(side)}<div class="files-list" tabindex="0" role="grid" aria-label="${side === "local" ? "내 기기" : "원격 기기"} 파일">${p.busy ? '<div class="files-note">폴더를 읽는 중…</div>' : !list.length ? '<div class="files-note">표시할 항목이 없습니다</div>' : view === "columns" ? columnHTML(side) : ["grid", "gallery"].includes(view) ? `<div class="files-grid ${view === "gallery" ? "files-gallery-strip" : ""}">${list.map((e, i) => `<div ${cell(e, i)}>${icon(e.dir, e.name)}<span>${esc(e.name)}${e.link ? " ↗" : ""}</span></div>`).join("")}</div>` : `<table><colgroup>${[47, 25, 12, 16].map((w, i) => `<col style="width:${columnWidths[side]?.[i] ? `${columnWidths[side][i]}px` : `${w}%`}">`).join("")}</colgroup><thead><tr>${[["name", "이름"], ["modified", "수정한 날짜"], ["size", "크기"], ["kind", "종류"]].map(([key, title], i) => `<th data-sort="${key}">${title}${p.sort === key ? (p.desc ? " ▾" : " ▴") : ""}${i < 3 ? `<span data-resize-column="${i}" role="separator" aria-label="${title} 열 너비" aria-orientation="vertical" tabindex="0"></span>` : ""}</th>`).join("")}</tr></thead><tbody>${rows(side)}</tbody></table>`}</div></section>`;
+        return `<section class="files-pane ${side === active ? "active" : ""}" data-pane="${side}">${MAC ? "" : pathHTML(side)}<div class="files-list" tabindex="0" role="grid" aria-label="${side === "local" ? "내 기기" : "원격 기기"} 파일">${view === "columns" ? columnHTML(side) : p.busy ? '<div class="files-note">폴더를 읽는 중…</div>' : !list.length ? '<div class="files-note">표시할 항목이 없습니다</div>' : ["grid", "gallery"].includes(view) ? `<div class="files-grid ${view === "gallery" ? "files-gallery-strip" : ""}">${list.map((e, i) => `<div ${cell(e, i)}>${icon(e.dir, e.name)}<span>${esc(e.name)}${e.link ? " ↗" : ""}</span></div>`).join("")}</div>` : `<table><colgroup>${[47, 25, 12, 16].map((w, i) => `<col style="width:${columnWidths[side]?.[i] ? `${columnWidths[side][i]}px` : `${w}%`}">`).join("")}</colgroup><thead><tr>${[["name", "이름"], ["modified", "수정한 날짜"], ["size", "크기"], ["kind", "종류"]].map(([key, title], i) => `<th data-sort="${key}">${title}${p.sort === key ? (p.desc ? " ▾" : " ▴") : ""}${i < 3 ? `<span data-resize-column="${i}" role="separator" aria-label="${title} 열 너비" aria-orientation="vertical" tabindex="0"></span>` : ""}</th>`).join("")}</tr></thead><tbody>${rows(side)}</tbody></table>`}</div></section>`;
       })
       .join("");
     layer
@@ -898,6 +899,7 @@
     folderCache.set(cacheKey(side, p.path), p.entries);
     p.seq = ++sequence;
     p.busy = true;
+    p.pendingPath = path;
     if (history) {
       p.start = 0;
       p.scroll = 0;
@@ -1064,7 +1066,7 @@
     if (e.target.closest(".files-preview-content img")) { zoomBy(1, e.clientX, e.clientY, zoom === null ? 1 : 0); return; }
     const item = e.target.closest("[data-index]");
     const pane = e.target.closest("[data-pane]");
-    if (!item || !pane) return;
+    if (!item || !pane || panes[pane.dataset.pane].busy) return;
     const entry = visible(pane.dataset.pane)[Number(item.dataset.index)];
     if (entry.dir)
       nav(pane.dataset.pane, child(panes[pane.dataset.pane].path, entry.name));
@@ -1761,6 +1763,7 @@
         const p = panes[m.side];
         if (m.seq !== p.seq) return true;
         p.busy = false;
+        p.pendingPath = null;
         renderPanes();
       }
       fail(m.error || "파일 작업에 실패했습니다");
@@ -1792,6 +1795,7 @@
         Math.max(0, (p.entries.length - 1) * rowHeight),
       );
       p.busy = false;
+      p.pendingPath = null;
       renderPanes();
       return true;
     }

@@ -1,6 +1,6 @@
 [package]
 name = "itda"
-version = "0.9.5"
+version = "0.9.6"
 edition = "2021"
 description = "Itda (잇다): lightweight remote desktop for Windows. Opens Macs (Screen Sharing), Windows PCs and VNC servers, and shows them in any browser."
 license = "MIT"
