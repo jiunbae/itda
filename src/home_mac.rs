@@ -68,7 +68,8 @@ thread_local! {
     static HOME_PANE: RefCell<Option<Pane>> = const { RefCell::new(None) };
     /// Connection windows by connection id.
     static FILE_PANES: RefCell<HashMap<String, Pane>> = RefCell::new(HashMap::new());
-    static FILE_REQUESTS: RefCell<Vec<(String, bool)>> = const { RefCell::new(Vec::new()) };
+    static FILE_HOSTS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    static FILE_REQUESTS: RefCell<Vec<(String, bool, bool)>> = const { RefCell::new(Vec::new()) };
     static MONITOR_PANES: RefCell<HashMap<(String, u32), Pane>> = RefCell::new(HashMap::new());
     static MONITOR_AUTO_FULL: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     static HIDDEN_OWNERS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
@@ -134,12 +135,22 @@ fn with_home(f: impl FnOnce(&Pane)) {
 }
 
 pub fn file_windows() -> Vec<String> {
-    FILE_PANES.with(|p| p.borrow().keys().cloned().collect())
+    FILE_HOSTS.with(|p| p.borrow().values().cloned().collect())
 }
 
 pub fn files_window(id: &str, close: bool) {
-    FILE_REQUESTS.with(|q| q.borrow_mut().push((id.into(), close)));
+    FILE_REQUESTS.with(|q| q.borrow_mut().push((id.into(), close, false)));
     wake();
+}
+
+pub fn files_new_window(id: &str) {
+    FILE_REQUESTS.with(|q| q.borrow_mut().push((id.into(), false, true)));
+    wake();
+}
+pub fn files_window_context(window: &str, id: &str) {
+    let title = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| format!("{} — 파일", h.label())).unwrap_or_else(|| "네트워크 — Itda".into()));
+    let exists = FILE_PANES.with(|p| { if let Some(p) = p.borrow().get(window) { p.window.set_title(&title); true } else { false } });
+    if exists { FILE_HOSTS.with(|p| {p.borrow_mut().insert(window.into(), id.into());}); super::send_hosts(); }
 }
 
 pub fn eval(js: &str) {
@@ -415,16 +426,19 @@ fn offer_clipboard(id: &str) {
 fn flush(target: &EventLoopWindowTarget<Wake>) {
     let file_requests = FILE_REQUESTS.with(|q| std::mem::take(&mut *q.borrow_mut()));
     let files_changed = !file_requests.is_empty();
-    for (id, close) in file_requests {
-        if close { FILE_PANES.with(|p| { p.borrow_mut().remove(&id); }); continue; }
+    for (id, close, new) in file_requests {
+        if close { FILE_PANES.with(|p| { p.borrow_mut().remove(&id); }); FILE_HOSTS.with(|p| {p.borrow_mut().remove(&id);}); continue; }
+        let existing = if new { None } else { FILE_HOSTS.with(|p| p.borrow().iter().find(|(_,host)| *host == &id).map(|(key,_)| key.clone())) };
         let exists = FILE_PANES.with(|p| {
-            if let Some(p) = p.borrow().get(&id) { p.window.set_minimized(false); p.window.set_focus(); true } else { false }
+            let panes = p.borrow();
+            if let Some(p) = existing.as_ref().and_then(|key| panes.get(key)) { p.window.set_minimized(false); p.window.set_focus(); true } else { false }
         });
         if exists { continue; }
+        let window_id = crate::store::new_id();
         let title = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| format!("{} — 파일", h.label())).unwrap_or_else(|| "네트워크 — Itda".into()));
         match WindowBuilder::new().with_title(title).with_titlebar_transparent(true).with_title_hidden(true).with_fullsize_content_view(true).with_inner_size(LogicalSize::new(1000.0, 700.0)).with_min_inner_size(LogicalSize::new(720.0, 480.0)).build(target) {
-            Ok(window) => match home_view(&window, home(|m| is_dark(&m.settings)), Some(&id)) {
-                Ok(view) => { crate::log!("file window up: {id}"); FILE_PANES.with(|p| { p.borrow_mut().insert(id, Pane { window, view }); }); }
+            Ok(window) => match home_view(&window, home(|m| is_dark(&m.settings)), Some(&id), Some(&window_id)) {
+                Ok(view) => { crate::log!("file window up: {id}"); FILE_HOSTS.with(|p| {p.borrow_mut().insert(window_id.clone(), id);}); FILE_PANES.with(|p| { p.borrow_mut().insert(window_id, Pane { window, view }); }); }
                 Err(e) => crate::log!("files webview: {e}"),
             },
             Err(e) => crate::log!("files window: {e}"),
@@ -468,6 +482,7 @@ fn flush(target: &EventLoopWindowTarget<Wake>) {
 
 const MENU_SETTINGS: &str = "settings";
 const MENU_NEW: &str = "new";
+const MENU_FILE_NEW: &str = "file-window-new";
 const MENU_HELP: &str = "help";
 const MENU_HOME: &str = "home";
 
@@ -499,8 +514,9 @@ fn menu() -> Menu {
             &PredefinedMenuItem::quit(None),
         ],
     );
-    let new = item(MENU_NEW, "새 연결", Some((Modifiers::SUPER, Code::KeyN)));
-    let file = Submenu::with_items("파일", true, &[&new, &PredefinedMenuItem::separator(), &PredefinedMenuItem::close_window(None)]);
+    let new = item(MENU_NEW, "새 연결", None);
+    let new_file = item(MENU_FILE_NEW, "새 파일 창", Some((Modifiers::SUPER, Code::KeyN)));
+    let file = Submenu::with_items("파일", true, &[&new_file, &new, &PredefinedMenuItem::separator(), &PredefinedMenuItem::close_window(None)]);
     let edit = Submenu::with_items(
         "편집",
         true,
@@ -538,6 +554,13 @@ fn on_menu(id: &muda::MenuId) {
         if !handled{native_files::system_edit(action);}
         return;
     }
+    if id.as_ref() == MENU_FILE_NEW {
+        let script = "window.ItdaFiles?.nativeNew()";
+        let handled = FILE_PANES.with(|p| { let p=p.borrow(); if let Some(p)=p.values().find(|p|p.window.is_focused()) {let _=p.view.evaluate_script(script);true}else{false} })
+            || HOME_PANE.with(|p| p.borrow().as_ref().is_some_and(|p| {if p.window.is_focused(){let _=p.view.evaluate_script(script);true}else{false}}));
+        if !handled { files_new_window(crate::files::locations::NETWORK); }
+        return;
+    }
     show_home();
     match id.as_ref() {
         MENU_SETTINGS => send(json!({"type": "go", "page": "settings"})),
@@ -547,10 +570,10 @@ fn on_menu(id: &muda::MenuId) {
     }
 }
 
-fn home_view(window: &Window, dark: bool, file: Option<&str>) -> wry::Result<WebView> {
+fn home_view(window: &Window, dark: bool, file: Option<&str>, file_window: Option<&str>) -> wry::Result<WebView> {
     let bg = if dark { (32, 32, 32, 255) } else { (243, 243, 243, 255) };
-    let drop_id = file.map(str::to_string);
-    let drag_id = file.map(str::to_string);
+    let drop_id = file_window.map(str::to_string);
+    let drag_id = file_window.map(str::to_string);
     WebViewBuilder::new()
         .with_initialization_script("window.itdaNativeFiles=true;")
         .with_accept_first_mouse(file.is_some())
@@ -563,7 +586,7 @@ fn home_view(window: &Window, dark: bool, file: Option<&str>) -> wry::Result<Web
         })
         .with_drag_drop_handler(move |event| {
             if let wry::DragDropEvent::Drop { paths, position } = event {
-                super::post(Event::Page(json!({"type":"files_drop","id":drop_id,"paths":paths,"position":[position.0,position.1]})));
+                super::post(Event::Page(json!({"type":"files_drop","window":drop_id,"paths":paths,"position":[position.0,position.1]})));
             }
             true
         })
@@ -609,7 +632,10 @@ fn home_view(window: &Window, dark: bool, file: Option<&str>) -> wry::Result<Web
             false
         })
         .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
-        .with_url(format!("itda://localhost/index.html{}", file.map(|id| format!("?files={}", id.bytes().map(|b| format!("%{b:02X}")).collect::<String>())).unwrap_or_default()))
+        .with_url(format!("itda://localhost/index.html{}", file.map(|id| {
+            let host = id.bytes().map(|b| format!("%{b:02X}")).collect::<String>();
+            format!("?files={host}&fileWindow={}", file_window.unwrap_or(""))
+        }).unwrap_or_default()))
         .with_background_color(bg)
         .with_devtools(std::env::var_os("ITDA_DEVTOOLS").is_some())
         .with_back_forward_navigation_gestures(false)
@@ -654,7 +680,7 @@ pub fn run(quick: Option<String>) {
         .with_min_inner_size(LogicalSize::new(720.0, 500.0))
         .build(&event_loop)
         .expect("window");
-    let view = match home_view(&window, dark, None) {
+    let view = match home_view(&window, dark, None, None) {
         Ok(v) => v,
         Err(e) => {
             crate::log!("webview: {e}");
@@ -707,7 +733,7 @@ pub fn run(quick: Option<String>) {
                     // The home only hides: the web viewer and connections keep running.
                     WindowEvent::CloseRequested if is_home => with_home(|p| p.window.set_visible(false)),
                     WindowEvent::CloseRequested => {
-                        if let Some(id) = fid { FILE_REQUESTS.with(|q| q.borrow_mut().push((id, true))); }
+                        if let Some(id) = fid { FILE_REQUESTS.with(|q| q.borrow_mut().push((id, true, false))); }
                         if let Some((owner,screen))=mid { close_monitor(&owner,screen); }
                         if let Some(id) = sid {
                             if MONITOR_PANES.with(|p| p.borrow().keys().any(|(owner,_)| owner==&id)) {

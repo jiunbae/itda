@@ -210,6 +210,14 @@ try {
     await page.goto(
       `http://127.0.0.1:${appPort}/${platform.startsWith("Mac") ? "" : "?files=files-fixture"}`,
     );
+    await page.evaluate(() => {
+      const original = send;
+      window.fileWindowRequests = [];
+      window.send = (cmd, data) => {
+        if (cmd === "files_window") { fileWindowRequests.push(data); return; }
+        original(cmd, data);
+      };
+    });
     if (platform.startsWith("Mac")) {
       await page.locator('.card[data-id="files-fixture"]').waitFor();
       assert((await page.locator('.card [data-act="files"]').count()) === 0, "Screen cards still have file buttons");
@@ -246,9 +254,10 @@ try {
         "Network search did not filter devices",
       );
       await page.locator('#search').press('Enter');
-      await page.locator('.files-setup h2').filter({ hasText: 'Travel Mac' }).waitFor();
+      await page.locator('.files-device-link.on[data-device="files-second"]').waitFor();
       assert(await page.evaluate(() => Object.keys(S.sessions).length === 0), "File search started a screen session");
-      await page.locator('[data-close]').click();
+      assert(await page.evaluate(() => fileWindowRequests.length === 0), "File search opened another native window");
+      await page.keyboard.press('Meta+w');
       await page.locator('#search').fill('unlisted-device');
       await page.locator('#search').press('Enter');
       await page.locator('.toast').filter({ hasText: '일치하는 기기가 없습니다' }).waitFor();
@@ -267,11 +276,36 @@ try {
         .locator('.files-home [data-device="files-fixture"]')
         .first()
         .click();
-      await page.locator("[data-connect]").click();
     }
     await page.locator(".files-layer").waitFor({ timeout: 30000 });
     if (platform.startsWith("Mac")) {
       await page.locator('[data-pane="remote"] th[data-sort="kind"]').waitFor();
+      const footer = await page.evaluate(() => {
+        const path = document.querySelector('.files-status .files-path').getBoundingClientRect();
+        const count = document.querySelector('.files-status [data-status]').getBoundingClientRect();
+        return Math.abs(path.y + path.height / 2 - count.y - count.height / 2);
+      });
+      assert(footer < 2 && await page.locator('.files-pane .files-path').count() === 0, "Path and count are not in one footer row");
+      await page.locator('.files-device-link[data-device="files-second"]').click();
+      await page.locator('.files-device-link.on[data-device="files-second"]').waitFor();
+      await page.locator('.files-device-link[data-device="files-fixture"]').click();
+      await page.locator('.files-device-link.on[data-device="files-fixture"]').waitFor();
+      assert(await page.evaluate(() => fileWindowRequests.length === 0), "Ordinary device selection opened a window");
+      await page.locator('.files-device-link[data-device="files-second"]').click({modifiers:['Meta']});
+      await page.locator('.files-device-link[data-device="files-fixture"]').click({modifiers:['Meta']});
+      await page.keyboard.press('Meta+n');
+      const windows = await page.evaluate(() => fileWindowRequests.splice(0));
+      assert(windows.length === 3 && windows.every(w => w.new === true) && windows[0].id === 'files-second' && windows[2].id === 'files-fixture', "Explicit window modifiers/shortcut lost their target");
+      assert(await page.locator('.files-device-link.on[data-device="files-fixture"]').count() === 1, "New-window command navigated the source window");
+      // Native incoming drops are bound to the window identity, even after host changes.
+      await page.evaluate(() => { window.ITDA_FILE_WINDOW='drop-window'; ItdaFiles.message({type:'files_drop',window:'other-window',paths:['/tmp/never-import.txt']}); });
+      assert(await page.locator('.files-prompt').count() === 0, "Drop from another window was imported");
+      await page.evaluate(file => ItdaFiles.message({type:'files_drop',window:'drop-window',paths:[file]}), path.join(local,'drag.txt'));
+      await page.locator('.files-prompt').filter({hasText:'파일 복사'}).waitFor();
+      await page.locator('[data-choice="cancel"]').click();
+      await page.evaluate(() => { delete window.ITDA_FILE_WINDOW; });
+      console.log('Device navigation stays in place; explicit Cmd+click/Cmd+N, window-bound drops and single footer row passed');
+
       // Real native clipboard IPC. The headless test reads back file URLs through
       // the product's native Paste path; no textual path/HTML clipboard substitute.
       await page.evaluate(()=>{const recv=itda.recv;window.nativeEvents=[];itda.recv=m=>{nativeEvents.push(m);recv(m);};window.itdaNativeFiles=true;});

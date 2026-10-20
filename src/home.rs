@@ -312,7 +312,15 @@ fn on_ipc(v: Value) {
         #[cfg(windows)]
         "files_native_drag" => plat::native_file_drag(v),
         "files_window" => {
-            if id == crate::files::locations::NETWORK || home(|m| m.hosts.iter().any(|h| h.id == id)) { plat::files_window(&id, v["close"] == true); }
+            if v["close"] == true { plat::files_window(v["window"].as_str().unwrap_or(&id), true); }
+            else if id == crate::files::locations::NETWORK || home(|m| m.hosts.iter().any(|h| h.id == id)) {
+                if v["new"] == true { plat::files_new_window(&id); } else { plat::files_window(&id, false); }
+            }
+        }
+        "files_window_context" => {
+            if id == crate::files::locations::NETWORK || home(|m| m.hosts.iter().any(|h| h.id == id)) {
+                plat::files_window_context(s(&v, "window").as_str(), &id);
+            }
         }
         "file_locations" => {
             let hosts = home(|m| m.hosts.clone());
