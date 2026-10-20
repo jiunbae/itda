@@ -7,7 +7,7 @@
   const inNewWindow = (e) => MAC ? e.metaKey : e.ctrlKey;
   if (window.ITDA_FILE_HOST) document.body.classList.add("file-window");
   const pageToken = crypto.randomUUID();
-  let pendingFolder = null;
+  let pendingFolder = null, tabSwitch = null;
   let host,
     layer,
     setup,
@@ -28,7 +28,8 @@
   const fileTabs = [], folderCache = new Map(), columnRequests = new Map();
   const viewModes = ["grid", "list", "columns", "gallery"];
   const viewLabels = ["아이콘 보기", "목록 보기", "열 보기", "갤러리 보기"];
-  const cacheKey = (side, path) => `${side}:${path}`;
+  // Remote folders belong to a device; tabs in one window may browse different devices.
+  const cacheKey = (side, path) => `${side === "remote" ? host?.id : ""}:${side}:${path}`;
   function recentFolders() {
     try { return JSON.parse(localStorage.getItem("itda.file.folders") || "[]").filter(x => hostById(x.id)).slice(0, 16); } catch { return []; }
   }
@@ -39,13 +40,14 @@
   }
   function saveTab() {
     const t = fileTabs.find(t => t.id === currentTab);
-    if (t) Object.assign(t, { panes: structuredClone(panes), active, view, search, hidden, split });
+    if (t) Object.assign(t, { host, panes: structuredClone(panes), active, view, search, hidden, split });
   }
   function tabBar() {
     if (!layer) return;
     const bar = layer.querySelector(".files-tabs");
     bar.hidden = MAC && host.id === NETWORK;
-    bar.innerHTML = fileTabs.map(t => `<div role="tab" aria-selected="${t.id === currentTab}" class="files-tab ${t.id === currentTab ? "on" : ""}" data-tab="${t.id}" tabindex="${t.id === currentTab ? 0 : -1}"><span>${icon(true)}${esc((t.id === currentTab ? panes[active].path : t.panes[t.active].path).split(/[\\/]/).filter(Boolean).pop() || "/")}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`).join("") + `<button class="files-tab-add" ${host.id === NETWORK ? "disabled" : ""} data-action="new-tab" aria-label="새 탭" title="새 탭 (${MAC ? "⌘T" : "Ctrl+T"})"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>`;
+    const mixed = fileTabs.some(t => t.host && t.host.id !== host.id);
+    bar.innerHTML = fileTabs.map(t => { const on = t.id === currentTab, h = on ? host : t.host || host, folder = (on ? panes[active].path : t.panes[t.active].path).split(/[\\/]/).filter(Boolean).pop() || "/", name = mixed && h.id !== NETWORK ? `${label(h)} · ${folder}` : folder; return `<div role="tab" aria-selected="${on}" class="files-tab ${on ? "on" : ""}" data-tab="${t.id}" tabindex="${on ? 0 : -1}" title="${esc(h.id === NETWORK ? folder : `${label(h)} · ${folder}`)}"><span>${icon(true)}${esc(name)}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`; }).join("") + `<button class="files-tab-add" ${host.id === NETWORK ? "disabled" : ""} data-action="new-tab" aria-label="새 탭" title="새 탭 (${MAC ? "⌘T" : "Ctrl+T"})"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>`;
     if (!MAC && networkMode) { const t = bar.querySelector(".files-tab.on > span"); if (t) t.innerHTML = `${I(explorerHome ? "E80F" : "E774")}${explorerHome ? "홈" : "네트워크"}`; }
   }
   function newTab(path, side) {
@@ -53,7 +55,7 @@
     networkMode = false;
     saveTab();
     currentTab = ++tabId;
-    fileTabs.push({ id: currentTab });
+    fileTabs.push({ id: currentTab, host });
     for (const side of ["local", "remote"]) panes[side] = structuredClone(panes[side]);
     if (side) active = side;
     saveTab();
@@ -68,6 +70,7 @@
     currentTab = id;
     Object.assign(panes, structuredClone(t.panes));
     ({ active, view, search, hidden, split } = t);
+    if (t.host && t.host.id !== host.id) useHost(t.host);
     layer.querySelector("[data-search]").value = search;
     previewKey = "";
     renderPanes();
@@ -78,8 +81,25 @@
     if (fileTabs.length === 1) return act("close");
     const index = fileTabs.findIndex(t => t.id === id);
     if (id === currentTab) switchTab(fileTabs[index === 0 ? 1 : index - 1].id);
-    fileTabs.splice(index, 1);
+    const [closed] = fileTabs.splice(index, 1);
+    releaseUnused(closed.host);
     tabBar();
+  }
+  // Point the window at the device of the current tab; the other tabs keep their connections.
+  function useHost(h) {
+    host = h;
+    previewKey = "";
+    document.title = `${label(h)} — 파일`;
+    if (fileWindow()) send("files_window_context", { window: fileWindow(), id: h.id, page: pageToken });
+    if (!layer) return;
+    const name = layer.querySelector(".files-title > b");
+    if (name) name.textContent = label(h);
+    const place = layer.querySelector('.files-current-places [data-side="remote"]');
+    if (place) place.innerHTML = `${I("E7F4")}${esc(label(h))}`;
+  }
+  function releaseUnused(h) {
+    if (!h || h.id === NETWORK || h.id === host?.id || fileTabs.some(t => t.host?.id === h.id)) return;
+    send("files", { id: h.id, window: pageToken, op: "release" });
   }
   function columnHTML(side) {
     const p = panes[side], target = (p.busy && p.pendingPath) || p.path, paths = [target];
@@ -352,7 +372,9 @@
     layer.classList.toggle("is-network", networkMode);
     const sidebar = layer.querySelector("[data-network-sidebar]");
     const devices = sortedDevices();
-    const deviceLinks = devices.map((h) => `<button class="btn subtle files-device-link ${!networkMode && active === "remote" && host.id === h.id ? "on" : ""}" data-device="${esc(h.id)}" data-id="file-device-${esc(h.id)}" ${MAC && host.id === h.id ? 'data-side="remote"' : ""} title="${esc(label(h))} · ${esc(deviceState(h))} · ${MOD}+클릭: 새 창">${I("E7F4")}<span>${esc(label(h))}</span>${(S.fileWindows || []).includes(h.id) ? '<span class="files-device-dot" aria-label="파일 창 열림"></span>' : ""}</button>`).join("");
+    // While another device is connecting in this tab, the tab still shows its previous device.
+    const shown = tabSwitch?.previous || host;
+    const deviceLinks = devices.map((h) => `<button class="btn subtle files-device-link ${!networkMode && active === "remote" && shown.id === h.id ? "on" : ""}" data-device="${esc(h.id)}" data-id="file-device-${esc(h.id)}" ${MAC && shown.id === h.id ? 'data-side="remote"' : ""} title="${esc(label(h))} · ${esc(deviceState(h))} · ${MOD}+클릭: 새 창">${I("E7F4")}<span>${esc(label(h))}</span>${(S.fileWindows || []).includes(h.id) ? '<span class="files-device-dot" aria-label="파일 창 열림"></span>' : ""}</button>`).join("");
     morph(sidebar, MAC ? `<h4>위치</h4><button class="btn subtle ${networkMode ? "on" : ""}" data-action="network">${I("E774")}모든 기기</button>${deviceLinks}` : `<button class="btn subtle ${networkMode && explorerHome ? "on" : ""}" data-action="explorer-home">${I("E80F")}홈</button><div class="files-explorer-pins"><button class="btn subtle" data-bookmark="Desktop" ${!panes.local.home ? "disabled" : ""}>${I("E7F8")}바탕 화면</button><button class="btn subtle" data-bookmark="Downloads" ${!panes.local.home ? "disabled" : ""}>${I("E8B7")}다운로드</button><button class="btn subtle" data-bookmark="Documents" ${!panes.local.home ? "disabled" : ""}>${I("E8A5")}문서</button></div><button class="btn subtle ${!networkMode && active === "local" ? "on" : ""}" data-side="local" ${!panes.local.home ? "disabled" : ""}>${I("E7F8")}내 PC</button><button class="btn subtle ${networkMode && !explorerHome ? "on" : ""}" data-action="network">${I("E774")}네트워크</button><div class="files-explorer-devices">${deviceLinks}</div><button class="btn subtle" data-bookmark=".itda-trash" ${!panes[active].home ? "disabled" : ""}>${I("E74D")}보관함</button>`);
     if (!MAC) { const nav = layer.querySelector(".files-sidebar"), selected = sidebar.querySelector(".on"); const key = `${networkMode}:${explorerHome}:${active}:${host.id}`; if(nav.dataset.selectedLocation !== key) { nav.dataset.selectedLocation = key; selected?.scrollIntoView({block:"nearest"}); } }
     layer.querySelector(".files-locations").hidden = true;
@@ -547,15 +569,19 @@
   function open(h, reuse = false) {
     if (!h) return;
     if (host && host.id !== h.id) {
-      if (host.id !== NETWORK) call("release");
-      layer?.remove();
-      layer = null;
-      clipboard = null;
-      undo.length = 0;
+      if (layer && host.id !== NETWORK) {
+        // Open the device in this tab; other tabs keep their own devices and connections.
+        saveTab();
+        tabSwitch ||= { previous: host };
+      } else {
+        if (host.id !== NETWORK) call("release");
+        layer?.remove();
+        layer = null;
+        clipboard = null;
+        undo.length = 0;
+      }
     }
-    host = h;
-    if (fileWindow()) send("files_window_context", {window:fileWindow(),id:h.id,page:pageToken});
-    document.title = `${label(h)} — 파일`;
+    useHost(h);
     showSetup();
     const f = h.files || {};
     if (reuse && (h.login_user || f.user || f.account || f.share || f.method === "smb")) {
@@ -597,6 +623,18 @@
     setup.querySelector('[name="account"]').onchange = refresh;
     refresh();
     setup.querySelector("[data-close]").onclick = () => {
+      if (tabSwitch) {
+        // Cancelled: the tab returns to its previous device untouched.
+        if (setupStarted && !fileTabs.some(t => t.host?.id === host.id)) call("disconnect");
+        const { previous } = tabSwitch;
+        tabSwitch = null;
+        setup.remove();
+        setup = null;
+        useHost(previous);
+        renderPanes();
+        layer.querySelector(".files-list")?.focus({ preventScroll: true });
+        return;
+      }
       if (setupStarted) {
         call("disconnect");
         layer?.remove();
@@ -672,6 +710,27 @@
     pendingFolder = path;
     open(h, true);
   }
+  // A connection opened inside an existing window fills the current tab only.
+  function adopt(data) {
+    const previous = tabSwitch?.previous;
+    tabSwitch = null;
+    setup?.remove();
+    setup = null;
+    networkMode = false;
+    Object.assign(panes.remote, emptyPane(), { path: data.path, home: data.path, entries: data.entries, history: [data.path], at: 0 });
+    if (!panes.local.home) Object.assign(panes.local, emptyPane(), { path: data.local_path, home: data.local_path, entries: data.local_entries, history: [data.local_path], at: 0 });
+    active = "remote";
+    search = "";
+    layer.querySelector("[data-search]").value = "";
+    previewKey = "";
+    saveTab();
+    releaseUnused(previous);
+    rememberFolder();
+    renderPanes();
+    renderJobs();
+    if (pendingFolder) { const path = pendingFolder; pendingFolder = null; nav("remote", path); }
+    layer.querySelector(".files-list")?.focus({ preventScroll: true });
+  }
   function workspace(data) {
     if (fileWindow()) send("files_window_context", { window: fileWindow(), id: host.id, page: pageToken });
     networkMode = host.id === NETWORK;
@@ -699,7 +758,7 @@
     undo.length = 0;
     layer = document.createElement("div");
     previewKey = ""; queuedPreview = null; ++previewSeq;
-    fileTabs.length = 0; currentTab = ++tabId; fileTabs.push({ id: currentTab }); folderCache.clear(); columnRequests.clear();
+    fileTabs.length = 0; currentTab = ++tabId; fileTabs.push({ id: currentTab, host }); folderCache.clear(); columnRequests.clear();
     layer.className = `files-layer ${MAC ? "mac" : "windows"}`;
     const tool = (action, glyph, text) =>
       `<button class="btn sm" data-action="${action}" title="${text}" aria-label="${text}">${I(glyph)}</button>`;
@@ -1268,8 +1327,8 @@
       case "settings":
         return showSetup();
       case "undo": {
-        const u = undo.pop();
-        if (u) call("undo", u);
+        const i = undo.findLastIndex(u => u.host === host.id);
+        if (i >= 0) call("undo", undo.splice(i, 1)[0].op);
         return;
       }
       case "refresh":
@@ -1303,6 +1362,7 @@
       case "cut":
         if (p.selected.size) {
           clipboard = {
+            host: host.id,
             side: active,
             path: p.path,
             names: [...p.selected],
@@ -1319,6 +1379,11 @@
       case "paste":
         if(nativeFiles()) { send("files_native_paste",{id:host.id,window:pageToken,stamp:clipboard?.nativeStamp,side:active,path:p.path}); return; }
       case "paste-internal":
+        // A remote selection belongs to its device; local files can be pasted into any tab.
+        if (clipboard?.side === "remote" && clipboard.host !== host.id) {
+          fail("다른 기기에서 복사한 파일은 이 기기에 바로 붙여넣을 수 없습니다. 먼저 이 컴퓨터로 복사하세요");
+          return;
+        }
         if (clipboard)
           await transfer(
             clipboard.side,
@@ -1447,7 +1512,7 @@
     const menu = document.createElement("div"), p = panes[active];
     menu.className = `files-menu${MAC ? "" : " windows-menu"}`;
     menu.setAttribute("role", "menu");
-    const disabled = (a) => ["open", "copy", "cut", "trash"].includes(a) ? !p.selected.size : a === "rename" ? p.selected.size !== 1 : a === "paste" ? !clipboard && !nativeFiles() : a === "undo" ? !undo.length : false;
+    const disabled = (a) => ["open", "copy", "cut", "trash"].includes(a) ? !p.selected.size : a === "rename" ? p.selected.size !== 1 : a === "paste" ? !clipboard && !nativeFiles() : a === "undo" ? !undo.some(u => u.host === host.id) : false;
     menu.innerHTML = items.map((item) => item ? `<button class="btn subtle" role="${item.length > 2 ? item[3] || "menuitemradio" : "menuitem"}" ${item.length > 2 ? `aria-checked="${item[2]}"` : ""} data-action="${item[0]}" ${disabled(item[0]) ? "disabled" : ""}>${esc(item[1])}</button>` : "<hr>").join("");
     menu.onclick = (e) => {
       const button = e.target.closest("button:not(:disabled)");
@@ -1854,7 +1919,11 @@
       return true;
     }
     if (m.type !== "files_result") return false;
-    if (!host || m.id !== host.id) return true;
+    if (!host || m.id !== host.id) {
+      // The tab moved to another device; let its folder be asked for again on return.
+      if (m.op === "list") columnRequests.delete(m.seq);
+      return true;
+    }
     if (m.op === "preview") {
       previewInFlight = false;
       previewResult(m);
@@ -1879,7 +1948,7 @@
       return true;
     }
     if (m.op === "connect") {
-      if (setup) workspace(m.data);
+      if (setup) (layer ? adopt : workspace)(m.data);
       return true;
     }
     if (m.op === "native") {
@@ -1914,7 +1983,7 @@
         "E8B7",
       );
     if (m.data?.undo) {
-      undo.push(m.data.undo);
+      undo.push({ host: m.id, op: m.data.undo });
       if (undo.length > 50) undo.shift();
     }
     if (["mkdir", "rename", "trash", "undo"].includes(m.op) && layer)
