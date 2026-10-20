@@ -67,6 +67,12 @@ try {
   await page.locator('.kind-seg [data-kind="mac"]').click();
   await page.locator("[data-tab=conn]").click();
   assert(await page.locator(".hp-box").isVisible(), "HP block missing after switching to Mac");
+  // A late remote-guide failure remains visible after the guide panel closes.
+  await page.evaluate(() => {
+    ItdaHpSetup.close();
+    itda.recv({ type: "hp", id: "mac", helper: true, error: "원격 Mac에 Itda가 설치되어 있지 않습니다" });
+  });
+  assert(await page.getByText("Mac 권한 도우미를 열지 못했습니다 — 원격 Mac에 Itda가 설치되어 있지 않습니다", { exact: true }).isVisible(), "closed-guide error was swallowed");
   assert(!errors.length, `page errors: ${errors}`);
   console.log("PASS: group chips, Enter/IME, HP state kept on save, HP events scoped, HP block follows kind");
 } finally {

@@ -21,6 +21,9 @@ use wry::{http, WebView, WebViewBuilder, WebViewBuilderExtMacos, WebViewExtMacOS
 
 #[path = "files_mac.rs"]
 mod native_files;
+#[path = "permissions_mac.rs"]
+mod permission_guide;
+pub fn permission_helper(permission: Option<&str>) { permission_guide::show(permission); }
 pub(super) fn native_file_copy(v: Value) {native_files::copy(v);}
 pub(super) fn native_file_paste(v: Value) {native_files::paste(v);}
 pub(super) fn native_file_copy_ready(v: &mut Value) { native_files::finish_copy(v); }
@@ -33,6 +36,7 @@ pub const PLATFORM: &str = "mac";
 enum Wake {
     Drain,
     Menu(muda::MenuId),
+    Permissions(Value),
 }
 
 static PROXY: OnceLock<Mutex<EventLoopProxy<Wake>>> = OnceLock::new();
@@ -748,6 +752,7 @@ pub fn run(quick: Option<String>) {
     apply_theme(dark);
     crate::log!("window up");
     super::started();
+    if crate::host_mac::enabled() && crate::host_mac::permissions() != (true,true) { permission_helper(None); }
     #[cfg(debug_assertions)]
     if let Ok(url) = std::env::var("ITDA_NATIVE_VIEWER_TEST") {
         if url.parse::<http::Uri>().ok().is_some_and(|u| u.scheme_str()==Some("http") && u.host()==Some("127.0.0.1")) {
@@ -760,6 +765,7 @@ pub fn run(quick: Option<String>) {
         let _ = &menu;
         match event {
             TaoEvent::LoopDestroyed => {
+                permission_guide::shutdown();
                 crate::files::shutdown();
                 native_files::shutdown();
                 // Drop related views while all thread locals are still available.
@@ -771,17 +777,25 @@ pub fn run(quick: Option<String>) {
                 crate::log!("all native views released before thread-local teardown");
             },
             TaoEvent::UserEvent(Wake::Drain) => drain(),
+            TaoEvent::UserEvent(Wake::Permissions(v)) => permission_guide::handle(v,target),
             TaoEvent::UserEvent(Wake::Menu(id)) => on_menu(&id),
             // Clicking the Dock icon brings the home back.
             TaoEvent::Reopen { .. } => show_home(),
             TaoEvent::Opened { urls } => {
                 for url in urls {
+                    match url.as_str().trim_end_matches('/') {
+                        "itda://permissions" => {permission_helper(None);continue;},
+                        "itda://permissions/screen" => {permission_helper(Some("screen"));continue;},
+                        "itda://permissions/access" => {permission_helper(Some("access"));continue;},
+                        _=>{}
+                    }
                     if let Some(id) = crate::files::locations::device_from_url(url.as_str()) {
                         if id == crate::files::locations::NETWORK || home(|m| m.hosts.iter().any(|h| h.id == id)) { files_window(&id, false); }
                     }
                 }
             }
             TaoEvent::WindowEvent { window_id, event, .. } => {
+                if permission_guide::event(window_id,&event){return;}
                 let is_home = HOME_PANE.with(|h| h.borrow().as_ref().is_some_and(|p| p.window.id() == window_id));
                 let fid = FILE_PANES.with(|s| s.borrow().iter().find(|(_, p)| p.window.id() == window_id).map(|(k, _)| k.clone()));
                 let mid = MONITOR_PANES.with(|s| s.borrow().iter().find(|(_,p)| p.window.id()==window_id).map(|(k,_)| k.clone()));

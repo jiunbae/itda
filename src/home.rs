@@ -193,6 +193,11 @@ fn asset(path: &str) -> Option<(Cow<'static, [u8]>, &'static str)> {
         "icon.svg" => ICON_SVG,
         "help.js" => HELP_JS,
         "help.css" => HELP_CSS,
+        "hp-setup.css" => include_str!("../web/hp-setup.css"),
+        "hp-setup.js" => include_str!("../web/hp-setup.js"),
+        "permissions.html" => include_str!("../web/permissions.html"),
+        "permissions.css" => include_str!("../web/permissions.css"),
+        "permissions.js" => include_str!("../web/permissions.js"),
         _ => return None,
     };
     Some((Cow::Borrowed(body.as_bytes()), mime))
@@ -588,6 +593,10 @@ fn on_ipc(v: Value) {
         // "고성능 모드": set up Itda's own sharing on this Mac over SSH; the next connection
         // uses it. Progress and the outcome go to the pages as {type:"hp"}.
         "hp_upgrade" => hp_upgrade(&id),
+        "hp_status" => hp_status(&id),
+        "hp_permissions" => hp_permissions(&id,v["permission"].as_str().map(str::to_string)),
+        #[cfg(target_os = "macos")]
+        "permission_helper" => plat::permission_helper(None),
         "hp_ready" | "hp_off" => {
             let on = s(&v, "cmd") == "hp_ready";
             let port = v["port"].as_u64().unwrap_or(0) as u16;
@@ -825,7 +834,7 @@ fn hp_upgrade(id: &str) {
             Ok(r) => {
                 store::set_password(&password_key(&id), Some(&r.password));
                 post(Event::Session("__ipc".into(), json!({"cmd":"hp_ready","id":id,"port":r.port})));
-                post(Event::Page(json!({"type":"hp","id":id,"ready":true,"screen":r.screen,"access":r.access,"installed":r.installed})));
+                post(Event::Page(json!({"type":"hp","id":id,"ready":true,"screen":r.screen,"access":r.access,"installed":r.installed,"helper_error":r.helper_error})));
             }
             Err(e) => post(Event::Page(json!({"type":"hp","id":id,"error":e.to_string()}))),
         }
@@ -839,9 +848,18 @@ fn hp_status(id: &str) {
         let pass = crate::gateway::typed(&host.id).or_else(|| login.pass.clone()).unwrap_or_default();
         let r = crate::hp_upgrade::status(&crate::hp_upgrade::ssh_cfg_with(&host, &login, pass));
         post(Event::Page(match r {
-            Ok((screen, access)) => json!({"type":"hp","id":host.id,"status":true,"screen":screen,"access":access}),
+            Ok(status) => json!({"type":"hp","id":host.id,"status":true,"screen":status.screen,"access":status.access,"running":status.running}),
             Err(e) => json!({"type":"hp","id":host.id,"status":true,"error":e.to_string()}),
         }));
+    });
+}
+
+fn hp_permissions(id: &str, permission: Option<String>) {
+    let Some((host,login))=home(|m|m.hosts.iter().find(|h|h.id==id).map(|h|(h.clone(),store::resolve(h,&m.accounts)))) else{return};
+    std::thread::spawn(move||{
+        let pass=crate::gateway::typed(&host.id).or_else(||login.pass.clone()).unwrap_or_default();
+        let result=crate::hp_upgrade::show_permissions(&crate::hp_upgrade::ssh_cfg_with(&host,&login,pass),permission.as_deref());
+        post(Event::Page(json!({"type":"hp","id":host.id,"helper":true,"error":result.err().map(|e|e.to_string())})));
     });
 }
 
@@ -849,6 +867,7 @@ fn on_session(id: &str, v: Value) {
     match s(&v, "ev").as_str() {
         "hp-upgrade" => hp_upgrade(id),
         "hp-status" => hp_status(id),
+        "hp-permissions" => hp_permissions(id,v["permission"].as_str().map(str::to_string)),
         "hp-off" => on_ipc(json!({"cmd":"hp_off","id":id})),
         "stage" => {
             home(|m| {
