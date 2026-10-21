@@ -35,14 +35,14 @@ struct Endpoint {
     cfg: Option<SshCfg>,
 }
 impl Endpoint {
-    fn new(remote: bool, c: &Connection, control: &Control) -> io::Result<Self> {
+    /// A device's files over its own SFTP session, or this computer's files (`None`).
+    fn new(remote: Option<&Connection>, control: &Control) -> io::Result<Self> {
         Ok(Self {
-            sftp: if remote {
-                Some(Sftp::connect(&c.cfg, control)?)
-            } else {
-                None
+            sftp: match remote {
+                Some(c) => Some(Sftp::connect(&c.cfg, control)?),
+                None => None,
             },
-            cfg: remote.then(|| c.cfg.clone()),
+            cfg: remote.map(|c| c.cfg.clone()),
         })
     }
     /// Remove a staged copy that didn't get its name. A cancel stops this side's SFTP session
@@ -193,6 +193,9 @@ struct Context {
     moving: bool,
     /// Carry permission bits over (not from a Windows source, which reports them loosely).
     modes: bool,
+    /// Both ends are one filesystem (same device, or both this computer): a move may be a
+    /// rename. Between two devices a rename would act on the source device alone.
+    same_fs: bool,
     done: u64,
     last: Instant,
 }
@@ -240,6 +243,7 @@ impl Context {
             existing = None;
         }
         if self.moving
+            && self.same_fs
             && src.sftp.is_some() == dst.sftp.is_some()
             && existing.is_none()
             && src.rename(from, &to, false).is_ok()
@@ -438,10 +442,10 @@ pub(super) fn export_batch(files: &[super::export::File], targets: &[PathBuf], e
     emit(json!({"type":"files_job","id":file.id,"job":job,"state":"queued","kind":"export","file":file.name}));
     let result: io::Result<()>=(|| {
         let _slot=slot(&control)?;
-        let mut src=if file.remote { Endpoint::new(true,&*connection(&file.id)?,&control)? } else { Endpoint{sftp:None,cfg:None} };
+        let mut src=if file.remote { Endpoint::new(Some(&*connection(&file.id)?),&control)? } else { Endpoint{sftp:None,cfg:None} };
         let mut dst=Endpoint{sftp:None,cfg:None};
         let mut cx=Context{control:control.clone(),emit:emit.clone(),id:file.id.clone(),job:job.clone(),
-            policy:"exclusive".into(),moving:false,modes:true,done:0,last:Instant::now()-Duration::from_secs(1)};
+            policy:"exclusive".into(),moving:false,modes:true,same_fs:false,done:0,last:Instant::now()-Duration::from_secs(1)};
         for(file,target)in files.iter().zip(targets){cx.copy(&mut src,&mut dst,&file.path()?.to_string_lossy(),&target.to_string_lossy(),0)?;}
         Ok(())
     })();
@@ -453,6 +457,13 @@ pub(super) fn export_batch(files: &[super::export::File], targets: &[PathBuf], e
 pub fn start(v: Value, host: Host, emit: Emit) {
     let id = host.id.clone();
     let key = super::scoped_id(&id, &v["window"]);
+    // Another device's files (another tab, or another file window's page) as the source; the
+    // job belongs to the destination device, where it shows and can be cancelled.
+    let source_key = v["from_id"].as_str().filter(|f| !f.is_empty()).map(|f| {
+        let window = if v["from_window"].is_string() { &v["from_window"] } else { &v["window"] };
+        super::scoped_id(f, window)
+    });
+    let same_device = source_key.as_ref().is_none_or(|k| *k == key);
     let job = crate::store::new_id();
     let control = Arc::new(Control::default());
     jobs()
@@ -473,7 +484,6 @@ pub fn start(v: Value, host: Host, emit: Emit) {
     std::thread::spawn(move || {
         let result = (|| -> io::Result<()> {
             let _slot = slot(&control)?;
-            let c = connection(&key)?;
             let from_remote = v["from"] == "remote";
             let to_remote = v["to"] == "remote";
             if !(v["from"] == "remote" || v["from"] == "local")
@@ -481,14 +491,30 @@ pub fn start(v: Value, host: Host, emit: Emit) {
             {
                 return Err(error("전송 위치가 올바르지 않습니다"));
             }
+            // Only the remote ends need a device connection: this computer's own files are
+            // copied without one (a file window with no device yet).
+            let dst_c = if to_remote || (from_remote && same_device) { Some(connection(&key)?) } else { None };
+            let src_c = match (&source_key, from_remote) {
+                (_, false) => None,
+                (Some(k), true) if !same_device => Some(connection(k).map_err(|_| error("원본 기기의 파일 연결이 닫혔습니다. 그 기기의 탭이나 창을 다시 열어 주세요"))?),
+                _ => dst_c.clone(),
+            };
+            let (src_c, dst_c) = (src_c.filter(|_| from_remote), dst_c.filter(|_| to_remote));
             let mut src_path = get(&v, "source");
             let mut dst_path = get(&v, "destination");
-            if from_remote {
+            if let Some(c) = &src_c {
                 src_path = remote_path(&src_path, &c.home);
             }
-            if to_remote {
+            if let Some(c) = &dst_c {
                 dst_path = remote_path(&dst_path, &c.home);
             }
+            if src_path.is_empty() || dst_path.is_empty() {
+                return Err(error("전송할 위치를 확인하세요"));
+            }
+            let src_windows = src_c.as_ref().map_or(cfg!(windows), |c| c.windows);
+            let dst_windows = dst_c.as_ref().map_or(cfg!(windows), |c| c.windows);
+            // The one remote end rsync can reach (it runs between this computer and a device).
+            let rsync_end = src_c.as_ref().or(dst_c.as_ref()).cloned();
             let moving = v["move"] == true;
             let policy = get(&v, "policy");
             if !["skip", "keep", "replace"].contains(&policy.as_str()) {
@@ -500,8 +526,8 @@ pub fn start(v: Value, host: Host, emit: Emit) {
             if names.is_empty() || names.len() > 10_000 {
                 return Err(error("전송할 파일 수를 확인하세요"));
             }
-            let mut src = Endpoint::new(from_remote, &c, &control)?;
-            let mut dst = Endpoint::new(to_remote, &c, &control)?;
+            let mut src = Endpoint::new(src_c.as_deref(), &control)?;
+            let mut dst = Endpoint::new(dst_c.as_deref(), &control)?;
             if from_remote == to_remote {
                 src_path = if let Some(s) = &mut src.sftp {
                     s.realpath(&src_path)?
@@ -521,7 +547,8 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                 job: job.clone(),
                 policy,
                 moving,
-                modes: !(from_remote && c.windows),
+                modes: !(from_remote && src_windows),
+                same_fs: same_device || (!from_remote && !to_remote),
                 done: 0,
                 last: Instant::now() - Duration::from_secs(1),
             };
@@ -531,7 +558,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
             let mut delta = None;
             // Every name written to a Windows side is checked before anything is created, so
             // a refused name deep in a folder leaves no half-copied folder behind.
-            if if to_remote { c.windows } else { cfg!(windows) } {
+            if dst_windows {
                 for n in names {
                     let n = n.as_str().ok_or_else(|| error("잘못된 파일 이름"))?;
                     name(n)?;
@@ -562,7 +589,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                 };
                 let compare = |p: &str| {
                     let p = p.replace('\\', "/");
-                    if (from_remote && c.windows) || (!from_remote && cfg!(windows)) {
+                    if src_windows {
                         p.to_lowercase()
                     } else {
                         p
@@ -570,6 +597,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                 };
                 let (f, t) = (compare(&from), compare(&to));
                 if from_remote == to_remote
+                    && (same_device || !from_remote)
                     && (f == t || t.starts_with(&format!("{}/", f.trim_end_matches('/'))))
                 {
                     return Err(error(
@@ -596,7 +624,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                     && !entry.link
                     && (requested == "rsync" || entry.dir || entry.size >= 8 << 20);
                 let can_delta = if candidate {
-                    *delta.get_or_insert_with(|| rsync_available() && probe_rsync(&c.cfg, &control))
+                    *delta.get_or_insert_with(|| rsync_end.as_ref().is_some_and(|c| rsync_available() && probe_rsync(&c.cfg, &control)))
                 } else {
                     false
                 };
@@ -609,7 +637,8 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                     emit(
                         json!({"type":"files_job","id":id,"job":job,"state":"running","file":n,"engine":"rsync","detail":"변경된 파일과 블록을 비교하고 있습니다"}),
                     );
-                    match run_rsync(&c.cfg, &from, &to, from_remote, entry.dir, &control) {
+                    let rc = rsync_end.as_ref().ok_or_else(|| error("rsync를 사용할 수 없습니다"))?;
+                    match run_rsync(&rc.cfg, &from, &to, from_remote, entry.dir, &control) {
                         Ok(()) => cx.done += 1,
                         // Asked for rsync: say why it failed. Chosen automatically: an rsync
                         // that won't run here (version, paths) shouldn't fail the copy, so
@@ -844,10 +873,31 @@ mod tests {
             policy: "keep".into(),
             moving: false,
             modes: true,
+            same_fs: true,
             done: 0,
             last: Instant::now() - Duration::from_secs(1),
         };
         (root, Endpoint { sftp: None, cfg: None }, Endpoint { sftp: None, cfg: None }, cx)
+    }
+
+    /// Between two devices a move must be a verified copy and delete, never a rename (which
+    /// would act on the source device alone). Seen here as a new file, not the same inode.
+    #[cfg(unix)]
+    #[test]
+    fn a_move_between_devices_copies_instead_of_renaming() {
+        use std::os::unix::fs::MetadataExt;
+        for same_fs in [true, false] {
+            let (root, mut src, mut dst, mut cx) = fixture();
+            cx.moving = true;
+            cx.same_fs = same_fs;
+            let (from, to) = (root.join("from/a.txt"), root.join("to/a.txt"));
+            std::fs::write(&from, b"payload").unwrap();
+            let inode = std::fs::metadata(&from).unwrap().ino();
+            cx.copy(&mut src, &mut dst, &from.to_string_lossy(), &to.to_string_lossy(), 0).unwrap();
+            assert!(!from.exists() && std::fs::read(&to).unwrap() == b"payload");
+            assert_eq!(std::fs::metadata(&to).unwrap().ino() == inode, same_fs, "same_fs={same_fs}");
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
     #[test]
     fn copy_conflicts_folders_and_move() {

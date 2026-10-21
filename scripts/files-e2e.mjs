@@ -351,6 +351,35 @@ try {
       await action("transfers");
       assert(await page.locator('.files-job').filter({hasText:'완료'}).count() === 1, "Explicit history did not show the completed transfer");
       console.log('Transfer completion: transient deduplicated toast, collapsed footer and persistent failure passed');
+      {
+        // Device to device: a file of a second device (open in another tab) moves into the first
+        // device. Both connections are real SFTP sessions; the job belongs to the destination.
+        const src = path.join(remote, "xdev-src"), dst = path.join(remote, "xdev-dst");
+        fs.rmSync(src, { recursive: true, force: true }); fs.rmSync(dst, { recursive: true, force: true });
+        fs.mkdirSync(src); fs.mkdirSync(dst);
+        fs.writeFileSync(path.join(src, "moved 한글.txt"), "device to device");
+        await page.locator(".files-list").first().focus();
+        await page.keyboard.press(platform.startsWith("Mac") ? "Meta+t" : "Control+t");
+        await page.locator('.files-device-link[data-device="files-second"]').first().click();
+        await page.locator('.files-device-link.on[data-device="files-second"]').waitFor();
+        await page.evaluate(({ src, dst }) => send("files", { id: "files-fixture", window: ItdaFiles.windowToken, op: "transfer", from_id: "files-second", from: "remote", source: src, names: ["moved 한글.txt"], to: "remote", destination: dst, move: true, policy: "replace", engine: "sftp" }), { src, dst });
+        const until = Date.now() + 30000;
+        while (Date.now() < until && !(fs.existsSync(path.join(dst, "moved 한글.txt")) && !fs.existsSync(path.join(src, "moved 한글.txt")))) await new Promise((r) => setTimeout(r, 200));
+        assert(fs.existsSync(path.join(dst, "moved 한글.txt")) && fs.readFileSync(path.join(dst, "moved 한글.txt"), "utf8") === "device to device", "Device-to-device move did not arrive");
+        assert(!fs.existsSync(path.join(src, "moved 한글.txt")), "Device-to-device move kept the source");
+        await page.keyboard.press(platform.startsWith("Mac") ? "Meta+w" : "Control+w");
+        await page.locator('.files-device-link.on[data-device="files-fixture"]').waitFor();
+        console.log(`${platform}: device-to-device move over two SFTP connections passed`);
+        // No device at all: this computer's own files copy without any connection.
+        const la = fs.mkdtempSync(path.join(os.tmpdir(), "itda-local-a-")), lb = fs.mkdtempSync(path.join(os.tmpdir(), "itda-local-b-"));
+        fs.writeFileSync(path.join(la, "local only.txt"), "no device");
+        await page.evaluate(({ la, lb }) => send("files", { id: "__network", window: ItdaFiles.windowToken, op: "transfer", from: "local", source: la, names: ["local only.txt"], to: "local", destination: lb, move: false, policy: "keep", engine: "auto" }), { la, lb });
+        const until2 = Date.now() + 15000;
+        while (Date.now() < until2 && !fs.existsSync(path.join(lb, "local only.txt"))) await new Promise((r) => setTimeout(r, 200));
+        assert(fs.existsSync(path.join(lb, "local only.txt")) && fs.existsSync(path.join(la, "local only.txt")), "Device-less local copy failed");
+        fs.rmSync(la, { recursive: true, force: true }); fs.rmSync(lb, { recursive: true, force: true });
+        console.log(`${platform}: device-less local copy without a connection passed`);
+      }
       // Two real pages of the same host: results and disconnect must stay isolated.
       const originalPath = await page.locator('[data-path="remote"]').first().inputValue();
       const sibling = await browser.newPage({userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/145.0.0.0 Safari/537.36'});

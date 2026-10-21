@@ -412,6 +412,8 @@ fn on_ipc(v: Value) {
             }
         }
         "files_release_page" => crate::files::release_page(s(&v, "page").as_str()),
+        // Copy/Cut in one file window is what Paste uses in every other one.
+        "files_clipboard" => send(json!({"type": "files_clipboard", "clip": v["clip"]})),
         "file_locations" => {
             let hosts = home(|m| m.hosts.clone());
             let reveal = v["reveal"] != false;
@@ -424,8 +426,12 @@ fn on_ipc(v: Value) {
         }
         "files" => {
             // The device-less file window still browses this computer's own files.
+            // Transfers from it land on this computer (their source may be another window's
+            // device, named by from_id); they never write to a device through this window.
             let local_only = id == crate::files::locations::NETWORK
-                && (v["op"] == "local_home" || (v["side"] == "local" && v["op"] != "transfer"));
+                && (v["op"] == "local_home"
+                    || (v["side"] == "local" && v["op"] != "transfer")
+                    || (v["op"] == "transfer" && v["to"] == "local" && (v["from"] == "local" || v["from_id"].as_str().is_some_and(|f| !f.is_empty() && f != id))));
             let found = home(|m| m.hosts.iter().find(|h| h.id == id).cloned());
             let Some(mut host) = found.or_else(|| local_only.then(|| Host { id: id.clone(), ..Default::default() })) else { return };
             if v["op"] == "finder" {
