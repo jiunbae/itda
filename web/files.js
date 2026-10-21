@@ -4,6 +4,11 @@
   window.ITDA_FILE_HOST ||= new URLSearchParams(location.search).get("files");
   window.ITDA_FILE_WINDOW ||= new URLSearchParams(location.search).get("fileWindow");
   const fileWindow = () => window.ITDA_FILE_WINDOW || window.ITDA_FILE_HOST;
+  // Windows: the app draws this window's title bar (tabs, then minimize, maximize, close).
+  const CHROME = !!window.ITDA_WINDOW_CHROME;
+  let maximized = false;
+  const windowControl = (op) => send("file_window_control", { window: fileWindow(), op });
+  window.itdaWindowState = (m) => { maximized = !!m.maximized; tabBar(); };
   const inNewWindow = (e) => MAC ? e.metaKey : e.ctrlKey;
   if (window.ITDA_FILE_HOST) document.body.classList.add("file-window");
   const pageToken = crypto.randomUUID();
@@ -81,6 +86,11 @@
     const mixed = fileTabs.some(t => t.host && t.host.id !== host.id);
     bar.innerHTML = fileTabs.map(t => { const on = t.id === currentTab, h = on ? host : t.host || host, folder = (on ? panes[active].path : t.panes[t.active].path).split(/[\\/]/).filter(Boolean).pop() || (!MAC && (on ? panes[active].path : t.panes[t.active].path) === "" ? "내 PC" : "/"), name = mixed && h.id !== NETWORK ? `${label(h)} · ${folder}` : folder; return `<div role="tab" aria-selected="${on}" class="files-tab ${on ? "on" : ""}" data-tab="${t.id}" tabindex="${on ? 0 : -1}" title="${esc(h.id === NETWORK ? folder : `${label(h)} · ${folder}`)}"><span>${icon(true)}${esc(name)}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`; }).join("") + `<button class="files-tab-add" ${host.id === NETWORK ? "disabled" : ""} data-action="new-tab" aria-label="새 탭" title="새 탭 (${MAC ? "⌘T" : "Ctrl+T"})"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>`;
     if (!MAC && networkMode) { const t = bar.querySelector(".files-tab.on > span"); if (t) t.innerHTML = `${I(explorerHome ? "E80F" : "E774")}${explorerHome ? "홈" : "네트워크"}`; }
+    // Windows file windows have no system title bar: the tab row is it, as in Explorer.
+    // (Drawn as SVG: the caption glyph fonts differ between Windows 10 and 11.)
+    const glyph = { minimize: '<path d="M1 5.5h9"/>', maximize: '<rect x="1" y="1" width="9" height="9"/>', restore: '<rect x="1" y="3" width="7" height="7"/><path d="M3 3V1h7v7H8"/>', close: '<path d="M1 1l9 9M10 1l-9 9"/>' };
+    const svg = (k) => `<svg viewBox="0 0 11 11" aria-hidden="true">${glyph[k]}</svg>`;
+    if (CHROME) bar.insertAdjacentHTML("beforeend", `<div class="files-caption"><button data-window="minimize" aria-label="최소화" title="최소화">${svg("minimize")}</button><button data-window="maximize" aria-label="${maximized ? "이전 크기로" : "최대화"}" title="${maximized ? "이전 크기로" : "최대화"}">${svg(maximized ? "restore" : "maximize")}</button><button data-window="close" class="close" aria-label="닫기" title="닫기">${svg("close")}</button></div>`);
   }
   function newTab(path, side) {
     if (host.id === NETWORK) return;
@@ -835,6 +845,14 @@
     layer.addEventListener("pointerdown", resizeStart, true);
     layer.addEventListener("click", click);
     layer.addEventListener("dblclick", dblclick);
+    if (CHROME) {
+      const bar = layer.querySelector(".files-tabs");
+      // The tab row's empty space moves the window; double-click maximizes or restores.
+      const empty = (e) => e.target === bar;
+      bar.addEventListener("mousedown", (e) => { if (e.button === 0 && empty(e) && e.detail === 1) windowControl("drag"); });
+      bar.addEventListener("dblclick", (e) => { if (empty(e)) windowControl("maximize"); });
+      bar.addEventListener("click", (e) => { const b = e.target.closest("[data-window]"); if (b) { e.stopPropagation(); windowControl(b.dataset.window); } });
+    }
     // A pinch arrives as ctrl+wheel: zoom the preview under it, and never the whole window
     // (the home's own ctrl+wheel zoom stays outside the file browser).
     let wheelPinch = 0, gestureScale = 1;

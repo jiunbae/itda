@@ -20,7 +20,7 @@ use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD};
 use windows_sys::Win32::System::Threading::CreateMutexW;
-use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use wry::raw_window_handle::{HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle};
@@ -255,7 +255,7 @@ fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&s
             format!("?files={host}&fileWindow={}", file_window.unwrap_or(""))
         }).unwrap_or_default()))
         .with_background_color(bg)
-        .with_initialization_script(&format!("window.itdaNativeDrag=true;window.ITDA_FILE_PATH={};", json!(file_path)))
+        .with_initialization_script(&format!("window.itdaNativeDrag=true;window.ITDA_FILE_PATH={};window.ITDA_WINDOW_CHROME={};", json!(file_path), file.is_some()))
         .with_devtools(devtools)
         .with_hotkeys_zoom(false)
         .with_browser_accelerator_keys(false)
@@ -278,7 +278,13 @@ unsafe fn resize_webview(h: HWND) {
     let mut rc: RECT = std::mem::zeroed();
     GetClientRect(h, &mut rc);
     if h != hwnd() {
-        FILE_PANES.with(|p| { for (wh, wv) in p.borrow().values() { if *wh == h as isize { let _ = wv.set_bounds(Rect { position: wry::dpi::PhysicalPosition::new(0, 0).into(), size: wry::dpi::PhysicalSize::new(rc.right as u32, rc.bottom as u32).into() }); } } });
+        // (Without a title bar, a thin strip above the page is the top edge to resize from.)
+        let top = top_edge(h);
+        FILE_PANES.with(|p| { for (wh, wv) in p.borrow().values() { if *wh == h as isize { let _ = wv.set_bounds(Rect { position: wry::dpi::PhysicalPosition::new(0, top).into(), size: wry::dpi::PhysicalSize::new(rc.right as u32, (rc.bottom - top).max(0) as u32).into() }); } } });
+        if chromeless(h) {
+            let v = json!({"maximized": IsZoomed(h) != 0});
+            FILE_PANES.with(|p| { for (wh, wv) in p.borrow().values() { if *wh == h as isize { let _ = wv.evaluate_script(&format!("window.itdaWindowState&&itdaWindowState({v})")); } } });
+        }
         return;
     }
     WEBVIEW.with(|w| {
@@ -319,9 +325,68 @@ fn file_window(id: &str, close: bool, new: bool, path: Option<&str>) {
         let title = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| format!("{} — 파일", h.label())).unwrap_or_else(|| "네트워크 — Itda".into()));
         let h = CreateWindowExW(0, wide("itda_home").as_ptr(), wide(&title).as_ptr(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1000, 740, null_mut(), null_mut(), GetModuleHandleW(null()), null());
         if h.is_null() { return; }
+        CHROMELESS.with(|c| c.borrow_mut().insert(h as isize));
+        place_file_window(h);
         match build_webview(h, home(|m| is_dark(&m.settings)), Some(id), Some(&window_id), path) {
             Ok(view) => { FILE_HOSTS.with(|p| {p.borrow_mut().insert(window_id.clone(), id.into());}); FILE_PANES.with(|p| { p.borrow_mut().insert(window_id, (h as isize, view)); }); resize_webview(h); ShowWindow(h, SW_SHOW); SetForegroundWindow(h); super::send_hosts(); }
             Err(e) => { crate::log!("files webview: {e}"); DestroyWindow(h); }
+        }
+    }
+}
+
+/// A file window's first size and place: Explorer-like 1100×760 at the screen's scale (the
+/// size given at creation is in physical pixels, small on a 150% screen), within the work area
+/// of the screen the home is on, each new one a step down and right of the last.
+unsafe fn place_file_window(h: HWND) {
+    let mon = MonitorFromWindow(if hwnd().is_null() { h } else { hwnd() }, MONITOR_DEFAULTTONEAREST);
+    let mut mi: MONITORINFO = std::mem::zeroed();
+    mi.cbSize = size_of::<MONITORINFO>() as u32;
+    if GetMonitorInfoW(mon, &mut mi) == 0 {
+        SetWindowPos(h, null_mut(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        return;
+    }
+    let wa = mi.rcWork;
+    let d = GetDpiForWindow(h).max(96) as i32;
+    let (aw, ah) = (wa.right - wa.left, wa.bottom - wa.top);
+    let (w, hh) = ((1100 * d / 96).min(aw * 92 / 100), (760 * d / 96).min(ah * 92 / 100));
+    let step = 32 * d / 96 * (FILE_PANES.with(|p| p.borrow().len()) as i32 % 6);
+    let (x, y) = (wa.left + (aw - w) / 2 + step, wa.top + (ah - hh) / 2 + step);
+    SetWindowPos(h, null_mut(), x.min(wa.right - w).max(wa.left), y.min(wa.bottom - hh).max(wa.top), w, hh, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+thread_local! {
+    /// File windows whose title bar the page draws (Explorer-style tabs in it).
+    static CHROMELESS: std::cell::RefCell<std::collections::HashSet<isize>> = std::cell::RefCell::new(Default::default());
+}
+fn chromeless(h: HWND) -> bool {
+    CHROMELESS.with(|c| c.borrow().contains(&(h as isize)))
+}
+/// The strip above the page that resizes a title-bar-less window from its top edge.
+unsafe fn top_edge(h: HWND) -> i32 {
+    if chromeless(h) && IsZoomed(h) == 0 { (4 * GetDpiForWindow(h).max(96) / 96) as i32 } else { 0 }
+}
+/// The frame that a maximized window keeps beyond the screen's edge.
+unsafe fn frame_y(h: HWND) -> i32 {
+    let d = GetDpiForWindow(h).max(96);
+    GetSystemMetricsForDpi(SM_CYFRAME, d) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, d)
+}
+
+/// The page's title-bar buttons and dragging, for file window `window`.
+pub fn file_window_control(window: &str, op: &str) {
+    let Some(h) = FILE_PANES.with(|p| p.borrow().get(window).map(|(h, _)| *h as HWND)) else { return };
+    unsafe {
+        match op {
+            "drag" => {
+                // As when the title bar is pressed: the system moves the window (and snaps it).
+                let mut pt: POINT = std::mem::zeroed();
+                GetCursorPos(&mut pt);
+                windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+                SendMessageW(h, WM_NCLBUTTONDOWN, HTCAPTION as usize, ((pt.y as u32 & 0xffff) << 16 | (pt.x as u32 & 0xffff)) as isize);
+            }
+            "minimize" => { ShowWindow(h, SW_MINIMIZE); }
+            "maximize" => { ShowWindow(h, if IsZoomed(h) != 0 { SW_RESTORE } else { SW_MAXIMIZE }); }
+            "close" => { PostMessageW(h, WM_CLOSE, 0, 0); }
+            _ => {}
         }
     }
 }
@@ -579,6 +644,31 @@ unsafe fn tray_menu(h: HWND) {
 // ---------------------------------------------------------------- window
 
 unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    // File windows draw their own title bar: no system caption, the other edges as usual.
+    if m == WM_NCCALCSIZE && wp != 0 && chromeless(h) {
+        let p = &mut *(lp as *mut NCCALCSIZE_PARAMS);
+        let top = p.rgrc[0].top;
+        let r = DefWindowProcW(h, m, wp, lp);
+        p.rgrc[0].top = top + if IsZoomed(h) != 0 { frame_y(h) } else { 0 };
+        return r;
+    }
+    if m == WM_NCHITTEST && chromeless(h) {
+        let r = DefWindowProcW(h, m, wp, lp);
+        if r == HTCLIENT as isize && IsZoomed(h) == 0 {
+            let mut pt = POINT { x: (lp & 0xffff) as i16 as i32, y: ((lp >> 16) & 0xffff) as i16 as i32 };
+            ScreenToClient(h, &mut pt);
+            let mut rc: RECT = std::mem::zeroed();
+            GetClientRect(h, &mut rc);
+            let edge = frame_y(h);
+            if pt.y < top_edge(h) {
+                return if pt.x < edge { HTTOPLEFT } else if pt.x >= rc.right - edge { HTTOPRIGHT } else { HTTOP } as isize;
+            }
+        }
+        return r;
+    }
+    if m == WM_DESTROY {
+        CHROMELESS.with(|c| c.borrow_mut().remove(&(h as isize)));
+    }
     match m {
         WM_SIZE => resize_webview(h),
         WM_EVENT => drain(),
