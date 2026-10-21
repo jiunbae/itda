@@ -437,6 +437,9 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
     let mut last_capture = Instant::now() - FRAME;
     // A capture frame arrived since the last capture (macOS): send it once the gap allows.
     let mut arrived = false;
+    // The encoder dropped the last frame (macOS: its rate control under heavy motion): encode
+    // the picture again at the next frame time, even if the capture has nothing newer.
+    let mut redo = false;
     let mut prev: Vec<u32> = Vec::new();
     let mut enc = Encoder::new();
     // H.264 for this viewer: the encoder (made when first needed), whether the platform has
@@ -463,7 +466,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         // clipboard check. Captures stay FRAME apart also when the screen doesn't change.
         let gap = if video.is_some() { VIDEO_FRAME } else { FRAME };
         let wait = match demand.due() {
-            Some(_) if out.room() && video.is_some() && cfg!(target_os = "macos") => video_wait(gap, last_capture.elapsed(), arrived),
+            Some(_) if out.room() && video.is_some() && cfg!(target_os = "macos") => video_wait(gap, last_capture.elapsed(), arrived || redo),
             Some(_) if out.room() => gap.saturating_sub(last_capture.elapsed()),
             _ => gap,
         };
@@ -531,13 +534,14 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         // With video and nothing new captured, there is nothing to encode until the still
         // repaint is due: skip the copy and compare of a whole frame.
         // (A viewer whose history was just reset, with `prev` cleared, always grabs.)
-        if video.is_some() && incremental && !prev.is_empty() && last_change.elapsed() < REFINE && !cap.lock().unwrap().fresh_since(seen) {
+        if video.is_some() && incremental && !prev.is_empty() && last_change.elapsed() < REFINE && !redo && !cap.lock().unwrap().fresh_since(seen) {
             // (A Frame can name a frame this pump already took: back to the fallback poll.)
             arrived = false;
             continue;
         }
         last_capture = Instant::now();
         arrived = false;
+        redo = false;
         // The size this viewer was last given (another viewer's capture may have resized it).
         let (w0, h0) = size;
         #[cfg(target_os = "macos")]
@@ -609,6 +613,14 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                 let encoded = v.encode(frame, w, key);
                 crate::trace::since("encode", encode);
                 match encoded {
+                    // Dropped by the encoder's rate control (macOS, heavy motion such as video):
+                    // send nothing now and encode the picture again next frame. A lossless
+                    // repaint of fast-changing pixels would be large and hold up what follows.
+                    Ok(data) if data.is_empty() && cfg!(target_os = "macos") && incremental && !full && u.rects == 0 => {
+                        crate::trace::add("dropped", 1.0);
+                        redo = true;
+                        continue;
+                    }
                     // Nothing out for this frame (an encoder still buffering): send it losslessly
                     // and keep any pending reset for the first real picture.
                     Ok(data) if data.is_empty() => {
