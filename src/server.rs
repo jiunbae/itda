@@ -360,9 +360,13 @@ const ENC_DESKTOP_SIZE: i32 = -223;
 
 /// Shortest time between two updates (~30 fps), and with a video encoder (~60 fps).
 const FRAME: Duration = Duration::from_millis(33);
-const VIDEO_FRAME: Duration = Duration::from_millis(16);
-/// How long the screen stands still before video is repainted losslessly.
-const REFINE: Duration = Duration::from_millis(250);
+/// (macOS: a new ScreenCaptureKit frame goes out as soon as it arrives, at least VIDEO_FRAME
+/// apart, looked for every VIDEO_POLL; Windows keeps its 16 ms capture timer.)
+const VIDEO_FRAME: Duration = Duration::from_millis(if cfg!(target_os = "macos") { 14 } else { 16 });
+const VIDEO_POLL: Duration = Duration::from_millis(3);
+/// How long the screen stands still before video is repainted losslessly. On macOS long enough
+/// that a short pause in motion doesn't start a full repaint that delays the next frames.
+const REFINE: Duration = Duration::from_millis(if cfg!(target_os = "macos") { 500 } else { 250 });
 /// Largest picture sent as video (hardware encoders and the viewers' decoders handle this).
 const VIDEO_MAX: usize = 4096;
 
@@ -372,6 +376,12 @@ pub(crate) trait VideoEncode: Send {
     fn size(&self) -> (usize, usize);
     /// Encode a frame (rows of `stride` pixels); `key` asks for an IDR with parameter sets.
     fn encode(&mut self, px: &[u32], stride: usize, key: bool) -> io::Result<Vec<u8>>;
+    /// macOS can encode the immutable SCK buffer itself, avoiding an encoder staging copy.
+    /// Other implementations can keep using the CPU-pixel path.
+    #[cfg(target_os = "macos")]
+    fn encode_buffer(&mut self, _buffer: &objc2_core_video::CVPixelBuffer, _key: bool) -> Option<io::Result<Vec<u8>>> {
+        None
+    }
 }
 pub(crate) type Video = Box<dyn VideoEncode>;
 
@@ -397,6 +407,8 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
     let mut reset = true;
     let mut exact: Vec<u32> = Vec::new();
     let mut last_change = Instant::now();
+    // The shared capture's frame this viewer last grabbed (see Capture::fresh_since).
+    let mut seen = u64::MAX;
     let mut u = Update::default();
     let mut clip_seq = platform::clipboard_seq();
     let mut clip_check = Instant::now();
@@ -411,6 +423,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
         // clipboard check. Captures stay FRAME apart also when the screen doesn't change.
         let gap = if video.is_some() { VIDEO_FRAME } else { FRAME };
         let wait = match demand.due() {
+            Some(_) if out.room() && video.is_some() && cfg!(target_os = "macos") => gap.saturating_sub(last_capture.elapsed()).max(VIDEO_POLL),
             Some(_) if out.room() => gap.saturating_sub(last_capture.elapsed()),
             _ => gap,
         };
@@ -470,12 +483,36 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
         if last_capture.elapsed() < gap || !out.room() {
             continue; // (a viewer that's behind gets the changes together later)
         }
+        // With video and nothing new captured, there is nothing to encode until the still
+        // repaint is due: skip the copy and compare of a whole frame.
+        // (A viewer whose history was just reset, with `prev` cleared, always grabs.)
+        if video.is_some() && incremental && !prev.is_empty() && last_change.elapsed() < REFINE && !cap.lock().unwrap().fresh_since(seen) {
+            continue;
+        }
         last_capture = Instant::now();
         // The size this viewer was last given (another viewer's capture may have resized it).
         let (w0, h0) = size;
+        #[cfg(target_os = "macos")]
+        let snapshot = cap.lock().unwrap().snapshot();
+        #[cfg(target_os = "macos")]
+        let (ox, oy, w, h, frame) = (snapshot.x, snapshot.y, snapshot.w, snapshot.h, snapshot.pixels.as_slice());
+        #[cfg(target_os = "macos")]
+        { seen = snapshot.generation; }
+        // Windows keeps its Desktop Duplication frame borrowed until this update is done.
+        // On macOS the capture lock is already released: slow encoders and lossless
+        // repaints cannot stop another viewer from taking its own immutable snapshot.
+        #[cfg(not(target_os = "macos"))]
         let mut cap = cap.lock().unwrap();
+        #[cfg(not(target_os = "macos"))]
         cap.fit(); // (grab does too) the virtual desktop's corner, read before the frame borrows cap
+        #[cfg(not(target_os = "macos"))]
         let (ox, oy) = (cap.x, cap.y);
+        // The frame this grab gives (one that turns up meanwhile only costs an extra pass).
+        #[cfg(not(target_os = "macos"))]
+        let g = cap.generation();
+        #[cfg(not(target_os = "macos"))]
+        { seen = g.wrapping_add(u64::from(cap.fresh_since(g))); }
+        #[cfg(not(target_os = "macos"))]
         let (w, h, frame) = cap.grab();
         size = (w, h);
         u.start();
@@ -515,7 +552,13 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
         match video.as_mut().filter(|_| want_video) {
             Some(v) if full || prev[..] != frame[..] => {
                 let (vw, vh) = v.size();
-                match v.encode(frame, w, reset || !incremental) {
+                let key = reset || !incremental;
+                #[cfg(target_os = "macos")]
+                let encoded = snapshot.native.as_deref().and_then(|buffer| v.encode_buffer(buffer, key))
+                    .unwrap_or_else(|| v.encode(frame, w, key));
+                #[cfg(not(target_os = "macos"))]
+                let encoded = v.encode(frame, w, key);
+                match encoded {
                     // Nothing out for this frame (an encoder still buffering): send it losslessly
                     // and keep any pending reset for the first real picture.
                     Ok(data) if data.is_empty() => {

@@ -142,6 +142,15 @@ impl Capture {
         self.under = None;
     }
 
+    /// Whether a frame may have changed since a grab: Windows can only tell by grabbing.
+    pub(crate) fn fresh_since(&self, _seen: u64) -> bool {
+        true
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        0
+    }
+
     pub(crate) fn grab(&mut self) -> (usize, usize, &[u32]) {
         self.fit();
         unsafe {
