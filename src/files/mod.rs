@@ -320,6 +320,10 @@ pub fn password_key(h: &Host) -> String {
         format!("files-{}-{}-{}", h.id, h.files.account, h.files.user)
     }
 }
+fn ssh_addr(host: &str, port: u16) -> String {
+    if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") }
+}
+
 fn cfg(h: &Host, login: &Login, password: Option<String>) -> io::Result<SshCfg> {
     let o = &h.files;
     let (default, _) = crate::tunnel::split_host(&h.host, 0);
@@ -366,7 +370,18 @@ fn cfg(h: &Host, login: &Login, password: Option<String>) -> io::Result<SshCfg> 
         } else {
             String::new()
         },
+        key_alias: String::new(),
     };
+    // The saved address not answering on the file port but the LAN one doing so: go there,
+    // as long as it proves to be the same device (its trusted SSH key).
+    let mut c = c;
+    if o.host.is_empty() && !h.lan.trim().is_empty() && !crate::store::answers(&ssh_addr(&c.host, c.port)) {
+        let lan = h.lan.trim().to_string();
+        if crate::store::answers(&ssh_addr(&lan, c.port)) {
+            crate::log!("files {}: not answering, using its LAN address {lan}", c.host);
+            c.key_alias = std::mem::replace(&mut c.host, lan);
+        }
+    }
     crate::tunnel::ssh_target(&c)?;
     Ok(c)
 }

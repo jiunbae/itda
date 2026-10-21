@@ -9,7 +9,6 @@ use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -988,7 +987,7 @@ fn remote_setup_probe(v:Value) {
         let host=s(&v,"address");
         let port=v["port"].as_u64().filter(|p|*p>0&&*p<=65535).ok_or_else(||std::io::Error::other("SSH 포트는 1부터 65535 사이여야 합니다"))? as u16;
         let pass=match v["password"].as_str().filter(|p|!p.is_empty()){Some(p)=>p.into(),None=>if account.is_empty(){h.and_then(|h|crate::gateway::typed(&h.id)).or(login.pass).unwrap_or_default()}else{login.pass.unwrap_or_default()}};
-        let cfg=crate::tunnel::SshCfg{host,port,user:s(&v,"user"),pass,vnc_port:0,key:login.ssh_key,key_pass:login.key_pass.unwrap_or_default()};
+        let cfg=crate::tunnel::SshCfg{host,port,user:s(&v,"user"),pass,vnc_port:0,key:login.ssh_key,key_pass:login.key_pass.unwrap_or_default(),key_alias:String::new()};
         crate::tunnel::ssh_target(&cfg)?;
         if cfg.host.trim().is_empty(){return Err(std::io::Error::other("설치할 기기의 SSH 주소를 입력하세요"));}
         let busy=crate::remote_setup::begin()?;
@@ -1162,6 +1161,10 @@ fn drain() {
             }
             Event::Tailnet(st, serving) => {
                 SERVING.store(serving, Relaxed);
+                if home(|m| learn_lan(&mut m.hosts, &st.peers)) {
+                    save_hosts();
+                    send_hosts();
+                }
                 send(json!({"type": "tailnet", "tailnet": st}));
                 *TAILNET.lock().unwrap() = Some(st);
                 if crate::gateway::running().is_some() {
@@ -1229,36 +1232,42 @@ fn probe_now() {
     PROBE_CV.notify_all();
 }
 
+/// Remember the LAN address of saved hosts that Tailscale reaches directly on this network, for
+/// when their Tailscale address stops answering. True if any changed.
+fn learn_lan(hosts: &mut [store::Host], peers: &[crate::tailscale::Peer]) -> bool {
+    let mut changed = false;
+    for h in hosts.iter_mut() {
+        let (name, _) = crate::tunnel::split_host(h.host.trim(), 0);
+        let name = name.to_lowercase();
+        let Some(p) = peers.iter().find(|p| [&p.dns, &p.name, &p.ip].iter().any(|n| !n.is_empty() && n.to_lowercase() == name)) else { continue };
+        // Only into an empty field: an address someone typed stays.
+        if let Some(ip) = crate::tailscale::lan_ip(&p.cur).filter(|_| h.lan.trim().is_empty()) {
+            {
+                h.lan = ip;
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
 /// Every 20 s (or on demand): is each Mac's Screen Sharing port answering?
 fn start_probes() {
     std::thread::spawn(|| loop {
         // hosts.json is small and only written by the UI thread (atomically): just read it.
         // SSH hosts are reachable when Remote Login answers; the Screen Sharing port may be firewalled.
-        let targets: Vec<(String, String)> = store::load_hosts()
-            .into_iter()
-            .map(|h| {
-                let addr = if h.is_rdp() {
-                    let t = h.host.trim();
-                    if t.rsplit_once(':').is_some_and(|(_, p)| p.parse::<u16>().is_ok()) { t.to_string() } else { format!("{t}:3389") }
-                } else if h.ssh.on {
-                    let (host, _) = crate::tunnel::split_host(&h.host, 5900);
-                    let port = if h.ssh.port == 0 { 22 } else { h.ssh.port };
-                    if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") }
-                } else {
-                    crate::rfb::addr(&h.host)
-                };
-                (h.id, addr)
-            })
-            .collect();
+        let hosts = store::load_hosts();
         let results: HashMap<String, bool> = std::thread::scope(|sc| {
-            let hs: Vec<_> = targets
+            let hs: Vec<_> = hosts
                 .iter()
-                .map(|(id, addr)| {
+                .map(|h| {
                     sc.spawn(move || {
-                        let ok = addr.to_socket_addrs().is_ok_and(|mut it| {
-                            it.any(|sa| TcpStream::connect_timeout(&sa, Duration::from_millis(1500)).is_ok())
-                        });
-                        (id.clone(), ok)
+                        if store::answers(&h.probe_addr(&h.host)) {
+                            return (h.id.clone(), true);
+                        }
+                        // (Counted only where a connection would really go there.)
+                        let lan = h.lan_fallback() && { let a = h.at_lan(); store::answers(&a.probe_addr(&a.host)) };
+                        (h.id.clone(), lan)
                     })
                 })
                 .collect();
@@ -1449,5 +1458,27 @@ mod test_bridge {
         };
         write!(c, "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", data.len())?;
         c.write_all(&data)
+    }
+}
+
+#[cfg(test)]
+mod lan_tests {
+    #[test]
+    fn learns_the_lan_address_of_a_saved_tailscale_host() {
+        let peer = |name: &str, dns: &str, cur: &str| crate::tailscale::Peer { name: name.into(), dns: dns.into(), cur: cur.into(), ..Default::default() };
+        let mut hosts = vec![
+            crate::store::Host { host: "JIUN-HOME.tail.ts.net:3390".into(), ..Default::default() },
+            crate::store::Host { host: "other".into(), lan: "10.0.0.9".into(), ..Default::default() },
+        ];
+        let peers = [peer("jiun-home", "jiun-home.tail.ts.net", "192.168.32.32:41641"), peer("other", "other.tail.ts.net", "")];
+        assert!(super::learn_lan(&mut hosts, &peers));
+        assert_eq!(hosts[0].lan, "192.168.32.32");
+        // A relayed peer (no direct path) keeps what was learned before, and a typed address
+        // is never replaced.
+        assert_eq!(hosts[1].lan, "10.0.0.9");
+        let peers2 = [peer("jiun-home", "jiun-home.tail.ts.net", "192.168.1.50:41641")];
+        assert!(!super::learn_lan(&mut hosts, &peers2));
+        assert_eq!(hosts[0].lan, "192.168.32.32");
+        assert!(!super::learn_lan(&mut hosts, &peers), "nothing new");
     }
 }

@@ -1034,7 +1034,7 @@ mod tests {
         if rsync_exe().is_none() {
             return;
         }
-        let cfg = SshCfg { host: "pc.local".into(), port: 22, user: "me@outlook.com".into(), pass: String::new(), vnc_port: 5900, key: String::new(), key_pass: String::new() };
+        let cfg = SshCfg { host: "pc.local".into(), port: 22, user: "me@outlook.com".into(), pass: String::new(), vnc_port: 5900, key: String::new(), key_pass: String::new(), key_alias: String::new() };
         let Ok(cmd) = rsync_command(&cfg, "/remote/a b.txt", "/tmp/x", true, false) else { return }; // no ssh here
         let env: Vec<_> = cmd.get_envs().filter_map(|(k, v)| Some((k.to_string_lossy().into_owned(), v?.to_string_lossy().into_owned()))).collect();
         assert!(env.iter().any(|(k, v)| k == "RSYNC_OLD_ARGS" && v == "1"));
@@ -1052,7 +1052,7 @@ mod tests {
     fn rsync_over_ssh() {
         let Ok(spec) = std::env::var("ITDA_RSYNC_TEST") else { return };
         let (user, host) = spec.split_once('@').unwrap();
-        let cfg = SshCfg { host: host.into(), port: 22, user: user.into(), pass: String::new(), vnc_port: 5900, key: String::new(), key_pass: String::new() };
+        let cfg = SshCfg { host: host.into(), port: 22, user: user.into(), pass: String::new(), vnc_port: 5900, key: String::new(), key_pass: String::new(), key_alias: String::new() };
         let root = std::env::temp_dir().join(format!("itda-rsync-{}", crate::store::new_id()));
         std::fs::create_dir_all(root.join("to")).unwrap();
         let from = root.join("it's a file.txt");

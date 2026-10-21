@@ -51,8 +51,10 @@ try {
   await page.locator("#hp-enable").click();
   assert((await page.evaluate(() => sent.at(-1))).cmd === "hp_upgrade", "켜기 did not ask for the upgrade");
   await page.evaluate((h) => { itda.recv({ type: "hosts", hosts: [{ ...h, hp: { on: true, port: 5910 } }] }); itda.recv({ type: "hp", id: h.id, ready: true, screen: true, access: true }); }, mac);
+  await page.locator("#f-lan").fill(" 192.168.32.32 ");
   await page.locator("[data-x=save]").click();
   const s1 = (await saved()).at(-1).host;
+  assert(s1.lan === "192.168.32.32", `LAN address not saved: ${s1.lan}`);
   assert(s1.hp.on === true && s1.hp.port === 5910, `save reverted hp: ${JSON.stringify(s1.hp)}`);
   assert(JSON.stringify(s1.groups) === JSON.stringify(["Home", "여행", "집"]) && s1.group === "Home, 여행, 집", `groups ${JSON.stringify(s1.groups)} ${s1.group}`);
   // Another connection's HP result leaves this editor alone.

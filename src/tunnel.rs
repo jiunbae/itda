@@ -35,6 +35,9 @@ pub struct SshCfg {
     /// Private key file (empty = ssh's defaults / agent) and its passphrase.
     pub key: String,
     pub key_pass: String,
+    /// Reaching a known device at another address (its LAN one): the name whose trusted host
+    /// key it must present. Unknown or different keys fail before any login is sent.
+    pub key_alias: String,
 }
 
 pub struct Tunnel {
@@ -78,6 +81,9 @@ fn quiet(cmd: &mut Command) -> &mut Command {
 /// The destination argument: the host alone. The account goes separately as `-l` (see
 /// ssh_command), so names with '@' (Microsoft accounts, UPNs: me@outlook.com) work.
 pub fn ssh_target(c: &SshCfg) -> io::Result<String> {
+    if c.key_alias.starts_with('-') || c.key_alias.chars().any(|v| v.is_control() || v.is_whitespace()) {
+        return Err(err(io::ErrorKind::InvalidInput, "SSH 기기 주소를 확인하세요"));
+    }
     if c.host.is_empty() || c.host.starts_with('-') || c.host.chars().any(|v| v.is_control() || v.is_whitespace() || v == '@') || c.user.starts_with('-') || c.user.chars().any(|v| v.is_control()) {
         return Err(err(io::ErrorKind::InvalidInput, "SSH 기기 주소와 계정 이름을 확인하세요"));
     }
@@ -92,6 +98,11 @@ fn ssh_command_with_check(c:&SshCfg,strict:bool)->io::Result<Command> {
     ssh_target(c)?;
     let exe = ssh_exe().ok_or_else(|| err(io::ErrorKind::NotFound, "OpenSSH 클라이언트를 찾을 수 없습니다"))?;
     let mut cmd = Command::new(exe);
+    // At another address of a known device: only its already trusted key will do.
+    let strict = strict || !c.key_alias.is_empty();
+    if !c.key_alias.is_empty() {
+        cmd.arg("-o").arg(format!("HostKeyAlias={}", host_key_name(&c.key_alias, c.port)));
+    }
     cmd.arg("-T").args(["-o", if strict{"StrictHostKeyChecking=yes"}else{"StrictHostKeyChecking=accept-new"}, "-o"])
         .arg(known_hosts_option(&known_hosts_files()))
         .args(["-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3", "-o", "ConnectTimeout=10", "-o", "NumberOfPasswordPrompts=1", "-o", "BatchMode=no"])
@@ -128,6 +139,12 @@ pub fn known_hosts_files() -> Vec<PathBuf> {
 fn known_hosts_option(files: &[PathBuf]) -> String {
     let quoted: Vec<String> = files.iter().map(|f| format!("\"{}\"", f.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\""))).collect();
     format!("UserKnownHostsFile={}", quoted.join(" "))
+}
+
+/// How known_hosts names `host` reached on `port` (ssh takes a HostKeyAlias as is, without
+/// adding the port itself).
+fn host_key_name(host: &str, port: u16) -> String {
+    if port == 22 { host.to_string() } else { format!("[{host}]:{port}") }
 }
 
 /// `host[:port]` → (host, port), keeping bracketed IPv6 intact.
@@ -314,6 +331,13 @@ pub fn forget_host_key(host: &str, port: u16) {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn host_key_alias_names_the_port_like_known_hosts() {
+        assert_eq!(super::host_key_name("jiun-home.tail.ts.net", 22), "jiun-home.tail.ts.net");
+        assert_eq!(super::host_key_name("jiun-home.tail.ts.net", 2222), "[jiun-home.tail.ts.net]:2222");
+        assert_eq!(super::host_key_name("fd7a::1", 2222), "[fd7a::1]:2222");
+    }
+
+    #[test]
     fn known_hosts_paths_with_spaces_stay_whole() {
         let mac = PathBuf::from("/Users/a/Library/Application Support/Itda/known_hosts");
         assert_eq!(known_hosts_option(&[mac.clone()]), "UserKnownHostsFile=\"/Users/a/Library/Application Support/Itda/known_hosts\"");
@@ -332,7 +356,7 @@ mod tests {
     }
 
     fn cfg(user: &str, host: &str) -> SshCfg {
-        SshCfg { host: host.into(), port: 22, user: user.into(), pass: String::new(), vnc_port: 5900, key: String::new(), key_pass: String::new() }
+        SshCfg { host: host.into(), port: 22, user: user.into(), pass: String::new(), vnc_port: 5900, key: String::new(), key_pass: String::new(), key_alias: String::new() }
     }
 
     /// The account is its own argument: '@' in it (me@outlook.com) is fine, and the
