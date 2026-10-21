@@ -213,7 +213,8 @@ fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&s
         args.push_str(&format!(" --remote-debugging-port={port}"));
     }
     let drop_id = file_window.map(str::to_string);
-    WebViewBuilder::new_with_web_context(&mut ctx)
+    let native_drop_id = drop_id.clone();
+    let view = WebViewBuilder::new_with_web_context(&mut ctx)
         .with_additional_browser_args(args)
         .with_custom_protocol("itda".into(), |_id, req| {
             let resp = match super::asset(req.uri().path()) {
@@ -260,7 +261,9 @@ fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&s
         .with_hotkeys_zoom(false)
         .with_browser_accelerator_keys(false)
         .with_default_context_menus(devtools)
-        .build_as_child(&Win(h))
+        .build_as_child(&Win(h))?;
+    if let Err(e) = crate::files_win::install_drop(h as isize,native_drop_id,|m|super::post(Event::Page(m))) { crate::log!("files drop: {e}"); }
+    Ok(view)
 }
 
 /// The home's own zoom (percent). WebView2's zoom shrinks the CSS viewport, so the page's
@@ -638,6 +641,7 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
             }
         }
         WM_DESTROY => {
+            crate::files_win::forget_drop(h as isize);
             if h != hwnd() {
                 let id = FILE_PANES.with(|p| p.borrow().iter().find(|(_, (wh, _))| *wh == h as isize).map(|(id, _)| id.clone()));
                 if let Some(id) = id { if let Some(page) = FILE_PAGES.with(|p| p.borrow_mut().remove(&id)) {crate::files::release_page(&page);}
