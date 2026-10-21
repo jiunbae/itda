@@ -164,6 +164,15 @@ pub(crate) fn monitors() -> Vec<(u32, i32, i32, i32, i32)> {
 /// The newest captured frame, handed from ScreenCaptureKit's queue to the pump.
 type Latest = Arc<Mutex<Option<CFRetained<CVPixelBuffer>>>>;
 
+/// Called when a new frame arrives; false once its viewer is gone.
+type Waker = Box<dyn Fn() -> bool + Send>;
+static FRAME_WAKERS: Mutex<Vec<Waker>> = Mutex::new(Vec::new());
+
+/// Have `wake` called whenever ScreenCaptureKit delivers a new frame.
+pub(crate) fn on_frame(wake: Waker) {
+    FRAME_WAKERS.lock().unwrap().push(wake);
+}
+
 struct OutputIvars {
     latest: Latest,
 }
@@ -183,6 +192,8 @@ define_class!(
             // Idle frames (nothing changed) carry no image.
             if let Some(image) = unsafe { sample.image_buffer() } {
                 *self.ivars().latest.lock().unwrap() = Some(image);
+                // Wake every viewer's pump now, rather than at its next poll.
+                FRAME_WAKERS.lock().unwrap().retain(|wake| wake());
             }
         }
     }

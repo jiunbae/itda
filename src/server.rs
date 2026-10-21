@@ -163,6 +163,10 @@ enum Msg {
     Ext(demand::Ext),
     /// SetDesktopSize: this PC's displays can't be resized from here; it gets an answer.
     Resize,
+    /// The capture has a new frame (macOS): wakes the pump to send it right away.
+    Frame,
+    /// The viewer's connection was closed (the frame waker keeps the channel open).
+    Gone,
 }
 
 fn rd<const N: usize>(r: &mut impl Read) -> io::Result<[u8; N]> {
@@ -270,12 +274,15 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
     changed();
 
     let (tx, rx) = channel();
+    let wake = tx.clone();
+    platform::on_frame(Box::new(move || wake.send(Msg::Frame).is_ok()));
     let reader = c.try_clone()?;
     let cfg2 = cfg.clone();
     std::thread::spawn(move || {
         let mut input = platform::Input::new(cfg2.cmd_as_ctrl, cfg2.view_only);
         let _ = read_client(BufReader::new(reader), &tx, &mut input);
         input.release_all();
+        let _ = tx.send(Msg::Gone);
     });
     let r = Outbox::new(c.try_clone()?).and_then(|out| pump(&out, &rx, &cap, size, stop));
     let _ = c.shutdown(Shutdown::Both);
@@ -361,9 +368,10 @@ const ENC_DESKTOP_SIZE: i32 = -223;
 /// Shortest time between two updates (~30 fps), and with a video encoder (~60 fps).
 const FRAME: Duration = Duration::from_millis(33);
 /// (macOS: a new ScreenCaptureKit frame goes out as soon as it arrives, at least VIDEO_FRAME
-/// apart, looked for every VIDEO_POLL; Windows keeps its 16 ms capture timer.)
+/// apart, woken by the capture (Msg::Frame) or at the latest every VIDEO_POLL; Windows keeps
+/// its 16 ms capture timer.)
 const VIDEO_FRAME: Duration = Duration::from_millis(if cfg!(target_os = "macos") { 14 } else { 16 });
-const VIDEO_POLL: Duration = Duration::from_millis(3);
+const VIDEO_POLL: Duration = Duration::from_millis(16);
 /// How long the screen stands still before video is repainted losslessly. On macOS long enough
 /// that a short pause in motion doesn't start a full repaint that delays the next frames.
 const REFINE: Duration = Duration::from_millis(if cfg!(target_os = "macos") { 500 } else { 250 });
@@ -397,6 +405,8 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
     let mut screens_read = Instant::now() - Duration::from_secs(10);
     let mut refuse_resize = false;
     let mut last_capture = Instant::now() - FRAME;
+    // A capture frame arrived since the last capture (macOS): send it once the gap allows.
+    let mut arrived = false;
     let mut prev: Vec<u32> = Vec::new();
     let mut enc = Encoder::new();
     // H.264 for this viewer: the encoder (made when first needed), whether the platform has
@@ -423,7 +433,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
         // clipboard check. Captures stay FRAME apart also when the screen doesn't change.
         let gap = if video.is_some() { VIDEO_FRAME } else { FRAME };
         let wait = match demand.due() {
-            Some(_) if out.room() && video.is_some() && cfg!(target_os = "macos") => gap.saturating_sub(last_capture.elapsed()).max(VIDEO_POLL),
+            Some(_) if out.room() && video.is_some() && cfg!(target_os = "macos") => gap.saturating_sub(last_capture.elapsed()).max(if arrived { Duration::ZERO } else { VIDEO_POLL }),
             Some(_) if out.room() => gap.saturating_sub(last_capture.elapsed()),
             _ => gap,
         };
@@ -451,6 +461,8 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
                     told = None; // (re)introduce the displays
                 }
                 Msg::Resize => refuse_resize = true,
+                Msg::Frame => arrived = true,
+                Msg::Gone => return Ok(()),
                 Msg::Request { incremental } => demand.request(incremental),
                 Msg::Ext(m) => {
                     if demand.ext(m, size.0, size.1, &mut reply) {
@@ -490,6 +502,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
             continue;
         }
         last_capture = Instant::now();
+        arrived = false;
         // The size this viewer was last given (another viewer's capture may have resized it).
         let (w0, h0) = size;
         #[cfg(target_os = "macos")]
