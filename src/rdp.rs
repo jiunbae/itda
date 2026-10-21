@@ -56,16 +56,18 @@ const FRAME: Duration = Duration::from_millis(16);
 /// Log in to an RDP host ("name" or "name:port"), asking for a `size` desktop (else 1920×1080).
 /// On success the returned `Raw` behaves like a VNC connection right after ServerInit (32bpp,
 /// no auth left to do).
-pub fn open(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>) -> io::Result<Raw> {
+/// Also gives the server's key (SHA-256 of its public key, hex). With `expect`, a server
+/// showing another key is refused before the login is sent.
+pub fn open(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>, expect: Option<&str>) -> io::Result<(Raw, String)> {
     crate::log!("rdp open {host} {size:?}");
-    let r = connect(host, user, pass, size);
+    let r = connect(host, user, pass, size, expect);
     if let Err(e) = &r {
         crate::log!("rdp failed: {e} [{}]", rfb::classify(e));
     }
     r
 }
 
-fn connect(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>) -> io::Result<Raw> {
+fn connect(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>, expect: Option<&str>) -> io::Result<(Raw, String)> {
     let (name, port) = split(host);
     if user.trim().is_empty() {
         return Err(rfb::denied("사용자 이름을 입력하세요 (Windows 계정 이름)"));
@@ -140,6 +142,10 @@ fn connect(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>) -> io::
     let mut connector = ClientConnector::new(config, local).with_static_channel(dvc);
     let upgrade = ironrdp_blocking::connect_begin(&mut framed, &mut connector).map_err(conn_err)?;
     let (tls, server_key) = tls_upgrade(framed.into_inner_no_leftover(), &name)?;
+    let key_id = key_id(&server_key);
+    if expect.is_some_and(|e| e != key_id) {
+        return Err(rfb::denied("이 주소의 원격 데스크톱은 저장된 기기가 아닙니다 (서버 키가 다름)"));
+    }
     let upgraded = ironrdp_blocking::mark_as_upgraded(upgrade, &mut connector);
     let mut framed = Framed::new(tls);
     let result = ironrdp_blocking::connect_finalize(upgraded, connector, &mut framed, &mut NoKdc, name.clone().into(), server_key, None)
@@ -181,14 +187,20 @@ fn connect(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>) -> io::
         }
     });
 
-    Ok(Raw {
+    Ok((Raw {
         reader: BufReader::with_capacity(1 << 20, Rx(ours.try_clone()?)),
         writer: ours,
         width: w,
         height: h,
         name: title,
         server_init,
-    })
+    }, key_id))
+}
+
+/// SHA-256 of the server's public key, hex: what identifies an RDP server between connections.
+fn key_id(key: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(key).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// "host[:port]" with RDP's default port; bracketed IPv6 allowed.
@@ -1043,10 +1055,16 @@ mod tests {
         let (host, user, pass) = (it.next().unwrap(), it.next().unwrap(), it.next().unwrap());
         crate::log::init("rdptest");
 
-        let e = open(host, user, "wrong-password", None).err().expect("bad password must fail");
+        let e = open(host, user, "wrong-password", None, None).err().expect("bad password must fail");
         assert_eq!(rfb::classify(&e), "auth", "{e}");
+        // Another server key than the one expected: refused before the login.
+        let e = open(host, user, pass, None, Some("00")).err().expect("a different server key must fail");
+        assert!(e.to_string().contains("서버 키"), "{e}");
 
-        let raw = open(host, user, pass, None).expect("open");
+        let (raw, key) = open(host, user, pass, None, None).expect("open");
+        assert_eq!(key.len(), 64);
+        drop(raw);
+        let (raw, _) = open(host, user, pass, None, Some(&key)).expect("open with its own key");
         assert_eq!((raw.width, raw.height), (800, 600));
         assert_eq!(&raw.server_init[..4], &[3, 32, 2, 88]);
         assert_eq!(&raw.server_init[4..20], &PIXEL_FORMAT);
@@ -1126,7 +1144,7 @@ mod tests {
         crate::log::init("rdptest");
 
         // (Windows starts at the size asked for here; the IronRDP test server keeps its own.)
-        let raw = open(host, user, pass, Some((1001, 701))).expect("open");
+        let (raw, _) = open(host, user, pass, Some((1001, 701)), None).expect("open");
         let (w0, h0) = (raw.width as usize, raw.height as usize);
         let (mut r, mut w) = (raw.reader, raw.writer);
         let mut m = vec![2, 0, 0, 3];

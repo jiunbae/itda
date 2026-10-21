@@ -91,6 +91,7 @@ pub fn run(l: Launch) {
             vnc_port,
             key: l.ssh_key.clone(),
             key_pass: l.key_pass.clone(),
+            key_alias: String::new(),
         };
         let shown = format!("{}@{host} (SSH)", cfg.user);
         let t = Tunnel::open(cfg)?;

@@ -788,8 +788,15 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u3
 
 fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mut Option<Arc<Tunnel>>, size: Option<(u32, u32)>) -> io::Result<rfb::Raw> {
     let host = &host.reachable();
+    let at_lan = !host.key_alias.is_empty();
     if host.is_rdp() {
-        return crate::rdp::open(&host.host, &login.user, &pass, size.filter(|_| host.opts.resize));
+        // At its LAN address the server must show the key it had at its own address.
+        let expect = if at_lan { Some(store::rdp_key(&host.id).ok_or_else(|| rfb::denied("저장된 기기인지 확인할 수 없어 같은 네트워크 주소로 연결하지 않았습니다"))?) } else { None };
+        let (raw, key) = crate::rdp::open(&host.host, &login.user, &pass, size.filter(|_| host.opts.resize), expect.as_deref())?;
+        if !at_lan {
+            store::set_rdp_key(&host.id, &key);
+        }
+        return Ok(raw);
     }
     // Itda's high-performance sharing on this Mac: through SSH to its loopback port. If it
     // can't be reached (Itda not running there, SSH refused), fall back to the usual way.
@@ -799,6 +806,7 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
                 *tunnel = Some(t);
                 return Ok(raw);
             }
+            Err(e) if at_lan && !host.ssh.on => return Err(e), // (plain VNC can't check the device there)
             Err(e) => crate::log!("high-performance sharing on {} unavailable, using Screen Sharing: {e}", host.host),
         }
     }
@@ -813,11 +821,14 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
             vnc_port,
             key: login.ssh_key.clone(),
             key_pass: login.key_pass.clone().unwrap_or_default(),
+            key_alias: host.key_alias.clone(),
         };
         let t = Tunnel::open(cfg)?;
         let a = t.addr()?;
         *tunnel = Some(t);
         rfb::open(&a, &creds)
+    } else if at_lan {
+        Err(rfb::denied("같은 네트워크 주소로는 SSH로만 연결합니다"))
     } else {
         rfb::open(&rfb::addr(&host.host), &creds)
     }

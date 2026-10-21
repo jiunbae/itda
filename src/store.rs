@@ -148,6 +148,9 @@ pub struct Host {
     /// Its address on the local network (no port), tried when `host` doesn't answer, e.g. a
     /// Tailscale name while Tailscale is down there. Learned from Tailscale's direct path.
     pub lan: String,
+    /// Set while connecting at `lan`: the device's own name, whose identity it must show.
+    #[serde(skip)]
+    pub key_alias: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
@@ -187,24 +190,33 @@ impl Host {
         }
     }
 
-    /// This host at its LAN address (keeping any port given with `host`).
+    /// This host at its LAN address (keeping any port given with `host`), bound to the
+    /// identity it has at its own address (`key_alias`).
     pub fn at_lan(&self) -> Host {
-        let (_, port) = crate::tunnel::split_host(&self.host, 0);
+        let (name, port) = crate::tunnel::split_host(&self.host, 0);
         let lan = self.lan.trim();
         let mut h = self.clone();
         h.host = if port == 0 { lan.to_string() } else if lan.contains(':') { format!("[{lan}]:{port}") } else { format!("{lan}:{port}") };
+        h.key_alias = name;
         h
     }
 
-    /// The host to connect to: itself, or at its LAN address when only that answers. (Waits
-    /// up to ANSWER for each; immediate without a LAN address.)
+    /// Can a screen connection go to the LAN address and still check it is this device?
+    /// Over SSH (its trusted host key, also for HP) or, on macOS, Remote Desktop with a server
+    /// key seen at its own address. Never plain VNC: nothing there proves who answers.
+    pub fn lan_fallback(&self) -> bool {
+        cfg!(target_os = "macos") && !self.lan.trim().is_empty() && (self.ssh.on || self.hp.on || (self.is_rdp() && rdp_key(&self.id).is_some()))
+    }
+
+    /// The host to connect to: itself, or at its LAN address when only that answers (and
+    /// the device there can be checked, see lan_fallback). Waits up to ANSWER for each.
     pub fn reachable(&self) -> Host {
-        if self.lan.trim().is_empty() || answers(&self.probe_addr(&self.host)) {
+        if !self.lan_fallback() || answers(&self.probe_addr(&self.host)) {
             return self.clone();
         }
         let alt = self.at_lan();
         if answers(&alt.probe_addr(&alt.host)) {
-            crate::log!("{}: not answering, using its LAN address {}", self.host, alt.host);
+            crate::log!("{}: not answering, trying its LAN address {}", self.host, alt.host);
             return alt;
         }
         self.clone()
@@ -219,14 +231,23 @@ pub fn answers(addr: &str) -> bool {
     addr.to_socket_addrs().is_ok_and(|mut it| it.any(|sa| std::net::TcpStream::connect_timeout(&sa, ANSWER).is_ok()))
 }
 
-/// Saved hosts whose own address stopped answering but whose LAN address does (from the
-/// background probes): connections start there without waiting.
-pub static VIA_LAN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// The Remote Desktop server key (SHA-256, hex) each saved host had when last reached at its
+/// own address: the LAN address must show the same one before a login goes there.
+fn rdp_keys() -> std::collections::HashMap<String, String> {
+    std::fs::read(dir().join("rdp-keys.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
 
-impl Host {
-    /// `reachable` from the last probe, without waiting.
-    pub fn probed(&self) -> Host {
-        if !self.lan.trim().is_empty() && VIA_LAN.lock().unwrap().contains(&self.id) { self.at_lan() } else { self.clone() }
+pub fn rdp_key(id: &str) -> Option<String> {
+    rdp_keys().remove(id)
+}
+
+pub fn set_rdp_key(id: &str, key: &str) {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _g = LOCK.lock().unwrap();
+    let mut keys = rdp_keys();
+    if keys.get(id).map(String::as_str) != Some(key) {
+        keys.insert(id.to_string(), key.to_string());
+        write_atomic("rdp-keys.json", &serde_json::to_vec(&keys).unwrap_or_default());
     }
 }
 
@@ -747,16 +768,23 @@ mod tests {
         h.kind = String::new();
         h.ssh.on = true;
         assert_eq!(h.probe_addr("192.168.32.32:5901"), "192.168.32.32:22");
+        // At the LAN address it must prove to be the device named by its own address.
+        assert_eq!(h.at_lan().key_alias, "jiun-home.tail.ts.net");
         // Without a LAN address nothing is probed or changed.
         h.lan.clear();
+        assert!(!h.lan_fallback());
         assert_eq!(h.reachable().host, h.host);
-        assert_eq!(h.probed().host, h.host);
-        // Known from the probes to answer only there.
+        // Plain VNC can't check who answers: never sent to the LAN address.
         h.lan = "192.168.32.32".into();
-        h.id = "lan-test".into();
-        super::VIA_LAN.lock().unwrap().push(h.id.clone());
-        assert_eq!(h.probed().host, "192.168.32.32:3390");
-        super::VIA_LAN.lock().unwrap().clear();
+        h.ssh.on = false;
+        assert!(!h.lan_fallback());
+        // RDP only with a server key seen at its own address.
+        h.kind = "rdp".into();
+        h.id = "lan-test-no-key".into();
+        assert!(!h.lan_fallback());
+        h.ssh.on = true;
+        h.kind = String::new();
+        assert_eq!(h.lan_fallback(), cfg!(target_os = "macos"));
     }
 
     #[cfg(not(windows))]

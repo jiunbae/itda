@@ -46,6 +46,7 @@ pub fn ssh_cfg_with(host: &crate::store::Host, login: &crate::store::Login, pass
         vnc_port: if host.hp.port == 0 { crate::host_mac_port() } else { host.hp.port },
         key: login.ssh_key.clone(),
         key_pass: login.key_pass.clone().unwrap_or_default(),
+        key_alias: if host.files.host.is_empty() { host.key_alias.clone() } else { String::new() },
     }
 }
 
@@ -229,7 +230,7 @@ mod tests {
     fn read_existing_status() {
         let spec=std::env::var("ITDA_HP_TEST_HOST").expect("ITDA_HP_TEST_HOST");
         let (user,host)=spec.split_once('@').expect("user@ssh-alias");
-        let cfg=SshCfg{host:host.into(),port:22,user:user.into(),pass:String::new(),vnc_port:crate::host_mac_port(),key:String::new(),key_pass:String::new()};
+        let cfg=SshCfg{host:host.into(),port:22,user:user.into(),pass:String::new(),vnc_port:crate::host_mac_port(),key:String::new(),key_pass:String::new(),key_alias:String::new()};
         println!("{:?}",status(&cfg).expect("read-only status"));
     }
 
@@ -248,7 +249,7 @@ mod tests {
     fn upgrade_a_real_mac() {
         let spec = std::env::var("ITDA_HP_TEST_HOST").expect("ITDA_HP_TEST_HOST");
         let (user, host) = spec.split_once('@').unwrap();
-        let cfg = SshCfg { host: host.into(), port: 22, user: user.into(), pass: String::new(), vnc_port: 5900, key: String::new(), key_pass: String::new() };
+        let cfg = SshCfg { host: host.into(), port: 22, user: user.into(), pass: String::new(), vnc_port: 5900, key: String::new(), key_pass: String::new(), key_alias: String::new() };
         let source = match std::env::var("ITDA_HP_TEST_BUNDLE") {
             Ok(p) => Source::Bundle(p.into()),
             Err(_) => Source::Release(env!("CARGO_PKG_VERSION").into()),

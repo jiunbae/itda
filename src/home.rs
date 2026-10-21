@@ -853,7 +853,6 @@ fn connect(id: &str, typed: Option<String>, save: bool) {
         return focus_session(id);
     }
     let Some(host) = home(|m| m.hosts.iter().find(|x| x.id == id).cloned()) else { return };
-    let host = host.probed();
     let login = home(|m| store::resolve(&host, &m.accounts));
     #[cfg(windows)]
     if host.is_rdp() {
@@ -961,7 +960,7 @@ fn remote_setup_probe(v:Value) {
         let host=s(&v,"address");
         let port=v["port"].as_u64().filter(|p|*p>0&&*p<=65535).ok_or_else(||std::io::Error::other("SSH 포트는 1부터 65535 사이여야 합니다"))? as u16;
         let pass=match v["password"].as_str().filter(|p|!p.is_empty()){Some(p)=>p.into(),None=>if account.is_empty(){h.and_then(|h|crate::gateway::typed(&h.id)).or(login.pass).unwrap_or_default()}else{login.pass.unwrap_or_default()}};
-        let cfg=crate::tunnel::SshCfg{host,port,user:s(&v,"user"),pass,vnc_port:0,key:login.ssh_key,key_pass:login.key_pass.unwrap_or_default()};
+        let cfg=crate::tunnel::SshCfg{host,port,user:s(&v,"user"),pass,vnc_port:0,key:login.ssh_key,key_pass:login.key_pass.unwrap_or_default(),key_alias:String::new()};
         crate::tunnel::ssh_target(&cfg)?;
         if cfg.host.trim().is_empty(){return Err(std::io::Error::other("설치할 기기의 SSH 주소를 입력하세요"));}
         let busy=crate::remote_setup::begin()?;
@@ -1214,8 +1213,9 @@ fn learn_lan(hosts: &mut [store::Host], peers: &[crate::tailscale::Peer]) -> boo
         let (name, _) = crate::tunnel::split_host(h.host.trim(), 0);
         let name = name.to_lowercase();
         let Some(p) = peers.iter().find(|p| [&p.dns, &p.name, &p.ip].iter().any(|n| !n.is_empty() && n.to_lowercase() == name)) else { continue };
-        if let Some(ip) = crate::tailscale::lan_ip(&p.cur) {
-            if h.lan != ip {
+        // Only into an empty field: an address someone typed stays.
+        if let Some(ip) = crate::tailscale::lan_ip(&p.cur).filter(|_| h.lan.trim().is_empty()) {
+            {
                 h.lan = ip;
                 changed = true;
             }
@@ -1230,24 +1230,23 @@ fn start_probes() {
         // hosts.json is small and only written by the UI thread (atomically): just read it.
         // SSH hosts are reachable when Remote Login answers; the Screen Sharing port may be firewalled.
         let hosts = store::load_hosts();
-        // (id, reachable, only at its LAN address)
-        let results: Vec<(String, bool, bool)> = std::thread::scope(|sc| {
+        let results: HashMap<String, bool> = std::thread::scope(|sc| {
             let hs: Vec<_> = hosts
                 .iter()
                 .map(|h| {
                     sc.spawn(move || {
                         if store::answers(&h.probe_addr(&h.host)) {
-                            return (h.id.clone(), true, false);
+                            return (h.id.clone(), true);
                         }
-                        let lan = !h.lan.trim().is_empty() && { let a = h.at_lan(); store::answers(&a.probe_addr(&a.host)) };
-                        (h.id.clone(), lan, lan)
+                        // (Counted only where a connection would really go there.)
+                        let lan = h.lan_fallback() && { let a = h.at_lan(); store::answers(&a.probe_addr(&a.host)) };
+                        (h.id.clone(), lan)
                     })
                 })
                 .collect();
             hs.into_iter().filter_map(|h| h.join().ok()).collect()
         });
-        *store::VIA_LAN.lock().unwrap() = results.iter().filter(|r| r.2).map(|r| r.0.clone()).collect();
-        post(Event::Online(results.into_iter().map(|(id, ok, _)| (id, ok)).collect::<HashMap<String, bool>>()));
+        post(Event::Online(results));
         let g = PROBE_WAKE.lock().unwrap();
         let (mut g, _) = PROBE_CV.wait_timeout_while(g, Duration::from_secs(20), |w| !*w).unwrap();
         *g = false;
@@ -1447,8 +1446,12 @@ mod lan_tests {
         let peers = [peer("jiun-home", "jiun-home.tail.ts.net", "192.168.32.32:41641"), peer("other", "other.tail.ts.net", "")];
         assert!(super::learn_lan(&mut hosts, &peers));
         assert_eq!(hosts[0].lan, "192.168.32.32");
-        // A relayed peer (no direct path) keeps what was learned before.
+        // A relayed peer (no direct path) keeps what was learned before, and a typed address
+        // is never replaced.
         assert_eq!(hosts[1].lan, "10.0.0.9");
+        let peers2 = [peer("jiun-home", "jiun-home.tail.ts.net", "192.168.1.50:41641")];
+        assert!(!super::learn_lan(&mut hosts, &peers2));
+        assert_eq!(hosts[0].lan, "192.168.32.32");
         assert!(!super::learn_lan(&mut hosts, &peers), "nothing new");
     }
 }
