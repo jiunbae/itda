@@ -258,7 +258,7 @@ Open **공유** in the sidebar → **웹 뷰어** (or **모두 켜기**). Open t
   - Chrome/Edge/Android: **Install app**. This needs the `https://…ts.net` Tailscale address.
 - **Security:**
   - HttpOnly cookie for 12 hours
-  - 5 wrong PINs pause new sign-ins for 1 minute across all clients; existing sessions still work
+  - 5 wrong PINs from one source pause its new sign-ins for 1 minute; 50 failures across sources also trigger a shared pause. Existing sessions still work
   - same-origin checks
   - a new PIN signs everyone out
   - The browser ↔ PC leg is plain HTTP, so use it on your own Wi-Fi or over Tailscale and **never forward the port to the internet**.
