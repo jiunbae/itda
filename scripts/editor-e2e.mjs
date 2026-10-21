@@ -16,7 +16,10 @@ const server = http.createServer((req, res) => {
   } catch { res.writeHead(404); res.end(); }
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
-const browser = await pw.chromium.launch(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {});
+// ENGINE=webkit runs it in WebKit, as the Mac app's WKWebView.
+const engine = process.env.ENGINE || "chromium";
+const exe = engine === "chromium" ? process.env.CHROMIUM : process.env.WEBKIT;
+const browser = await pw[engine].launch(exe ? { executablePath: exe } : {});
 try {
   const page = await browser.newPage({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36" });
   const errors = [];
@@ -75,8 +78,40 @@ try {
     itda.recv({ type: "hp", id: "mac", helper: true, error: "원격 Mac에 Itda가 설치되어 있지 않습니다" });
   });
   assert(await page.getByText("Mac 권한 도우미를 열지 못했습니다 — 원격 Mac에 Itda가 설치되어 있지 않습니다", { exact: true }).isVisible(), "closed-guide error was swallowed");
+  // Group suggestions (drawn by the page: WKWebView shows no <datalist>): other connections'
+  // groups, filtered as you type, picked with the arrows and Enter or a click.
+  await page.evaluate(() => closeModal());
+  const work = { ...pc, id: "work", name: "Work", host: "work.local", group: "회사, 집", groups: ["회사", "집"] };
+  await page.evaluate(([a, b, c]) => { itda.recv({ type: "hosts", hosts: [a, b, c] }); openEdit(b); }, [mac, pc, work]);
+  await page.waitForTimeout(150); // (openModal's own focus timer first)
+  await page.locator("#f-group").focus();
+  const sugs = () => page.locator("#group-suggest [data-sug]").evaluateAll((e) => e.map((x) => x.dataset.sug));
+  assert(await page.locator("#group-suggest").isVisible(), "no suggestions on focus");
+  assert(JSON.stringify((await sugs()).sort()) === JSON.stringify(["Home", "집", "회사"].sort()), `suggestions ${await sugs()}`);
+  await page.locator("#f-group").pressSequentially("ho");
+  assert(JSON.stringify(await sugs()) === JSON.stringify(["Home"]), `filtered ${await sugs()}`);
+  await page.locator("#f-group").press("Enter");
+  assert(JSON.stringify(await chips()) === JSON.stringify(["Home"]), `Enter did not take the suggestion: ${await chips()}`);
+  assert(!(await sugs()).includes("Home"), "a group already on the connection is still suggested");
+  await page.locator("#f-group").press("ArrowDown"); // with nothing typed: first suggestion
+  await page.locator("#f-group").press("Enter");
+  assert((await chips()).length === 2, `arrow + Enter: ${await chips()}`);
+  await page.locator(`#group-suggest [data-sug]`).first().dispatchEvent("mousedown");
+  assert((await chips()).length === 3, `click: ${await chips()}`);
+  assert(await page.locator("#group-suggest").isHidden(), "suggestions left with nothing to suggest");
+  // A new group still goes in as typed, and Enter didn't save the dialog on the way.
+  await page.locator("#f-group").fill("여행");
+  await page.locator("#f-group").press("Enter");
+  assert((await chips()).includes("여행"), "new group not added");
+  assert((await saved()).filter((x) => x.host.id === "work").length === 0, "Enter in the group field saved");
+  await page.evaluate(() => closeModal());
+  // OS marks: a card with a preview keeps a small OS badge; without one the big mark shows.
+  await page.evaluate(([a, b]) => itda.recv({ type: "hosts", hosts: [a, { ...b, thumb: 1 }] }), [mac, pc]);
+  assert(await page.locator('.card[data-id="pc"] .os-badge[title="Windows"]').count() === 1, "no OS badge on a card with a preview");
+  assert(await page.locator('.card[data-id="mac"] .os-badge').count() === 0, "badge on a card without a preview");
+  assert(await page.locator('.card[data-id="mac"] .ph .osm-mac').count() === 1, "big Mac mark missing");
   assert(!errors.length, `page errors: ${errors}`);
-  console.log("PASS: group chips, Enter/IME, HP state kept on save, HP events scoped, HP block follows kind");
+  console.log("PASS: group chips, Enter/IME, HP state kept on save, HP events scoped, HP block follows kind, group suggestions, OS badges");
 } finally {
   await browser.close();
   server.close();
