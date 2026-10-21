@@ -27,7 +27,7 @@ try{
    const homes={studio:'/Users/alex',build:'/home/dev',fresh:'/fresh'};
    const tree={'/Users/alex':[entry('Docs',true),entry('Alpha-A.txt')],'/Users/alex/Docs':[entry('Inside-A.txt')],'/home/dev':[entry('Beta-B.txt')],'/fresh':[entry('Fresh.txt')],'/local':[entry('Local.txt')]};
    window.testPackets=[];
-   window.ipc={postMessage:raw=>{const m=JSON.parse(raw);if(m.cmd==='files_clipboard'||m.cmd==='files_sort'){testPackets.push(m);return;}if(m.cmd!=='files')return;testPackets.push(m);
+   window.ipc={postMessage:raw=>{const m=JSON.parse(raw);if(['files_clipboard','files_sort','files_drag_release'].includes(m.cmd)){testPackets.push(m);return;}if(m.cmd!=='files')return;testPackets.push(m);
     const result={...m,type:'files_result',ok:true};
     if(m.op==='connect'){if(!homes[m.id])return;result.data={path:homes[m.id],entries:tree[homes[m.id]],local_path:'/local',local_entries:tree['/local'],rsync:true};}
     else if(m.op==='list')result.data={path:m.path,entries:window.sortTesting&&m.path==='/Users/alex' ? [entry('Folder2',true),{...entry('file10.txt'),size:20,modified:300},{...entry('Zebra.pdf'),size:5,modified:100},entry('Docs',true),{...entry('file2.txt'),size:20,modified:200}] : tree[m.path]||[]};
@@ -130,6 +130,17 @@ try{
   await p.locator('.files-prompt [data-choice="ok"]').click();
   {const t=(await packets()).filter(x=>x.op==='transfer').at(-1);
    assert(t.id==='build'&&t.from_id==='studio'&&t.from_window==='other-window'&&t.source==='/Users/alex','Cross-window paste: '+JSON.stringify(t));}
+  // Native drop provenance goes through the same transfer confirmation and relay.
+  const nativeOrigin={id:'studio',window:'source-window',side:'remote',path:'/Users/alex',names:['Alpha-A.txt'],drag:'native-live-token'};
+  await p.evaluate(origin=>itda.recv({type:'files_drop',window:window.ITDA_FILE_WINDOW||window.ITDA_FILE_HOST||null,origin}),nativeOrigin);
+  await p.locator('.files-prompt [data-choice="ok"]').click();
+  await p.waitForFunction(()=>testPackets.some(x=>x.cmd==='files_drag_release'&&x.drag==='native-live-token'));
+  {const t=(await packets()).filter(x=>x.op==='transfer').at(-1);assert(t.id==='build'&&t.from_id==='studio'&&t.from_window==='source-window'&&t.from_drag==='native-live-token'&&t.names[0]==='Alpha-A.txt','Native cross-window origin lost: '+JSON.stringify(t));}
+  const beforeCancel=(await packets()).filter(x=>x.op==='transfer').length;
+  await p.evaluate(origin=>itda.recv({type:'files_drop',window:window.ITDA_FILE_WINDOW||window.ITDA_FILE_HOST||null,origin:{...origin,drag:'native-cancel-token'}}),nativeOrigin);
+  await p.locator('.files-prompt [data-choice="cancel"]').click();
+  await p.waitForFunction(()=>testPackets.some(x=>x.cmd==='files_drag_release'&&x.drag==='native-cancel-token'));
+  assert((await packets()).filter(x=>x.op==='transfer').length===beforeCancel,'Cancelled native drop started a transfer');
   await layer.locator('[data-tab]').nth(0).click();await row('Inside-A.txt').waitFor();
   // Transfers show on their own device's tabs and cancel on that device.
   await p.evaluate(()=>itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job:'job-A',state:'running',file:'A-copy'}));

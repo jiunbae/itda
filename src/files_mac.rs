@@ -10,7 +10,7 @@ use objc2_app_kit::{
     NSApp, NSDragOperation, NSDraggingContext, NSDraggingItem, NSDraggingSession, NSDraggingSource,
     NSEvent, NSEventModifierFlags, NSEventType, NSFilePromiseProvider,
     NSFilePromiseProviderDelegate, NSImage, NSPasteboard, NSPasteboardTypeFileURL,
-    NSPasteboardWriting, NSView,
+    NSPasteboardWriting, NSView, NSPasteboardNameDrag, NSPasteboardWritingOptions,
 };
 use objc2_foundation::{
     NSArray, NSData, NSDictionary, NSError, NSLocalizedDescriptionKey, NSOperationQueue, NSPoint,
@@ -179,6 +179,132 @@ define_class!(
         }
     }
 );
+// Describe the private token as part of each writer before AppKit creates its
+// pasteboard items. The native promise/URL representations keep their own data.
+fn with_drag_type(types: &NSArray<NSString>) -> Retained<NSArray<NSString>> {
+    let mut types: Vec<_> = types.iter().map(|kind| kind.retain()).collect();
+    types.push(NSString::from_str("dev.jiun.itda.file-drag"));
+    NSArray::from_retained_slice(&types)
+}
+struct ProviderState {
+    token: String,
+}
+define_class!(
+    #[unsafe(super(NSFilePromiseProvider))]
+    #[thread_kind=AnyThread]
+    #[name = "ItdaTokenFilePromiseProvider"]
+    #[ivars=ProviderState]
+    struct TokenProvider;
+    unsafe impl NSObjectProtocol for TokenProvider {}
+    unsafe impl NSPasteboardWriting for TokenProvider {
+        #[unsafe(method(writingOptionsForType:pasteboard:))]
+        fn options(&self, kind: &NSString, board: &NSPasteboard) -> NSPasteboardWritingOptions {
+            if kind.to_string() == "dev.jiun.itda.file-drag" {
+                NSPasteboardWritingOptions::empty()
+            } else {
+                unsafe { msg_send![super(self),writingOptionsForType:kind,pasteboard:board] }
+            }
+        }
+        #[unsafe(method_id(writableTypesForPasteboard:))]
+        fn types(&self, board: &NSPasteboard) -> Retained<NSArray<NSString>> {
+            let native: Retained<NSArray<NSString>> =
+                unsafe { msg_send![super(self),writableTypesForPasteboard:board] };
+            with_drag_type(&native)
+        }
+        #[unsafe(method_id(pasteboardPropertyListForType:))]
+        fn value(&self, kind: &NSString) -> Option<Retained<AnyObject>> {
+            if kind.to_string() == "dev.jiun.itda.file-drag" {
+                Some(
+                    NSString::from_str(&self.ivars().token)
+                        .into_super()
+                        .into_super(),
+                )
+            } else {
+                unsafe { msg_send![super(self),pasteboardPropertyListForType:kind] }
+            }
+        }
+    }
+);
+struct UrlState {
+    url: Retained<NSURL>,
+    token: String,
+}
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind=AnyThread]
+    #[name = "ItdaTokenFileUrlWriter"]
+    #[ivars=UrlState]
+    struct TokenUrl;
+    unsafe impl NSObjectProtocol for TokenUrl {}
+    unsafe impl NSPasteboardWriting for TokenUrl {
+        #[unsafe(method_id(writableTypesForPasteboard:))]
+        fn types(&self, board: &NSPasteboard) -> Retained<NSArray<NSString>> {
+            let native = self.ivars().url.writableTypesForPasteboard(board);
+            with_drag_type(&native)
+        }
+        #[unsafe(method_id(pasteboardPropertyListForType:))]
+        fn value(&self, kind: &NSString) -> Option<Retained<AnyObject>> {
+            if kind.to_string() == "dev.jiun.itda.file-drag" {
+                Some(
+                    NSString::from_str(&self.ivars().token)
+                        .into_super()
+                        .into_super(),
+                )
+            } else {
+                self.ivars().url.pasteboardPropertyListForType(kind)
+            }
+        }
+    }
+);
+fn url_writer(path: &str, token: &str) -> Retained<TokenUrl> {
+    let object = TokenUrl::alloc().set_ivars(UrlState {
+        url: NSURL::fileURLWithPath(&NSString::from_str(path)),
+        token: token.into(),
+    });
+    unsafe { msg_send![super(object), init] }
+}
+fn promise_writer(
+    file: File,
+    queue: &NSOperationQueue,
+    drag: &str,
+) -> (Retained<TokenProvider>, String) {
+    let token = crate::store::new_id();
+    let kind = NSString::from_str(if file.dir {
+        "public.folder"
+    } else {
+        "public.data"
+    });
+    let object = Promise::alloc().set_ivars(PromiseState {
+        file,
+        token: token.clone(),
+        queue: queue.retain(),
+    });
+    let delegate: Retained<Promise> = unsafe { msg_send![super(object), init] };
+    let object = TokenProvider::alloc().set_ivars(ProviderState { token: drag.into() });
+    let provider: Retained<TokenProvider> = unsafe {
+        msg_send![super(object),initWithFileType:&*kind,delegate:ProtocolObject::<dyn NSFilePromiseProviderDelegate>::from_ref(&*delegate)]
+    };
+    PROMISES.with(|p| p.borrow_mut().insert(token.clone(), delegate));
+    (provider, token)
+}
+struct PendingDrag {
+    token: String,
+    promises: Vec<String>,
+    started: bool,
+}
+impl Drop for PendingDrag {
+    fn drop(&mut self) {
+        if !self.started {
+            files::drag::release(&self.token);
+            PROMISES.with(|p| {
+                let mut p = p.borrow_mut();
+                for token in &self.promises {
+                    p.remove(token);
+                }
+            });
+        }
+    }
+}
 struct DragState {
     drag: String,
     tokens: Vec<String>,
@@ -203,7 +329,8 @@ define_class!(
         #[unsafe(method(draggingSession:endedAtPoint:operation:))]
         fn ended(&self, _session: &NSDraggingSession, _point: NSPoint, operation: NSDragOperation) {
             let _keep_alive = self.retain();
-            if operation == NSDragOperation::None {
+            let internal = files::drag::finish(&self.ivars().drag);
+            if operation == NSDragOperation::None || internal {
                 let _ = PROMISES.try_with(|p| {
                     let mut p = p.borrow_mut();
                     for token in &self.ivars().tokens {
@@ -243,48 +370,28 @@ pub fn drag(nsview: &NSView, v: Value) -> Result<(), String> {
             "한 번에 256개까지 Finder로 끌어 놓을 수 있습니다. 폴더로 묶어 다시 시도하세요".into(),
         );
     }
+    let mut pending = PendingDrag {token:files::drag::begin(&v,&selection).map_err(|e|e.to_string())?,promises:Vec::new(),started:false};
+    let token = pending.token.clone();
     let queue = NSOperationQueue::new();
     queue.setMaxConcurrentOperationCount(2);
-    let mut tokens = Vec::new();
     let mut items = Vec::new();
     for file in selection {
         let writer: Retained<ProtocolObject<dyn NSPasteboardWriting>> = if file.remote {
-            let token = crate::store::new_id();
-            let object = Promise::alloc().set_ivars(PromiseState {
-                file: file.clone(),
-                token: token.clone(),
-                queue: queue.clone(),
-            });
-            let delegate: Retained<Promise> = unsafe { msg_send![super(object), init] };
-            let provider = NSFilePromiseProvider::initWithFileType_delegate(
-                NSFilePromiseProvider::alloc(),
-                &NSString::from_str(if file.dir {
-                    "public.folder"
-                } else {
-                    "public.data"
-                }),
-                ProtocolObject::from_ref(&*delegate),
-            );
-            PROMISES.with(|p| {
-                p.borrow_mut().insert(token.clone(), delegate);
-            });
-            tokens.push(token);
+            let (provider,promise)=promise_writer(file,&queue,&token);
+            pending.promises.push(promise);
             ProtocolObject::from_retained(provider)
         } else {
             let path = file.path().map_err(|e| e.to_string())?;
             std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-            ProtocolObject::from_retained(NSURL::fileURLWithPath(&NSString::from_str(
-                &path.to_string_lossy(),
-            )))
+            ProtocolObject::from_retained(url_writer(&path.to_string_lossy(),&token))
         };
         let item = NSDraggingItem::initWithPasteboardWriter(NSDraggingItem::alloc(), &writer);
         unsafe { item.setDraggingFrame_contents(frame, Some(&image)) };
         items.push(item);
     }
-    let token = crate::store::new_id();
     let state = Source::alloc(mtm).set_ivars(DragState {
         drag: token.clone(),
-        tokens,
+        tokens:pending.promises.clone(),
         id: files::scoped_id(v["id"].as_str().unwrap_or(""), &v["window"]),
     });
     let source: Retained<Source> = unsafe { msg_send![super(state), init] };
@@ -300,7 +407,21 @@ pub fn drag(nsview: &NSView, v: Value) -> Result<(), String> {
         &event,
         ProtocolObject::from_ref(&*source),
     );
+    pending.started = true;
     Ok(())
+}
+
+pub fn register_drop(view: &NSView) {
+    let mut types: Vec<_> = view.registeredDraggedTypes().iter().map(|kind|kind.retain()).collect();
+    types.push(NSString::from_str("dev.jiun.itda.file-drag"));
+    view.registerForDraggedTypes(&NSArray::from_retained_slice(&types));
+}
+fn board_origin(board: &NSPasteboard) -> Option<Value> {
+    let token = board.stringForType(&NSString::from_str("dev.jiun.itda.file-drag"))?.to_string();
+    files::drag::accept(&token)
+}
+pub fn drop_origin() -> Option<Value> {
+    board_origin(&NSPasteboard::pasteboardWithName(unsafe { NSPasteboardNameDrag }))
 }
 
 pub fn promise_done(v: &Value) {
@@ -347,6 +468,25 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     #[test]
+    fn private_drag_board_preserves_urls_and_checks_native_session() {
+        let board = NSPasteboard::pasteboardWithUniqueName();
+        board.clearContents();
+        let v = json!({"id":"source","window":"source-window","side":"local","path":"/tmp","items":[{"name":"itda-drag-fixture.txt"}]});
+        let files = files::export::selection(&v).unwrap();
+        let token = files::drag::begin(&v,&files).unwrap();
+        assert!(board.writeObjects(&NSArray::from_retained_slice(&[ProtocolObject::<dyn NSPasteboardWriting>::from_retained(url_writer("/tmp/itda-drag-fixture.txt",&token))])));
+        assert!(board.types().unwrap().containsObject(unsafe { NSPasteboardTypeFileURL }),"marker removed native file URLs");
+        let origin = board_origin(&board).unwrap();
+        assert_eq!(origin["window"],"source-window"); assert_eq!(origin["names"],json!(["itda-drag-fixture.txt"]));
+        assert!(board_origin(&board).is_none(),"drop token could be replayed");
+        files::drag::finish(&token); files::drag::release(&token);
+        board.clearContents();
+        assert!(board.writeObjects(&NSArray::from_retained_slice(&[ProtocolObject::<dyn NSPasteboardWriting>::from_retained(url_writer("/tmp/itda-drag-fixture.txt","00000000000000000000000000000000"))])));
+        assert!(board_origin(&board).is_none());
+        board.clearContents();
+    }
+
+    #[test]
     fn finder_promise_writes_and_never_overwrites_or_removes_source() {
         let root =
             std::env::temp_dir().join(format!("itda-promise-test-{}", crate::store::new_id()));
@@ -361,18 +501,23 @@ mod tests {
             dir: true,
         };
         let queue = NSOperationQueue::new();
-        let object = Promise::alloc().set_ivars(PromiseState {
-            file,
-            token: "test".into(),
-            queue,
-        });
-        let delegate: Retained<Promise> = unsafe { msg_send![super(object), init] };
-        let protocol = ProtocolObject::<dyn NSFilePromiseProviderDelegate>::from_ref(&*delegate);
-        let provider = NSFilePromiseProvider::initWithFileType_delegate(
-            NSFilePromiseProvider::alloc(),
-            &NSString::from_str("public.folder"),
-            protocol,
-        );
+        let (provider,promise_token) = promise_writer(file,&queue,"promise-drag-token");
+        let protocol = provider.delegate().unwrap();
+        let board = NSPasteboard::pasteboardWithUniqueName();
+        board.clearContents();
+        assert!(board.writeObjects(&NSArray::from_retained_slice(&[ProtocolObject::<dyn NSPasteboardWriting>::from_retained(provider.clone())])));
+        assert_eq!(provider.writingOptionsForType_pasteboard(&NSString::from_str("dev.jiun.itda.file-drag"),&board),NSPasteboardWritingOptions::empty());
+        assert_eq!(board.stringForType(&NSString::from_str("dev.jiun.itda.file-drag")).unwrap().to_string(),"promise-drag-token");
+        let native_types:Retained<NSArray<NSString>>=unsafe {msg_send![super(&*provider),writableTypesForPasteboard:&*board]};
+        for kind in native_types.iter() {
+            assert!(board.types().unwrap().containsObject(&kind),"native promise type removed");
+            let forwarded=provider.pasteboardPropertyListForType(&kind);
+            let native:Option<Retained<AnyObject>>=unsafe {msg_send![super(&*provider),pasteboardPropertyListForType:&*kind]};
+            match (forwarded,native) {
+                (Some(a),Some(b)) => {let same:bool=unsafe {msg_send![&*a,isEqual:&*b]};assert!(same,"promise metadata changed for {kind}");},
+                (None,None)=>{},_=>panic!("promise metadata missing for {kind}")
+            }
+        }
         let target = root.join("Finder copy");
         let url = NSURL::fileURLWithPath(&NSString::from_str(&target.to_string_lossy()));
         let errors = Arc::new(Mutex::new(Vec::new()));
@@ -397,6 +542,8 @@ mod tests {
             std::fs::read(target.join("한글 문서.txt")).unwrap(),
             b"keep destination"
         );
+        PROMISES.with(|p|p.borrow_mut().remove(&promise_token));
+        board.clearContents();
         std::fs::remove_dir_all(root).unwrap();
     }
 }
