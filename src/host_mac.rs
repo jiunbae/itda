@@ -164,13 +164,20 @@ pub(crate) fn monitors() -> Vec<(u32, i32, i32, i32, i32)> {
 /// The newest captured frame, handed from ScreenCaptureKit's queue to the pump.
 type Latest = Arc<Mutex<Option<CFRetained<CVPixelBuffer>>>>;
 
-/// Called when a new frame arrives; false once its viewer is gone.
-type Waker = Box<dyn Fn() -> bool + Send>;
-static FRAME_WAKERS: Mutex<Vec<Waker>> = Mutex::new(Vec::new());
+/// Called when a new frame arrives.
+type Waker = Box<dyn Fn() + Send>;
+static FRAME_WAKERS: Mutex<Vec<(u64, Waker)>> = Mutex::new(Vec::new());
+static NEXT_WAKER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Have `wake` called whenever ScreenCaptureKit delivers a new frame.
-pub(crate) fn on_frame(wake: Waker) {
-    FRAME_WAKERS.lock().unwrap().push(wake);
+/// Have `wake` called whenever ScreenCaptureKit delivers a new frame, until `off_frame(id)`.
+pub(crate) fn on_frame(wake: Waker) -> u64 {
+    let id = NEXT_WAKER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    FRAME_WAKERS.lock().unwrap().push((id, wake));
+    id
+}
+
+pub(crate) fn off_frame(id: u64) {
+    FRAME_WAKERS.lock().unwrap().retain(|(i, _)| *i != id);
 }
 
 struct OutputIvars {
@@ -193,7 +200,9 @@ define_class!(
             if let Some(image) = unsafe { sample.image_buffer() } {
                 *self.ivars().latest.lock().unwrap() = Some(image);
                 // Wake every viewer's pump now, rather than at its next poll.
-                FRAME_WAKERS.lock().unwrap().retain(|wake| wake());
+                for (_, wake) in FRAME_WAKERS.lock().unwrap().iter() {
+                    wake();
+                }
             }
         }
     }

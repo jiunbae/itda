@@ -274,17 +274,25 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
     changed();
 
     let (tx, rx) = channel();
-    let wake = tx.clone();
-    platform::on_frame(Box::new(move || wake.send(Msg::Frame).is_ok()));
+    // At most one Frame waits in the channel: the pump takes the newest frame anyway.
+    let woken = Arc::new(AtomicBool::new(false));
+    let (wake, woken2) = (tx.clone(), woken.clone());
+    let waker = FrameWaker(platform::on_frame(Box::new(move || {
+        if !woken2.swap(true, Relaxed) {
+            let _ = wake.send(Msg::Frame);
+        }
+    })));
     let reader = c.try_clone()?;
     let cfg2 = cfg.clone();
     std::thread::spawn(move || {
+        // The waker keeps the channel open, so say when the viewer is gone (also on a panic).
+        let gone = Gone(tx);
         let mut input = platform::Input::new(cfg2.cmd_as_ctrl, cfg2.view_only);
-        let _ = read_client(BufReader::new(reader), &tx, &mut input);
+        let _ = read_client(BufReader::new(reader), &gone.0, &mut input);
         input.release_all();
-        let _ = tx.send(Msg::Gone);
     });
-    let r = Outbox::new(c.try_clone()?).and_then(|out| pump(&out, &rx, &cap, size, stop));
+    let r = Outbox::new(c.try_clone()?).and_then(|out| pump(&out, &rx, &woken, &cap, size, stop));
+    drop(waker);
     let _ = c.shutdown(Shutdown::Both);
     VIEWERS.lock().unwrap().retain(|(i, _, _)| *i != id);
     changed();
@@ -394,7 +402,29 @@ pub(crate) trait VideoEncode: Send {
 pub(crate) type Video = Box<dyn VideoEncode>;
 
 /// Server → client: capture, diff, encode, send.
-fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut size: (usize, usize), stop: &AtomicBool) -> io::Result<()> {
+/// How long a macOS video pump waits for its next capture: the rest of the frame gap once a
+/// new frame has arrived, else until the fallback poll.
+fn video_wait(gap: Duration, since_capture: Duration, arrived: bool) -> Duration {
+    gap.saturating_sub(since_capture).max(if arrived { Duration::ZERO } else { VIDEO_POLL })
+}
+
+/// Stops a viewer's frame wakes when its connection ends.
+struct FrameWaker(u64);
+impl Drop for FrameWaker {
+    fn drop(&mut self) {
+        platform::off_frame(self.0);
+    }
+}
+
+/// Tells the pump its viewer's connection was closed once the reader thread ends.
+struct Gone(Sender<Msg>);
+impl Drop for Gone {
+    fn drop(&mut self) {
+        let _ = self.0.send(Msg::Gone);
+    }
+}
+
+fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platform::Capture>, mut size: (usize, usize), stop: &AtomicBool) -> io::Result<()> {
     let mut pf = PixelFormat::parse(&PIXEL_FORMAT);
     let mut encs: Vec<i32> = Vec::new();
     let mut demand = Demand::default();
@@ -433,7 +463,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
         // clipboard check. Captures stay FRAME apart also when the screen doesn't change.
         let gap = if video.is_some() { VIDEO_FRAME } else { FRAME };
         let wait = match demand.due() {
-            Some(_) if out.room() && video.is_some() && cfg!(target_os = "macos") => gap.saturating_sub(last_capture.elapsed()).max(if arrived { Duration::ZERO } else { VIDEO_POLL }),
+            Some(_) if out.room() && video.is_some() && cfg!(target_os = "macos") => video_wait(gap, last_capture.elapsed(), arrived),
             Some(_) if out.room() => gap.saturating_sub(last_capture.elapsed()),
             _ => gap,
         };
@@ -461,7 +491,10 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
                     told = None; // (re)introduce the displays
                 }
                 Msg::Resize => refuse_resize = true,
-                Msg::Frame => arrived = true,
+                Msg::Frame => {
+                    woken.store(false, Relaxed);
+                    arrived = true;
+                }
                 Msg::Gone => return Ok(()),
                 Msg::Request { incremental } => demand.request(incremental),
                 Msg::Ext(m) => {
@@ -499,6 +532,8 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
         // repaint is due: skip the copy and compare of a whole frame.
         // (A viewer whose history was just reset, with `prev` cleared, always grabs.)
         if video.is_some() && incremental && !prev.is_empty() && last_change.elapsed() < REFINE && !cap.lock().unwrap().fresh_since(seen) {
+            // (A Frame can name a frame this pump already took: back to the fallback poll.)
+            arrived = false;
             continue;
         }
         last_capture = Instant::now();
@@ -619,6 +654,18 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn video_waits_for_the_frame_gap_or_the_fallback_poll() {
+        use super::{video_wait, VIDEO_FRAME, VIDEO_POLL};
+        use std::time::Duration;
+        let ms = Duration::from_millis;
+        // A frame arrived: go as soon as the gap allows.
+        assert_eq!(video_wait(VIDEO_FRAME, ms(4), true), VIDEO_FRAME - ms(4));
+        assert_eq!(video_wait(VIDEO_FRAME, VIDEO_FRAME + ms(5), true), Duration::ZERO);
+        // None arrived (or the one named was already taken): don't spin, poll as a fallback.
+        assert_eq!(video_wait(VIDEO_FRAME, VIDEO_FRAME + ms(5), false), VIDEO_POLL);
+    }
+
     #[test]
     fn nearby_devices_are_this_network_or_tailnet() {
         let near = |s: &str| super::near(s.parse().unwrap());
