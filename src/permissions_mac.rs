@@ -32,6 +32,11 @@ fn pending_marker() -> PathBuf {
 pub(super) fn pending() -> bool {
     pending_marker().exists()
 }
+/// Pending from a setup still going on (marked in the last 10 minutes): a relaunch then is
+/// macOS's "Quit & Reopen", not someone opening Itda to use it.
+pub(super) fn pending_recently() -> bool {
+    std::fs::metadata(pending_marker()).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|d| d.as_secs() < 600))
+}
 /// Mid-setup relaunch: the permission still to do, so the guide carries on by itself.
 pub(super) fn next_missing() -> Option<&'static str> {
     if !pending() { return None; }

@@ -38,6 +38,12 @@ pub fn state() -> State {
     imp::state()
 }
 
+/// Launched to stay in the background (macOS: `open … --args --background`, from another Itda
+/// setting up high-performance sharing over SSH).
+pub fn background_launch(mut args: impl Iterator<Item = String>) -> bool {
+    args.any(|a| a == "--background")
+}
+
 /// Turn starting at login on or off; the state that resulted.
 pub fn set(on: bool) -> Result<State, String> {
     imp::set(on)?;
@@ -184,6 +190,15 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_launch_is_asked_for_explicitly() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter();
+        assert!(background_launch(args(&["--background"])));
+        assert!(background_launch(args(&["-psn_0_123", "--background"])));
+        assert!(!background_launch(args(&[])));
+        assert!(!background_launch(args(&["itda://permissions"])));
+    }
 
     #[test]
     fn a_failed_change_keeps_what_the_system_has() {
