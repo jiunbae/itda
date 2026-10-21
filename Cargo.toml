@@ -29,6 +29,7 @@ ironrdp-dvc = "0.8"
 ironrdp-displaycontrol = "0.8"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 x509-cert = { version = "0.2", default-features = false, features = ["std"] }
+unicode-normalization = "0.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # High-performance mode: hardware H.264 (VideoToolbox) for RFB encoding 50.

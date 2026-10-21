@@ -427,6 +427,8 @@ fn on_ipc(v: Value) {
         #[cfg(any(target_os = "macos", windows))]
         "files_drag_release" => { if let Some(token) = v["drag"].as_str() { crate::files::drag::release(token); } },
         "files_release_page" => crate::files::release_page(s(&v, "page").as_str()),
+        // A sort chosen in one file window applies in every open one.
+        "files_sort" => send(json!({"type": "files_sort", "sort": v["sort"]})),
         // Copy/Cut in one file window is what Paste uses in every other one.
         "files_clipboard" => {
             let clip = v["clip"].clone();
@@ -540,6 +542,11 @@ fn on_ipc(v: Value) {
         "delete_host" => {
             stop_session(&id);
             crate::files::disconnect(&id);
+            // A copy from this device can't be pasted any more: windows drop it.
+            let cid = home(|m| (m.file_clipboard["host"].as_str() == Some(id.as_str())).then(|| std::mem::take(&mut m.file_clipboard)["cid"].as_str().map(str::to_string)).flatten());
+            if let Some(cid) = cid {
+                send(json!({"type": "files_clipboard", "clip": {"clear": cid}}));
+            }
             if let Some(h) = home(|m| m.hosts.iter().find(|h| h.id == id).cloned()) { store::set_password(&crate::files::password_key(&h), None); }
             store::set_password(&format!("files-{id}"), None);
             home(|m| m.hosts.retain(|x| x.id != id));
