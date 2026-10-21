@@ -86,11 +86,13 @@ const viewerTrace = (() => {
     const Base = window.VideoDecoder;
     window.VideoDecoder = class extends Base {
       constructor(init) {
-        // This decoder's frames in flight: chunk timestamp → when it was handed over.
+        // This decoder's chunks in flight: timestamp → when each was handed over, oldest first
+        // (noVNC gives every access unit of one rectangle the same timestamp).
         const submitted = new Map();
         super({ ...init, output: (f) => {
-          const t = submitted.get(f.timestamp);
-          submitted.delete(f.timestamp);
+          const q = submitted.get(f.timestamp);
+          const t = q && q.shift();
+          if (q && !q.length) submitted.delete(f.timestamp);
           if (t !== undefined) {
             const now = performance.now();
             add('decode', now - t);
@@ -101,9 +103,18 @@ const viewerTrace = (() => {
         this.itdaSubmitted = submitted;
       }
       decode(chunk) {
-        if (this.itdaSubmitted.size > 64) this.itdaSubmitted.clear(); // (errors leave entries)
-        this.itdaSubmitted.set(chunk.timestamp, performance.now());
-        return super.decode(chunk);
+        const s = this.itdaSubmitted;
+        if (s.size > 64) s.clear(); // (a decoder error leaves its chunks behind)
+        const q = s.get(chunk.timestamp) || [];
+        q.push(performance.now());
+        s.set(chunk.timestamp, q);
+        try {
+          return super.decode(chunk);
+        } catch (e) {
+          q.pop(); // not submitted after all
+          if (!q.length) s.delete(chunk.timestamp);
+          throw e;
+        }
       }
       reset() { this.itdaSubmitted.clear(); return super.reset(); }
       close() { this.itdaSubmitted.clear(); return super.close(); }

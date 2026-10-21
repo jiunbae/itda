@@ -50,6 +50,14 @@ try {
     a.decode(new EncodedVideoChunk({ timestamp: 10, type: "key", data }));
     b.decode(new EncodedVideoChunk({ timestamp: 20, type: "key", data }));
     await Promise.all([a.flush(), b.flush()]);
+    // Two access units with one timestamp (noVNC's way within a rectangle): both pair, and
+    // only the frame that reaches the screen counts as drawn.
+    const c = new VideoDecoder({ output: (f) => { frames++; if (f.timestamp === 40 && ++same === 2) { display._drawCtx.drawImage(f, 0, 0, 64, 64); flip(); } f.close(); }, error: (e) => { throw e; } });
+    let same = 0;
+    c.configure(cfg);
+    c.decode(new EncodedVideoChunk({ timestamp: 40, type: "key", data }));
+    c.decode(new EncodedVideoChunk({ timestamp: 40, type: "key", data }));
+    await c.flush();
     // A flip with nothing new decoded, and a non-video draw, count as no frame.
     flip();
     display._drawCtx.fillRect(0, 0, 8, 8); flip();
@@ -79,11 +87,12 @@ try {
     process.exit(0);
   }
   const off = await run(false);
-  assert(!off.patched && off.frames === 2 && off.posted.length === 0, `trace off changed something: ${JSON.stringify(off)}`);
+  assert(!off.patched && off.frames === 4 && off.posted.length === 0, `trace off changed something: ${JSON.stringify(off)}`);
   const on = await run(true);
-  assert(on.patched && on.frames === 3, `decoder: ${JSON.stringify(on)}`);
-  // Two decoded frames, each drawn and copied once; the empty flip and the plain draw added none.
-  assert(on.early.decode === 2 && on.early.draw === 2 && on.early.nextRaf === 2, `counts ${JSON.stringify(on.early)}`);
+  assert(on.patched && on.frames === 5, `decoder: ${JSON.stringify(on)}`);
+  // Four decoded frames (two sharing a timestamp), three of them drawn and copied once; the
+  // empty flip and the plain draw added none.
+  assert(on.early.decode === 4 && on.early.draw === 3 && on.early.nextRaf === 3, `counts ${JSON.stringify(on.early)}`);
   const report = on.posted.find((m) => m.ev === "trace");
   assert(report && /decode n=\d+ p50=[\d.]+/.test(report.text) && /draw n=\d+/.test(report.text) && /nextRaf n=\d+/.test(report.text), `report: ${JSON.stringify(on.posted)}`);
   console.log(`PASS (${engine}): trace off leaves VideoDecoder alone; on: ${report.text}`);
