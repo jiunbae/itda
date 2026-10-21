@@ -605,7 +605,6 @@
         if (host.id !== NETWORK) call("release");
         layer?.remove();
         layer = null;
-        clipboard = null;
         undo.length = 0;
       }
     }
@@ -784,7 +783,6 @@
     split = false;
     search = "";
     returnPage = null;
-    clipboard = null;
     undo.length = 0;
     layer = document.createElement("div");
     previewKey = ""; queuedPreview = null; ++previewSeq;
@@ -1891,6 +1889,9 @@
   document.addEventListener("pointercancel", clearDrag);
   window.addEventListener("blur", clearDrag);
   function message(m) {
+    // The source may have copied before this window existed. Initial state carries the
+    // same private in-app clipboard; opening a device must not discard it.
+    if (m.type === "state" && m.files_clipboard) message({ type: "files_clipboard", clip: m.files_clipboard });
     if (["files_result", "files_job", "files_native_paste", "files_native_drag_end"].includes(m.type) && m.window !== pageToken) return true;
     if (m.type === "files_clipboard") {
       // Another window copied (or used a cut): the latest Copy/Cut is what Paste uses here too.

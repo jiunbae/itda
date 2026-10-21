@@ -320,25 +320,29 @@ impl Context {
         let result = (|| -> io::Result<()> {
             if let Some(s) = &mut dst.sftp {
                 if let Some(source) = &mut src.sftp {
-                    let temp = Temp(
-                        std::env::temp_dir().join(format!("itda-stage-{}", crate::store::new_id())),
-                    );
-                    let mut opts = OpenOptions::new();
-                    opts.write(true).read(true).create_new(true);
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::OpenOptionsExt;
-                        opts.mode(0o600);
+                    if !self.same_fs {
+                        source.relay_to(from, before.size, s, &staging, &control, |n| self.progress(n, before.size, &before.name))?;
+                    } else {
+                        let temp = Temp(
+                            std::env::temp_dir().join(format!("itda-stage-{}", crate::store::new_id())),
+                        );
+                        let mut opts = OpenOptions::new();
+                        opts.write(true).read(true).create_new(true);
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::OpenOptionsExt;
+                            opts.mode(0o600);
+                        }
+                        let mut f = opts.open(&temp.0)?;
+                        source.download(from, before.size, &mut f, &control, |n| {
+                            self.progress(n, before.size, &before.name)
+                        })?;
+                        use std::io::Seek;
+                        f.rewind()?;
+                        s.upload(&staging, &mut f, &control, |n| {
+                            self.progress(n, before.size, &before.name)
+                        })?;
                     }
-                    let mut f = opts.open(&temp.0)?;
-                    source.download(from, before.size, &mut f, &control, |n| {
-                        self.progress(n, before.size, &before.name)
-                    })?;
-                    use std::io::Seek;
-                    f.rewind()?;
-                    s.upload(&staging, &mut f, &control, |n| {
-                        self.progress(n, before.size, &before.name)
-                    })?;
                 } else {
                     let mut f = File::open(from)?;
                     s.upload(&staging, &mut f, &control, |n| {
@@ -466,6 +470,11 @@ pub fn start(v: Value, host: Host, emit: Emit) {
     // One device even when the copy came from another window of it: then the guards against
     // copying a folder into itself and the rename-for-move apply as usual.
     let same_device = v["from_id"].as_str().is_none_or(|f| f.is_empty() || f == id);
+    // Capture the source connection before the job queues: closing its window later must
+    // not invalidate a copy already accepted by the destination window.
+    let held_source = if v["from"] == "remote" && !same_device {
+        source_key.as_ref().map(|k| connection(k)).transpose()
+    } else { Ok(None) };
     let job = crate::store::new_id();
     let control = Arc::new(Control::default());
     jobs()
@@ -498,7 +507,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
             let dst_c = if to_remote || (from_remote && same_device) { Some(connection(&key)?) } else { None };
             let src_c = match (&source_key, from_remote) {
                 (_, false) => None,
-                (Some(k), true) if !same_device => Some(connection(k).map_err(|_| error("원본 기기의 파일 연결이 닫혔습니다. 그 기기의 탭이나 창을 다시 열어 주세요"))?),
+                (Some(_), true) if !same_device => Some(held_source.map_err(|_| error("원본 기기의 파일 연결이 닫혔습니다. 그 기기의 탭이나 창을 다시 열어 주세요"))?.ok_or_else(|| error("원본 기기의 파일 연결을 확인하세요"))?),
                 _ => dst_c.clone(),
             };
             let (src_c, dst_c) = (src_c.filter(|_| from_remote), dst_c.filter(|_| to_remote));
@@ -893,6 +902,39 @@ mod tests {
             last: Instant::now() - Duration::from_secs(1),
         };
         (root, Endpoint { sftp: None, cfg: None }, Endpoint { sftp: None, cfg: None }, cx)
+    }
+
+    #[test]
+    fn remote_relay_keeps_transaction_and_move_guards() {
+        let server = std::env::var_os("ITDA_SFTP_SERVER").map(PathBuf::from).unwrap_or_else(|| "/usr/libexec/sftp-server".into());
+        if !server.is_file() { return; }
+        let (root, mut src, mut dst, mut cx) = fixture();
+        let open = |c: &Control| Sftp::start(Command::new(&server).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap(), c).unwrap();
+        src.sftp = Some(open(&cx.control)); dst.sftp = Some(open(&cx.control));
+        cx.same_fs = false; cx.policy = "replace".into();
+        let from = root.join("from/한글.bin").to_string_lossy().into_owned();
+        let to = root.join("to/한글.bin").to_string_lossy().into_owned();
+        let data: Vec<u8> = (0..(3 * 1024 * 1024 + 7)).map(|i| (i % 239) as u8).collect();
+        std::fs::write(&from, &data).unwrap();std::fs::write(&to, b"old target").unwrap();
+        let events = Arc::new(Mutex::new(Vec::new()));let seen = events.clone();
+        cx.emit = Arc::new(move |v| seen.lock().unwrap().push(v));
+        cx.copy(&mut src, &mut dst, &from, &to, 0).unwrap();
+        assert_eq!(std::fs::read(&to).unwrap(), data);assert_eq!(std::fs::read(&from).unwrap(), data);
+        let steps:Vec<u64> = events.lock().unwrap().iter().filter_map(|v|v["bytes"].as_u64()).collect();
+        assert!(steps.windows(2).all(|n|n[0]<=n[1]));assert!(steps.iter().any(|&n|n>0&&n<data.len()as u64));
+        // A cross-device move runs the same stream, verifies hashes, then removes the source.
+        cx.moving = true;
+        cx.copy(&mut src, &mut dst, &from, &to, 0).unwrap();
+        assert!(!Path::new(&from).exists());assert_eq!(std::fs::read(&to).unwrap(), data);
+        drop((src,dst));
+        // Cancellation during replacement leaves both the existing destination and source.
+        std::fs::write(&from,&data).unwrap();std::fs::write(&to,b"keep existing").unwrap();
+        cx.control = Arc::new(Control::default());cx.moving=true;
+        let stop=cx.control.clone();cx.emit=Arc::new(move|v|{if v["bytes"].as_u64().is_some_and(|n|n>0){stop.stop();}});
+        let mut src=Endpoint{sftp:Some(open(&cx.control)),cfg:None};let mut dst=Endpoint{sftp:Some(open(&cx.control)),cfg:None};
+        assert!(cx.copy(&mut src,&mut dst,&from,&to,0).is_err());
+        assert_eq!(std::fs::read(&to).unwrap(),b"keep existing");assert_eq!(std::fs::read(&from).unwrap(),data);
+        drop((src,dst));std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Between two devices a move must be a verified copy and delete, never a rename (which

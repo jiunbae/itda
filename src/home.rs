@@ -98,6 +98,8 @@ struct Home {
     /// Address passed on the command line: offer to connect once the page is up.
     pending_quick: Option<String>,
     ready: bool,
+    /// The current in-app copy/cut, also sent to file windows opened after Copy.
+    file_clipboard: Value,
 }
 
 thread_local! {
@@ -361,6 +363,7 @@ fn send_state() {
             "login_item": crate::autostart::state().name(),
             "sessions": sessions_json(m),
             "file_windows": plat::file_windows(),
+            "files_clipboard": m.file_clipboard,
             "online": m.online,
             "found": m.found,
             "dark": plat::system_dark(),
@@ -423,7 +426,17 @@ fn on_ipc(v: Value) {
         }
         "files_release_page" => crate::files::release_page(s(&v, "page").as_str()),
         // Copy/Cut in one file window is what Paste uses in every other one.
-        "files_clipboard" => send(json!({"type": "files_clipboard", "clip": v["clip"]})),
+        "files_clipboard" => {
+            let clip = v["clip"].clone();
+            home(|m| {
+                if let Some(clear) = clip["clear"].as_str() {
+                    if m.file_clipboard["cid"].as_str() == Some(clear) { m.file_clipboard = Value::Null; }
+                } else if clip["names"].as_array().is_some_and(|names| !names.is_empty() && names.len() <= 10_000) {
+                    m.file_clipboard = clip.clone();
+                }
+            });
+            send(json!({"type": "files_clipboard", "clip": clip}));
+        },
         "file_locations" => {
             let hosts = home(|m| m.hosts.clone());
             let reveal = v["reveal"] != false;
