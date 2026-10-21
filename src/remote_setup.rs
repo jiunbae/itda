@@ -923,6 +923,9 @@ fn trusted_fingerprints(cfg: &crate::tunnel::SshCfg) -> io::Result<Vec<String>> 
         if keys.status.success() {
             for line in String::from_utf8_lossy(&keys.stdout).lines() {
                 if !line.starts_with('#') && !line.starts_with("@revoked") && !line.trim().is_empty() {
+                    // Display only: ssh-keygen -l reads "host type key"; a CA's marker would
+                    // make it fail. ssh itself still applies the marker when connecting.
+                    let line = line.strip_prefix("@cert-authority ").unwrap_or(line);
                     found.extend_from_slice(line.as_bytes());
                     found.push(b'\n');
                 }

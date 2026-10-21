@@ -109,8 +109,9 @@ pub fn known_hosts() -> PathBuf {
 }
 
 /// The file earlier Itda wrote to by mistake: it passed the path unquoted, and ssh took the
-/// first word ("~/Library/Application"). Still read (never written or deleted), so host keys,
-/// revocations and CAs trusted back then keep their effect.
+/// first word ("~/Library/Application"). Still read, so host keys, revocations and CAs trusted
+/// back then keep their effect. Itda never moves or deletes it; new keys go to the first file,
+/// while an explicit "forget changed key" and ssh's own UpdateHostKeys may edit entries in it.
 fn legacy_known_hosts() -> Option<PathBuf> {
     let full = known_hosts().to_string_lossy().into_owned();
     let first = full.split_whitespace().next()?;
