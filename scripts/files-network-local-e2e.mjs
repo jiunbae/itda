@@ -68,12 +68,13 @@ try{
   for(const a of ['new','paste','cut','copy','rename','trash'])assert(await layer.locator(`[data-action="${a}"]`).isDisabled(),`${a} enabled on This PC`);
   await layer.locator('.files-list').focus();await p.keyboard.press('Control+Shift+n');
   assert(!(await p.evaluate(()=>testPackets)).some(x=>x.op==='mkdir'),'A folder was created on This PC');
-  // Copying without a device is explained instead of silently dropped.
+  // Copying on this computer works without a device.
   await row('C:').dblclick();await row('Users').waitFor();await row('Users').click();await p.keyboard.press('Control+c');
   await layer.locator('[data-network-sidebar] [data-bookmark="Downloads"]').click();await row('setup.exe').waitFor();
   await layer.locator('.files-list').focus();await p.keyboard.press('Control+v');
-  assert((await layer.locator('.files-error').textContent()).includes('기기를 고르지 않은 창'),'Device-less copy not explained');
-  assert(!(await p.evaluate(()=>testPackets)).some(x=>x.op==='transfer'),'Device-less copy sent a transfer');
+  await p.locator('.files-prompt [data-choice="ok"]').click();
+  {const t=(await p.evaluate(()=>testPackets)).filter(x=>x.op==='transfer').at(-1);
+   assert(t&&t.id==='__network'&&t.from==='local'&&t.to==='local'&&t.source==='C:\\'&&t.destination==='C:\\Users\\alex\\Downloads'&&!t.from_id,'Device-less local copy: '+JSON.stringify(t));}
   assert(!errors.length,errors.join('\n'));
   // A slow home answer must not pull an already opened This PC back to the home folder.
   {

@@ -1384,12 +1384,15 @@
       case "cut":
         if (p.selected.size) {
           clipboard = {
+            cid: crypto.randomUUID(),
             host: host.id,
+            window: pageToken,
             side: active,
             path: p.path,
             names: [...p.selected],
             move: action === "cut",
           };
+          send("files_clipboard", { clip: clipboard });
           status();
           if(nativeFiles()) {
             clipboard.seq=crypto.randomUUID();
@@ -1401,20 +1404,14 @@
       case "paste":
         if(nativeFiles()) { send("files_native_paste",{id:host.id,window:pageToken,stamp:clipboard?.nativeStamp,side:active,path:p.path}); return; }
       case "paste-internal":
-        // A remote selection belongs to its device; local files can be pasted into any tab.
-        if (clipboard?.side === "remote" && clipboard.host !== host.id) {
-          fail("다른 기기에서 복사한 파일은 이 기기에 바로 붙여넣을 수 없습니다. 먼저 이 컴퓨터로 복사하세요");
-          return;
+        // A remote selection stays on its device (maybe another tab's or window's): the copy
+        // goes device to device. This computer's files paste into any tab.
+        if (clipboard) {
+          const clip = clipboard;
+          const sent = await transfer(clip.side, clip.path, clip.names, active, p.path, clip.move, host.id, clip.side === "remote" ? { id: clip.host, window: clip.window } : null);
+          // A cut is used once, in every window (a cancelled paste keeps it).
+          if (sent && clip.move) send("files_clipboard", { clip: { clear: clip.cid } });
         }
-        if (clipboard)
-          await transfer(
-            clipboard.side,
-            clipboard.path,
-            clipboard.names,
-            active,
-            p.path,
-            clipboard.move,
-          );
         return;
       case "mkdir":
       case "rename": {
@@ -1457,10 +1454,13 @@
       }
     }
   }
-  async function transfer(from, source, names, to, destination, move = false, id = host.id) {
+  // `origin`: where remote source files live when that is another device (a tab or another
+  // file window) than the destination `id`; the transfer then runs device to device.
+  async function transfer(from, source, names, to, destination, move = false, id = host.id, origin = null) {
     if (!names.length) return;
-    if (id === NETWORK) {
-      fail("기기를 고르지 않은 창에서는 아직 파일을 복사·이동할 수 없어요. 기기 창에서 하거나 탐색기를 사용해 주세요");
+    const cross = from === "remote" && origin && (origin.id !== id || (origin.window && origin.window !== pageToken));
+    if (id === NETWORK && to === "remote") {
+      fail("기기를 고르지 않은 창에서는 이 컴퓨터로만 복사·이동할 수 있어요");
       return;
     }
     if (to === "local" && destination === "" && !MAC) {
@@ -1474,14 +1474,15 @@
         : [];
     const r = await prompt(
       move ? "파일 이동" : "파일 복사",
-      `<p><b>${esc(names.length === 1 ? names[0] : `${names.length}개 항목`)}</b></p><p class="hint">${esc(source)} → ${esc(destination)}</p>${collisions.length ? `<p>같은 이름의 항목 ${collisions.length}개가 있습니다.</p>` : ""}<div class="field"><label>같은 이름의 파일이 있으면</label><select class="input" name="policy"><option value="keep">둘 다 유지</option><option value="replace">변경된 파일 바꾸기 · 폴더는 합치기</option><option value="skip">기존 파일 건너뛰기</option></select></div><details><summary>전송 옵션 · 자동 선택</summary><div class="field"><label>전송 방식</label><select class="input" name="engine"><option value="auto">자동 · 가능한 경우 rsync 증분 전송</option><option value="sftp">일반 전송 · SFTP</option><option value="rsync">증분 전송 · rsync 필요</option></select></div></details>${move ? '<p class="hint">같은 파일시스템 안에서는 바로 이동하며, 장치 간 이동은 해시를 확인한 뒤 원본을 삭제합니다. 취소하거나 실패한 항목의 원본은 유지합니다.</p>' : ""}`,
+      `<p><b>${esc(names.length === 1 ? names[0] : `${names.length}개 항목`)}</b></p><p class="hint">${esc(where(from, source, cross ? origin.id : id))} → ${esc(where(to, destination, id))}</p>${collisions.length ? `<p>같은 이름의 항목 ${collisions.length}개가 있습니다.</p>` : ""}<div class="field"><label>같은 이름의 파일이 있으면</label><select class="input" name="policy"><option value="keep">둘 다 유지</option><option value="replace">변경된 파일 바꾸기 · 폴더는 합치기</option><option value="skip">기존 파일 건너뛰기</option></select></div><details><summary>전송 옵션 · 자동 선택</summary><div class="field"><label>전송 방식</label><select class="input" name="engine"><option value="auto">자동 · 가능한 경우 rsync 증분 전송</option><option value="sftp">일반 전송 · SFTP</option><option value="rsync">증분 전송 · rsync 필요</option></select></div></details>${move ? '<p class="hint">같은 파일시스템 안에서는 바로 이동하며, 장치 간 이동은 해시를 확인한 뒤 원본을 삭제합니다. 취소하거나 실패한 항목의 원본은 유지합니다.</p>' : ""}`,
       [
         ["cancel", "취소"],
         ["ok", move ? "이동" : "복사", true],
       ],
     );
-    if (r.choice === "ok")
-      send("files", { id, window: pageToken, op: "transfer",
+    if (r.choice !== "ok") return false;
+    send("files", { id, window: pageToken, op: "transfer",
+        ...(cross ? { from_id: origin.id, from_window: origin.window || pageToken } : {}),
         from,
         source,
         names,
@@ -1491,6 +1492,13 @@
         policy: r.policy,
         engine: r.engine,
       });
+    return true;
+  }
+  // "Device: path" for the transfer dialog ("이 컴퓨터" for this computer's side).
+  function where(side, path, id) {
+    if (side === "local") return `이 컴퓨터: ${path}`;
+    const h = id === host.id ? host : hostById(id);
+    return `${h ? label(h) : "원격"}: ${path}`;
   }
   function previewDone() {
     previewInFlight = false;
@@ -1846,26 +1854,22 @@
       const target = document.elementFromPoint(e.clientX, e.clientY),
         pane = target?.closest("[data-pane]");
       const tab = target?.closest("[data-tab]");
-      if (d.host !== host.id && d.side === "remote" && !tab) {
-        // The tab changed device during the drag; its remote files are not here.
-        fail("다른 기기의 파일은 이 탭으로 바로 옮길 수 없습니다. 먼저 이 컴퓨터로 복사하세요");
-        return;
-      }
+      // The tab may have changed device during the drag: remote files come from where they were.
+      const origin = d.side === "remote" && d.host !== host.id ? { id: d.host } : null;
       if (!pane) {
         const bookmark = target?.closest("[data-bookmark]");
         if (bookmark) {
           const p = panes[active];
           const to = bookmark.dataset.bookmark === "home" ? p.home : child(p.home, bookmark.dataset.bookmark);
-          if (d.side !== active || d.path !== to) transfer(d.side, d.path, d.names, active, to, e.shiftKey);
+          if (origin || d.side !== active || d.path !== to) transfer(d.side, d.path, d.names, active, to, e.shiftKey, host.id, origin);
         } else if (tab) {
           const t = fileTabs.find(t => t.id === Number(tab.dataset.tab));
           const side = t.id === currentTab ? active : t.active;
           const to = t.id === currentTab ? panes[side].path : t.panes[side].path;
           const target = t.id === currentTab ? host : t.host || host;
           if (target.id !== d.host) {
-            // Only this computer's files can go to another device's tab; the transfer runs on that device.
-            if (d.side === "remote") fail("다른 기기의 파일은 이 탭으로 바로 옮길 수 없습니다. 먼저 이 컴퓨터로 복사하세요");
-            else transfer("local", d.path, d.names, side, to, e.shiftKey, target.id);
+            // Onto another device's tab: device to device (or this computer's files to it).
+            transfer(d.side, d.path, d.names, side, to, e.shiftKey, target.id, d.side === "remote" ? { id: d.host } : null);
           } else if (d.side !== side || d.path !== to) transfer(d.side, d.path, d.names, side, to, e.shiftKey, target.id);
         }
         return;
@@ -1876,8 +1880,8 @@
       const to = entry?.dir
         ? child(panes[side].path, entry.name)
         : panes[side].path;
-      if (d.side === side && d.path === to) return;
-      transfer(d.side, d.path, d.names, side, to, e.shiftKey);
+      if (!origin && d.side === side && d.path === to) return;
+      transfer(d.side, d.path, d.names, side, to, e.shiftKey, host.id, origin);
   }
   document.addEventListener("pointerup", finishDrag, true);
   // Some native WebKit input paths deliver a mouse-up without a matching pointer-up.
@@ -1886,6 +1890,14 @@
   window.addEventListener("blur", clearDrag);
   function message(m) {
     if (["files_result", "files_job", "files_native_paste", "files_native_drag_end"].includes(m.type) && m.window !== pageToken) return true;
+    if (m.type === "files_clipboard") {
+      // Another window copied (or used a cut): the latest Copy/Cut is what Paste uses here too.
+      const c = m.clip || {};
+      if (c.clear) { if (clipboard?.cid === c.clear) clipboard = null; }
+      else if (c.window !== pageToken && c.names?.length) clipboard = c;
+      if (layer && !networkMode) status();
+      return true;
+    }
     if (m.type === "files_native_drag_end") { if(m.id===host?.id){clearDrag();if(m.error)fail(m.error);}return true; }
     if (m.type === "files_native_paste") {
       if(m.id!==host?.id)return true;
@@ -1896,7 +1908,7 @@
     }
     if(m.type==="files_result" && ["native_copy_started","native_copy"].includes(m.op)) {
       if(m.id!==host?.id || m.seq!==clipboard?.seq)return true;
-      if(m.ok){clipboard.nativeStamp=m.data.stamp;if(m.op==="native_copy")toast(clipboard.move ? "Finder에서는 복사됩니다 — Itda 안의 붙여넣기는 이동합니다" : "파일 복사 준비 완료 — Finder에서 붙여넣으세요", "E8B7");}
+      if(m.ok){clipboard.nativeStamp=m.data.stamp;send("files_clipboard",{clip:clipboard});if(m.op==="native_copy")toast(clipboard.move ? "Finder에서는 복사됩니다 — Itda 안의 붙여넣기는 이동합니다" : "파일 복사 준비 완료 — Finder에서 붙여넣으세요", "E8B7");}
       else fail(m.error||"파일 복사를 준비하지 못했습니다");
       return true;
     }
