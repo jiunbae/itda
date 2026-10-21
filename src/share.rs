@@ -105,7 +105,10 @@ pub(crate) struct Capture {
 unsafe impl Send for Capture {}
 
 /// (Windows has no frame-arrival signal: its pump captures on a timer.)
-pub(crate) fn on_frame(_wake: Box<dyn Fn() -> bool + Send>) {}
+pub(crate) fn on_frame(_wake: Box<dyn Fn() + Send>) -> u64 {
+    0
+}
+pub(crate) fn off_frame(_id: u64) {}
 
 impl Capture {
     fn new() -> Capture {
