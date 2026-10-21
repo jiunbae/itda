@@ -217,4 +217,36 @@ mod tests {
         let again = e.encode(&px, w, true).unwrap();
         assert!(again.key && types(&again.data)[..2] == [7, 8]);
     }
+
+    /// Encode time of a scrolling screen-sized picture (ms, p50/p95) and how many frames the
+    /// rate control drops, for text and for noise (like video): for comparing settings.
+    /// `cargo test --release encode_time -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn encode_time() {
+        let (w, h) = (1512, 982);
+        let bitrate = ((w * h * 6) as i64).clamp(4_000_000, 40_000_000); // as host_mac::video
+        let text = |x: usize, y: usize| {
+            let glyph = ((x / 7) as u32 ^ (y / 16) as u32 * 31).wrapping_mul(2654435761) >> 29;
+            if y % 16 < 11 && x % 7 < 5 && glyph > 1 && (x as u32 ^ y as u32 * 3) % 5 != 0 { 0x20_2020u32 } else { 0xff_ffff }
+        };
+        let noise = |x: usize, y: usize| (x as u32 * 7 ^ y as u32 * 13).wrapping_mul(2654435761) & 0xff_ffff;
+        for (name, f) in [("text", &text as &dyn Fn(usize, usize) -> u32), ("noise", &noise)] {
+            let mut e = H264::new(w, h, bitrate).expect("encoder");
+            let base: Vec<u32> = (0..w * (h + 400)).map(|i| f(i % w, i / w)).collect();
+            let (mut times, mut dropped) = (Vec::new(), 0);
+            for n in 0..240 {
+                let off = (n * 3 % 400) * w;
+                let t = std::time::Instant::now();
+                let u = e.encode(&base[off..off + w * h], w, n == 0).unwrap();
+                dropped += usize::from(u.data.is_empty());
+                if n >= 20 {
+                    times.push(t.elapsed().as_secs_f64() * 1000.0);
+                }
+            }
+            times.sort_by(f64::total_cmp);
+            let q = |p: f64| times[((times.len() - 1) as f64 * p) as usize];
+            println!("{name} {w}x{h} at {bitrate} bit/s: encode p50 {:.2} ms, p95 {:.2} ms; dropped {dropped} of 240", q(0.5), q(0.95));
+        }
+    }
 }
