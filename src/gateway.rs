@@ -45,7 +45,11 @@ struct Running {
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 /// Signed-in browser sessions: (token, since, from the local listener).
 static TOKENS: Mutex<Vec<(String, Instant, bool)>> = Mutex::new(Vec::new());
-static FAILS: Mutex<(u32, Option<Instant>)> = Mutex::new((0, None));
+/// Wrong PINs per source (address): (count, locked until). One device guessing locks only
+/// itself out; ALL_FAILS bounds guessing from many addresses at once.
+static FAILS: Mutex<Option<HashMap<std::net::IpAddr, (u32, Option<Instant>)>>> = Mutex::new(None);
+static ALL_FAILS: Mutex<(u32, Option<Instant>)> = Mutex::new((0, None));
+const MAX_ALL_FAILS: u32 = 50;
 /// Open browser sessions of the web viewer, closed when it stops.
 static LIVE: Mutex<Vec<TcpStream>> = Mutex::new(Vec::new());
 // Native monitor views share a relay; closing the final view must stop both sockets,
@@ -190,7 +194,8 @@ pub fn stop() {
         let _ = s.shutdown(Shutdown::Both);
     }
     TOKENS.lock().unwrap().retain(|t| t.2);
-    *FAILS.lock().unwrap() = (0, None);
+    *FAILS.lock().unwrap() = None;
+    *ALL_FAILS.lock().unwrap() = (0, None);
 }
 
 /// Addresses other devices can use: every LAN IPv4 (Tailscale's 100.x included).
@@ -276,6 +281,7 @@ fn read_req(r: &mut BufReader<TcpStream>) -> io::Result<Req> {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let (path, query) = (path.to_string(), query.to_string());
     let mut headers = HashMap::new();
+    let mut lines = 0;
     loop {
         let h = head_line(r, started)?;
         if h.is_empty() || h.trim().is_empty() {
@@ -284,7 +290,8 @@ fn read_req(r: &mut BufReader<TcpStream>) -> io::Result<Req> {
         if let Some((k, v)) = h.split_once(':') {
             headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
         }
-        if headers.len() > 64 {
+        lines += 1;
+        if lines > 64 {
             return Err(io::Error::other("too many headers"));
         }
     }
@@ -377,27 +384,51 @@ fn same_origin(req: &Req) -> bool {
     }
 }
 
-fn login(c: &mut TcpStream, req: &Req) -> io::Result<()> {
+/// Who is signing in, for counting wrong PINs: the peer, or behind `tailscale serve` (which
+/// connects from this machine) the address it forwards for.
+fn source(req: &Req, peer: SocketAddr) -> std::net::IpAddr {
+    let fwd = || req.headers.get("x-forwarded-for").and_then(|v| v.split(',').next()).and_then(|v| v.trim().parse().ok());
+    if peer.ip().is_loopback() { fwd().unwrap_or(peer.ip()) } else { peer.ip() }
+}
+
+fn login(c: &mut TcpStream, req: &Req, peer: SocketAddr) -> io::Result<()> {
+    let from = source(req, peer);
+    let locked = |f: &mut (u32, Option<Instant>)| match f.1 {
+        Some(until) if Instant::now() < until => true,
+        Some(_) => { *f = (0, None); false }
+        None => false,
+    };
     {
-        let mut f = FAILS.lock().unwrap();
-        if let Some(until) = f.1 {
-            if Instant::now() < until {
-                return json_resp(c, "429 Too Many Requests", json!({"error": "잠시 후 다시 시도하세요 (PIN을 여러 번 틀렸습니다)"}));
-            }
-            *f = (0, None);
+        let mut all = ALL_FAILS.lock().unwrap();
+        let mut g = FAILS.lock().unwrap();
+        let mine = g.get_or_insert_with(HashMap::new).entry(from).or_insert((0, None));
+        if locked(&mut all) || locked(mine) {
+            return json_resp(c, "429 Too Many Requests", json!({"error": "잠시 후 다시 시도하세요 (PIN을 여러 번 틀렸습니다)"}));
         }
     }
     let pin = serde_json::from_slice::<serde_json::Value>(&req.body).ok().and_then(|v| v["pin"].as_str().map(str::to_string)).unwrap_or_default();
     if !eq_ct(pin.trim().as_bytes(), store::web_pin(false).as_bytes()) {
-        let mut f = FAILS.lock().unwrap();
-        f.0 += 1;
-        if f.0 >= MAX_FAILS {
-            f.1 = Some(Instant::now() + LOCKOUT);
+        let mut g = FAILS.lock().unwrap();
+        let map = g.get_or_insert_with(HashMap::new);
+        if map.len() > 1024 {
+            map.retain(|_, f| f.1.is_some_and(|u| Instant::now() < u)); // (bounded memory)
         }
-        crate::log!("web: wrong PIN ({})", f.0);
+        let mine = map.entry(from).or_insert((0, None));
+        mine.0 += 1;
+        if mine.0 >= MAX_FAILS {
+            mine.1 = Some(Instant::now() + LOCKOUT);
+        }
+        let mut all = ALL_FAILS.lock().unwrap();
+        all.0 += 1;
+        if all.0 >= MAX_ALL_FAILS {
+            all.1 = Some(Instant::now() + LOCKOUT);
+        }
+        crate::log!("web: wrong PIN from {from} ({})", mine.0);
         return json_resp(c, "401 Unauthorized", json!({"error": "PIN이 맞지 않습니다"}));
     }
-    *FAILS.lock().unwrap() = (0, None);
+    if let Some(map) = FAILS.lock().unwrap().as_mut() {
+        map.remove(&from);
+    }
     let cookie = new_session(false);
     respond(c, "200 OK", "application/json; charset=utf-8", &cookie, b"{\"ok\":true}")
 }
@@ -715,7 +746,7 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
         ("GET", "/icon-512.png") => asset(&mut c, &req, "image/png", ICON_PNG_512),
         ("GET", "/sw.js") => respond(&mut c, "200 OK", "text/javascript; charset=utf-8", "", SW.as_bytes()),
         ("GET", "/auth") if local => local_auth(&mut c, &req),
-        ("POST", "/api/login") if same_origin(&req) && !local => login(&mut c, &req),
+        ("POST", "/api/login") if same_origin(&req) && !local => login(&mut c, &req, peer),
         ("POST", "/api/logout") if same_origin(&req) => {
             if let Some(t) = token_of(&req) {
                 TOKENS.lock().unwrap().retain(|(k, _, _)| *k != t);
@@ -821,10 +852,14 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
     let host = &host.reachable();
     let at_lan = !host.key_alias.is_empty();
     if host.is_rdp() {
-        // At its LAN address the server must show the key it had at its own address.
-        let expect = if at_lan { Some(store::rdp_key(&host.id).ok_or_else(|| rfb::denied("저장된 기기인지 확인할 수 없어 같은 네트워크 주소로 연결하지 않았습니다"))?) } else { None };
-        let (raw, key) = crate::rdp::open(&host.host, &login.user, &pass, size.filter(|_| host.opts.resize), expect.as_deref())?;
-        if !at_lan {
+        // The server must show the key it had the first time (checked before the login goes
+        // out); at the LAN address there must be one already.
+        let saved = store::rdp_key(&host.id);
+        if at_lan && saved.is_none() {
+            return Err(rfb::denied("저장된 기기인지 확인할 수 없어 같은 네트워크 주소로 연결하지 않았습니다"));
+        }
+        let (raw, key) = crate::rdp::open(&host.host, &login.user, &pass, size.filter(|_| host.opts.resize), saved.as_deref())?;
+        if saved.is_none() {
             store::set_rdp_key(&host.id, &key);
         }
         return Ok(raw);
@@ -949,6 +984,18 @@ fn kind_code(kind: &str) -> u16 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wrong_pins_count_per_source() {
+        let req = |xff: Option<&str>| super::Req { method: "POST".into(), path: "/api/login".into(), query: String::new(), headers: xff.map(|v| [("x-forwarded-for".to_string(), v.to_string())].into_iter().collect()).unwrap_or_default(), body: Vec::new() };
+        let lan: std::net::SocketAddr = "192.168.0.9:5000".parse().unwrap();
+        let local: std::net::SocketAddr = "127.0.0.1:5000".parse().unwrap();
+        // Direct clients can't pick their own source with a header.
+        assert_eq!(super::source(&req(Some("10.9.9.9")), lan), lan.ip());
+        // Behind tailscale serve (from this machine): the address it forwards for.
+        assert_eq!(super::source(&req(Some("100.64.1.2, 127.0.0.1")), local).to_string(), "100.64.1.2");
+        assert_eq!(super::source(&req(None), local), local.ip());
+    }
+
     #[test]
     fn request_heads_are_bounded() {
         use std::io::Write;

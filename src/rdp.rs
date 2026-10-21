@@ -147,7 +147,9 @@ fn connect(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>, expect:
     let (tls, server_key) = tls_upgrade(framed.into_inner_no_leftover(), &name)?;
     let key_id = key_id(&server_key);
     if expect.is_some_and(|e| e != key_id) {
-        return Err(rfb::denied("이 주소의 원격 데스크톱은 저장된 기기가 아닙니다 (서버 키가 다름)"));
+        return Err(rfb::denied(
+            "원격 데스크톱 서버 키가 지난번과 다릅니다. 다른 기기가 응답했을 수 있어 암호를 보내지 않았습니다. 그 PC를 다시 설치했거나 인증서가 바뀐 것이 확실하면 연결의 ⋯ 메뉴에서 ‘원격 데스크톱 서버 키 다시 받기’를 누르세요",
+        ));
     }
     let upgraded = ironrdp_blocking::mark_as_upgraded(upgrade, &mut connector);
     let mut framed = Framed::new(tls);

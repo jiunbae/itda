@@ -313,6 +313,7 @@ fn host_json(h: &Host, accounts: &[store::Account]) -> Value {
     v["login_user"] = json!(login.user);
     v["thumb"] = json!(thumb_version(&h.id));
     v["custom_thumb"] = json!(store::custom_thumb_path(&h.id).is_file());
+    v["rdp_key"] = json!(h.is_rdp() && store::rdp_key(&h.id).is_some());
     v
 }
 
@@ -502,6 +503,10 @@ fn on_ipc(v: Value) {
             let id = host.id.clone();
             home(|m| match m.hosts.iter_mut().find(|x| x.id == id) {
                 Some(x) => {
+                    // Another device now: the Remote Desktop key seen before isn't its.
+                    if x.host.trim().to_lowercase() != host.host.trim().to_lowercase() || x.kind != host.kind {
+                        store::forget_rdp_key(&id);
+                    }
                     // Keep fields the editor doesn't own.
                     host.files = x.files.clone();
                     host.last_used = x.last_used;
@@ -701,6 +706,11 @@ fn on_ipc(v: Value) {
         // uses it. Progress and the outcome go to the pages as {type:"hp"}.
         "hp_upgrade" => hp_upgrade(&id),
         "update_check" => update_check(),
+        "forget_rdp_key" => {
+            store::forget_rdp_key(&id);
+            send_hosts();
+            send(json!({"type": "toast", "text": "원격 데스크톱 서버 키를 지웠습니다. 다음 연결에서 새로 받습니다"}));
+        }
         // Settings opened: the login item may have been changed in the system's settings.
         "login_item" => {
             let s = crate::autostart::state();
