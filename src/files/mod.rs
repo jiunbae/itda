@@ -385,6 +385,37 @@ fn cfg(h: &Host, login: &Login, password: Option<String>) -> io::Result<SshCfg> 
     crate::tunnel::ssh_target(&c)?;
     Ok(c)
 }
+// One copied remote selection may outlive its window. Retain only its connection metadata;
+// transfers open fresh SFTP streams with their own cancellation control. The clipboard ID
+// prevents a later Copy from lending its credentials to an older paste or a drag operation.
+struct ClipboardSource {
+    cid: String,
+    key: String,
+    connection: Arc<Connection>,
+}
+static CLIPBOARD_SOURCE: Mutex<Option<ClipboardSource>> = Mutex::new(None);
+pub fn remember_clipboard_source(clip: &Value) {
+    let candidate = (|| {
+        if clip["side"] != "remote" { return None; }
+        let cid = clip["cid"].as_str()?.to_string();
+        let key = scoped_id(clip["host"].as_str()?, &clip["window"]);
+        Some((cid, key))
+    })();
+    let mut kept = CLIPBOARD_SOURCE.lock().unwrap();
+    if let Some((cid, key)) = candidate {
+        if kept.as_ref().is_some_and(|k| k.cid == cid && k.key == key) { return; }
+        *kept = connection(&key).ok().map(|connection| ClipboardSource { cid, key, connection });
+    } else { *kept = None; }
+}
+fn transfer_source(key: &str, clipboard: Option<&str>) -> io::Result<Arc<Connection>> {
+    if let Some(cid) = clipboard {
+        if let Some(kept) = CLIPBOARD_SOURCE.lock().unwrap().as_ref().filter(|k| k.cid == cid && k.key == key) {
+            return Ok(kept.connection.clone());
+        }
+    }
+    connection(key)
+}
+
 /// Isolate browsing, cancellation and transfer jobs for each file-browser page.
 pub fn scoped_id(id: &str, window: &Value) -> String {
     match window.as_str().filter(|s| !s.is_empty()) {

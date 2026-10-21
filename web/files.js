@@ -605,7 +605,6 @@
         if (host.id !== NETWORK) call("release");
         layer?.remove();
         layer = null;
-        clipboard = null;
         undo.length = 0;
       }
     }
@@ -784,7 +783,6 @@
     split = false;
     search = "";
     returnPage = null;
-    clipboard = null;
     undo.length = 0;
     layer = document.createElement("div");
     previewKey = ""; queuedPreview = null; ++previewSeq;
@@ -1410,7 +1408,7 @@
         // goes device to device. This computer's files paste into any tab.
         if (clipboard) {
           const clip = clipboard;
-          const sent = await transfer(clip.side, clip.path, clip.names, active, p.path, clip.move, host.id, clip.side === "remote" ? { id: clip.host, window: clip.window } : null);
+          const sent = await transfer(clip.side, clip.path, clip.names, active, p.path, clip.move, host.id, clip.side === "remote" ? { id: clip.host, window: clip.window, cid: clip.cid } : null);
           // A cut is used once, in every window (a cancelled paste keeps it).
           if (sent && clip.move) send("files_clipboard", { clip: { clear: clip.cid } });
         }
@@ -1484,7 +1482,7 @@
     );
     if (r.choice !== "ok") return false;
     send("files", { id, window: pageToken, op: "transfer",
-        ...(cross ? { from_id: origin.id, from_window: origin.window || pageToken } : {}),
+        ...(cross ? { from_id: origin.id, from_window: origin.window || pageToken, ...(origin.cid ? { from_clip: origin.cid } : {}) } : {}),
         from,
         source,
         names,
@@ -1891,6 +1889,9 @@
   document.addEventListener("pointercancel", clearDrag);
   window.addEventListener("blur", clearDrag);
   function message(m) {
+    // The source may have copied before this window existed. Initial state carries the
+    // same private in-app clipboard; opening a device must not discard it.
+    if (m.type === "state" && m.files_clipboard) message({ type: "files_clipboard", clip: m.files_clipboard });
     if (["files_result", "files_job", "files_native_paste", "files_native_drag_end"].includes(m.type) && m.window !== pageToken) return true;
     if (m.type === "files_clipboard") {
       // Another window copied (or used a cut): the latest Copy/Cut is what Paste uses here too.

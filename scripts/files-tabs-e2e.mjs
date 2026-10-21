@@ -38,12 +38,17 @@ try{
   const p=await c.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
   if(platform==='windows'&&process.platform!=='win32')await p.route('**/icons.js',route=>route.fulfill({contentType:'text/javascript',body:fs.readFileSync(path.join(root,'web/icons.js'),'utf8').replace('if (/Windows/.test(navigator.userAgent)) return;','')}));
   await p.goto(base+'/web/');
-  const launch=()=>p.evaluate(()=>{const files={method:'sftp',user:'alex'};S.hosts=[{id:'studio',name:'Studio Mac',host:'studio.local',os:'mac',kind:'vnc',login_user:'alex',has_pw:true,files},{id:'build',name:'Build Server',host:'build.local',os:'linux',kind:'vnc',login_user:'dev',has_pw:true,files},{id:'slow',name:'Slow Box',host:'slow.local',os:'linux',kind:'vnc',login_user:'dev',has_pw:true,files}];S.settings={...S.settings,onboarded:true,theme:'light'};render();ItdaFiles.launch(S.hosts[0]);});
+  const launch=()=>p.evaluate(()=>{const files={method:'sftp',user:'alex'};S.hosts=[{id:'studio',name:'Studio Mac',host:'studio.local',os:'mac',kind:'vnc',login_user:'alex',has_pw:true,files},{id:'build',name:'Build Server',host:'build.local',os:'linux',kind:'vnc',login_user:'dev',has_pw:true,files},{id:'slow',name:'Slow Box',host:'slow.local',os:'linux',kind:'vnc',login_user:'dev',has_pw:true,files}];S.settings={...S.settings,onboarded:true,theme:'light'};render();ItdaFiles.message({type:'state',files_clipboard:{cid:'before-window',host:'build',window:'prior-page',side:'remote',path:'/home/dev',names:['Beta-B.txt'],move:false}});ItdaFiles.launch(S.hosts[0]);});
   await launch();
   const layer=p.locator('.files-layer'),row=name=>layer.locator('[data-index]').filter({hasText:name}).first();
   const packets=()=>p.evaluate(()=>testPackets),mod=platform==='mac'?'Meta':'Control';
   const count=async(id,op)=>(await packets()).filter(x=>x.id===id&&x.op===op).length;
   await row('Alpha-A.txt').waitFor();
+  // Copy happened before this window was created: state hydration survives opening its device.
+  await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+v`);
+  await p.locator('.files-prompt [data-choice="ok"]').click();
+  {const t=(await packets()).filter(x=>x.op==='transfer').at(-1);assert(t?.from_id==='build'&&t.from_window==='prior-page'&&t.names[0]==='Beta-B.txt','New window lost the earlier copy: '+JSON.stringify(t));}
+
   // One sorting preference drives every layout, including cached ancestor columns.
   const sort=async name=>{await layer.locator('[data-action="sort"]').click();await p.getByRole('menuitemradio',{name,exact:true}).click();};
   const names=()=>layer.locator('[data-pane="remote"] [data-index]').evaluateAll(es=>es.map(e=>e.querySelector('td .files-name > span, :scope > span').textContent.trim()));

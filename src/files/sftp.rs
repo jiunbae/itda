@@ -102,6 +102,47 @@ pub struct Sftp {
     next: u32,
     diagnostics: Arc<Mutex<String>>,
 }
+// At most WINDOW writes are outstanding. Source reads are already bounded to WINDOW
+// CHUNKs by download(); bytes flow directly to the other SFTP session, never a local file.
+struct RelayWriter<'a, F: FnMut(u64)> {
+    dst: &'a mut Sftp,
+    handle: Vec<u8>,
+    pending: Vec<u32>,
+    offset: u64,
+    control: &'a Control,
+    progress: F,
+}
+impl<F: FnMut(u64)> Write for RelayWriter<'_, F> {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        for data in data.chunks(CHUNK) {
+            self.control.check()?;
+            let mut b = Vec::new();
+            string(&mut b, &self.handle);
+            b.extend_from_slice(&self.offset.to_be_bytes());
+            string(&mut b, data);
+            self.pending.push(self.dst.send(6, &b)?);
+            self.offset += data.len() as u64;
+            if self.pending.len() >= WINDOW { self.flush()?; }
+        }
+        Ok(data.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        let mut failure = None;
+        while !self.pending.is_empty() {
+            self.control.check()?;
+            let mut r = self.dst.packet()?;
+            let i = self.pending.iter().position(|&id| id == r.id).ok_or_else(|| err("SFTP 중계 쓰기 응답 오류"))?;
+            self.pending.remove(i);
+            let checked = r.status().and_then(|status| if status == 0 { Ok(()) } else { Err(err("SFTP 중계 쓰기 실패")) });
+            // Drain the rest even after a write rejection: CLOSE and staging cleanup
+            // must not mistake an old WRITE reply for their own response.
+            if let Err(e) = checked { if failure.is_none() { failure = Some(e); } }
+        }
+        if let Some(e) = failure { return Err(e); }
+        (self.progress)(self.offset);
+        Ok(())
+    }
+}
 impl Drop for Sftp {
     fn drop(&mut self) {
         if let Ok(mut c) = self.child.lock() {
@@ -414,6 +455,19 @@ impl Sftp {
         }
         self.close(&h)
     }
+    /// Stream a file to another device with bounded read/write windows. The caller owns
+    /// the destination staging name and commits it only after source/size verification.
+    pub fn relay_to(&mut self, from: &str, size: u64, dst: &mut Sftp, to: &str, control: &Control, progress: impl FnMut(u64)) -> io::Result<u64> {
+        let handle = dst.open(to, 2 | 8 | 16 | 32)?;
+        let mut sink = RelayWriter { dst, handle, pending: Vec::new(), offset: 0, control, progress };
+        let copied = self.download(from, size, &mut sink, control, |_| {});
+        // Drain queued replies before CLOSE / cleanup while the transport is available.
+        // Cancellation kills both sessions; the transfer then reconnects to discard staging.
+        let flushed = sink.flush();
+        let closed = sink.dst.close(&sink.handle);
+        copied.and(flushed).and(closed)?;
+        Ok(sink.offset)
+    }
     pub fn upload(
         &mut self,
         p: &str,
@@ -485,6 +539,59 @@ impl Sftp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn real_server_relay_streams_and_cancels() {
+        let server = std::env::var_os("ITDA_SFTP_SERVER").map(std::path::PathBuf::from).unwrap_or_else(|| "/usr/libexec/sftp-server".into());
+        if !server.is_file() { return; }
+        let root = std::env::temp_dir().join(format!("itda-relay-{}", crate::store::new_id()));
+        std::fs::create_dir(&root).unwrap();
+        let from = root.join("원본.bin").to_string_lossy().into_owned();
+        let to = root.join("대상.partial").to_string_lossy().into_owned();
+        let bytes: Vec<u8> = (0..(5 * 1024 * 1024 + 13)).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&from, &bytes).unwrap();
+        let session = |control: &Control| Sftp::start(std::process::Command::new(&server).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap(), control).unwrap();
+        let control = Control::default();
+        let mut src = session(&control);
+        let mut dst = session(&control);
+        let mut progress = Vec::new();
+        assert_eq!(src.relay_to(&from, bytes.len() as u64, &mut dst, &to, &control, |n| progress.push(n)).unwrap(), bytes.len() as u64);
+        assert_eq!(std::fs::read(&to).unwrap(), bytes);
+        assert!(progress.windows(2).all(|n| n[0] <= n[1]));
+        assert_eq!(progress.last(), Some(&(bytes.len() as u64)));
+        assert!(progress.len() >= 3, "relay only reported after buffering the whole file");
+        // Exclusive staging cannot overwrite a file already present at that name.
+        assert!(src.relay_to(&from, bytes.len() as u64, &mut dst, &to, &control, |_| {}).is_err());
+        assert_eq!(std::fs::read(&to).unwrap(), bytes);
+        drop((src, dst));
+        // Cancel while bytes are flowing; it must neither finish nor alter the source.
+        let control = Control::default();
+        let mut src = session(&control);
+        let mut dst = session(&control);
+        let cancelled = root.join("cancelled.partial").to_string_lossy().into_owned();
+        let result = src.relay_to(&from, bytes.len() as u64, &mut dst, &cancelled, &control, |n| { if n > 0 { control.stop(); } });
+        assert!(result.is_err());
+        assert!(std::fs::metadata(&cancelled).unwrap().len() < bytes.len() as u64);
+        assert_eq!(std::fs::read(&from).unwrap(), bytes);
+        drop((src, dst));
+        #[cfg(unix)]
+        {
+            // A real server returns WRITE failures once this child's file-size limit
+            // is reached. Its following replies must still be drained for cleanup.
+            let control = Control::default();
+            let mut src = session(&control);
+            let child = std::process::Command::new("/bin/sh")
+                .args(["-c", "trap '' XFSZ; ulimit -f 1024; exec \"$1\"", "itda-limited-sftp"])
+                .arg(&server).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+            let mut dst = Sftp::start(child, &control).unwrap();
+            let rejected = root.join("rejected.partial").to_string_lossy().into_owned();
+            assert!(src.relay_to(&from, bytes.len() as u64, &mut dst, &rejected, &control, |_| {}).is_err());
+            assert!(dst.stat(&rejected).unwrap().unwrap().size < bytes.len() as u64);
+            dst.remove(&rejected, false).unwrap();
+            assert!(!std::path::Path::new(&rejected).exists());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn real_server_roundtrip() {
         let server = std::env::var_os("ITDA_SFTP_SERVER")
