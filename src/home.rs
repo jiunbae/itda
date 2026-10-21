@@ -434,6 +434,7 @@ fn on_ipc(v: Value) {
                 } else if clip["names"].as_array().is_some_and(|names| !names.is_empty() && names.len() <= 10_000) {
                     m.file_clipboard = clip.clone();
                 }
+                crate::files::remember_clipboard_source(&m.file_clipboard);
             });
             send(json!({"type": "files_clipboard", "clip": clip}));
         },

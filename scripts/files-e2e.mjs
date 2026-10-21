@@ -421,6 +421,7 @@ try {
       // A different device window opened AFTER Copy receives the in-app source through state.
       // Native Paste must use A's remote connection, not upload its Finder staging file as local.
       const crossWindowDir=path.join(remote,'new-window-destination');fs.mkdirSync(crossWindowDir,{recursive:true});
+      await page.evaluate(()=>send('files_release_page',{page:ItdaFiles.windowToken}));
       let crossWindowTransfer;
       const late=await browser.newPage({viewport:{width:1200,height:800},userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/145.0.0.0 Safari/537.36'});
       await late.addInitScript(path=>{window.ITDA_FILE_PATH=path;window.itdaNativeFiles=true;},crossWindowDir);
@@ -433,7 +434,9 @@ try {
       assert(hash(path.join(crossWindowDir,'한글 문서.txt'))===hash(path.join(remote,'한글 문서.txt')),'Cross-window paste changed bytes');
       assert(crossWindowTransfer?.id==='files-second'&&crossWindowTransfer.from_id==='files-fixture'&&crossWindowTransfer.from==='remote'&&crossWindowTransfer.from_window===await page.evaluate(()=>ItdaFiles.windowToken),'Native paste lost its remote source: '+JSON.stringify(crossWindowTransfer));
       await late.evaluate(()=>send('files_release_page',{page:ItdaFiles.windowToken}));await late.close();
-      console.log('New different-device window: seeded clipboard, native Paste, real SFTP and byte check passed');
+      await page.evaluate(()=>send('files',{id:'files-fixture',window:ItdaFiles.windowToken,op:'connect',options:S.hosts.find(h=>h.id==='files-fixture').files,reuse:true}));
+      await page.locator('[data-pane="remote"] tr[data-index]').filter({hasText:'한글 문서.txt'}).waitFor();
+      console.log('New different-device window after source release: seeded clipboard, native Paste, real SFTP and byte check passed');
       const nativeDestination=path.join(local,'Finder-paste');fs.mkdirSync(nativeDestination);
       await page.evaluate(destination=>send('files_native_paste',{id:'files-fixture',stamp:-1,side:'local',path:destination}),nativeDestination);
       await page.locator('.files-prompt').filter({hasText:'파일 복사'}).waitFor();await page.locator('[data-choice=ok]').click();

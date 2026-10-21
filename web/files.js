@@ -1408,7 +1408,7 @@
         // goes device to device. This computer's files paste into any tab.
         if (clipboard) {
           const clip = clipboard;
-          const sent = await transfer(clip.side, clip.path, clip.names, active, p.path, clip.move, host.id, clip.side === "remote" ? { id: clip.host, window: clip.window } : null);
+          const sent = await transfer(clip.side, clip.path, clip.names, active, p.path, clip.move, host.id, clip.side === "remote" ? { id: clip.host, window: clip.window, cid: clip.cid } : null);
           // A cut is used once, in every window (a cancelled paste keeps it).
           if (sent && clip.move) send("files_clipboard", { clip: { clear: clip.cid } });
         }
@@ -1482,7 +1482,7 @@
     );
     if (r.choice !== "ok") return false;
     send("files", { id, window: pageToken, op: "transfer",
-        ...(cross ? { from_id: origin.id, from_window: origin.window || pageToken } : {}),
+        ...(cross ? { from_id: origin.id, from_window: origin.window || pageToken, ...(origin.cid ? { from_clip: origin.cid } : {}) } : {}),
         from,
         source,
         names,
