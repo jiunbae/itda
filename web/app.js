@@ -29,6 +29,8 @@ const OS_SVG = {
   linux: '<path d="M12 2.6c-2.3 0-3.6 1.9-3.6 4.4 0 1.3.3 2.2-.6 3.6-1.2 1.8-2.9 3.9-2.9 6.6 0 .6.1 1.1.3 1.6-.8.4-1.5.9-1.4 1.5.2.9 2.1.6 3.4 1.1 1.1.4 2 .6 2.6-.2.5-.1 1.4-.2 2.2-.2s1.7.1 2.2.2c.6.8 1.5.6 2.6.2 1.3-.5 3.2-.2 3.4-1.1.1-.6-.6-1.1-1.4-1.5.2-.5.3-1 .3-1.6 0-2.7-1.7-4.8-2.9-6.6-.9-1.4-.6-2.3-.6-3.6 0-2.5-1.3-4.4-3.6-4.4z"/><path class="cut" d="M12 10.2c-1.9 0-3.2 2.6-3.2 5.6 0 1.7.6 3.2 1.3 4h3.8c.7-.8 1.3-2.3 1.3-4 0-3-1.3-5.6-3.2-5.6z"/><circle class="cut" cx="10.6" cy="6.6" r=".9"/><circle class="cut" cx="13.4" cy="6.6" r=".9"/><path class="cut" d="M10.9 8.4h2.2L12 9.6z"/>',
 };
 
+const OS_NAME = { mac: 'Mac', windows: 'Windows', linux: 'Linux' };
+
 // 'mac' | 'windows' | 'linux' | '' for a host in the book, a Bonjour find or a tailnet peer.
 function osOf(x) {
   const o = String(x.os || '').toLowerCase();
@@ -400,8 +402,11 @@ function dot(h) {
 function thumb(h) {
   const img = h.thumb ? `<img data-thumb src="thumb/${esc(h.id)}.png?v=${h.thumb}" alt="" loading="lazy" onerror="this.remove()">` : '';
   const initial = esc((label(h)[0] || '?').toUpperCase());
+  // A preview hides the big OS mark: keep a small one in the corner.
+  const os = osOf(h);
+  const mark = img && OS_SVG[os] ? `<span class="os-badge" title="${OS_NAME[os]}">${osIcon(h)}</span>` : '';
   return `<div class="thumb" style="--h:${hue(h.id)}">
-    <span class="ph">${osIcon(h)}</span><span class="ph-initial">${initial}</span>${img}`;
+    <span class="ph">${osIcon(h)}</span><span class="ph-initial">${initial}</span>${img}${mark}`;
 }
 
 function primaryAction(h) {
@@ -1104,11 +1109,11 @@ function openEdit(init = {}, mode = {}) {
   const title = quick ? `${esc(h.host)}에 연결` : existing ? '연결 편집' : '새 연결';
   const tabs = quick ? '' : `<div class="tabs" role="tablist">
       <button class="on" data-tab="general">일반</button><button data-tab="display">화면</button>${MAC ? '' : '<button data-tab="input">키보드</button>'}<button data-tab="conn">연결</button></div>`;
-  const groupsList = groups().map((g) => `<option value="${esc(g)}">`).join('');
   const chipList = (gs) => gs.map((g) => `<span class="chip" data-chip="${esc(g)}">${esc(g)}<button type="button" class="chip-x" data-chip-x="${esc(g)}" aria-label="${esc(g)} 그룹 빼기">×</button></span>`).join('');
   const groupField = quick ? '' : `<div class="field"><label for="f-group">그룹</label>
-      <div class="chips input" id="group-chips">${chipList(hostGroups(h))}<input id="f-group" list="groups" placeholder="${hostGroups(h).length ? '' : '없음 — 예: 집, 회사'}" aria-label="그룹 추가"></div>
-      <datalist id="groups">${groupsList}</datalist><span class="hint">Enter나 쉼표로 추가합니다. 같은 그룹의 연결은 왼쪽 목록에서 모아 볼 수 있습니다.</span></div>`;
+      <div class="group-wrap"><div class="chips input" id="group-chips">${chipList(hostGroups(h))}<input id="f-group" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="group-suggest" aria-expanded="false" placeholder="${hostGroups(h).length ? '' : '없음 — 예: 집, 회사'}" aria-label="그룹 추가"></div>
+      <div class="group-suggest" id="group-suggest" role="listbox" hidden></div></div>
+      <span class="hint">입력하면 기존 그룹을 제안합니다(↑↓로 고르고 Enter). 새 그룹은 Enter나 쉼표로 추가합니다.</span></div>`;
   const sshBox = `<div class="ssh-box" ${KD.ssh ? '' : 'hidden'}>
         <div class="opt"><span class="i ssh-ico">&#xE72E;</span><div class="txt"><b>SSH로 암호화해서 연결 <a href="#" class="help-link" data-help="accounts">자세히</a></b><span>인터넷·공용 Wi-Fi에서 켜세요. 상대 기기에 SSH(Mac은 ‘원격 로그인’)가 켜져 있어야 하고 암호는 위와 같습니다.</span></div>
           <label class="switch"><input type="checkbox" id="f-ssh" ${ssh.on ? 'checked' : ''}><span></span></label></div>
@@ -1199,19 +1204,64 @@ ${quick ? sshBox : ''}
       gin.value = '';
       gin.placeholder = current().length ? '' : '없음 — 예: 집, 회사';
     };
-    gin.addEventListener('keydown', (e) => {
-      // Enter adds a group here; it must not also save the dialog. (Empty Enter still saves.)
-      // Enter that finishes Korean composition only commits the syllable.
-      if (e.key === 'Enter' && (e.isComposing || e.keyCode === 229)) { e.stopPropagation(); return; }
-      if ((e.key === 'Enter' && gin.value.trim() || e.key === ',') && !e.isComposing) { e.preventDefault(); e.stopPropagation(); add(gin.value); }
-      else if (e.key === 'Backspace' && !gin.value && !e.isComposing && e.keyCode !== 229) { const last = [...chips.querySelectorAll('[data-chip]')].pop(); if (last) { last.remove(); gin.placeholder = current().length ? '' : '없음 — 예: 집, 회사'; } }
+    // Suggestions: the other connections' groups not on this one yet, matching what's typed
+    // (anywhere in the name). The webviews don't all show <datalist>, so they are drawn here.
+    const box = m.querySelector('#group-suggest');
+    let pick = -1;
+    const shown = () => [...box.querySelectorAll('[data-sug]')];
+    const suggest = () => {
+      const q = gin.value.trim().toLowerCase();
+      const have = current().map((x) => x.toLowerCase());
+      const list = groups().filter((g) => !have.includes(g.toLowerCase()) && (!q || g.toLowerCase().includes(q)))
+        .sort((a, b) => (b.toLowerCase().startsWith(q) - a.toLowerCase().startsWith(q))).slice(0, 8);
+      pick = q && list.length ? 0 : -1;
+      box.innerHTML = list.map((g, i) => `<button type="button" class="sug" role="option" id="group-sug-${i}" tabindex="-1" data-sug="${esc(g)}">${esc(g)}</button>`).join('');
+      show(!!list.length && document.activeElement === gin);
+      mark();
+    };
+    const show = (on) => { box.hidden = !on; gin.setAttribute('aria-expanded', String(on)); };
+    // The highlighted choice, for the eye (.on) and for screen readers (selected, active).
+    const mark = () => {
+      shown().forEach((b, i) => { b.classList.toggle('on', i === pick); b.setAttribute('aria-selected', String(i === pick)); });
+      if (pick >= 0 && !box.hidden) gin.setAttribute('aria-activedescendant', `group-sug-${pick}`);
+      else gin.removeAttribute('aria-activedescendant');
+    };
+    // Pressing a choice must not take the focus from the field; the click picks it.
+    box.addEventListener('pointerdown', (e) => e.preventDefault());
+    box.addEventListener('mousedown', (e) => e.preventDefault());
+    box.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-sug]');
+      if (!b) return;
+      add(b.dataset.sug);
+      gin.focus();
+      suggest();
     });
-    gin.addEventListener('input', () => { if (gin.value.includes(',')) add(gin.value); });
-    // Picking a suggestion from the list adds it right away.
-    gin.addEventListener('change', () => { if (gin.value.trim()) add(gin.value); });
+    gin.addEventListener('focus', suggest);
+    gin.addEventListener('blur', () => { show(false); mark(); });
+    gin.addEventListener('keydown', (e) => {
+      // While composing (Korean IME), keys belong to the IME: arrows move its candidates and
+      // Enter only commits the syllable. Nothing here, and nothing reaching the dialog.
+      if (e.isComposing || e.keyCode === 229) { if (e.key === 'Enter' || e.key === 'Escape') e.stopPropagation(); return; }
+      // Enter adds a group here; it must not also save the dialog. (Empty Enter still saves.)
+      if (!box.hidden && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+        e.preventDefault();
+        const n = shown().length;
+        pick = e.key === 'ArrowDown' ? (pick + 1) % n : (pick <= 0 ? n - 1 : pick - 1);
+        mark();
+        return;
+      }
+      if (!box.hidden && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); show(false); mark(); return; }
+      // A highlighted suggestion wins over the typed text (Enter or Tab).
+      if (!box.hidden && pick >= 0 && (e.key === 'Enter' || e.key === 'Tab' && gin.value.trim()) && !e.isComposing) {
+        e.preventDefault(); e.stopPropagation(); add(shown()[pick].dataset.sug); suggest(); return;
+      }
+      if (e.key === 'Enter' && gin.value.trim() || e.key === ',') { e.preventDefault(); e.stopPropagation(); add(gin.value); suggest(); }
+      else if (e.key === 'Backspace' && !gin.value) { const last = [...chips.querySelectorAll('[data-chip]')].pop(); if (last) { last.remove(); gin.placeholder = current().length ? '' : '없음 — 예: 집, 회사'; suggest(); } }
+    });
+    gin.addEventListener('input', () => { if (gin.value.includes(',')) add(gin.value); suggest(); });
     chips.addEventListener('click', (e) => {
       const x = e.target.closest('[data-chip-x]');
-      if (x) { x.closest('[data-chip]').remove(); gin.focus(); } else gin.focus();
+      if (x) { x.closest('[data-chip]').remove(); gin.focus(); suggest(); } else gin.focus();
     });
     m._groups = () => { if (gin.value.trim()) add(gin.value); return current(); };
   }

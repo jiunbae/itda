@@ -310,6 +310,15 @@ kbd {
 [data-theme="dark"] .found .ico:has(.osm-windows) { color: #4cc2ff; }
 [data-theme="dark"] .found .ico:has(.osm-linux) { color: #f5c518; --os-cut: #2b2b2b; }
 .found .ico .osm svg { width: 22px; height: 22px; }
+/* The OS on a card whose preview covers the big mark. */
+.thumb .os-badge {
+  position: absolute; right: 8px; bottom: 8px; z-index: 1; display: grid; place-items: center;
+  width: 24px; height: 24px; border-radius: 6px; color: #fff; background: rgba(0,0,0,.55);
+  backdrop-filter: blur(6px); --os-cut: #3a3a3a; pointer-events: auto;
+}
+.thumb .os-badge .osm svg { width: 15px; height: 15px; filter: none; }
+.list-row .thumb .os-badge { right: 2px; bottom: 2px; width: 14px; height: 14px; border-radius: 4px; }
+.list-row .thumb .os-badge .osm svg { width: 9px; height: 9px; }
 .thumb .ph-initial {
   position: absolute; left: 14px; bottom: 10px; font-size: 13px; font-weight: 600; color: rgba(255,255,255,.95);
   text-shadow: 0 1px 4px rgba(0,0,0,.35);
@@ -721,3 +730,16 @@ details.raw code { display: block; margin-top: 6px; padding: 8px 10px; border-ra
 .hp-box .hp-ico { width: 20px; text-align: center; font-size: 16px; }
 .hp-box .txt { flex: 1; display: flex; flex-direction: column; gap: 2px; }
 .hp-box .txt span { color: var(--text-2); font-size: 12px; }
+
+/* Group suggestions under the editor's group field. */
+.group-wrap { position: relative; }
+.group-suggest {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20;
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 8px;
+  background: var(--surface, var(--bg)); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow-2);
+}
+.group-suggest .sug {
+  border: 1px solid var(--border); border-radius: 12px; padding: 3px 10px; font: inherit; font-size: 12.5px;
+  background: transparent; color: var(--text); cursor: pointer;
+}
+.group-suggest .sug:hover, .group-suggest .sug.on { background: var(--accent); border-color: var(--accent); color: #fff; }
