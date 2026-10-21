@@ -2,8 +2,12 @@
 //   cargo test --release h264_e2e -- --ignored --nocapture &   then   node scripts/cu-e2e.mjs
 // Needs Playwright (PLAYWRIGHT=/path/to/node_modules/playwright; CHROMIUM=browser binary).
 const pw = await import(process.env.PLAYWRIGHT ?? 'playwright');
-const { chromium } = pw.chromium ? pw : pw.default;
-const browser = await chromium.launch(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {});
+const engines = pw.chromium ? pw : pw.default;
+// ENGINE=webkit runs it in WebKit (as the Mac app's WKWebView; headless Chromium may not
+// offer H.264 to noVNC). WEBKIT/CHROMIUM: browser binary.
+const engine = process.env.ENGINE || 'chromium';
+const exe = engine === 'chromium' ? process.env.CHROMIUM : process.env.WEBKIT;
+const browser = await engines[engine].launch(exe ? { executablePath: exe } : {});
 // Wait for the test server (it may still be compiling).
 for (let i = 0; ; i++) {
   try {

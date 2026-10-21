@@ -342,6 +342,7 @@ fn open_window(target: &EventLoopWindowTarget<Wake>, id: String, url: String, ti
         .with_ipc_handler(move |req| {
             let Ok(v) = serde_json::from_str::<Value>(req.body()) else { return };
             if v["ev"] == "apple-screen-sharing" { apple_screen_sharing(&sid); return; }
+            if v["ev"] == "trace" { crate::log!("viewer trace: {}", v["text"].as_str().unwrap_or("")); return; }
             if v["ev"] == "monitor-close" || v["ev"] == "monitor-remove" {
                 let screen = if v["ev"] == "monitor-remove" { v["screen"].as_u64().and_then(|n| u32::try_from(n).ok()) } else { None };
                 let _ = MONITOR_CLOSE.try_with(|q| q.borrow_mut().push((sid.clone(), screen)));

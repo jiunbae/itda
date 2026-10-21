@@ -51,8 +51,103 @@ const S = { hosts: [], accounts: [], rfb: null, ws: null, host: null, fit: true,
 // to the app's home instead of offering the list.
 const OPEN = new URLSearchParams(location.search).get('open');
 const MIRROR = new URLSearchParams(location.search).get('mirror');
+// ITDA_HP_TRACE (the app adds trace=1): time this viewer's part of each H.264 frame.
+const TRACE = new URLSearchParams(location.search).get('trace') === '1';
 const APP = !!(OPEN && window.ipc);
 const post = (m) => { try { window.ipc.postMessage(JSON.stringify(m)); } catch (_) {} };
+
+// Where an H.264 frame spends its time in this viewer (TRACE only), p50/p95 in ms every 5 s:
+//   decode  — handed to its VideoDecoder → that frame out (matched by the chunk's timestamp)
+//   draw    — decoded → copied to the visible canvas (noVNC draws it to its back buffer, then
+//             a flip copies that to the screen canvas)
+//   nextRaf — on the visible canvas → the next animation-frame callback: when the browser
+//             next gets to render, a scheduling proxy, not when the glass shows it
+// `counts` keeps totals since the start (for tests).
+const viewerTrace = (() => {
+  const stats = { decode: [], draw: [], nextRaf: [] };
+  const counts = { decode: 0, draw: 0, nextRaf: 0 };
+  const decodedAt = new WeakMap(); // VideoFrame → when it came out of its decoder
+  let since = performance.now();
+  const add = (k, ms) => {
+    stats[k].push(ms);
+    counts[k]++;
+    if (performance.now() - since < 5000) return;
+    const q = (v, p) => v[Math.min(v.length - 1, Math.round((v.length - 1) * p))];
+    const text = Object.entries(stats).filter(([, v]) => v.length).map(([k, v]) => {
+      v.sort((a, b) => a - b);
+      return `${k} n=${v.length} p50=${q(v, 0.5).toFixed(1)} p95=${q(v, 0.95).toFixed(1)}`;
+    }).join(' | ');
+    for (const k in stats) stats[k] = [];
+    since = performance.now();
+    console.log('viewer trace:', text);
+    post({ ev: 'trace', text });
+  };
+  if (TRACE && window.VideoDecoder) {
+    const Base = window.VideoDecoder;
+    window.VideoDecoder = class extends Base {
+      constructor(init) {
+        // This decoder's chunks in flight: timestamp → when each was handed over, oldest first
+        // (noVNC gives every access unit of one rectangle the same timestamp).
+        const submitted = new Map();
+        super({ ...init, output: (f) => {
+          const q = submitted.get(f.timestamp);
+          const t = q && q.shift();
+          if (q && !q.length) submitted.delete(f.timestamp);
+          if (t !== undefined) {
+            const now = performance.now();
+            add('decode', now - t);
+            decodedAt.set(f, now);
+          }
+          init.output(f);
+        } });
+        this.itdaSubmitted = submitted;
+      }
+      decode(chunk) {
+        const s = this.itdaSubmitted;
+        if (s.size > 64) s.clear(); // (a decoder error leaves its chunks behind)
+        const q = s.get(chunk.timestamp) || [];
+        q.push(performance.now());
+        s.set(chunk.timestamp, q);
+        try {
+          return super.decode(chunk);
+        } catch (e) {
+          q.pop(); // not submitted after all
+          if (!q.length) s.delete(chunk.timestamp);
+          throw e;
+        }
+      }
+      reset() { this.itdaSubmitted.clear(); return super.reset(); }
+      close() { this.itdaSubmitted.clear(); return super.close(); }
+    };
+  }
+  return {
+    counts,
+    attach(rfb) {
+      const d = rfb._display;
+      const back = d && d._drawCtx, screen = d && d._targetCtx;
+      if (!back || !screen) return;
+      // The newest decoded frame drawn to the back buffer and not yet on the visible canvas.
+      let pending;
+      const toBack = back.drawImage.bind(back);
+      back.drawImage = (img, ...a) => {
+        const t = decodedAt.get(img);
+        if (t !== undefined) pending = t;
+        return toBack(img, ...a);
+      };
+      const toScreen = screen.drawImage.bind(screen);
+      screen.drawImage = (img, ...a) => {
+        const r = toScreen(img, ...a);
+        if (pending !== undefined && img === d._backbuffer) {
+          const now = performance.now();
+          add('draw', now - pending);
+          pending = undefined;
+          requestAnimationFrame(() => add('nextRaf', performance.now() - now));
+        }
+        return r;
+      };
+    },
+  };
+})();
 const monitors = new MonitorController({S,app:APP,post,api,render:renderTools,toast,close:leave});
 const opt = (k, dflt) => (S.host && S.host.opts && k in S.host.opts ? S.host.opts[k] : dflt);
 // What to call the remote device in messages.
@@ -459,6 +554,7 @@ function open(h) {
   S.ws = ws;
   const rfb = new window.RFB($('#screen'), ws, { shared: true });
   S.rfb = rfb;
+  if (TRACE) viewerTrace.attach(rfb);
   monitors.attach(rfb);
   rfb.scaleViewport = S.fit;
   rfb.clipViewport = !S.fit;

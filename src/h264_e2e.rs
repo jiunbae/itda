@@ -49,8 +49,19 @@ const PAGE: &str = r#"<!doctype html><meta charset=utf-8><div id=screen style="w
 <script type=module>
 import './novnc.min.js';
 const mode = new URLSearchParams(location.search).get('mode');
+// The h264 session also runs the app viewer's ITDA_HP_TRACE hooks (web/viewer/viewer.js).
+if (mode === 'h264') await import('./trace.js');
 const rfb = new window.RFB(document.getElementById('screen'), `ws://${location.host}/ws?mode=${mode}`);
 rfb.scaleViewport = false;
+// Counted independently of the hooks: decoded frames drawn to noVNC's back buffer, and
+// copies of that buffer to the visible canvas.
+const seen = { videoDraws: 0, screenCopies: 0 };
+if (window.viewerTrace) {
+  viewerTrace.attach(rfb);
+  const d = rfb._display, back = d._drawCtx.drawImage.bind(d._drawCtx), screen = d._targetCtx.drawImage.bind(d._targetCtx);
+  d._drawCtx.drawImage = (img, ...a) => { if (typeof VideoFrame !== 'undefined' && img instanceof VideoFrame) seen.videoDraws++; return back(img, ...a); };
+  d._targetCtx.drawImage = (img, ...a) => { if (img === d._backbuffer) seen.screenCopies++; return screen(img, ...a); };
+}
 setTimeout(async () => {
   const c = document.querySelector('#screen canvas');
   const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
@@ -59,10 +70,19 @@ setTimeout(async () => {
     const i = (y * c.width + x) * 4;
     samples.push([x, y, d[i] << 16 | d[i + 1] << 8 | d[i + 2]]);
   }
-  await fetch('/report', { method: 'POST', body: JSON.stringify({ mode, h264: typeof VideoDecoder !== 'undefined', w: c.width, h: c.height, samples }) });
+  const trace = window.viewerTrace ? { ...viewerTrace.counts, ...seen, reports: (window.traceReports || []).length } : null;
+  await fetch('/report', { method: 'POST', body: JSON.stringify({ mode, h264: typeof VideoDecoder !== 'undefined', w: c.width, h: c.height, samples, trace }) });
   document.title = 'done';
 }, 7000);
 </script>"#;
+
+/// The app viewer's trace hooks, on, reporting into window.traceReports.
+fn trace_js() -> String {
+    let v = include_str!("../web/viewer/viewer.js");
+    let a = v.find("const viewerTrace = (() => {").expect("viewerTrace in viewer.js");
+    let b = a + v[a..].find("})();").expect("end of viewerTrace") + 5;
+    format!("const TRACE = true;\nconst post = (m) => (window.traceReports ??= []).push(m);\n{}\nwindow.viewerTrace = viewerTrace;\n", &v[a..b])
+}
 
 #[derive(Default, Debug)]
 struct Stats {
@@ -228,11 +248,21 @@ fn h264_e2e() {
             let worst = samples.iter().map(|s| off(s[2].as_u64().unwrap() as u32, expected[s[1].as_u64().unwrap() as usize * W + s[0].as_u64().unwrap() as usize])).max().unwrap();
             println!("report {}: webcodecs={} canvas {}x{}, {} samples, worst channel error {worst}", v["mode"], v["h264"], v["w"], v["h"], samples.len());
             assert!(worst <= 24, "picture differs from the source");
+            // The viewer trace pairs each decoded frame with its own copy to the screen canvas.
+            if let Some(t) = v["trace"].as_object() {
+                let n = |k: &str| t[k].as_u64().unwrap_or(0);
+                println!("viewer trace counts: {t:?}");
+                assert!(n("draw") > 0 && n("decode") >= n("videoDraws") && n("videoDraws") >= n("draw"), "draws counted beyond decoded frames drawn");
+                assert!(n("draw") <= n("screenCopies") && n("nextRaf") <= n("draw"), "draws counted without a copy to the screen");
+                assert!(n("reports") >= 1, "no 5 s report");
+            }
             reply(&mut c, "text/plain", b"ok");
             reports += 1;
             if reports == 2 {
                 break;
             }
+        } else if path.starts_with("/trace.js") {
+            reply(&mut c, "text/javascript", trace_js().as_bytes());
         } else if path.starts_with("/novnc.min.js") {
             reply(&mut c, "text/javascript", NOVNC.as_bytes());
         } else {
