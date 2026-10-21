@@ -454,6 +454,13 @@ pub fn release_page(page: &str) {
 pub fn disconnect(id: &str) {
     if !id.contains('\x1f') {
         let prefix = format!("{id}\x1f");
+        // The device itself is going (deleted, or its files disconnected): a copied selection
+        // from it no longer keeps its connection open. (A closed window alone keeps it.)
+        let mut kept = CLIPBOARD_SOURCE.lock().unwrap();
+        if kept.as_ref().is_some_and(|k| k.key == id || k.key.starts_with(&prefix)) {
+            *kept = None;
+        }
+        drop(kept);
         let mut keys: Vec<String> = connections().lock().unwrap().keys().chain(connecting().lock().unwrap().keys()).filter(|key| key.starts_with(&prefix)).cloned().collect();
         keys.extend(jobs().lock().unwrap().values().filter(|(key,_)| key.starts_with(&prefix)).map(|(key,_)| key.clone()));
         keys.sort(); keys.dedup();

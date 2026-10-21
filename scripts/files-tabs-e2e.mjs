@@ -27,7 +27,7 @@ try{
    const homes={studio:'/Users/alex',build:'/home/dev'};
    const tree={'/Users/alex':[entry('Docs',true),entry('Alpha-A.txt')],'/Users/alex/Docs':[entry('Inside-A.txt')],'/home/dev':[entry('Beta-B.txt')],'/local':[entry('Local.txt')]};
    window.testPackets=[];
-   window.ipc={postMessage:raw=>{const m=JSON.parse(raw);if(m.cmd==='files_clipboard'){testPackets.push(m);return;}if(m.cmd!=='files')return;testPackets.push(m);
+   window.ipc={postMessage:raw=>{const m=JSON.parse(raw);if(m.cmd==='files_clipboard'||m.cmd==='files_sort'){testPackets.push(m);return;}if(m.cmd!=='files')return;testPackets.push(m);
     const result={...m,type:'files_result',ok:true};
     if(m.op==='connect'){if(!homes[m.id])return;result.data={path:homes[m.id],entries:tree[homes[m.id]],local_path:'/local',local_entries:tree['/local'],rsync:true};}
     else if(m.op==='list')result.data={path:m.path,entries:window.sortTesting&&m.path==='/Users/alex' ? [entry('Folder2',true),{...entry('file10.txt'),size:20,modified:300},{...entry('Zebra.pdf'),size:5,modified:100},entry('Docs',true),{...entry('file2.txt'),size:20,modified:200}] : tree[m.path]||[]};
@@ -74,6 +74,16 @@ try{
   await layer.locator('[data-action="sort"]').click();assert(await p.getByRole('menuitemradio',{name:'내림차순',exact:true}).getAttribute('aria-checked')==='true','Sort preference did not survive reload');await p.keyboard.press('Escape');
   await layer.locator('th[data-sort="name"]').click();
   await layer.locator('[data-action="sort"]').click();assert(await p.getByRole('menuitemradio',{name:'오름차순',exact:true}).getAttribute('aria-checked')==='true','Header and menu sort diverged');await p.keyboard.press('Escape');
+  // A sort chosen here is announced to every open file window, and one from another window applies here.
+  assert(await p.evaluate(()=>testPackets.some(m=>m.cmd==='files_sort'&&m.sort?.key==='name')),'Sort change not announced to other windows');
+  await p.keyboard.press('Escape');
+  const announced=await p.evaluate(()=>testPackets.filter(m=>m.cmd==='files_sort').length);
+  await p.evaluate(()=>itda.recv({type:'files_sort',sort:{key:'size',desc:true}}));
+  await layer.locator('[data-action="sort"]').click();
+  assert(await p.getByRole('menuitemradio',{name:'크기',exact:true}).getAttribute('aria-checked')==='true'&&await p.getByRole('menuitemradio',{name:'내림차순',exact:true}).getAttribute('aria-checked')==='true','Sort from another window not applied');
+  await p.keyboard.press('Escape');
+  assert(await p.evaluate(()=>testPackets.filter(m=>m.cmd==='files_sort').length)===announced,'Sort from another window echoed back');
+  await p.evaluate(()=>itda.recv({type:'files_sort',sort:{key:'name',desc:false}}));
 
   await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+t`);
   assert(await layer.locator('[data-tab]').count()===2,'New tab failed');
