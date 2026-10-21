@@ -162,10 +162,8 @@ pub(crate) fn monitors() -> Vec<(u32, i32, i32, i32, i32)> {
 }
 
 /// The newest captured frame, handed from ScreenCaptureKit's queue to the pump.
-type Latest = Arc<Mutex<Option<CFRetained<CVPixelBuffer>>>>;
-
-/// When the pending frame arrived (ITDA_HP_TRACE only).
-static ARRIVED: Mutex<Option<Instant>> = Mutex::new(None);
+/// (With when it arrived, under ITDA_HP_TRACE.)
+type Latest = Arc<Mutex<Option<(CFRetained<CVPixelBuffer>, Option<Instant>)>>>;
 
 /// Called when a new frame arrives.
 type Waker = Box<dyn Fn() + Send>;
@@ -201,13 +199,13 @@ define_class!(
             }
             // Idle frames (nothing changed) carry no image.
             if let Some(image) = unsafe { sample.image_buffer() } {
-                if crate::trace::on() {
+                let arrived = crate::trace::on().then(|| {
                     // From the frame's display time to its delivery here.
                     let (now, shown) = unsafe { (objc2_core_media::CMClock::host_time_clock().time().seconds(), sample.presentation_time_stamp().seconds()) };
                     crate::trace::add("sck", ((now - shown) * 1000.0) as f32);
-                    *ARRIVED.lock().unwrap() = Some(Instant::now());
-                }
-                *self.ivars().latest.lock().unwrap() = Some(image);
+                    Instant::now()
+                });
+                *self.ivars().latest.lock().unwrap() = Some((image, arrived));
                 // Wake every viewer's pump now, rather than at its next poll.
                 for (_, wake) in FRAME_WAKERS.lock().unwrap().iter() {
                     wake();
@@ -300,11 +298,11 @@ impl Capture {
 
     fn update(&mut self) {
         let pending = self.latest.lock().unwrap().take();
-        if let Some(pb) = pending {
-            if let Some(at) = ARRIVED.lock().unwrap().take() {
+        if let Some((pb, arrived)) = pending {
+            if let Some(at) = arrived {
                 crate::trace::since("wait", at);
             }
-            let copy = Instant::now();
+            let copy = crate::trace::on().then(Instant::now);
             if unsafe { CVPixelBufferLockBaseAddress(&pb, CVPixelBufferLockFlags::ReadOnly) } == 0 {
                 let base = CVPixelBufferGetBaseAddress(&pb) as *const u8;
                 let (bw, bh, bpr) = (CVPixelBufferGetWidth(&pb), CVPixelBufferGetHeight(&pb), CVPixelBufferGetBytesPerRow(&pb));
@@ -326,7 +324,9 @@ impl Capture {
                 }
                 unsafe { CVPixelBufferUnlockBaseAddress(&pb, CVPixelBufferLockFlags::ReadOnly) };
             }
-            crate::trace::since("copy", copy);
+            if let Some(t) = copy {
+                crate::trace::since("copy", t);
+            }
         }
     }
 
@@ -381,12 +381,12 @@ mod snapshot_tests {
     #[test]
     fn held_snapshot_survives_next_capture_and_capture_drop() {
         let mut c = capture();
-        *c.latest.lock().unwrap() = Some(buffer(16, 16, 0xff123456));
+        *c.latest.lock().unwrap() = Some((buffer(16, 16, 0xff123456), None));
         let first = c.snapshot();
         let unchanged = c.snapshot();
         assert!(Arc::ptr_eq(&first.pixels, &unchanged.pixels));
         assert!(!c.fresh_since(first.generation));
-        *c.latest.lock().unwrap() = Some(buffer(16, 16, 0xff654321));
+        *c.latest.lock().unwrap() = Some((buffer(16, 16, 0xff654321), None));
         assert!(c.fresh_since(first.generation));
         let next = c.snapshot();
         assert_ne!(first.generation, next.generation);
@@ -406,7 +406,7 @@ mod snapshot_tests {
     #[test]
     fn mismatched_buffer_uses_cpu_fallback() {
         let mut c = capture();
-        *c.latest.lock().unwrap() = Some(buffer(20, 20, 0xffabcdef));
+        *c.latest.lock().unwrap() = Some((buffer(20, 20, 0xffabcdef), None));
         let s = c.snapshot();
         assert!(s.native.is_none());
         assert_eq!((s.w, s.h), (16, 16));
