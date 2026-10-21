@@ -273,6 +273,16 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                     if verbose {
                         crate::log!("update #{updates}: rect {x},{y} {w}x{h} enc={enc}");
                     }
+                    // Pixel data is read into buffers of the rectangle's size: one that isn't
+                    // on the screen (or a cursor larger than any) ends the connection first.
+                    let outside = match enc {
+                        ENC_RAW | ENC_ZRLE => !s.fb.lock().unwrap().fits(x, y, w, h),
+                        ENC_CURSOR => w > 512 || h > 512,
+                        _ => false,
+                    };
+                    if outside {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, "화면 공유 서버가 화면 밖의 영역을 보냈습니다"));
+                    }
                     match enc {
                         ENC_RAW => {
                             raw.resize(w * h * 4, 0);
@@ -391,14 +401,14 @@ fn inflate(z: &mut Decompress, input: &[u8], out: &mut Vec<u8>, most: usize) -> 
     out.clear();
     let mut used = 0;
     loop {
-        if out.len() > most {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "ZRLE data inflates too far"));
-        }
         if out.capacity() - out.len() < 1 << 16 {
             out.reserve(out.capacity().max(1 << 18));
         }
         let (i0, o0) = (z.total_in(), out.len());
         z.decompress_vec(&input[used..], out, FlushDecompress::Sync).map_err(io::Error::other)?;
+        if out.len() > most {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "ZRLE data inflates too far"));
+        }
         used += (z.total_in() - i0) as usize;
         let full = out.len() == out.capacity();
         if (used >= input.len() && !full) || (z.total_in() == i0 && out.len() == o0) {

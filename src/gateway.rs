@@ -47,9 +47,15 @@ static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 static TOKENS: Mutex<Vec<(String, Instant, bool)>> = Mutex::new(Vec::new());
 /// Wrong PINs per source (address): (count, locked until). One device guessing locks only
 /// itself out; ALL_FAILS bounds guessing from many addresses at once.
-static FAILS: Mutex<Option<HashMap<std::net::IpAddr, (u32, Option<Instant>)>>> = Mutex::new(None);
-static ALL_FAILS: Mutex<(u32, Option<Instant>)> = Mutex::new((0, None));
+static FAILS: Mutex<Option<Fails>> = Mutex::new(None);
 const MAX_ALL_FAILS: u32 = 50;
+const MAX_SOURCES: usize = 1024;
+
+#[derive(Default)]
+struct Fails {
+    per: HashMap<std::net::IpAddr, (u32, Option<Instant>)>,
+    all: (u32, Option<Instant>),
+}
 /// Open browser sessions of the web viewer, closed when it stops.
 static LIVE: Mutex<Vec<TcpStream>> = Mutex::new(Vec::new());
 // Native monitor views share a relay; closing the final view must stop both sockets,
@@ -143,7 +149,7 @@ const MAX_CONNECTIONS: usize = 128;
 /// A request line or header longer than this, or a head slower than REQUEST_TIME, ends the
 /// connection (before anyone has signed in, so it must not hold memory or a thread for long).
 const MAX_LINE: u64 = 8 << 10;
-const REQUEST_TIME: Duration = Duration::from_secs(15);
+const REQUEST_TIME: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 15 });
 
 /// Blocking accept, so a new connection is served at once; `stop()` wakes it with a connect.
 fn serve(l: TcpListener, local: bool, stop: Arc<AtomicBool>) -> io::Result<std::thread::JoinHandle<()>> {
@@ -195,7 +201,6 @@ pub fn stop() {
     }
     TOKENS.lock().unwrap().retain(|t| t.2);
     *FAILS.lock().unwrap() = None;
-    *ALL_FAILS.lock().unwrap() = (0, None);
 }
 
 /// Addresses other devices can use: every LAN IPv4 (Tailscale's 100.x included).
@@ -259,21 +264,38 @@ struct Req {
     body: Vec<u8>,
 }
 
+/// Wait for more of the request, but never past `deadline` (each read gets only what is left,
+/// so a client sending a byte at a time can't stretch it).
+fn more(r: &mut BufReader<TcpStream>, deadline: Instant) -> io::Result<&[u8]> {
+    let left = deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero());
+    let left = left.ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "request too slow"))?;
+    r.get_ref().set_read_timeout(Some(left))?;
+    r.fill_buf()
+}
+
 /// One line of the request head, at most MAX_LINE long.
-fn head_line(r: &mut BufReader<TcpStream>, started: Instant) -> io::Result<String> {
-    if started.elapsed() > REQUEST_TIME {
-        return Err(io::Error::new(io::ErrorKind::TimedOut, "request too slow"));
+fn head_line(r: &mut BufReader<TcpStream>, deadline: Instant) -> io::Result<String> {
+    let mut line = Vec::new();
+    loop {
+        let buf = more(r, deadline)?;
+        if buf.is_empty() {
+            break; // closed
+        }
+        let take = buf.iter().position(|&b| b == b'\n').map_or(buf.len(), |i| i + 1);
+        line.extend_from_slice(&buf[..take]);
+        r.consume(take);
+        if line.ends_with(b"\n") {
+            break;
+        }
+        if line.len() as u64 > MAX_LINE {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "request line too long"));
+        }
     }
-    let mut line = String::new();
-    let n = r.by_ref().take(MAX_LINE).read_line(&mut line)?;
-    if n as u64 == MAX_LINE && !line.ends_with('\n') {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "request line too long"));
-    }
-    Ok(line)
+    Ok(String::from_utf8_lossy(&line).into_owned())
 }
 
 fn read_req(r: &mut BufReader<TcpStream>) -> io::Result<Req> {
-    let started = Instant::now();
+    let started = Instant::now() + REQUEST_TIME;
     let line = head_line(r, started)?;
     let mut it = line.split_whitespace();
     let method = it.next().unwrap_or("").to_string();
@@ -296,8 +318,18 @@ fn read_req(r: &mut BufReader<TcpStream>) -> io::Result<Req> {
         }
     }
     let len: usize = headers.get("content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let mut body = vec![0; len.min(64 << 10)];
-    r.read_exact(&mut body)?;
+    let mut body = Vec::with_capacity(len.min(64 << 10));
+    while body.len() < len.min(64 << 10) {
+        let buf = more(r, started)?;
+        if buf.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "request body cut short"));
+        }
+        let take = buf.len().min(len.min(64 << 10) - body.len());
+        body.extend_from_slice(&buf[..take]);
+        r.consume(take);
+    }
+    // (Back to the per-read timeout for what follows, e.g. a WebSocket.)
+    r.get_ref().set_read_timeout(Some(Duration::from_secs(15)))?;
     Ok(Req { method, path, query, headers, body })
 }
 
@@ -393,41 +425,46 @@ fn source(req: &Req, peer: SocketAddr) -> std::net::IpAddr {
 
 fn login(c: &mut TcpStream, req: &Req, peer: SocketAddr) -> io::Result<()> {
     let from = source(req, peer);
+    // (A lock that has run out starts the count afresh.)
     let locked = |f: &mut (u32, Option<Instant>)| match f.1 {
         Some(until) if Instant::now() < until => true,
         Some(_) => { *f = (0, None); false }
         None => false,
     };
     {
-        let mut all = ALL_FAILS.lock().unwrap();
         let mut g = FAILS.lock().unwrap();
-        let mine = g.get_or_insert_with(HashMap::new).entry(from).or_insert((0, None));
-        if locked(&mut all) || locked(mine) {
+        let f = g.get_or_insert_with(Fails::default);
+        if locked(&mut f.all) || f.per.get_mut(&from).is_some_and(locked) {
             return json_resp(c, "429 Too Many Requests", json!({"error": "잠시 후 다시 시도하세요 (PIN을 여러 번 틀렸습니다)"}));
         }
     }
     let pin = serde_json::from_slice::<serde_json::Value>(&req.body).ok().and_then(|v| v["pin"].as_str().map(str::to_string)).unwrap_or_default();
     if !eq_ct(pin.trim().as_bytes(), store::web_pin(false).as_bytes()) {
         let mut g = FAILS.lock().unwrap();
-        let map = g.get_or_insert_with(HashMap::new);
-        if map.len() > 1024 {
-            map.retain(|_, f| f.1.is_some_and(|u| Instant::now() < u)); // (bounded memory)
+        let f = g.get_or_insert_with(Fails::default);
+        if !f.per.contains_key(&from) && f.per.len() >= MAX_SOURCES {
+            // Bounded memory: keep the sources still locked out; past that, only the total counts.
+            f.per.retain(|_, x| x.1.is_some_and(|u| Instant::now() < u));
         }
-        let mine = map.entry(from).or_insert((0, None));
-        mine.0 += 1;
-        if mine.0 >= MAX_FAILS {
-            mine.1 = Some(Instant::now() + LOCKOUT);
+        let n = if f.per.contains_key(&from) || f.per.len() < MAX_SOURCES {
+            let mine = f.per.entry(from).or_insert((0, None));
+            mine.0 += 1;
+            if mine.0 >= MAX_FAILS {
+                mine.1 = Some(Instant::now() + LOCKOUT);
+            }
+            mine.0
+        } else {
+            0
+        };
+        f.all.0 += 1;
+        if f.all.0 >= MAX_ALL_FAILS {
+            f.all.1 = Some(Instant::now() + LOCKOUT);
         }
-        let mut all = ALL_FAILS.lock().unwrap();
-        all.0 += 1;
-        if all.0 >= MAX_ALL_FAILS {
-            all.1 = Some(Instant::now() + LOCKOUT);
-        }
-        crate::log!("web: wrong PIN from {from} ({})", mine.0);
+        crate::log!("web: wrong PIN from {from} ({n})");
         return json_resp(c, "401 Unauthorized", json!({"error": "PIN이 맞지 않습니다"}));
     }
-    if let Some(map) = FAILS.lock().unwrap().as_mut() {
-        map.remove(&from);
+    if let Some(f) = FAILS.lock().unwrap().as_mut() {
+        f.per.remove(&from);
     }
     let cookie = new_session(false);
     respond(c, "200 OK", "application/json; charset=utf-8", &cookie, b"{\"ok\":true}")
@@ -1016,6 +1053,32 @@ mod tests {
         let mut header = b"GET / HTTP/1.1\r\nX: ".to_vec();
         header.resize(super::MAX_LINE as usize * 2, b'b');
         assert!(send(header).is_err());
+        // A byte at a time stays under every per-read timeout but not the whole-head deadline.
+        let mut c = std::net::TcpStream::connect(addr).unwrap();
+        let drip = std::thread::spawn(move || {
+            for b in b"GET /slow HTTP/1.1\r\nHost: h\r\n\r\n".iter().cycle().take(400) {
+                if c.write_all(&[*b]).is_err() { break; }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        let (s, _) = l.accept().unwrap();
+        let t = std::time::Instant::now();
+        let r = super::read_req(&mut std::io::BufReader::new(s));
+        // (The first 30 bytes make a whole request well within the deadline.)
+        assert!(r.is_ok() && t.elapsed() < super::REQUEST_TIME, "{:?}", r.err());
+        let _ = drip.join();
+        let mut c = std::net::TcpStream::connect(addr).unwrap();
+        let drip = std::thread::spawn(move || {
+            for _ in 0..200 {
+                if c.write_all(b"a").is_err() { break; }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        let (s, _) = l.accept().unwrap();
+        let t = std::time::Instant::now();
+        let r = super::read_req(&mut std::io::BufReader::new(s));
+        assert!(r.is_err() && t.elapsed() < super::REQUEST_TIME + std::time::Duration::from_millis(500), "slow head allowed for {:?}", t.elapsed());
+        let _ = drip.join();
     }
 
     use super::*;

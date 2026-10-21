@@ -1207,6 +1207,9 @@ fn drain() {
                         let wipe = home(|m| web_save_guard(&mut v["host"], &m.hosts));
                         if let Some(id) = wipe {
                             forget_saved_logins(&id);
+                            // Files follow the new address unless they have their own: then their
+                            // account mustn't go along either. (save_host keeps `files` as stored.)
+                            home(|m| m.hosts.iter_mut().filter(|x| x.id == id && x.files.host.trim().is_empty()).for_each(|x| x.files.account.clear()));
                         }
                     }
                     on_ipc(v);
