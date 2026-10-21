@@ -65,6 +65,15 @@ try {
     assert(!(await login.isChecked()), "Login start on by default");
     await login.evaluate((e) => e.click());
     assert((await sent("settings")).at(-1).settings.login_start === true, "Turning on login start was not saved");
+    // The system's answer wins: waiting for approval offers System Settings, and an item
+    // removed there shows as off.
+    assert((await sent("login_item")).length >= 1, "Opening settings did not ask for the login item's state");
+    await page.evaluate(() => itda.recv({ type: "login_item", state: "approval" }));
+    await page.locator('[data-act="login-item-settings"]').click();
+    assert((await sent("login_item_settings")).length === 1, "Login Items not opened");
+    await page.evaluate(() => itda.recv({ type: "login_item", state: "off" }));
+    assert(!(await page.locator('input[data-set="login_start"]').isChecked()), "Removed login item still shown on");
+    assert(await page.locator('[data-act="login-item-settings"]').isHidden(), "Approval prompt left after removal");
     assert(!errors.length, errors.join("\n"));
     await page.close();
   }
