@@ -158,7 +158,7 @@ fn destination_leaf(path: &str, windows: bool) -> String {
 
 /// A name about to be written on a Windows side, refused with the item it names.
 fn windows_target(n: &str, shown: &str) -> io::Result<()> {
-    if windows_name(n) {
+    if windows_name(&destination_name(n, true)) {
         Ok(())
     } else {
         Err(error(format!("Windows에서 쓸 수 없는 파일 이름입니다: {shown}")))

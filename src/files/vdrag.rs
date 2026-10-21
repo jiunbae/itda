@@ -96,12 +96,12 @@ fn walk(s: &mut Sftp, path: &str, rel: &str, e: &Entry, out: &mut Vec<Item>) -> 
         return Err(error("한 번에 끌어 놓을 수 있는 항목 수(10,000개)를 넘었습니다"));
     }
     for part in rel.split('\\') {
-        if name(part).is_err() || !windows_name(part) {
+        if name(part).is_err() || windows_target(part,rel).is_err() {
             return Err(error(format!("Windows에서 쓸 수 없는 파일 이름입니다: {}", rel.replace('\\', "/"))));
         }
     }
     // The receiver's own folder path is added in front; keep well under MAX_PATH.
-    if rel.encode_utf16().count() >= 200 {
+    if destination_name(rel,true).encode_utf16().count() >= 200 {
         return Err(error(format!("경로가 너무 깁니다: {}", rel.replace('\\', "/"))));
     }
     out.push(Item { rel: destination_name(rel,true), dir: e.dir, size: if e.dir { 0 } else { e.size }, modified: e.modified, path: path.to_string() });
