@@ -101,7 +101,7 @@ fn ssh_command_with_check(c:&SshCfg,strict:bool)->io::Result<Command> {
     // At another address of a known device: only its already trusted key will do.
     let strict = strict || !c.key_alias.is_empty();
     if !c.key_alias.is_empty() {
-        cmd.arg("-o").arg(format!("HostKeyAlias={}", c.key_alias));
+        cmd.arg("-o").arg(format!("HostKeyAlias={}", host_key_name(&c.key_alias, c.port)));
     }
     cmd.arg("-T").args(["-o", if strict{"StrictHostKeyChecking=yes"}else{"StrictHostKeyChecking=accept-new"}, "-o"])
         .arg(known_hosts_option(&known_hosts_files()))
@@ -139,6 +139,12 @@ pub fn known_hosts_files() -> Vec<PathBuf> {
 fn known_hosts_option(files: &[PathBuf]) -> String {
     let quoted: Vec<String> = files.iter().map(|f| format!("\"{}\"", f.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\""))).collect();
     format!("UserKnownHostsFile={}", quoted.join(" "))
+}
+
+/// How known_hosts names `host` reached on `port` (ssh takes a HostKeyAlias as is, without
+/// adding the port itself).
+fn host_key_name(host: &str, port: u16) -> String {
+    if port == 22 { host.to_string() } else { format!("[{host}]:{port}") }
 }
 
 /// `host[:port]` → (host, port), keeping bracketed IPv6 intact.
@@ -324,6 +330,13 @@ pub fn forget_host_key(host: &str, port: u16) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn host_key_alias_names_the_port_like_known_hosts() {
+        assert_eq!(super::host_key_name("jiun-home.tail.ts.net", 22), "jiun-home.tail.ts.net");
+        assert_eq!(super::host_key_name("jiun-home.tail.ts.net", 2222), "[jiun-home.tail.ts.net]:2222");
+        assert_eq!(super::host_key_name("fd7a::1", 2222), "[fd7a::1]:2222");
+    }
+
     #[test]
     fn known_hosts_paths_with_spaces_stay_whole() {
         let mac = PathBuf::from("/Users/a/Library/Application Support/Itda/known_hosts");
