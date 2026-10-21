@@ -1408,9 +1408,9 @@
         // goes device to device. This computer's files paste into any tab.
         if (clipboard) {
           const clip = clipboard;
-          await transfer(clip.side, clip.path, clip.names, active, p.path, clip.move, host.id, clip.side === "remote" ? { id: clip.host, window: clip.window } : null);
-          // A cut is used once, in every window.
-          if (clip.move) send("files_clipboard", { clip: { clear: clip.cid } });
+          const sent = await transfer(clip.side, clip.path, clip.names, active, p.path, clip.move, host.id, clip.side === "remote" ? { id: clip.host, window: clip.window } : null);
+          // A cut is used once, in every window (a cancelled paste keeps it).
+          if (sent && clip.move) send("files_clipboard", { clip: { clear: clip.cid } });
         }
         return;
       case "mkdir":
@@ -1480,8 +1480,8 @@
         ["ok", move ? "이동" : "복사", true],
       ],
     );
-    if (r.choice === "ok")
-      send("files", { id, window: pageToken, op: "transfer",
+    if (r.choice !== "ok") return false;
+    send("files", { id, window: pageToken, op: "transfer",
         ...(cross ? { from_id: origin.id, from_window: origin.window || pageToken } : {}),
         from,
         source,
@@ -1492,6 +1492,7 @@
         policy: r.policy,
         engine: r.engine,
       });
+    return true;
   }
   // "Device: path" for the transfer dialog ("이 컴퓨터" for this computer's side).
   function where(side, path, id) {

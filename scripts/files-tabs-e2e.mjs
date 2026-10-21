@@ -67,6 +67,13 @@ try{
   const last=(await packets()).filter(x=>x.op==='list').at(-1);
   assert(last.id==='studio','Tab switch listed the wrong device: '+JSON.stringify(last));
   await row('Docs').dblclick();await row('Inside-A.txt').waitFor();
+  // A cancelled paste keeps the cut for later (and in every window).
+  await row('Inside-A.txt').click();await p.keyboard.press(`${mod}+x`);
+  await layer.locator('[data-tab]').nth(1).click();await row('Beta-B.txt').waitFor();
+  await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+v`);
+  await p.locator('.files-prompt [data-choice="cancel"]').click();
+  assert(!(await packets()).some(x=>x.cmd==='files_clipboard'&&x.clip?.clear),'Cancel consumed the cut clipboard');
+  await layer.locator('[data-tab]').nth(0).click();await row('Inside-A.txt').waitFor();
   // Copied on one device, pasted on another: device to device.
   await row('Inside-A.txt').click();await p.keyboard.press(`${mod}+c`);
   assert((await packets()).some(x=>x.cmd==='files_clipboard'&&x.clip?.names?.includes('Inside-A.txt')),'Copy was not shared with other windows');

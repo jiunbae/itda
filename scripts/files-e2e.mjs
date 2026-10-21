@@ -370,6 +370,18 @@ try {
         await page.keyboard.press(platform.startsWith("Mac") ? "Meta+w" : "Control+w");
         await page.locator('.files-device-link.on[data-device="files-fixture"]').waitFor();
         console.log(`${platform}: device-to-device move over two SFTP connections passed`);
+        // Two saved devices that are one machine: a "replace" move onto the same path must be
+        // refused, not delete the only copy.
+        await page.keyboard.press(platform.startsWith("Mac") ? "Meta+t" : "Control+t");
+        await page.locator('.files-device-link[data-device="files-second"]').first().click();
+        await page.locator('.files-device-link.on[data-device="files-second"]').waitFor();
+        fs.writeFileSync(path.join(dst, "only copy.txt"), "keep me");
+        await page.evaluate(({ dst }) => send("files", { id: "files-fixture", window: ItdaFiles.windowToken, op: "transfer", from_id: "files-second", from: "remote", source: dst, names: ["only copy.txt"], to: "remote", destination: dst, move: true, policy: "replace", engine: "sftp" }), { dst });
+        await new Promise((r) => setTimeout(r, 4000));
+        assert(fs.existsSync(path.join(dst, "only copy.txt")) && fs.readFileSync(path.join(dst, "only copy.txt"), "utf8") === "keep me", "Moving onto itself through another saved device deleted the file");
+        await page.keyboard.press(platform.startsWith("Mac") ? "Meta+w" : "Control+w");
+        await page.locator('.files-device-link.on[data-device="files-fixture"]').waitFor();
+        console.log(`${platform}: same machine under two saved devices kept the only copy`);
         // No device at all: this computer's own files copy without any connection.
         const la = fs.mkdtempSync(path.join(os.tmpdir(), "itda-local-a-")), lb = fs.mkdtempSync(path.join(os.tmpdir(), "itda-local-b-"));
         fs.writeFileSync(path.join(la, "local only.txt"), "no device");

@@ -530,6 +530,19 @@ pub fn start(v: Value, host: Host, emit: Emit) {
             }
             let mut src = Endpoint::new(src_c.as_deref(), &control)?;
             let mut dst = Endpoint::new(dst_c.as_deref(), &control)?;
+            // Two saved devices can be one machine (a LAN and a Tailscale entry): a folder made
+            // through the source and seen through the destination means one filesystem, where a
+            // copy into itself is refused and replacing "the other" copy would delete the only one.
+            let mut same_fs = same_device || (!from_remote && !to_remote);
+            if !same_fs && from_remote && to_remote {
+                if let Ok(real) = src.sftp.as_mut().map_or(Ok(src_path.clone()), |s| s.realpath(&src_path)) {
+                    let marker = join(&real, &format!(".itda-same-{}", crate::store::new_id()))?;
+                    if src.mkdir(&marker).is_ok() {
+                        same_fs = matches!(dst.stat(&marker), Ok(Some(_)));
+                        let _ = src.remove(&marker, true);
+                    }
+                }
+            }
             if from_remote == to_remote {
                 src_path = if let Some(s) = &mut src.sftp {
                     s.realpath(&src_path)?
@@ -550,7 +563,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                 policy,
                 moving,
                 modes: !(from_remote && src_windows),
-                same_fs: same_device || (!from_remote && !to_remote),
+                same_fs,
                 done: 0,
                 last: Instant::now() - Duration::from_secs(1),
             };
@@ -599,7 +612,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                 };
                 let (f, t) = (compare(&from), compare(&to));
                 if from_remote == to_remote
-                    && (same_device || !from_remote)
+                    && same_fs
                     && (f == t || t.starts_with(&format!("{}/", f.trim_end_matches('/'))))
                 {
                     return Err(error(
