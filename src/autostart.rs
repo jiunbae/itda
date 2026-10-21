@@ -13,6 +13,8 @@ pub enum State {
     On,
     /// Registered, but macOS waits for the person to allow it in System Settings.
     NeedsApproval,
+    /// Registered, but turned off in Windows' Startup apps (or Task Manager): theirs to turn on.
+    Disabled,
 }
 
 impl State {
@@ -21,6 +23,7 @@ impl State {
             State::Off => "off",
             State::On => "on",
             State::NeedsApproval => "approval",
+            State::Disabled => "disabled",
         }
     }
 
@@ -46,6 +49,13 @@ pub fn open_settings() {
     imp::open_settings()
 }
 
+/// Windows' StartupApproved mark: its first byte is even while the item may start (an odd one,
+/// 3 or 7, means turned off). No mark: allowed.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn approved(mark: &[u8]) -> bool {
+    mark.first().is_none_or(|b| b & 1 == 0)
+}
+
 /// Ask for `want` with `set`. On failure the state stays what the system says (`now`), so
 /// the setting never claims a change that didn't happen.
 pub fn apply(want: bool, set: impl FnOnce(bool) -> Result<State, String>, now: impl FnOnce() -> State) -> (State, Option<String>) {
@@ -59,7 +69,7 @@ pub fn apply(want: bool, set: impl FnOnce(bool) -> Result<State, String>, now: i
 mod imp {
     use super::State;
     use std::ptr::null_mut;
-    use windows_sys::Win32::System::Registry::{RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ};
+    use windows_sys::Win32::System::Registry::{RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_BINARY, RRF_RT_REG_SZ};
 
     const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
     const NAME: &str = "Itda";
@@ -68,11 +78,21 @@ mod imp {
         s.encode_utf16().chain(Some(0)).collect()
     }
 
+    /// Startup apps turned off in Windows' settings are marked here (the Run value stays).
+    const APPROVED: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+
     pub fn state() -> State {
         let (key, name) = (wide(RUN), wide(NAME));
         let mut n = 0u32;
         let r = unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ, null_mut(), null_mut(), &mut n) };
-        if r == 0 { State::On } else { State::Off }
+        if r != 0 {
+            return State::Off;
+        }
+        let mut blob = [0u8; 12];
+        let mut n = blob.len() as u32;
+        let approved = wide(APPROVED);
+        let r = unsafe { RegGetValueW(HKEY_CURRENT_USER, approved.as_ptr(), name.as_ptr(), RRF_RT_REG_BINARY, null_mut(), blob.as_mut_ptr().cast(), &mut n) };
+        if r == 0 && !super::approved(&blob[..n as usize]) { State::Disabled } else { State::On }
     }
 
     pub fn set(on: bool) -> Result<(), String> {
@@ -178,6 +198,19 @@ mod tests {
         assert!(s.on() && s.name() == "approval" && e.is_none());
         let (s, _) = apply(false, |_| Ok(State::Off), || unreachable!());
         assert!(!s.on());
+        // Turned off in Windows' Startup apps: still registered, and Itda says so instead of
+        // claiming it will start (turning it on again in Itda leaves that decision alone).
+        let (s, e) = apply(true, |_| Ok(State::Disabled), || unreachable!());
+        assert!(s.on() && s.name() == "disabled" && e.is_none());
+    }
+
+    #[test]
+    fn startup_approved_marks() {
+        assert!(approved(&[]));
+        assert!(approved(&[2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+        assert!(approved(&[6, 0, 0, 0]));
+        assert!(!approved(&[3, 0, 0, 0, 0x10, 0x20, 0, 0, 0, 0, 0, 0]));
+        assert!(!approved(&[7, 0, 0, 0]));
     }
 
     /// The SMAppService calls are well-formed: reading the status of a test binary (no

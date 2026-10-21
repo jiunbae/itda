@@ -71,6 +71,8 @@ try {
     await page.evaluate(() => itda.recv({ type: "login_item", state: "approval" }));
     await page.locator('[data-act="login-item-settings"]').click();
     assert((await sent("login_item_settings")).length === 1, "Login Items not opened");
+    await page.evaluate(() => itda.recv({ type: "login_item", state: "disabled" }));
+    assert((await page.locator("#content").textContent()).includes("시작 앱에서 꺼짐"), "Startup-apps disable not shown");
     await page.evaluate(() => itda.recv({ type: "login_item", state: "off" }));
     assert(!(await page.locator('input[data-set="login_start"]').isChecked()), "Removed login item still shown on");
     assert(await page.locator('[data-act="login-item-settings"]').isHidden(), "Approval prompt left after removal");
