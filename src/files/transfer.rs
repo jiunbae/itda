@@ -463,7 +463,9 @@ pub fn start(v: Value, host: Host, emit: Emit) {
         let window = if v["from_window"].is_string() { &v["from_window"] } else { &v["window"] };
         super::scoped_id(f, window)
     });
-    let same_device = source_key.as_ref().is_none_or(|k| *k == key);
+    // One device even when the copy came from another window of it: then the guards against
+    // copying a folder into itself and the rename-for-move apply as usual.
+    let same_device = v["from_id"].as_str().is_none_or(|f| f.is_empty() || f == id);
     let job = crate::store::new_id();
     let control = Arc::new(Control::default());
     jobs()
