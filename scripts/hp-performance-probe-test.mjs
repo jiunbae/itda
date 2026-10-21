@@ -25,6 +25,7 @@ async function check(mode) {
     function take(n) { const b = buffer.subarray(0, n); buffer = buffer.subarray(n); return b; }
     function frame() {
       if (s.destroyed || mode === 'closed') return;
+      if (sent === 0) s.write(Buffer.from([0, 0, 0, 0]));
       const chunks = [Buffer.from([0, 0, 0, 3])];
       for (let r = 0; r < 3; r++) {
         const video = r === 0, payload = video
@@ -116,6 +117,7 @@ async function check(mode) {
       assert.equal(result.h264_rectangles, result.updates);
       assert.equal(result.zrle_rectangles, result.updates * 2);
       assert.equal(result.idr, 1); assert.equal(result.fps, result.updates);
+      assert.equal(result.empty_updates, 1);
       assert(result.rtt_samples_ms.length > 0);
       assert(result.samples.every(u => u.rectangles === 3 && u.bytes === 15));
     } else {

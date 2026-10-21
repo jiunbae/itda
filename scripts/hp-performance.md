@@ -33,6 +33,8 @@ node /tmp/hp-performance-probe.mjs --local --port 15910 --seconds 10 --samples
 continuous mode must negotiate ContinuousUpdates. The JSON distinguishes
 complete framebuffer updates from H.264/ZRLE rectangles: a single lossless
 repaint containing many tiles is one update, not many displayed frames.
+Empty updates and updates completed after the measurement deadline do not count
+toward the reported rate. This is the received update rate, not decoded FPS.
 Fence RTT includes server pump scheduling and is not a raw network RTT.
 Handshake time includes connecting the SSH tunnel; `first_after_init_ms`
 separates that from the first framebuffer response. `--samples` includes each

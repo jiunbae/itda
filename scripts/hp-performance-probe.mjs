@@ -42,6 +42,7 @@ const started = performance.now();
 let deadline = Infinity, measuredAt;
 const updates = [], rtts = [], pending = new Map();
 let sequence = 0, requests = 0, continuousOffered = false, continuousEnabled = false;
+let emptyUpdates = 0;
 let width, height, handshakeMs, firstFrameMs, failure;
 function interrupt() {
   failure = 'Measurement interrupted';
@@ -197,8 +198,10 @@ try {
         else u.zrle++;
       }
       u.ms = performance.now() - measuredAt;
+      if (performance.now() > deadline) break; // completed outside the timed interval
       if (firstFrameMs === undefined && rectangles) firstFrameMs = performance.now() - started;
-      updates.push(u); // one update may contain many ZRLE rectangles
+      if (rectangles) updates.push(u); // one painted update may contain many ZRLE rectangles
+      else emptyUpdates++;
       if (options.mode === 'classic' || !continuousEnabled) request();
     } else if (type === 3) {
       const h = await reader.read(7), length = h.readUInt32BE(3);
@@ -224,6 +227,7 @@ const summary = {status: failure ? 'failed' : 'ok', error: failure,
   width, height, seconds: options.seconds, handshake_ms: handshakeMs,
   first_frame_ms: firstFrameMs, first_after_init_ms: firstFrameMs === undefined ? undefined : firstFrameMs - handshakeMs,
   continuous_offered: continuousOffered, requests, updates: updates.length,
+  empty_updates: emptyUpdates,
   fps: failure ? null : updates.length / options.seconds,
   h264_rectangles: updates.reduce((n, u) => n + u.h264, 0), zrle_rectangles: updates.reduce((n, u) => n + u.zrle, 0),
   idr: updates.reduce((n, u) => n + u.idr, 0), bytes: updates.reduce((n, u) => n + u.bytes, 0),
