@@ -57,6 +57,9 @@ pub fn password_key(id: &str) -> String {
 
 const RELEASES: &str = "https://github.com/jiunbae/itda/releases/download";
 const BUNDLE_ID: &str = "dev.jiun.itda";
+/// Sets `bg` for `open`: Itda from 1.0 starts in the background when asked to (only the
+/// permission helper shows); older ones would reject the argument.
+const BACKGROUND: &str = r#"case "$(defaults read "$app/Contents/Info" CFBundleShortVersionString 2>/dev/null)" in 0.*|"") bg="" ;; *) bg="--args --background" ;; esac"#;
 
 /// Run `script` with bash on the Mac, returning stdout; with `upload`, the script is
 /// instead the remote command and `upload` is its stdin (e.g. `cat > file`).
@@ -124,7 +127,9 @@ set -e
 app=""
 for a in /Applications/Itda.app "$HOME/Applications/Itda.app"; do [ -d "$a" ] && {{ app=$a; break; }}; done
 [ -n "$app" ] || {{ echo 'error=원격 Mac에 Itda가 설치되어 있지 않습니다'; exit 5; }}
-open -a "$app" 'itda://permissions{suffix}'
+# (Started here if it isn't running: then only its helper shows, not the home window.)
+{BACKGROUND}
+if pgrep -f "$app/Contents/MacOS/" >/dev/null; then open -a "$app" 'itda://permissions{suffix}'; else open -a "$app" 'itda://permissions{suffix}' $bg; fi
 "#),None).map(|_|())
 }
 
@@ -198,7 +203,8 @@ for a in /Applications/Itda.app "$HOME/Applications/Itda.app"; do [ -d "$a" ] &&
 if pgrep -f "$app/Contents/MacOS/" >/dev/null && ! nc -z 127.0.0.1 5910 2>/dev/null; then
   osascript -e 'tell application id "{BUNDLE_ID}" to quit' >/dev/null 2>&1 || true; sleep 2; pkill -f "$app/Contents/MacOS/" || true
 fi
-pgrep -f "$app/Contents/MacOS/" >/dev/null || open -g -j "$app"
+{BACKGROUND}
+pgrep -f "$app/Contents/MacOS/" >/dev/null || open -g -j "$app" $bg
 # A status written after this point: the serving Itda is alive (it rewrites it every 2 s).
 for i in $(seq 1 60); do [ "$data/hp-status" -nt "$since" ] && [ -f "$data/hp-password" ] && nc -z -w 1 127.0.0.1 5910 2>/dev/null && break; sleep 0.5; done
 [ "$data/hp-status" -nt "$since" ] && nc -z -w 1 127.0.0.1 5910 2>/dev/null || {{ rm -f "$since"; echo "error=Itda가 고성능 공유를 시작하지 못했습니다"; exit 6; }}

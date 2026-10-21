@@ -161,7 +161,8 @@ fn main() {
             "-u" => user = args.next(),
             "-p" => pass = args.next(),
             "--swap" => swap = true,
-            "--login" => autostart::AT_LOGIN.store(true, std::sync::atomic::Ordering::Relaxed),
+            // (macOS: started for high-performance sharing over SSH; only its helper shows.)
+            "--login" | "--background" => autostart::AT_LOGIN.store(true, std::sync::atomic::Ordering::Relaxed),
             _ if host.is_none() && !a.starts_with('-') => host = Some(a),
             _ => return ui::message(USAGE, false),
         }

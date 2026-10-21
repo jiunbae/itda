@@ -206,6 +206,27 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
                 guide_intro();
                 return Ok(());
             }
+            "guide_reset" => {
+                // A switch that is on but doesn't take: an entry left from an earlier build
+                // (pinned to that build's signature). Remove Itda's entry for this permission,
+                // ask again so a fresh one appears, and have it switched on once more.
+                let permission = GUIDE.with(|g| g.borrow().as_ref().map(|g| g.permission.clone())).unwrap_or_default();
+                let service = match permission.as_str() {
+                    "screen" => "ScreenCapture",
+                    "access" => "Accessibility",
+                    _ => return Ok(()),
+                };
+                let ok = std::process::Command::new("/usr/bin/tccutil").args(["reset", service, "dev.jiun.itda"]).status().is_ok_and(|s| s.success());
+                crate::log!("permission reset {service}: {ok}");
+                if !ok {
+                    guide_reply(json!({"type":"guide","state":"예전 항목을 지우지 못했어요. 목록에서 Itda를 선택하고 − 버튼으로 지운 뒤 다시 추가해 주세요","error":true}));
+                    return Ok(());
+                }
+                request(&permission)?;
+                GUIDE.with(|g| if let Some(g) = g.borrow_mut().as_mut() { g.started = std::time::Instant::now(); g.stale_hint = false; });
+                guide_reply(json!({"type":"guide","stale":false,"state":"예전 항목을 지웠어요. 목록에 새로 나타난 Itda 스위치를 다시 켜 주세요"}));
+                return Ok(());
+            }
             "guide_reveal" | "guide_copy" => {
                 let app = app_path().ok_or("응용 프로그램 폴더의 Itda 앱을 실행해 주세요")?;
                 if v["cmd"] == "guide_reveal" {
@@ -440,12 +461,18 @@ struct Guide {
     checked: std::time::Instant,
     done: Option<std::time::Instant>,
     side: &'static str,
+    /// Offered to reset an entry that is on but doesn't take (see guide_reset).
+    stale_hint: bool,
 }
 thread_local! { static GUIDE: RefCell<Option<Guide>> = const { RefCell::new(None) }; }
 static GUIDE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 const SETTINGS_ID: &str = "com.apple.systempreferences";
 const GUIDE_W: f64 = 300.;
 const GUIDE_H: f64 = 470.;
+
+fn guide_reply_to(g: &Guide, v: Value) {
+    let _ = g.pane.view.evaluate_script(&format!("window.itda&&itda.recv({v})"));
+}
 
 fn guide_reply(v: Value) {
     GUIDE.with(|g| {
@@ -467,7 +494,8 @@ fn start_guide(permission: &str, target: &EventLoopWindowTarget<Wake>) -> Result
     let reused = GUIDE.with(|g| {
         let mut g = g.borrow_mut();
         let Some(g) = g.as_mut() else { return false };
-        (g.permission, g.started, g.checked, g.done) = (permission.into(), now, now, None);
+        (g.permission, g.started, g.checked, g.done, g.stale_hint) = (permission.into(), now, now, None, false);
+        guide_reply_to(g, json!({"type":"guide","stale":false}));
         true
     });
     if !reused {
@@ -512,7 +540,7 @@ fn start_guide(permission: &str, target: &EventLoopWindowTarget<Wake>) -> Result
             .with_back_forward_navigation_gestures(false)
             .build(&window)
             .map_err(|e| e.to_string())?;
-        GUIDE.with(|g| *g.borrow_mut() = Some(Guide { pane: Pane { window, view }, permission: permission.into(), started: now, checked: now, done: None, side: "" }));
+        GUIDE.with(|g| *g.borrow_mut() = Some(Guide { pane: Pane { window, view }, permission: permission.into(), started: now, checked: now, done: None, side: "", stale_hint: false }));
     }
     // The main helper steps back so it never covers the Settings list.
     PANE.with(|p| if let Some(p) = p.borrow().as_ref() { p.window.set_always_on_top(false) });
@@ -660,6 +688,14 @@ fn guide_tick(seq: u64, target: &EventLoopWindowTarget<Wake>) {
             None => {}
         }
     });
+    // Still not granted after a while, though the person has had time to flip the switch: say
+    // what to do when it is on yet doesn't take (an entry from an earlier build).
+    if done.is_none() && now.duration_since(started).as_secs() >= 25 {
+        let first = GUIDE.with(|g| g.borrow_mut().as_mut().is_some_and(|g| !std::mem::replace(&mut g.stale_hint, true)));
+        if first {
+            guide_reply(json!({"type":"guide","stale":true}));
+        }
+    }
     // Watch for the switch (a fresh process sees it even when this one cannot yet).
     if done.is_none() && now.duration_since(checked).as_millis() >= 1500 {
         GUIDE.with(|g| if let Some(g) = g.borrow_mut().as_mut() { g.checked = now });
