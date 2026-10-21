@@ -135,7 +135,7 @@ Files inherit the device account by default. Selecting another saved account for
 
 **Delta copies:** Auto mode probes local/remote rsync and a compatible remote shell for replace-mode folder copies or files of at least 8MiB. It uses rsync over SSH when available and SFTP otherwise. Windows local rsync must include a compatible `cygpath.exe`. Normal mode never runs rsync. Rsync partial files remain in `.itda-partial` for reuse; SFTP block deltas and partial-file resume are not implemented. No default copy uses mirror/delete semantics.
 
-Browsing and transfers have separate SSH connections. At most two transfer jobs run concurrently; each pipelines up to 64 SFTP requests of 32KiB. Ordinary SFTP copy reports unsupported symlinks instead of following them. Inline folder disclosure, full ACL/xattr preservation, rclone/WebDAV, an Itda-to-Itda file server, and native outbound virtual-file dragging on Windows remain follow-up work; the workspace does not claim complete Finder/Explorer feature parity.
+Browsing and transfers have separate SSH connections. At most two transfer jobs run concurrently; each pipelines up to 64 SFTP requests of 32KiB. Ordinary SFTP copy reports unsupported symlinks instead of following them. Inline folder disclosure, full ACL/xattr preservation, rclone/WebDAV, and an Itda-to-Itda file server remain follow-up work; the workspace does not claim complete Finder/Explorer feature parity. Windows outbound drag is implemented with streamed virtual files and copy-only semantics; native Explorer drop acceptance still needs runtime validation.
 
 ## Multiple monitors
 
@@ -211,13 +211,15 @@ The browser never gets a password. Itda on your PC or Mac signs in to each devic
 | Nearby | Bonjour (mDNS): Macs with Screen Sharing and every PC or Mac running Itda, even with sharing off (it says how to turn it on); refreshed every 30 s. Plus your Tailscale devices. Add one with a single click. |
 | Connecting | Shows each step (address → connect → sign in → screen). You can cancel, or leave it running in the background. |
 | Errors | Explains the cause and what to do, worded for the kind of device: Mac, PC, RDP or Linux. |
-| Settings | Theme, **display size (Ctrl +/−, Ctrl+wheel)**, toolbar mode, hotkeys, defaults for new connections, tray, notifications, previews. |
+| Settings | Theme, **display size (Ctrl +/− and Ctrl+wheel; ⌘ on Mac)**, defaults, notifications and previews. Windows also has native session toolbar/hotkey and tray settings. |
 
-**Session window toolbar** (top center, auto-hides): fullscreen, fit or 1:1, pick a display, Mac special keys, clipboard, view-only, screenshot (`Pictures\Itda`), stats, pin, disconnect.
+**Windows native session toolbar** (top center, auto-hides): fullscreen, fit or 1:1, pick a display, Mac special keys, clipboard, view-only, screenshot (`Pictures\Itda`), stats, pin, disconnect.
 
-**Hotkeys** (Ctrl+Alt, or Ctrl+Shift): `Enter` fullscreen · `0` fit · `1` 1:1 · `S` stats · `V` view-only · `P` screenshot · `I` info · `T` pin toolbar · `R` reconnect · `M` menu.
+**Windows native session hotkeys** (Ctrl+Alt, or Ctrl+Shift): `Enter` fullscreen · `0` fit · `1` 1:1 · `S` stats · `V` view-only · `P` screenshot · `I` info · `T` pin toolbar · `R` reconnect · `M` menu.
 
-**Key mapping:**
+The FPS/Mbps/RTT statistics overlay and the shortcuts above belong to the Windows native VNC session. Mac app and browser viewers use the control bar and shortcut menus described in their sections; they do not provide the same statistics overlay.
+
+**Windows keyboard → remote Mac mapping:**
 
 | Windows | Mac |
 |---|---|
@@ -228,9 +230,10 @@ The browser never gets a password. Itda on your PC or Mac signs in to each devic
 
 If the network drops, the session dims and **reconnects automatically**. Options you change during a session are saved for that connection.
 
-**Command line:**
+**Windows command line** (these address and `-u`/`-p` options are not the Mac app CLI):
+
 - `itda <address>` opens the home and connects.
-- `itda <address> -u <user> -p <password>` connects directly.
+- `itda <address> -u <user> -p <password>` connects directly. A `-p` password can appear in the process list and shell history; prefer a saved login in the app.
 </details>
 
 <details>
@@ -255,7 +258,7 @@ Open **공유** in the sidebar → **웹 뷰어** (or **모두 켜기**). Open t
   - Chrome/Edge/Android: **Install app**. This needs the `https://…ts.net` Tailscale address.
 - **Security:**
   - HttpOnly cookie for 12 hours
-  - 5 wrong PINs lock sign-in for 1 minute
+  - 5 wrong PINs from one source pause its new sign-ins for 1 minute; 50 failures across sources also trigger a shared pause. Existing sessions still work
   - same-origin checks
   - a new PIN signs everyone out
   - The browser ↔ PC leg is plain HTTP, so use it on your own Wi-Fi or over Tailscale and **never forward the port to the internet**.
@@ -265,9 +268,9 @@ Open **공유** in the sidebar → **웹 뷰어** (or **모두 켜기**). Open t
 <summary><b>Encryption (SSH), Tailscale, and accounts</b></summary>
 
 **SSH tunnel.** Turn on *SSH로 암호화해서 연결* in the connection editor. It needs the Mac's **Remote Login** (or any SSH server).
-- Itda runs Windows' built-in OpenSSH without a window, forwarding `127.0.0.1:<random> → device:5900`.
+- Itda runs Windows' built-in OpenSSH or `/usr/bin/ssh` on Mac without a window, forwarding `127.0.0.1:<random> → device:5900`.
 - The password comes from Itda through `SSH_ASKPASS`, and your `~/.ssh` keys and config still work.
-- Host keys are pinned in `%APPDATA%\Itda\known_hosts`. If a key changes, the connection stops with a warning.
+- Host keys are stored in the Itda data directory's `known_hosts` (`%APPDATA%\Itda` on Windows; `~/Library/Application Support/Itda` on Mac). If a key changes, the connection stops with a warning.
 - The tunnel reopens on its own after a network drop.
 
 **Tailscale.** Your tailnet's Macs, PCs and Linux machines appear under *Nearby → Tailscale*. The web viewer shows a `http://<pc>.<tailnet>.ts.net:8780/` QR code. Turn on HTTPS certificates in the Tailscale admin and press *HTTPS 주소 만들기* to get `https://<pc>.<tailnet>.ts.net/` through `tailscale serve`.
@@ -281,13 +284,13 @@ Open **공유** in the sidebar → **웹 뷰어** (or **모두 켜기**). Open t
 | Method | Works on | How |
 |---|---|---|
 | **Share this PC** | Any Windows 10/11 with Itda | On that PC: **공유 → 이 PC 공유**. It shows up as "Windows · Itda" under Nearby; connect with the share password. macOS Screen Sharing and other VNC apps can connect too. |
-| **Remote Desktop** | Windows Pro / Enterprise / Education | Choose *Windows 원격 데스크톱* in the editor. On the PC, Itda hands the account to `mstsc`. In the web viewer, Itda connects itself (IronRDP: TLS + NLA) and streams the screen to the browser. |
+| **Remote Desktop** | Windows Pro / Enterprise / Education | Choose *Windows 원격 데스크톱* in the editor. Windows Itda opens `mstsc`. The Mac app and web viewer use the built-in IronRDP bridge (TLS + NLA) to show the session. |
 
 **How Share this PC works:**
-- GDI capture of every monitor, 64×64 tile diff, ZRLE
+- Desktop Duplication capture with GDI fallback, 64×64 tile diff, ZRLE
 - SendInput for the mouse and keyboard; a Mac's ⌘ acts as Ctrl
 - clipboard in both directions
-- a random VNC password plus an "allow?" prompt on every connection (on by default). Devices on the same network or your tailnet get in with the password alone
+- a random VNC password plus optional approval (enabled by default). Nearby trust is also on by default: private/link-local/ULA and `100.64.0.0/10` addresses skip approval after the password succeeds. These ranges do not establish device ownership; turn off **공유 → 내 기기는 묻지 않기** to require approval
 - notifications and a tray badge while someone is watching, and a button that disconnects everyone
 - view-only mode and Bonjour registration
 
@@ -299,10 +302,10 @@ Windows security doesn't let a remote viewer control the lock screen, UAC prompt
 
 | Where | What |
 |---|---|
-| `%APPDATA%\Itda\hosts.json`, `accounts.json`, `settings.json` | Address book, accounts, settings |
+| `%APPDATA%\Itda\hosts.json`, `accounts.json`, `settings.json` (Mac: `~/Library/Application Support/Itda/`) | Address book, accounts, settings |
 | `%APPDATA%\Itda\thumbs\` | Small previews of the last screen (can be turned off) |
-| Windows Credential Manager `Itda/…` | Passwords, key passphrases, the web PIN, the share password |
-| `%TEMP%\itda.log`, `%TEMP%\itda\session-*.log` | Diagnostic logs (they never contain passwords) |
+| Windows Credential Manager `Itda/…` (Mac: login Keychain, service `Itda`) | Passwords, key passphrases, the web PIN, the share password |
+| Windows: `%TEMP%\itda.log`, `%TEMP%\itda\session-*.log`; Mac: `$TMPDIR/itda.log` | Diagnostic logs; review device names, addresses and paths before sharing |
 </details>
 
 ## 🛠️ Build from source
@@ -323,12 +326,12 @@ Run `cargo test files::` for file operation tests. On macOS, after `cargo build`
 |---|---|
 | `home.rs` · `home_win.rs` · `home_mac.rs` | Home window and page IPC, sessions, reachability; per platform: WebView2 + tray + session processes (Windows), WKWebView + menu bar + viewer windows (macOS) |
 | `web/` | Home UI (HTML/CSS/JS, embedded; `ITDA_WEB_DIR` serves it from disk) |
-| `session.rs` · `ui.rs` · `toolbar.rs` | Session process and window: rendering, input, toolbar, reconnect, screenshots |
+| `session.rs` · `ui.rs` · `toolbar.rs` | Windows native session process and window: rendering, input, toolbar, reconnect, screenshots |
 | `rfb.rs` · `net.rs` · `fb.rs` · `clip.rs` | RFB handshake/auth, receive loop and reconnect, decoders, clipboard |
-| `tunnel.rs` | SSH tunnel through Windows OpenSSH |
+| `tunnel.rs` | SSH tunnel through system OpenSSH (Windows and Mac) |
 | `gateway.rs` · `ws.rs` · `web/viewer/` | Web viewer: HTTP/WebSocket, PIN, address-book API, RFB relay, PWA |
 | `rdp.rs` | RDP → RFB bridge (IronRDP, TLS + NLA → framebuffer → ZRLE) |
-| `share.rs` | Share this PC: VNC server (GDI capture, tile diff, ZRLE, SendInput, Bonjour) |
+| `share.rs` | Share this PC: Windows VNC server (Desktop Duplication with GDI fallback, tile diff, ZRLE, SendInput, Bonjour) |
 | `enc.rs` | RFB pixel formats and Raw/ZRLE rectangles (shared by `share.rs` and `rdp.rs`) |
 | `web/icons.js` · `scripts/macos-bundle.sh` | Itda for Mac: stroke icons in place of Segoe Fluent glyphs, `.app` bundle |
 | `store.rs` · `mdns.rs` · `tailscale.rs` | Storage and credentials, Bonjour, Tailscale CLI |
@@ -338,7 +341,7 @@ Run `cargo test files::` for file operation tests. On macOS, after `cargo build`
 | Protocol | RFB 3.8 (macOS 3.889). Auth: None, VNC (DES), Apple ARD (DH + AES-128) |
 | Encodings | ZRLE, CopyRect, Raw, plus Cursor, DesktopSize, ExtendedDesktopSize and Extended Clipboard |
 | Latency | TCP_NODELAY, pipelined update requests, local cursor, liveness probes |
-| Rendering | DIB section, dirty-rect blits, `BitBlt` at 1:1 / `StretchBlt(HALFTONE)` when scaled, per-monitor DPI v2 |
+| Windows native rendering | DIB section, dirty-rect blits, `BitBlt` at 1:1 / `StretchBlt(HALFTONE)` when scaled, per-monitor DPI v2 |
 
 Test hooks `ITDA_TEST_HTTP`, `ITDA_TEST_SNAP` and `ITDA_DEBUG_PORT` do nothing unless those environment variables are set.
 </details>

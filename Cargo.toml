@@ -2,7 +2,7 @@
 name = "itda"
 version = "0.9.19"
 edition = "2021"
-description = "Itda (잇다): lightweight remote desktop for Windows. Opens Macs (Screen Sharing), Windows PCs and VNC servers, and shows them in any browser."
+description = "Itda (잇다): remote desktop and file access for Windows and macOS, with a browser viewer for phones and tablets."
 license = "MIT"
 repository = "https://github.com/jiunbae/itda"
 homepage = "https://jiun.dev/itda/"
