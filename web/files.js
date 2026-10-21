@@ -30,6 +30,32 @@
   const fileTabs = [], folderCache = new Map(), columnRequests = new Map();
   const viewModes = ["grid", "list", "columns", "gallery"];
   const viewLabels = ["아이콘 보기", "목록 보기", "열 보기", "갤러리 보기"];
+  const sortKeys = ["name", "modified", "size", "kind"];
+  // One order for every view, column, pane and tab. Remember it for the next file window.
+  let sorting = { key: "name", desc: false };
+  try {
+    const saved = JSON.parse(localStorage.getItem("itda.file.sort"));
+    if (saved && sortKeys.includes(saved.key)) sorting = { key: saved.key, desc: saved.desc === true };
+  } catch {}
+  function ordered(entries) {
+    const names = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    return [...entries].sort((a, b) => {
+      if (a.dir !== b.dir) return a.dir ? -1 : 1;
+      const n = sorting.key === "name" ? names(a, b) : sorting.key === "kind" ? kind(a).localeCompare(kind(b)) : sorting.key === "size" ? a.size - b.size : a.modified - b.modified;
+      return (sorting.desc ? -1 : 1) * (n || names(a, b));
+    });
+  }
+  function setSort(key, desc = sorting.desc) {
+    sorting = { key, desc };
+    try { localStorage.setItem("itda.file.sort", JSON.stringify(sorting)); } catch {}
+    // Indices and virtual-list offsets belonged to the old order; selections are names.
+    const states = [panes, ...fileTabs.map(t => t.panes).filter(Boolean)];
+    for (const state of states) for (const p of Object.values(state)) {
+      p.start = 0; p.scroll = 0; p.focus = -1; p.anchor = 0; p.cacheEntries = null;
+    }
+    renderPanes();
+  }
+
   // Remote folders belong to a device; tabs in one window may browse different devices.
   const cacheKey = (side, path) => `${side === "remote" ? host?.id : ""}:${side}:${path}`;
   function recentFolders() {
@@ -112,7 +138,7 @@
       const loading = p.busy && path === target;
       const current = path === p.path && !p.busy, k = cacheKey(side, path);
       const entries = loading ? null : current ? visible(side) : folderCache.get(k);
-      const shown = entries?.filter(e => hidden || !e.name.startsWith("."));
+      const shown = entries && ordered(entries.filter(e => hidden || !e.name.startsWith(".")));
       if (!loading && !entries && ![...columnRequests.values()].some(r => r.key === k)) {
         const seq = ++sequence;
         columnRequests.set(seq, { key: k, side });
@@ -256,8 +282,6 @@
       at: -1,
       start: 0,
       scroll: 0,
-      sort: "name",
-      desc: false,
       seq: 0,
       busy: false,
       pendingPath: null,
@@ -778,7 +802,8 @@
       views.className = "files-view-switch";
       views.setAttribute("role", "group");
       views.setAttribute("aria-label", "보기 방식");
-      views.innerHTML = viewModes.map((mode,i) => `<button class="btn sm" data-mode="${mode}" title="${viewLabels[i]}" aria-label="${viewLabels[i]}">${["<svg viewBox='0 0 20 20' aria-hidden='true'><path d='M3 3h5v5H3zM12 3h5v5h-5zM3 12h5v5H3zM12 12h5v5h-5z'/></svg>","<svg viewBox='0 0 20 20' aria-hidden='true'><path d='M3 4h2M8 4h9M3 10h2M8 10h9M3 16h2M8 16h9'/></svg>","<svg viewBox='0 0 20 20' aria-hidden='true'><path d='M2 3h16v14H2zM7 3v14M13 3v14'/></svg>","<svg viewBox='0 0 20 20' aria-hidden='true'><path d='M2 3h16v10H2zM2 16h4M8 16h4M14 16h4'/></svg>"][i]}</button>`).join("") + tool("preview", "E890", "미리보기 패널");
+      views.innerHTML = viewModes.map((mode,i) => `<button class="btn sm" data-mode="${mode}" title="${viewLabels[i]}" aria-label="${viewLabels[i]}">${["<svg viewBox='0 0 20 20' aria-hidden='true'><path d='M3 3h5v5H3zM12 3h5v5h-5zM3 12h5v5H3zM12 12h5v5h-5z'/></svg>","<svg viewBox='0 0 20 20' aria-hidden='true'><path d='M3 4h2M8 4h9M3 10h2M8 10h9M3 16h2M8 16h9'/></svg>","<svg viewBox='0 0 20 20' aria-hidden='true'><path d='M2 3h16v14H2zM7 3v14M13 3v14'/></svg>","<svg viewBox='0 0 20 20' aria-hidden='true'><path d='M2 3h16v10H2zM2 16h4M8 16h4M14 16h4'/></svg>"][i]}</button>`).join("") + (MAC ? tool("sort", "E8CB", "정렬 · 폴더 먼저") : "") + tool("preview", "E890", "미리보기 패널");
+      views.querySelector('[data-action="sort"]')?.setAttribute("aria-haspopup", "menu");
       title.insertBefore(views, title.querySelector('[data-action="view"]'));
       if (MAC) layer.querySelector('[data-side="remote"]').remove();
       if (MAC) {
@@ -842,29 +867,11 @@
     layer.querySelector(networkMode ? "[data-search]" : ".files-list")?.focus({ preventScroll: true });
   }
   function visible(side) {
-    const p = panes[side],
-      key = [hidden, search, p.sort, p.desc].join("|");
+    const p = panes[side], key = [hidden, search, sorting.key, sorting.desc].join("|");
     if (p.cacheEntries === p.entries && p.cacheKey === key) return p.cache;
     p.cacheEntries = p.entries;
     p.cacheKey = key;
-    return (p.cache = p.entries
-      .filter(
-        (e) =>
-          (hidden || !e.name.startsWith(".")) &&
-          e.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
-      )
-      .sort((a, b) => {
-        if (a.dir !== b.dir) return a.dir ? -1 : 1;
-        let n =
-          p.sort === "name"
-            ? a.name.localeCompare(b.name, undefined, { numeric: true })
-            : p.sort === "kind"
-              ? kind(a).localeCompare(kind(b))
-            : p.sort === "size"
-              ? a.size - b.size
-              : a.modified - b.modified;
-        return p.desc ? -n : n;
-      }));
+    return (p.cache = ordered(p.entries.filter(e => (hidden || !e.name.startsWith(".")) && e.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()))));
   }
   const rowHeight = MAC ? 22 : 34;
   function resizeBy(handle, delta) {
@@ -980,7 +987,7 @@
         const list = visible(side);
         const cell = (e, i) =>
           `data-index="${i}" class="files-item ${p.selected.has(e.name) ? "selected" : ""}" aria-selected="${p.selected.has(e.name)}"`;
-        return `<section class="files-pane ${side === active ? "active" : ""}" data-pane="${side}">${!MAC && split ? pathHTML(side) : ""}<div class="files-list" tabindex="0" role="grid" aria-label="${side === "local" ? "내 기기" : "원격 기기"} 파일">${view === "columns" ? columnHTML(side) : p.busy ? '<div class="files-note">폴더를 읽는 중…</div>' : !list.length ? '<div class="files-note">표시할 항목이 없습니다</div>' : ["grid", "gallery"].includes(view) ? `<div class="files-grid ${view === "gallery" ? "files-gallery-strip" : ""}">${list.map((e, i) => `<div ${cell(e, i)}>${icon(e.dir, e.name)}<span>${esc(e.name)}${e.link ? " ↗" : ""}</span></div>`).join("")}</div>` : `<table><colgroup>${(MAC ? [47, 25, 12, 16] : [42, 24, 22, 12]).map((w, i) => `<col style="width:${columnWidths[side]?.[i] ? `${columnWidths[side][i]}px` : `${w}%`}">`).join("")}</colgroup><thead><tr>${(MAC ? [["name", "이름"], ["modified", "수정한 날짜"], ["size", "크기"], ["kind", "종류"]] : [["name", "이름"], ["modified", "수정한 날짜"], ["kind", "종류"], ["size", "크기"]]).map(([key, title], i) => `<th data-sort="${key}">${title}${p.sort === key ? (p.desc ? " ▾" : " ▴") : ""}${i < 3 ? `<span data-resize-column="${i}" role="separator" aria-label="${title} 열 너비" aria-orientation="vertical" tabindex="0"></span>` : ""}</th>`).join("")}</tr></thead><tbody>${rows(side)}</tbody></table>`}</div></section>`;
+        return `<section class="files-pane ${side === active ? "active" : ""}" data-pane="${side}">${!MAC && split ? pathHTML(side) : ""}<div class="files-list" tabindex="0" role="grid" aria-label="${side === "local" ? "내 기기" : "원격 기기"} 파일">${view === "columns" ? columnHTML(side) : p.busy ? '<div class="files-note">폴더를 읽는 중…</div>' : !list.length ? '<div class="files-note">표시할 항목이 없습니다</div>' : ["grid", "gallery"].includes(view) ? `<div class="files-grid ${view === "gallery" ? "files-gallery-strip" : ""}">${list.map((e, i) => `<div ${cell(e, i)}>${icon(e.dir, e.name)}<span>${esc(e.name)}${e.link ? " ↗" : ""}</span></div>`).join("")}</div>` : `<table><colgroup>${(MAC ? [47, 25, 12, 16] : [42, 24, 22, 12]).map((w, i) => `<col style="width:${columnWidths[side]?.[i] ? `${columnWidths[side][i]}px` : `${w}%`}">`).join("")}</colgroup><thead><tr>${(MAC ? [["name", "이름"], ["modified", "수정한 날짜"], ["size", "크기"], ["kind", "종류"]] : [["name", "이름"], ["modified", "수정한 날짜"], ["kind", "종류"], ["size", "크기"]]).map(([key, title], i) => `<th data-sort="${key}">${title}${sorting.key === key ? (sorting.desc ? " ▾" : " ▴") : ""}${i < 3 ? `<span data-resize-column="${i}" role="separator" aria-label="${title} 열 너비" aria-orientation="vertical" tabindex="0"></span>` : ""}</th>`).join("")}</tr></thead><tbody>${rows(side)}</tbody></table>`}</div></section>`;
       })
       .join("");
     layer
@@ -1213,12 +1220,7 @@
     active = pane.dataset.pane;
     const sort = e.target.closest("[data-sort]");
     if (sort) {
-      const p = panes[active];
-      p.desc = p.sort === sort.dataset.sort ? !p.desc : false;
-      p.sort = sort.dataset.sort;
-      p.start = 0;
-      p.scroll = 0;
-      renderPanes();
+      setSort(sort.dataset.sort, sorting.key === sort.dataset.sort ? !sorting.desc : false);
       return;
     }
     const item = e.target.closest("[data-index]");
@@ -1291,7 +1293,7 @@
     const p = panes[active];
     if (thisPC() && VIRTUAL_BLOCKED.includes(action)) { fail("내 PC에서는 드라이브를 열 수만 있어요"); return; }
     if (action.startsWith("mode-")) { const mode = action.slice(5); if (viewModes.includes(mode)) {view = mode; renderPanes();} return; }
-    if (action.startsWith("sort-")) { const value = action.slice(5); if (["name","modified","size","kind"].includes(value)) p.sort = value; else if (["ascending","descending"].includes(value)) p.desc = value === "descending"; p.start = 0; p.scroll = 0; renderPanes(); return; }
+    if (action.startsWith("sort-")) { const value = action.slice(5); if (sortKeys.includes(value)) setSort(value); else if (["ascending","descending"].includes(value)) setSort(sorting.key, value === "descending"); return; }
     fail("");
     switch (action) {
       case "close":
@@ -1313,7 +1315,7 @@
       case "new":
       case "sort": {
         const rect = layer.querySelector(`[data-action="${action}"]`).getBoundingClientRect();
-        showMenu(action === "new" ? [["mkdir", "폴더"]] : [["sort-name", "이름", p.sort === "name"],["sort-modified", "수정한 날짜", p.sort === "modified"],["sort-kind", "종류", p.sort === "kind"],["sort-size", "크기", p.sort === "size"],null,["sort-ascending", "오름차순", !p.desc],["sort-descending", "내림차순", p.desc]], rect.left, rect.bottom + 4, action);
+        showMenu(action === "new" ? [["mkdir", "폴더"]] : [["sort-name", "이름", sorting.key === "name"],["sort-modified", "수정한 날짜", sorting.key === "modified"],["sort-kind", "종류", sorting.key === "kind"],["sort-size", "크기", sorting.key === "size"],null,["sort-ascending", "오름차순", !sorting.desc],["sort-descending", "내림차순", sorting.desc]], rect.left, rect.bottom + 4, action);
         return;
       }
       case "more": {
@@ -1555,7 +1557,7 @@
     menu.className = `files-menu${MAC ? "" : " windows-menu"}`;
     menu.setAttribute("role", "menu");
     const disabled = (a) => ["open", "copy", "cut", "trash"].includes(a) ? !p.selected.size : a === "rename" ? p.selected.size !== 1 : a === "paste" ? !clipboard && !nativeFiles() : a === "undo" ? !undo.some(u => u.host === host.id) : false;
-    menu.innerHTML = items.map((item) => item ? `<button class="btn subtle" role="${item.length > 2 ? item[3] || "menuitemradio" : "menuitem"}" ${item.length > 2 ? `aria-checked="${item[2]}"` : ""} data-action="${item[0]}" ${disabled(item[0]) ? "disabled" : ""}>${esc(item[1])}</button>` : "<hr>").join("");
+    menu.innerHTML = items.map((item) => item ? `<button class="btn subtle" role="${item.length > 2 ? item[3] || "menuitemradio" : "menuitem"}" ${item.length > 2 ? `aria-checked="${item[2]}"` : ""} data-action="${item[0]}" aria-label="${esc(item[1])}" ${disabled(item[0]) ? "disabled" : ""}>${esc(item[1])}</button>` : "<hr>").join("");
     menu.onclick = (e) => {
       const button = e.target.closest("button:not(:disabled)");
       if (!button) return;

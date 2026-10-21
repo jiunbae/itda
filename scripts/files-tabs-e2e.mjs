@@ -30,7 +30,7 @@ try{
    window.ipc={postMessage:raw=>{const m=JSON.parse(raw);if(m.cmd==='files_clipboard'){testPackets.push(m);return;}if(m.cmd!=='files')return;testPackets.push(m);
     const result={...m,type:'files_result',ok:true};
     if(m.op==='connect'){if(!homes[m.id])return;result.data={path:homes[m.id],entries:tree[homes[m.id]],local_path:'/local',local_entries:tree['/local'],rsync:true};}
-    else if(m.op==='list')result.data={path:m.path,entries:tree[m.path]||[]};
+    else if(m.op==='list')result.data={path:m.path,entries:window.sortTesting&&m.path==='/Users/alex' ? [entry('Folder2',true),{...entry('file10.txt'),size:20,modified:300},{...entry('Zebra.pdf'),size:5,modified:100},entry('Docs',true),{...entry('file2.txt'),size:20,modified:200}] : tree[m.path]||[]};
     else return;
     setTimeout(()=>itda.recv(result),10);
    }};
@@ -38,11 +38,38 @@ try{
   const p=await c.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
   if(platform==='windows'&&process.platform!=='win32')await p.route('**/icons.js',route=>route.fulfill({contentType:'text/javascript',body:fs.readFileSync(path.join(root,'web/icons.js'),'utf8').replace('if (/Windows/.test(navigator.userAgent)) return;','')}));
   await p.goto(base+'/web/');
-  await p.evaluate(()=>{const files={method:'sftp',user:'alex'};S.hosts=[{id:'studio',name:'Studio Mac',host:'studio.local',os:'mac',kind:'vnc',login_user:'alex',has_pw:true,files},{id:'build',name:'Build Server',host:'build.local',os:'linux',kind:'vnc',login_user:'dev',has_pw:true,files},{id:'slow',name:'Slow Box',host:'slow.local',os:'linux',kind:'vnc',login_user:'dev',has_pw:true,files}];S.settings={...S.settings,onboarded:true,theme:'light'};render();ItdaFiles.launch(S.hosts[0]);});
+  const launch=()=>p.evaluate(()=>{const files={method:'sftp',user:'alex'};S.hosts=[{id:'studio',name:'Studio Mac',host:'studio.local',os:'mac',kind:'vnc',login_user:'alex',has_pw:true,files},{id:'build',name:'Build Server',host:'build.local',os:'linux',kind:'vnc',login_user:'dev',has_pw:true,files},{id:'slow',name:'Slow Box',host:'slow.local',os:'linux',kind:'vnc',login_user:'dev',has_pw:true,files}];S.settings={...S.settings,onboarded:true,theme:'light'};render();ItdaFiles.launch(S.hosts[0]);});
+  await launch();
   const layer=p.locator('.files-layer'),row=name=>layer.locator('[data-index]').filter({hasText:name}).first();
   const packets=()=>p.evaluate(()=>testPackets),mod=platform==='mac'?'Meta':'Control';
   const count=async(id,op)=>(await packets()).filter(x=>x.id===id&&x.op===op).length;
   await row('Alpha-A.txt').waitFor();
+  // One sorting preference drives every layout, including cached ancestor columns.
+  const sort=async name=>{await layer.locator('[data-action="sort"]').click();await p.getByRole('menuitemradio',{name,exact:true}).click();};
+  const names=()=>layer.locator('[data-pane="remote"] [data-index]').evaluateAll(es=>es.map(e=>e.querySelector('td .files-name > span, :scope > span').textContent.trim()));
+  const mode=async name=>{if(platform==='mac')await layer.locator(`[data-mode="${name}"]`).click();else{await layer.locator('[data-action="view"]').click();await p.getByRole('menuitemradio',{name:name==='grid'?'큰 아이콘':'자세히',exact:true}).click();}};
+  await p.evaluate(()=>window.sortTesting=true);
+  await layer.locator('[data-action="refresh"]').click();await row('file10.txt').waitFor();
+  const orders=[['이름',['Docs','Folder2','file2.txt','file10.txt','Zebra.pdf']],['수정한 날짜',['Docs','Folder2','Zebra.pdf','file2.txt','file10.txt']],['크기',['Docs','Folder2','Zebra.pdf','file2.txt','file10.txt']],['종류',['Docs','Folder2','Zebra.pdf','file2.txt','file10.txt']]];
+  for(const [key,expected]of orders){
+   await sort(key);await sort('오름차순');
+   for(const v of platform==='mac'?['list','grid','columns','gallery']:['list','grid']){await mode(v);assert(JSON.stringify(await names())===JSON.stringify(expected),`${platform}/${key}/${v}: ${JSON.stringify(await names())}`);}
+   await sort('내림차순');const descending=[...expected.slice(0,2).reverse(),...expected.slice(2).reverse()];
+   for(const v of platform==='mac'?['gallery','columns','grid','list']:['grid','list']){await mode(v);assert(JSON.stringify(await names())===JSON.stringify(descending),`${platform}/${key}/descending/${v}: ${JSON.stringify(await names())}`);}
+  }
+  await sort('이름');
+  if(platform==='mac'){
+   await mode('columns');await row('Docs').click();await row('Inside-A.txt').waitFor();
+   const ancestor=await layer.locator('.files-column[data-column="/Users/alex"] .files-column-entry > span').allTextContents();
+   assert(JSON.stringify(ancestor)===JSON.stringify(['Folder2','Docs','Zebra.pdf','file10.txt','file2.txt']),`Cached ancestor ignored shared sort: ${ancestor}`);
+   await layer.locator('[data-action="back"]').click();await row('file10.txt').waitFor();await mode('list');
+  }
+  // A new page/window restores the setting; a header click changes the same menu preference.
+  await p.reload();await launch();await row('Alpha-A.txt').waitFor();
+  await layer.locator('[data-action="sort"]').click();assert(await p.getByRole('menuitemradio',{name:'내림차순',exact:true}).getAttribute('aria-checked')==='true','Sort preference did not survive reload');await p.keyboard.press('Escape');
+  await layer.locator('th[data-sort="name"]').click();
+  await layer.locator('[data-action="sort"]').click();assert(await p.getByRole('menuitemradio',{name:'오름차순',exact:true}).getAttribute('aria-checked')==='true','Header and menu sort diverged');await p.keyboard.press('Escape');
+
   await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+t`);
   assert(await layer.locator('[data-tab]').count()===2,'New tab failed');
   // Open another device in the new tab.
