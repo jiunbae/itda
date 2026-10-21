@@ -80,5 +80,43 @@ try{
   }
   assert(!errors.length,errors.join('\n'));await c.close();
  }
- console.log(`PASS: Explorer layout, address/history, tabs, sort/view, copy state, preview/details, home/network and Mac regression (${process.platform})`);
+ // Windows file windows draw their own title bar: tabs, then minimize/maximize/close; the
+ // empty tab row moves the window. Narrow windows keep every command reachable.
+ {
+  const c=await browser.newContext({viewport:{width:1000,height:700},reducedMotion:'reduce',userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
+  await c.addInitScript(()=>{window.ITDA_WINDOW_CHROME=true;window.ITDA_FILE_WINDOW='native-1';
+   const entry=(name,dir=false)=>({name,dir,size:100,modified:1780000000});const home='/Users/alex',tree={[home]:[entry('Documents',true),entry('Notes.txt')]};
+   window.testPackets=[];window.ipc={postMessage:raw=>{const m=JSON.parse(raw);testPackets.push(m);if(m.cmd!=='files')return;const result={...m,type:'files_result',ok:true};
+    if(m.op==='connect')result.data={path:home,entries:tree[home],local_path:home,local_entries:tree[home],rsync:true};else if(m.op==='list')result.data={path:m.path,entries:tree[m.path]||[]};else return;queueMicrotask(()=>itda.recv(result));}};});
+  const p=await c.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
+  if(process.platform!=='win32')await p.route('**/icons.js',route=>route.fulfill({contentType:'text/javascript',body:fs.readFileSync(path.join(root,'web/icons.js'),'utf8').replace('if (/Windows/.test(navigator.userAgent)) return;','')}));
+  await p.goto(base+'/web/');
+  await p.evaluate(()=>{S.hosts=[{id:'test',name:'Studio Mac',host:'studio.local',os:'mac',kind:'vnc',login_user:'alex',has_pw:true,files:{method:'sftp',user:'alex'}}];S.settings={...S.settings,onboarded:true,theme:'light'};render();ItdaFiles.launch(S.hosts[0]);});
+  const layer=p.locator('.files-layer');await layer.locator('[data-index]').first().waitFor();
+  const controls=()=>p.evaluate(()=>testPackets.filter(m=>m.cmd==='file_window_control').map(m=>`${m.window}:${m.op}`));
+  const caption=layer.locator('.files-tabs .files-caption');
+  assert(await caption.count()===1,'No title-bar buttons in the tab row');
+  const [tabs,cap]=await Promise.all([layer.locator('.files-tabs').boundingBox(),caption.boundingBox()]);
+  assert(Math.abs(cap.x+cap.width-1000)<=1&&cap.y<=tabs.y+1,'Title-bar buttons not at the top right');
+  for(const op of ['minimize','maximize','close'])await caption.locator(`[data-window="${op}"]`).click();
+  const bar=await layer.locator('.files-tabs').boundingBox();
+  await p.mouse.move(bar.x+bar.width-200,bar.y+10);await p.mouse.down();await p.mouse.up();
+  await p.mouse.dblclick(bar.x+bar.width-200,bar.y+10);
+  const ops=await controls();
+  assert(JSON.stringify(ops.slice(0,4))===JSON.stringify(['native-1:minimize','native-1:maximize','native-1:close','native-1:drag'])&&ops.includes('native-1:maximize'),'Title-bar actions: '+JSON.stringify(ops));
+  const before=ops.length;await layer.locator('.files-tab').first().click();
+  assert((await controls()).filter(x=>x.endsWith(':drag')).length===ops.filter(x=>x.endsWith(':drag')).length,'Clicking a tab moved the window');
+  await p.evaluate(()=>itdaWindowState({maximized:true}));
+  assert(await caption.locator('[data-window="maximize"]').getAttribute('aria-label')==='이전 크기로','Maximized state not shown');
+  // Narrow: every command still inside the window, the navigation pane gives way.
+  for(const w of [740,560,440]){
+   await p.setViewportSize({width:w,height:520});await p.waitForTimeout(50);
+   const out=await p.evaluate(()=>[...document.querySelectorAll('.files-tools .btn, .files-title .btn, .files-caption button')].filter(b=>b.offsetParent&&b.getBoundingClientRect().right>innerWidth+1).map(b=>b.dataset.action||b.dataset.window));
+   assert(!out.length,`${w}px: controls outside the window ${JSON.stringify(out)}`);
+   if(w<=600)assert(await layer.locator('.files-sidebar').isHidden(),`${w}px: navigation pane still squeezing the list`);
+  }
+  await p.screenshot({path:path.join(out,'windows-title-bar-narrow.png')});
+  assert(!errors.length,errors.join('\n'));await c.close();
+ }
+ console.log(`PASS: Explorer layout, address/history, tabs, sort/view, copy state, preview/details, home/network, Mac regression, title-bar tabs and narrow windows (${process.platform})`);
 }finally{await browser.close();server.closeAllConnections();await new Promise(r=>server.close(r));}

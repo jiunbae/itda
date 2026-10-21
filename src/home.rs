@@ -425,6 +425,8 @@ fn on_ipc(v: Value) {
             }
         }
         "files_release_page" => crate::files::release_page(s(&v, "page").as_str()),
+        #[cfg(windows)]
+        "file_window_control" => plat::file_window_control(s(&v, "window").as_str(), s(&v, "op").as_str()),
         // Copy/Cut in one file window is what Paste uses in every other one.
         "files_clipboard" => {
             let clip = v["clip"].clone();

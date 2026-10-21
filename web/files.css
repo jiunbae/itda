@@ -1084,3 +1084,31 @@ body:has(.files-layer) #modals .scrim { z-index: 3800; }
 .windows-menu .btn { position:relative; padding-left:30px; }
 .windows-menu [aria-checked="true"]::before { content:"✓"; position:absolute; left:10px; font-size:13px; }
 .files-layer.windows .files-tab-add:disabled { opacity:.35; cursor:default; }
+
+/* Windows: the tab row is the title bar (Explorer). Its empty space moves the window. */
+.files-layer.windows .files-tabs:has(.files-caption) { padding-right:0; align-items:stretch; }
+.files-layer.windows .files-tabs:has(.files-caption) .files-tab { align-self:end; }
+.files-layer.windows .files-tabs:has(.files-caption) .files-tab-add { align-self:end; }
+.files-caption { display:flex; flex:none; margin-left:auto; position:sticky; right:0; height:32px; margin-top:-5px; background:var(--bg); }
+.files-caption button { width:46px; height:32px; border:0; border-radius:0; background:transparent; color:var(--text); display:grid; place-items:center; font-size:10px; }
+.files-caption button:hover { background:var(--hover); }
+.files-caption button.close:hover { background:#c42b1c; color:#fff; }
+.files-caption svg { width:10px; height:10px; fill:none; stroke:currentColor; stroke-width:1; shape-rendering:crispEdges; }
+
+/* Narrow Explorer windows: commands become icons, the panes give way. */
+@media(max-width:760px) {
+ .files-layer.windows { grid-template-columns:150px minmax(0,1fr) 0; }
+ .files-layer.windows .files-tools .btn > span:not(.i), .files-layer.windows .files-tools .files-chevron { display:none; }
+ .files-layer.windows .files-tools .btn { padding-inline:6px; gap:0; }
+ .files-layer.windows .files-search { flex-basis:130px; width:130px; min-width:90px; }
+ .files-layer.windows .files-tab { min-width:110px; }
+}
+@media(max-width:600px) {
+ .files-layer.windows, .files-layer.windows.has-preview { grid-template-columns:0 minmax(0,1fr) 0; }
+ .files-layer.windows .files-sidebar { display:none; }
+ .files-layer.windows .files-title { gap:6px; padding-inline:6px; }
+ .files-layer.windows .files-title [data-action="forward"], .files-layer.windows .files-title [data-action="up"] { display:none; }
+ .files-layer.windows .files-search { flex-basis:96px; width:96px; min-width:70px; }
+ .files-layer.windows .files-explorer-address { min-width:60px; }
+ .files-command-divider { display:none; }
+}
