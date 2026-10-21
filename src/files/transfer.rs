@@ -476,7 +476,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
     // Capture the source connection before the job queues: closing its window later must
     // not invalidate a copy already accepted by the destination window.
     let held_source = if v["from"] == "remote" && !same_device {
-        source_key.as_ref().map(|k| super::transfer_source(k, v["from_clip"].as_str())).transpose()
+        source_key.as_ref().map(|k| super::transfer_source(k, v["from_clip"].as_str(), v["from_drag"].as_str())).transpose()
     } else { Ok(None) };
     let job = crate::store::new_id();
     let control = Arc::new(Control::default());

@@ -1511,7 +1511,7 @@
     );
     if (r.choice !== "ok") return false;
     send("files", { id, window: pageToken, op: "transfer",
-        ...(cross ? { from_id: origin.id, from_window: origin.window || pageToken, ...(origin.cid ? { from_clip: origin.cid } : {}) } : {}),
+        ...(cross ? { from_id: origin.id, from_window: origin.window || pageToken, ...(origin.cid ? { from_clip: origin.cid } : {}), ...(origin.drag ? { from_drag: origin.drag } : {}) } : {}),
         from,
         source,
         names,
@@ -2025,12 +2025,19 @@
       )
         return true;
       if (networkMode) {
+        if (m.origin?.drag) send("files_drag_release", { drag: m.origin.drag });
         toast("전송할 기기의 파일 창을 먼저 열어 주세요", "E8B7");
         return true;
       }
       let side=active,destination=panes[active].path;
       if(m.position){const target=document.elementFromPoint(...m.position),pane=target?.closest("[data-pane]");if(pane){side=pane.dataset.pane;const item=target.closest("[data-index]"),entry=item?visible(side)[Number(item.dataset.index)]:null;destination=entry?.dir?child(panes[side].path,entry.name):panes[side].path;}}
-      importPaths(m.paths,side,destination);
+      if (m.origin?.drag) {
+        const origin = m.origin;
+        // Only the native receiver supplies origin, after verifying its live OS token.
+        void transfer(origin.side, origin.path, origin.names, side, destination, false, host.id, origin)
+          .catch(e => fail(e.message || String(e)))
+          .finally(() => send("files_drag_release", { drag: origin.drag }));
+      } else importPaths(m.paths,side,destination);
       return true;
     }
     if (m.type !== "files_result") return false;

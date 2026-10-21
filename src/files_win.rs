@@ -19,7 +19,7 @@ use windows::Win32::Foundation::*;
 use windows::Win32::System::Com::Marshal::CoMarshalInterThreadInterfaceInStream;
 use windows::Win32::System::Com::StructuredStorage::CoGetInterfaceAndReleaseStream;
 use windows::Win32::System::Com::*;
-use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT};
+use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GlobalSize, GMEM_MOVEABLE, GMEM_ZEROINIT};
 use windows::Win32::System::Ole::*;
 use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
@@ -33,7 +33,17 @@ pub fn drag(v: &Value, post: fn(Value)) -> Result<(), String> {
     ole()?;
     let files = export::selection(v).map_err(|e| e.to_string())?;
     let id = crate::files::scoped_id(v["id"].as_str().unwrap_or(""), &v["window"]);
-    let data: IDataObject = if files.iter().all(|f| !f.remote) { local(&files)? } else { remote(files, post)? };
+    let token = crate::files::drag::begin(v, &files).map_err(|e|e.to_string())?;
+    // The guard also clears cancelled/failed drags. An accepted destination retains
+    // its lease only until its confirmation dialog starts or cancels the transfer.
+    struct Finish(String);
+    impl Drop for Finish { fn drop(&mut self) { crate::files::drag::finish(&self.0); } }
+    let _finish = Finish(token.clone());
+    let data: IDataObject = if files.iter().all(|f| !f.remote) { tagged_local(local(&files)?,&token) } else {
+        let data=remote(files, post)?;
+        set_marker(&data,&token).map_err(|e|e.to_string())?;
+        data
+    };
     let mut effect = DROPEFFECT_NONE;
     let hr = unsafe { DoDragDrop(&data, &IDropSource::from(Source), DROPEFFECT_COPY, &mut effect) };
     if hr.is_err() {
@@ -146,6 +156,7 @@ struct Virtual {
     group: u16,
     contents: u16,
     preferred: u16,
+    marker: Mutex<Option<String>>,
     async_mode: AtomicBool,
     in_op: AtomicBool,
 }
@@ -161,6 +172,7 @@ impl Virtual {
             group: format("FileGroupDescriptorW"),
             contents: format("FileContents"),
             preferred: format("Preferred DropEffect"),
+            marker: Mutex::new(None),
             async_mode: AtomicBool::new(true),
             in_op: AtomicBool::new(false),
         }
@@ -178,9 +190,11 @@ impl Virtual {
         g.clone().unwrap()
     }
 
-    fn formats(&self) -> [FORMATETC; 3] {
+    fn formats(&self) -> Vec<FORMATETC> {
         let f = |cf: u16, tymed: TYMED, lindex: i32| FORMATETC { cfFormat: cf, ptd: std::ptr::null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex, tymed: tymed.0 as u32 };
-        [f(self.group, TYMED_HGLOBAL, -1), f(self.contents, TYMED_ISTREAM, -1), f(self.preferred, TYMED_HGLOBAL, -1)]
+        let mut formats = vec![f(self.group, TYMED_HGLOBAL, -1), f(self.contents, TYMED_ISTREAM, -1), f(self.preferred, TYMED_HGLOBAL, -1)];
+        if self.marker.lock().unwrap().is_some() { formats.push(marker_format()); }
+        formats
     }
 
     fn descriptor(&self, items: &[vdrag::Item]) -> Vec<u8> {
@@ -209,6 +223,11 @@ impl IDataObject_Impl for Virtual_Impl {
             return Err(DV_E_FORMATETC.into());
         }
         let medium = |tymed: TYMED, u: STGMEDIUM_0| STGMEDIUM { tymed: tymed.0 as u32, u, pUnkForRelease: std::mem::ManuallyDrop::new(None) };
+        if f.cfFormat == marker_format().cfFormat && f.tymed & TYMED_HGLOBAL.0 as u32 != 0 {
+            let marker = self.marker.lock().unwrap();
+            let token = marker.as_ref().ok_or(windows::core::Error::from(DV_E_FORMATETC))?;
+            return Ok(medium(TYMED_HGLOBAL, STGMEDIUM_0 { hGlobal: global(token.as_bytes())? }));
+        }
         if f.cfFormat == self.group && f.tymed & TYMED_HGLOBAL.0 as u32 != 0 {
             let items = self.items().map_err(|_| windows::core::Error::from(E_FAIL))?;
             let h = global(&self.descriptor(&items))?;
@@ -250,7 +269,13 @@ impl IDataObject_Impl for Virtual_Impl {
         DATA_S_SAMEFORMATETC
     }
 
-    fn SetData(&self, _: *const FORMATETC, m: *const STGMEDIUM, release: BOOL) -> windows::core::Result<()> {
+    fn SetData(&self, f: *const FORMATETC, m: *const STGMEDIUM, release: BOOL) -> windows::core::Result<()> {
+        if !f.is_null() && !m.is_null() && unsafe { (*f).cfFormat } == marker_format().cfFormat {
+            let token = marker_medium(unsafe { &*m });
+            if release.as_bool() { unsafe { ReleaseStgMedium(m as *mut STGMEDIUM); } }
+            *self.marker.lock().unwrap() = Some(token.ok_or(windows::core::Error::from(DV_E_FORMATETC))?);
+            return Ok(());
+        }
         // Receivers report back ("Performed DropEffect" and the like); nothing to keep.
         if release.as_bool() && !m.is_null() {
             unsafe { ReleaseStgMedium(m as *mut STGMEDIUM) };
@@ -481,6 +506,9 @@ mod tests {
         let file = |n: &str, dir: bool| export::File { id: String::new(), remote: true, source: src.clone(), name: n.into(), dir };
         let files = vec![file("Folder", true), file("한글.txt", false)];
         let data = in_mta(move || Virtual::new(files, source, String::new(), |_| {}).into()).unwrap();
+        set_marker(&data,"0123456789abcdef0123456789abcdef").unwrap();
+        assert_eq!(marker(&data).as_deref(),Some("0123456789abcdef0123456789abcdef"));
+        assert_eq!(unsafe {data.QueryGetData(&marker_format())},S_OK);
         let fmt = |cf: u16, tymed: TYMED, lindex: i32| FORMATETC { cfFormat: cf, ptd: std::ptr::null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex, tymed: tymed.0 as u32 };
         unsafe {
             let mut m = data.GetData(&fmt(format("FileGroupDescriptorW"), TYMED_HGLOBAL, -1)).unwrap();
@@ -616,6 +644,506 @@ mod tests {
             let want: Vec<_> = ["a.txt", "b c.txt"].iter().map(|n| real(&root.join(n).to_string_lossy())).collect();
             assert_eq!(got, want);
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+// Shell data objects can return E_NOTIMPL from SetData. Wrap their IDataObject
+// interface instead; every original format stays owned/implemented by the shell.
+#[implement(IDataObject)]
+struct TaggedLocal {
+    native: IDataObject,
+    token: String,
+}
+fn tagged_local(native: IDataObject, token: &str) -> IDataObject {
+    TaggedLocal {
+        native,
+        token: token.into(),
+    }
+    .into()
+}
+impl IDataObject_Impl for TaggedLocal_Impl {
+    fn GetData(&self, f: *const FORMATETC) -> windows::core::Result<STGMEDIUM> {
+        if !f.is_null() && unsafe { (*f).cfFormat } == marker_format().cfFormat {
+            self.QueryGetData(f).ok()?;
+            return Ok(STGMEDIUM {
+                tymed: TYMED_HGLOBAL.0 as u32,
+                u: STGMEDIUM_0 {
+                    hGlobal: global(self.token.as_bytes())?,
+                },
+                pUnkForRelease: std::mem::ManuallyDrop::new(None),
+            });
+        }
+        unsafe { self.native.GetData(f) }
+    }
+    fn GetDataHere(&self, f: *const FORMATETC, m: *mut STGMEDIUM) -> windows::core::Result<()> {
+        unsafe { self.native.GetDataHere(f, m) }
+    }
+    fn QueryGetData(&self, f: *const FORMATETC) -> HRESULT {
+        if !f.is_null() && unsafe { (*f).cfFormat } == marker_format().cfFormat {
+            let f = unsafe { &*f };
+            if f.dwAspect != DVASPECT_CONTENT.0 || f.lindex != -1 {
+                DV_E_FORMATETC
+            } else if f.tymed & TYMED_HGLOBAL.0 as u32 == 0 {
+                DV_E_TYMED
+            } else {
+                S_OK
+            }
+        } else {
+            unsafe { self.native.QueryGetData(f) }
+        }
+    }
+    fn GetCanonicalFormatEtc(&self, f: *const FORMATETC, out: *mut FORMATETC) -> HRESULT {
+        if !f.is_null() && unsafe { (*f).cfFormat } == marker_format().cfFormat {
+            if out.is_null() {
+                return E_POINTER;
+            }
+            unsafe {
+                (*out).ptd = std::ptr::null_mut();
+            }
+            DATA_S_SAMEFORMATETC
+        } else {
+            unsafe { self.native.GetCanonicalFormatEtc(f, out) }
+        }
+    }
+    fn SetData(
+        &self,
+        f: *const FORMATETC,
+        m: *const STGMEDIUM,
+        release: BOOL,
+    ) -> windows::core::Result<()> {
+        unsafe { self.native.SetData(f, m, release.as_bool()) }
+    }
+    fn EnumFormatEtc(&self, dir: u32) -> windows::core::Result<IEnumFORMATETC> {
+        let native = unsafe { self.native.EnumFormatEtc(dir) }?;
+        if dir != DATADIR_GET.0 as u32 {
+            return Ok(native);
+        }
+        Ok(TaggedFormats {
+            native,
+            first: std::cell::Cell::new(true),
+        }
+        .into())
+    }
+    fn DAdvise(
+        &self,
+        f: *const FORMATETC,
+        flags: u32,
+        sink: Ref<IAdviseSink>,
+    ) -> windows::core::Result<u32> {
+        unsafe { self.native.DAdvise(f, flags, sink.as_ref()) }
+    }
+    fn DUnadvise(&self, id: u32) -> windows::core::Result<()> {
+        unsafe { self.native.DUnadvise(id) }
+    }
+    fn EnumDAdvise(&self) -> windows::core::Result<IEnumSTATDATA> {
+        unsafe { self.native.EnumDAdvise() }
+    }
+}
+#[implement(IEnumFORMATETC)]
+struct TaggedFormats {
+    native: IEnumFORMATETC,
+    first: std::cell::Cell<bool>,
+}
+impl IEnumFORMATETC_Impl for TaggedFormats_Impl {
+    fn Next(&self, count: u32, out: *mut FORMATETC, got: *mut u32) -> HRESULT {
+        if out.is_null() || (count != 1 && got.is_null()) {
+            return E_POINTER;
+        }
+        let mut n = 0;
+        if count > 0 && self.first.replace(false) {
+            unsafe {
+                *out = marker_format();
+            }
+            n = 1;
+        }
+        let mut read = 0;
+        let status = if n < count {
+            unsafe {
+                self.native.Next(
+                    std::slice::from_raw_parts_mut(out.add(n as usize), (count - n) as usize),
+                    Some(&mut read),
+                )
+            }
+        } else {
+            S_OK
+        };
+        n += read;
+        if !got.is_null() {
+            unsafe {
+                *got = n;
+            }
+        }
+        if status.is_err() {
+            status
+        } else if n == count {
+            S_OK
+        } else {
+            S_FALSE
+        }
+    }
+    fn Skip(&self, mut count: u32) -> windows::core::Result<()> {
+        if count > 0 && self.first.replace(false) {
+            count -= 1;
+        }
+        if count == 0 {
+            Ok(())
+        } else {
+            unsafe { self.native.Skip(count) }
+        }
+    }
+    fn Reset(&self) -> windows::core::Result<()> {
+        unsafe { self.native.Reset() }?;
+        self.first.set(true);
+        Ok(())
+    }
+    fn Clone(&self) -> windows::core::Result<IEnumFORMATETC> {
+        Ok(TaggedFormats {
+            native: unsafe { self.native.Clone() }?,
+            first: std::cell::Cell::new(self.first.get()),
+        }
+        .into())
+    }
+}
+
+// ---------------------------------------------------------------- Itda window receivers
+fn marker_format() -> FORMATETC {
+    FORMATETC {
+        cfFormat: format("dev.jiun.itda.file-drag"),
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    }
+}
+fn set_marker(data: &IDataObject, token: &str) -> windows::core::Result<()> {
+    let mut medium = STGMEDIUM {
+        tymed: TYMED_HGLOBAL.0 as u32,
+        u: STGMEDIUM_0 {
+            hGlobal: global(token.as_bytes())?,
+        },
+        pUnkForRelease: std::mem::ManuallyDrop::new(None),
+    };
+    let result = unsafe { data.SetData(&marker_format(), &medium, false) };
+    unsafe {
+        ReleaseStgMedium(&mut medium);
+    }
+    result
+}
+fn marker_medium(medium: &STGMEDIUM) -> Option<String> {
+    if medium.tymed != TYMED_HGLOBAL.0 as u32 {
+        return None;
+    }
+    unsafe {
+        let handle = medium.u.hGlobal;
+        let len = GlobalSize(handle);
+        if !(32..=128).contains(&len) {
+            return None;
+        }
+        let bytes = GlobalLock(handle) as *const u8;
+        if bytes.is_null() {
+            return None;
+        }
+        let bytes = std::slice::from_raw_parts(bytes, len);
+        let token = std::str::from_utf8(&bytes[..32])
+            .ok()
+            .filter(|s| s.bytes().all(|b| b.is_ascii_hexdigit()))
+            .map(str::to_string);
+        let _ = GlobalUnlock(handle);
+        token
+    }
+}
+fn marker(data: &IDataObject) -> Option<String> {
+    let mut medium = unsafe { data.GetData(&marker_format()) }.ok()?;
+    let token = marker_medium(&medium);
+    unsafe {
+        ReleaseStgMedium(&mut medium);
+    }
+    token
+}
+fn path_format() -> FORMATETC {
+    FORMATETC {
+        cfFormat: CF_HDROP.0,
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    }
+}
+fn drop_paths(data: &IDataObject) -> Option<Vec<std::path::PathBuf>> {
+    let mut medium = unsafe { data.GetData(&path_format()) }.ok()?;
+    let result = (|| unsafe {
+        if medium.tymed != TYMED_HGLOBAL.0 as u32 {
+            return None;
+        }
+        let hdrop = HDROP(medium.u.hGlobal.0);
+        let count = DragQueryFileW(hdrop, u32::MAX, None);
+        if count == 0 || count > 10_000 {
+            return None;
+        }
+        let mut paths = Vec::new();
+        for i in 0..count {
+            let n = DragQueryFileW(hdrop, i, None) as usize;
+            if n == 0 || n > 32_767 {
+                return None;
+            }
+            let mut path = vec![0; n + 1];
+            if DragQueryFileW(hdrop, i, Some(&mut path)) as usize != n {
+                return None;
+            }
+            use std::os::windows::ffi::OsStringExt;
+            paths.push(std::ffi::OsString::from_wide(&path[..n]).into());
+        }
+        Some(paths)
+    })();
+    // The medium owns the HDROP; DragFinish would free it a second time.
+    unsafe {
+        ReleaseStgMedium(&mut medium);
+    }
+    result
+}
+#[implement(IDropTarget)]
+struct WindowDrop {
+    root: isize,
+    window: Option<String>,
+    post: fn(Value),
+    valid: std::cell::Cell<bool>,
+}
+impl WindowDrop {
+    fn allowed(&self, data: &IDataObject) -> bool {
+        match marker(data) {
+            Some(token) => crate::files::drag::valid(&token),
+            None => unsafe { data.QueryGetData(&path_format()) }.is_ok(),
+        }
+    }
+    fn position(&self, pt: &POINTL) -> Option<[f64; 2]> {
+        let mut point = windows_sys::Win32::Foundation::POINT { x: pt.x, y: pt.y };
+        let root = self.root as windows_sys::Win32::Foundation::HWND;
+        if unsafe { windows_sys::Win32::Graphics::Gdi::ScreenToClient(root, &mut point) } == 0 {
+            return None;
+        }
+        let dpi = unsafe { windows_sys::Win32::UI::HiDpi::GetDpiForWindow(root) }.max(96) as f64;
+        Some([point.x as f64 * 96. / dpi, point.y as f64 * 96. / dpi])
+    }
+}
+impl IDropTarget_Impl for WindowDrop_Impl {
+    fn DragEnter(
+        &self,
+        data: Ref<IDataObject>,
+        _: MODIFIERKEYS_FLAGS,
+        _: &POINTL,
+        effect: *mut DROPEFFECT,
+    ) -> windows::core::Result<()> {
+        let allowed = data.as_ref().is_some_and(|data| self.allowed(data));
+        self.valid.set(allowed);
+        unsafe {
+            *effect = if allowed && (*effect).0 & DROPEFFECT_COPY.0 != 0 {
+                DROPEFFECT_COPY
+            } else {
+                DROPEFFECT_NONE
+            };
+        }
+        Ok(())
+    }
+    fn DragOver(
+        &self,
+        _: MODIFIERKEYS_FLAGS,
+        _: &POINTL,
+        effect: *mut DROPEFFECT,
+    ) -> windows::core::Result<()> {
+        unsafe {
+            *effect = if self.valid.get() && (*effect).0 & DROPEFFECT_COPY.0 != 0 {
+                DROPEFFECT_COPY
+            } else {
+                DROPEFFECT_NONE
+            };
+        }
+        Ok(())
+    }
+    fn DragLeave(&self) -> windows::core::Result<()> {
+        self.valid.set(false);
+        Ok(())
+    }
+    fn Drop(
+        &self,
+        data: Ref<IDataObject>,
+        _: MODIFIERKEYS_FLAGS,
+        pt: &POINTL,
+        effect: *mut DROPEFFECT,
+    ) -> windows::core::Result<()> {
+        let can_copy = unsafe { (*effect).0 & DROPEFFECT_COPY.0 != 0 };
+        unsafe {
+            *effect = DROPEFFECT_NONE;
+        }
+        self.valid.set(false);
+        let Some(data) = data.as_ref().filter(|_| can_copy) else {
+            return Ok(());
+        };
+        let event = match marker(data) {
+            Some(token) => crate::files::drag::accept(&token).map(|origin| json!({"type":"files_drop","window":self.window,"origin":origin,"position":self.position(pt)})),
+            None => drop_paths(data).map(|paths|json!({"type":"files_drop","window":self.window,"paths":paths,"position":self.position(pt)})),
+        };
+        if let Some(event) = event {
+            (self.post)(event);
+            unsafe {
+                *effect = DROPEFFECT_COPY;
+            }
+        }
+        Ok(())
+    }
+}
+struct Receivers {
+    root: isize,
+    window: Option<String>,
+    post: fn(Value),
+    targets: Vec<(HWND, IDropTarget)>,
+}
+impl Drop for Receivers {
+    fn drop(&mut self) {
+        for (hwnd, _) in &self.targets {
+            let _ = unsafe { RevokeDragDrop(*hwnd) };
+        }
+    }
+}
+thread_local! { static RECEIVERS:std::cell::RefCell<std::collections::HashMap<isize,Receivers>> = std::cell::RefCell::new(std::collections::HashMap::new()); }
+pub fn forget_drop(root: isize) {
+    RECEIVERS.with(|r| r.borrow_mut().remove(&root));
+}
+pub fn install_drop(root: isize, window: Option<String>, post: fn(Value)) -> Result<(), String> {
+    ole()?;
+    forget_drop(root);
+    let mut receivers = Receivers {
+        root,
+        window,
+        post,
+        targets: Vec::new(),
+    };
+    unsafe extern "system" fn each(
+        hwnd: windows_sys::Win32::Foundation::HWND,
+        param: isize,
+    ) -> windows_sys::Win32::Foundation::BOOL {
+        let receivers = &mut *(param as *mut Receivers);
+        let hwnd = HWND(hwnd);
+        if RevokeDragDrop(hwnd) != Err(DRAGDROP_E_INVALIDHWND.into()) {
+            let target: IDropTarget = WindowDrop {
+                root: receivers.root,
+                window: receivers.window.clone(),
+                post: receivers.post,
+                valid: std::cell::Cell::new(false),
+            }
+            .into();
+            if RegisterDragDrop(hwnd, &target).is_ok() {
+                receivers.targets.push((hwnd, target));
+            }
+        }
+        1
+    }
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::EnumChildWindows(
+            root as _,
+            Some(each),
+            &mut receivers as *mut Receivers as isize,
+        );
+    }
+    if receivers.targets.is_empty() {
+        return Err("파일을 받을 창을 등록하지 못했습니다".into());
+    }
+    RECEIVERS.with(|r| r.borrow_mut().insert(root, receivers));
+    Ok(())
+}
+
+#[cfg(test)]
+mod receiver_tests {
+    use super::*;
+    static EVENTS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
+    fn post(v: Value) {
+        EVENTS.lock().unwrap().push(v);
+    }
+    #[test]
+    fn remote_marker_requires_no_listing_or_download() {
+        ole().unwrap();
+        let source = vdrag::Remote::new(Box::new(|_| {
+            panic!("private drag token requested remote file data")
+        }));
+        let data = in_mta(move || {
+            Virtual::new(
+                vec![export::File {
+                    id: "source".into(),
+                    remote: true,
+                    source: "/remote".into(),
+                    name: "file.txt".into(),
+                    dir: false,
+                }],
+                source,
+                String::new(),
+                |_| {},
+            )
+            .into()
+        })
+        .unwrap();
+        set_marker(&data, "0123456789abcdef0123456789abcdef").unwrap();
+        assert_eq!(
+            marker(&data).as_deref(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
+    }
+    #[test]
+    fn native_receiver_checks_provenance_and_keeps_explorer_paths() {
+        ole().unwrap();
+        let root = std::env::temp_dir().join(format!("itda-drop-{}", crate::store::new_id()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("한글.txt"), b"source bytes").unwrap();
+        let v = json!({"id":"source","window":"source-window","side":"local","path":root,"items":[{"name":"한글.txt"}]});
+        let files = export::selection(&v).unwrap();
+        let data = local(&files).unwrap();
+        let target: IDropTarget = WindowDrop {
+            root: 0,
+            window: Some("destination-window".into()),
+            post,
+            valid: std::cell::Cell::new(false),
+        }
+        .into();
+        let point = POINTL { x: 0, y: 0 };
+        // A normal Explorer/shell drop still carries its original paths.
+        let mut effect = DROPEFFECT_COPY;
+        unsafe { target.DragEnter(&data, MODIFIERKEYS_FLAGS(0), point, &mut effect) }.unwrap();
+        assert_eq!(effect, DROPEFFECT_COPY);
+        unsafe { target.Drop(&data, MODIFIERKEYS_FLAGS(0), point, &mut effect) }.unwrap();
+        let event = EVENTS.lock().unwrap().pop().unwrap();
+        assert_eq!(event["window"], "destination-window");
+        let path = std::path::PathBuf::from(event["paths"][0].as_str().unwrap());
+        assert_eq!(std::fs::read(path).unwrap(), b"source bytes");
+        // Itda's private format is accepted once, from a live session only.
+        let token = crate::files::drag::begin(&v, &files).unwrap();
+        let data = tagged_local(data, &token);
+        assert_eq!(marker(&data), Some(token.clone()));
+        let original_paths = drop_paths(&data).unwrap();
+        assert_eq!(std::fs::read(&original_paths[0]).unwrap(), b"source bytes");
+        let formats = unsafe { data.EnumFormatEtc(DATADIR_GET.0 as u32) }.unwrap();
+        let mut first = [FORMATETC::default()];
+        let mut got = 0;
+        assert_eq!(unsafe { formats.Next(&mut first, Some(&mut got)) }, S_OK);
+        assert_eq!(got, 1);
+        assert_eq!(first[0].cfFormat, marker_format().cfFormat);
+        unsafe { formats.Reset() }.unwrap();
+        effect = DROPEFFECT_COPY;
+        unsafe { target.DragEnter(&data, MODIFIERKEYS_FLAGS(0), point, &mut effect) }.unwrap();
+        assert_eq!(effect, DROPEFFECT_COPY);
+        unsafe { target.Drop(&data, MODIFIERKEYS_FLAGS(0), point, &mut effect) }.unwrap();
+        let event = EVENTS.lock().unwrap().pop().unwrap();
+        assert_eq!(event["origin"]["window"], "source-window");
+        assert_eq!(event["origin"]["names"], json!(["한글.txt"]));
+        crate::files::drag::finish(&token);
+        effect = DROPEFFECT_COPY;
+        unsafe { target.DragEnter(&data, MODIFIERKEYS_FLAGS(0), point, &mut effect) }.unwrap();
+        assert_eq!(effect, DROPEFFECT_NONE);
+        crate::files::drag::release(&token);
+        let data = tagged_local(data, "00000000000000000000000000000000");
+        effect = DROPEFFECT_COPY;
+        unsafe { target.DragEnter(&data, MODIFIERKEYS_FLAGS(0), point, &mut effect) }.unwrap();
+        assert_eq!(effect, DROPEFFECT_NONE);
+        unsafe { target.Drop(&data, MODIFIERKEYS_FLAGS(0), point, &mut effect) }.unwrap();
+        assert!(EVENTS.lock().unwrap().is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 }
