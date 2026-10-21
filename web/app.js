@@ -1578,6 +1578,7 @@ function showCtx(id, x, y) {
   items.push(['thumb-pick', 'E91B', '미리보기 이미지 지정…']);
   if (h.custom_thumb) items.push(['thumb-reset', 'E72C', '미리보기를 마지막 화면으로']);
   if (h.has_pw) items.push(['forget', 'E8D7', '저장된 암호 지우기']);
+  if (h.rdp_key) items.push(['forget-rdp-key', 'E72C', '원격 데스크톱 서버 키 다시 받기']);
   items.push('-', ['del', 'E74D', '삭제', 'danger']);
   const el = $('#ctx');
   el.innerHTML = items.map((it) => (it === '-' ? '<hr>' : `<button data-act="${it[0]}" data-id="${esc(id)}" class="${it[3] || ''}">${I(it[1])}${it[2]}</button>`)).join('');
@@ -1619,6 +1620,7 @@ function act(a, el) {
       if (MAC && ['mac', 'macos'].includes(hostById(id)?.os) && hostById(id)?.kind !== 'rdp') send('apple_screen_sharing', { id });
       return;
     case 'files': return window.ItdaFiles.launch(hostById(id));
+    case 'forget-rdp-key': return send('forget_rdp_key', { id });
     case 'remote-setup': return window.ItdaRemoteSetup.open({id,hosts:S.hosts,accounts:S.accounts,send,modal:openModal,close:closeModal,toast,esc});
     case 'connect': return connect(id);
     case 'focus': return send('focus', { id });

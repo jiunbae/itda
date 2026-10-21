@@ -75,9 +75,10 @@ pub fn sh() -> &'static Shared {
     SHARED.get().unwrap()
 }
 
-pub fn init(out: TcpStream, w: u16, h: u16) {
+pub fn init(out: TcpStream, w: u16, h: u16) -> io::Result<()> {
+    let fb = Fb::new(w as usize, h as usize).ok_or_else(|| io::Error::other("화면을 그릴 메모리가 부족합니다"))?;
     let s = Shared {
-        fb: Mutex::new(Fb::new(w as usize, h as usize)),
+        fb: Mutex::new(fb),
         screens: Mutex::new(Vec::new()),
         ext_clip: AtomicBool::new(false),
         clip_out: Mutex::new(String::new()),
@@ -96,6 +97,7 @@ pub fn init(out: TcpStream, w: u16, h: u16) {
         pending: AtomicBool::new(false),
     };
     let _ = SHARED.set(s);
+    Ok(())
 }
 
 impl Shared {
@@ -203,7 +205,11 @@ pub fn spawn(mut reader: BufReader<Rx>, dial: Dial, creds: Creds) {
                     *s.out.lock().unwrap() = sess.writer;
                     let (w, h) = (sess.width as u32, sess.height as u32);
                     if s.size() != (w, h) {
-                        s.fb.lock().unwrap().resize(w as usize, h as usize);
+                        if !s.fb.lock().unwrap().resize(w as usize, h as usize) {
+                            *s.error.lock().unwrap() = Some("화면 크기를 바꿀 메모리가 부족합니다".into());
+                            s.post(WM_NETERR);
+                            return;
+                        }
                         s.fb_w.store(w, Relaxed);
                         s.fb_h.store(h, Relaxed);
                         s.post(WM_RESIZED);
@@ -273,12 +279,23 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                     if verbose {
                         crate::log!("update #{updates}: rect {x},{y} {w}x{h} enc={enc}");
                     }
+                    // Pixel data is read into buffers of the rectangle's size: one that isn't
+                    // on the screen (or a cursor larger than any) ends the connection first.
+                    let outside = match enc {
+                        ENC_RAW | ENC_ZRLE => !s.fb.lock().unwrap().fits(x, y, w, h),
+                        ENC_CURSOR => w > 512 || h > 512,
+                        _ => false,
+                    };
+                    if outside {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, "화면 공유 서버가 화면 밖의 영역을 보냈습니다"));
+                    }
                     match enc {
                         ENC_RAW => {
                             raw.resize(w * h * 4, 0);
                             r.read_exact(&mut raw)?;
                             let mut fb = s.fb.lock().unwrap();
-                            if fb.fits(x, y, w, h) {
+                            // (An empty rectangle has nothing to draw.)
+                            if w > 0 && h > 0 && fb.fits(x, y, w, h) {
                                 fb.raw(x, y, w, h, &raw);
                                 fb.mark(x, y, w, h);
                             }
@@ -293,12 +310,18 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                             }
                         }
                         ENC_ZRLE => {
+                            // A rectangle's data can't sensibly be larger than its pixels; a
+                            // server claiming more (or inflating past that) is cut off.
+                            let most = w * h * 4 + (1 << 20);
                             let len = rd_u32(&mut r)? as usize;
+                            if len > most {
+                                return Err(io::Error::new(io::ErrorKind::InvalidData, "ZRLE rectangle too large"));
+                            }
                             zin.resize(len, 0);
                             r.read_exact(&mut zin)?;
-                            inflate(&mut z, &zin, &mut zout)?;
+                            inflate(&mut z, &zin, &mut zout, most)?;
                             let mut fb = s.fb.lock().unwrap();
-                            if fb.fits(x, y, w, h) {
+                            if w > 0 && h > 0 && fb.fits(x, y, w, h) {
                                 fb.zrle(&zout, x, y, w, h).ok_or_else(|| io::Error::other("bad ZRLE data"))?;
                                 fb.mark(x, y, w, h);
                             }
@@ -310,7 +333,8 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                             s.post(WM_CURSOR);
                         }
                         ENC_DESKTOP_SIZE => {
-                            resize(s, w, h);
+                            crate::rfb::check_size(w, h)?;
+                            resize(s, w, h)?;
                             resized = true;
                         }
                         ENC_EXT_DESKTOP_SIZE => {
@@ -333,7 +357,8 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                             crate::log!("ExtendedDesktopSize reason={x} status={y} {w}x{h} screens={screens:?}");
                             *s.screens.lock().unwrap() = screens;
                             if !(x == 1 && y != 0) && s.size() != (w as u32, h as u32) {
-                                resize(s, w, h);
+                                crate::rfb::check_size(w, h)?;
+                                resize(s, w, h)?;
                                 resized = true;
                             }
                             s.post(WM_RESIZED);
@@ -373,15 +398,18 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
     }
 }
 
-fn resize(s: &Shared, w: usize, h: usize) {
-    s.fb.lock().unwrap().resize(w, h);
+fn resize(s: &Shared, w: usize, h: usize) -> io::Result<()> {
+    if !s.fb.lock().unwrap().resize(w, h) {
+        return Err(io::Error::other("화면 크기를 바꿀 메모리가 부족합니다"));
+    }
     s.fb_w.store(w as u32, Relaxed);
     s.fb_h.store(h as u32, Relaxed);
     s.post(WM_RESIZED);
+    Ok(())
 }
 
 /// Inflate one ZRLE rect's worth of data (the zlib stream persists across rects).
-fn inflate(z: &mut Decompress, input: &[u8], out: &mut Vec<u8>) -> io::Result<()> {
+fn inflate(z: &mut Decompress, input: &[u8], out: &mut Vec<u8>, most: usize) -> io::Result<()> {
     out.clear();
     let mut used = 0;
     loop {
@@ -390,6 +418,9 @@ fn inflate(z: &mut Decompress, input: &[u8], out: &mut Vec<u8>) -> io::Result<()
         }
         let (i0, o0) = (z.total_in(), out.len());
         z.decompress_vec(&input[used..], out, FlushDecompress::Sync).map_err(io::Error::other)?;
+        if out.len() > most {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "ZRLE data inflates too far"));
+        }
         used += (z.total_in() - i0) as usize;
         let full = out.len() == out.capacity();
         if (used >= input.len() && !full) || (z.total_in() == i0 && out.len() == o0) {

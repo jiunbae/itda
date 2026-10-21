@@ -187,13 +187,13 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
 
     let sec = if minor == 3 {
         match rd_u32(&mut r)? {
-            0 => return err(format!("server refused: {}", rd_reason(&mut r)?)),
+            0 => return err(format!("화면 공유 서버가 연결을 거부했습니다: {}", rd_reason(&mut r)?)),
             t => t as u8,
         }
     } else {
         let n = rd_u8(&mut r)? as usize;
         if n == 0 {
-            return err(format!("server refused: {}", rd_reason(&mut r)?));
+            return err(format!("화면 공유 서버가 연결을 거부했습니다: {}", rd_reason(&mut r)?));
         }
         let types = rd_vec(&mut r, n)?;
         let has = |t| types.contains(&t);
@@ -207,7 +207,7 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
         } else if has(1) {
             1
         } else {
-            return err(format!("no supported security type (server offers {types:?})"));
+            return err(format!("이 화면 공유 서버의 인증 방식을 지원하지 않습니다 (서버가 제공하는 방식: {types:?})"));
         };
         crate::log!("security types {types:?} -> {pick}");
         w.write_all(&[pick])?;
@@ -220,7 +220,7 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
         1 => {}
         2 => vnc_auth(&mut r, &mut w, &creds.pass)?,
         30 => ard_auth(&mut r, &mut w, &creds.user, &creds.pass)?,
-        t => return err(format!("unsupported security type {t}")),
+        t => return err(format!("이 화면 공유 서버의 인증 방식을 지원하지 않습니다 ({t})")),
     }
     if sec != 1 || minor == 8 {
         if rd_u32(&mut r)? != 0 {
@@ -234,6 +234,7 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
     w.write_all(&[1])?;
     let width = rd_u16(&mut r)?;
     let height = rd_u16(&mut r)?;
+    check_size(width as usize, height as usize)?;
     let pf = rd_vec(&mut r, 16)?;
     let n = rd_u32(&mut r)? as usize;
     let name_bytes = rd_vec(&mut r, n)?;
@@ -246,6 +247,19 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
     server_init.extend_from_slice(&(n as u32).to_be_bytes());
     server_init.extend_from_slice(&name_bytes);
     Ok(Raw { reader: r, writer: w, width, height, name, server_init })
+}
+
+/// The most a server's screen may be: wider than any monitor row people use, and no more
+/// pixels than a few 8K displays (a 32-bit picture of it is ~400 MB).
+pub const MAX_SIDE: usize = 32768;
+pub const MAX_PIXELS: usize = 100 << 20;
+
+/// A screen size from a server, before anything is allocated for it.
+pub fn check_size(w: usize, h: usize) -> io::Result<()> {
+    if w > MAX_SIDE || h > MAX_SIDE || w * h > MAX_PIXELS {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("화면 공유 서버가 너무 큰 화면 크기를 보냈습니다 ({w}x{h})")));
+    }
+    Ok(())
 }
 
 /// An authenticated connection right after ServerInit, before any client setup.
@@ -325,8 +339,15 @@ fn ard_auth(r: &mut impl Read, w: &mut impl Write, user: &str, pass: &str) -> io
 
     let g = BigUint::from(rd_u16(r)?);
     let klen = rd_u16(r)? as usize;
+    // (A server's own key length: Apple's is 128. Zero or tiny would also panic modpow.)
+    if !(16..=512).contains(&klen) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "Apple 인증 키 길이가 올바르지 않습니다"));
+    }
     let p = BigUint::from_bytes_be(&rd_vec(r, klen)?);
     let server_pub = BigUint::from_bytes_be(&rd_vec(r, klen)?);
+    if p <= BigUint::from(2u8) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "Apple 인증 키가 올바르지 않습니다"));
+    }
 
     let mut xb = vec![0u8; klen];
     getrandom::getrandom(&mut xb).map_err(io::Error::other)?;
@@ -359,4 +380,27 @@ fn put_cstr(dst: &mut [u8], s: &str) {
     let n = s.len().min(dst.len() - 1);
     dst[..n].copy_from_slice(&s.as_bytes()[..n]);
     dst[n] = 0;
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn server_screen_sizes_are_bounded() {
+        assert!(super::check_size(5120, 2880).is_ok());
+        assert!(super::check_size(15360, 4320).is_ok()); // three 5K side by side
+        assert!(super::check_size(65535, 65535).is_err());
+        assert!(super::check_size(40000, 10).is_err());
+    }
+
+    #[test]
+    fn apple_auth_rejects_bad_keys_instead_of_panicking() {
+        for (klen, p) in [(0u16, vec![]), (8, vec![0u8; 8]), (128, vec![0u8; 128])] {
+            let mut msg = vec![0, 2];
+            msg.extend_from_slice(&klen.to_be_bytes());
+            msg.extend_from_slice(&p);
+            msg.extend_from_slice(&vec![1u8; klen as usize]);
+            let r = super::ard_auth(&mut std::io::Cursor::new(msg), &mut Vec::new(), "me", "secret");
+            assert!(r.is_err(), "klen {klen}");
+        }
+    }
 }

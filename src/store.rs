@@ -241,6 +241,16 @@ pub fn rdp_key(id: &str) -> Option<String> {
     rdp_keys().remove(id)
 }
 
+/// Forget a connection's Remote Desktop key (its next connection learns it again).
+pub fn forget_rdp_key(id: &str) {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _g = LOCK.lock().unwrap();
+    let mut keys = rdp_keys();
+    if keys.remove(id).is_some() {
+        write_atomic("rdp-keys.json", &serde_json::to_vec(&keys).unwrap_or_default());
+    }
+}
+
 pub fn set_rdp_key(id: &str, key: &str) {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _g = LOCK.lock().unwrap();

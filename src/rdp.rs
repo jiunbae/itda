@@ -102,7 +102,10 @@ fn connect(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>, expect:
     let config = ironrdp_connector::Config {
         credentials: Credentials::UsernamePassword { username, password: pass.to_string() },
         domain,
-        enable_tls: true,
+        // NLA (CredSSP) only. Offering plain TLS too would let a server, or anyone in the
+        // middle (certificates aren't checked), pick it and receive the password itself in
+        // the logon info; ironrdp refuses a selection that wasn't offered.
+        enable_tls: false,
         enable_credssp: true,
         keyboard_type: KeyboardType::IbmEnhanced,
         keyboard_subtype: 0,
@@ -144,7 +147,9 @@ fn connect(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>, expect:
     let (tls, server_key) = tls_upgrade(framed.into_inner_no_leftover(), &name)?;
     let key_id = key_id(&server_key);
     if expect.is_some_and(|e| e != key_id) {
-        return Err(rfb::denied("이 주소의 원격 데스크톱은 저장된 기기가 아닙니다 (서버 키가 다름)"));
+        return Err(rfb::denied(
+            "원격 데스크톱 서버 키가 지난번과 다릅니다. 다른 기기가 응답했을 수 있어 암호를 보내지 않았습니다. 그 PC를 다시 설치했거나 인증서가 바뀐 것이 확실하면 연결의 ⋯ 메뉴에서 ‘원격 데스크톱 서버 키 다시 받기’를 누르세요",
+        ));
     }
     let upgraded = ironrdp_blocking::mark_as_upgraded(upgrade, &mut connector);
     let mut framed = Framed::new(tls);
@@ -223,7 +228,13 @@ fn conn_err(e: ironrdp_connector::ConnectorError) -> io::Error {
     match e.kind() {
         ConnectorErrorKind::AccessDenied => rfb::denied("이 계정은 원격 데스크톱으로 로그인할 수 없습니다 (원격 데스크톱 사용자 권한 확인)"),
         ConnectorErrorKind::Credssp(_) => rfb::denied("RDP 로그인 실패: 사용자 이름 또는 암호가 맞지 않습니다"),
-        ConnectorErrorKind::Negotiation(f) => io::Error::other(format!("원격 데스크톱 보안 협상 실패: {f}")),
+        ConnectorErrorKind::Negotiation(f) => io::Error::other(format!(
+            "원격 데스크톱 보안 협상 실패: {f}. Itda는 암호를 보호하는 네트워크 수준 인증(NLA)으로만 연결합니다. 상대 PC의 원격 데스크톱 설정에서 NLA를 허용하세요"
+        )),
+        // The server chose a protocol without NLA, which wasn't offered.
+        _ if e.to_string().contains("but server selected") => rfb::denied(
+            "이 원격 데스크톱이 네트워크 수준 인증(NLA) 없이 연결하려고 해서 연결하지 않았습니다 (암호 보호). 상대 PC의 원격 데스크톱 설정에서 NLA를 허용하세요",
+        ),
         _ => {
             // Keep the socket error's kind (reset, timeout…) when there is one underneath.
             let mut src: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(&e);
@@ -333,7 +344,7 @@ fn read_client(mut r: BufReader<TcpStream>, tx: Sender<Msg>) -> io::Result<()> {
     }
     loop {
         let m = match rd::<1>(&mut r)?[0] {
-            0 => Msg::Format(PixelFormat::parse(&rd::<19>(&mut r)?[3..])),
+            0 => Msg::Format(PixelFormat::from_viewer(&rd::<19>(&mut r)?[3..])?),
             2 => {
                 let b: [u8; 3] = rd(&mut r)?;
                 let n = u16::from_be_bytes([b[1], b[2]]) as usize;
@@ -991,6 +1002,36 @@ fn us_scancode(ch: char) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+    /// A server (or anyone in the middle) answering with plain TLS instead of NLA gets no TLS
+    /// handshake, so no logon info with the password: the client stops at the confirm.
+    #[test]
+    fn refuses_a_downgrade_to_tls_without_nla() {
+        use std::io::Read;
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut c, _) = l.accept().unwrap();
+            let mut req = [0u8; 4];
+            c.read_exact(&mut req).unwrap();
+            let mut rest = vec![0u8; u16::from_be_bytes([req[2], req[3]]) as usize - 4];
+            c.read_exact(&mut rest).unwrap();
+            // The request offers HYBRID (2) | HYBRID_EX (8), not SSL (1).
+            let offered = u32::from_le_bytes(rest[rest.len() - 4..].try_into().unwrap());
+            // TPKT + X.224 Connection Confirm + RDP_NEG_RSP selecting PROTOCOL_SSL.
+            c.write_all(&[3, 0, 0, 19, 14, 0xd0, 0, 0, 0x12, 0x34, 0, 2, 0, 8, 0, 1, 0, 0, 0]).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut next = Vec::new();
+            let _ = c.read_to_end(&mut next);
+            (offered, next)
+        });
+        let e = open(&format!("127.0.0.1:{port}"), "me", "secret", None, None).err().expect("a TLS-only server must be refused");
+        assert!(e.to_string().contains("NLA"), "{e}");
+        let (offered, next) = server.join().unwrap();
+        assert_eq!(offered & 1, 0, "plain TLS offered: {offered:#x}");
+        assert!(offered & 2 != 0, "NLA not offered: {offered:#x}");
+        assert!(next.is_empty(), "the client went on after the downgrade: {} bytes", next.len());
+    }
+
     use super::*;
 
     /// Converting and comparing only damaged areas sends exactly what a full conversion and

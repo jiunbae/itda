@@ -45,7 +45,17 @@ struct Running {
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 /// Signed-in browser sessions: (token, since, from the local listener).
 static TOKENS: Mutex<Vec<(String, Instant, bool)>> = Mutex::new(Vec::new());
-static FAILS: Mutex<(u32, Option<Instant>)> = Mutex::new((0, None));
+/// Wrong PINs per source (address): (count, locked until). One device guessing locks only
+/// itself out; ALL_FAILS bounds guessing from many addresses at once.
+static FAILS: Mutex<Option<Fails>> = Mutex::new(None);
+const MAX_ALL_FAILS: u32 = 50;
+const MAX_SOURCES: usize = 1024;
+
+#[derive(Default)]
+struct Fails {
+    per: HashMap<std::net::IpAddr, (u32, Option<Instant>)>,
+    all: (u32, Option<Instant>),
+}
 /// Open browser sessions of the web viewer, closed when it stops.
 static LIVE: Mutex<Vec<TcpStream>> = Mutex::new(Vec::new());
 // Native monitor views share a relay; closing the final view must stop both sockets,
@@ -136,6 +146,13 @@ fn random_token() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+static OPEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+const MAX_CONNECTIONS: usize = 128;
+/// A request line or header longer than this, or a head slower than REQUEST_TIME, ends the
+/// connection (before anyone has signed in, so it must not hold memory or a thread for long).
+const MAX_LINE: u64 = 8 << 10;
+const REQUEST_TIME: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 15 });
+
 /// Blocking accept, so a new connection is served at once; `stop()` wakes it with a connect.
 fn serve(l: TcpListener, local: bool, stop: Arc<AtomicBool>) -> io::Result<std::thread::JoinHandle<()>> {
     Ok(std::thread::spawn(move || {
@@ -143,12 +160,20 @@ fn serve(l: TcpListener, local: bool, stop: Arc<AtomicBool>) -> io::Result<std::
             match l.accept() {
                 Ok(_) if stop.load(Relaxed) => break,
                 Ok((c, peer)) => {
+                    // Each connection has its own thread: past MAX_CONNECTIONS (viewer windows,
+                    // file panes and page loads stay far below it) new ones are turned away.
+                    if OPEN.fetch_add(1, Relaxed) >= MAX_CONNECTIONS {
+                        OPEN.fetch_sub(1, Relaxed);
+                        drop(c);
+                        continue;
+                    }
                     // Small frames (cursor, one tile) must not wait for Nagle + delayed ACK.
                     let _ = c.set_nodelay(true);
                     std::thread::spawn(move || {
                         if let Err(e) = handle(c, peer, local) {
                             crate::log!("web {peer}: {e}");
                         }
+                        OPEN.fetch_sub(1, Relaxed);
                     });
                 }
                 Err(e) => {
@@ -177,7 +202,7 @@ pub fn stop() {
         let _ = s.shutdown(Shutdown::Both);
     }
     TOKENS.lock().unwrap().retain(|t| t.2);
-    *FAILS.lock().unwrap() = (0, None);
+    *FAILS.lock().unwrap() = None;
 }
 
 /// Addresses other devices can use: every LAN IPv4 (Tailscale's 100.x included).
@@ -241,30 +266,72 @@ struct Req {
     body: Vec<u8>,
 }
 
+/// Wait for more of the request, but never past `deadline` (each read gets only what is left,
+/// so a client sending a byte at a time can't stretch it).
+fn more(r: &mut BufReader<TcpStream>, deadline: Instant) -> io::Result<&[u8]> {
+    let left = deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero());
+    let left = left.ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "request too slow"))?;
+    r.get_ref().set_read_timeout(Some(left))?;
+    r.fill_buf()
+}
+
+/// One line of the request head, at most MAX_LINE long.
+fn head_line(r: &mut BufReader<TcpStream>, deadline: Instant) -> io::Result<String> {
+    let mut line = Vec::new();
+    loop {
+        let buf = more(r, deadline)?;
+        if buf.is_empty() {
+            break; // closed
+        }
+        let take = buf.iter().position(|&b| b == b'\n').map_or(buf.len(), |i| i + 1);
+        line.extend_from_slice(&buf[..take]);
+        r.consume(take);
+        if line.len() as u64 > MAX_LINE {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "request line too long"));
+        }
+        if line.ends_with(b"\n") {
+            break;
+        }
+    }
+    Ok(String::from_utf8_lossy(&line).into_owned())
+}
+
 fn read_req(r: &mut BufReader<TcpStream>) -> io::Result<Req> {
-    let mut line = String::new();
-    r.read_line(&mut line)?;
+    let started = Instant::now() + REQUEST_TIME;
+    let line = head_line(r, started)?;
     let mut it = line.split_whitespace();
     let method = it.next().unwrap_or("").to_string();
     let target = it.next().unwrap_or("/");
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let (path, query) = (path.to_string(), query.to_string());
     let mut headers = HashMap::new();
+    let mut lines = 0;
     loop {
-        let mut h = String::new();
-        if r.read_line(&mut h)? == 0 || h.trim().is_empty() {
+        let h = head_line(r, started)?;
+        if h.is_empty() || h.trim().is_empty() {
             break;
         }
         if let Some((k, v)) = h.split_once(':') {
             headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
         }
-        if headers.len() > 64 {
+        lines += 1;
+        if lines > 64 {
             return Err(io::Error::other("too many headers"));
         }
     }
     let len: usize = headers.get("content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let mut body = vec![0; len.min(64 << 10)];
-    r.read_exact(&mut body)?;
+    let mut body = Vec::with_capacity(len.min(64 << 10));
+    while body.len() < len.min(64 << 10) {
+        let buf = more(r, started)?;
+        if buf.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "request body cut short"));
+        }
+        let take = buf.len().min(len.min(64 << 10) - body.len());
+        body.extend_from_slice(&buf[..take]);
+        r.consume(take);
+    }
+    // (Back to the per-read timeout for what follows, e.g. a WebSocket.)
+    r.get_ref().set_read_timeout(Some(Duration::from_secs(15)))?;
     Ok(Req { method, path, query, headers, body })
 }
 
@@ -351,27 +418,56 @@ fn same_origin(req: &Req) -> bool {
     }
 }
 
-fn login(c: &mut TcpStream, req: &Req) -> io::Result<()> {
+/// Who is signing in, for counting wrong PINs: the peer, or behind `tailscale serve` (which
+/// connects from this machine) the address it forwards for.
+fn source(req: &Req, peer: SocketAddr) -> std::net::IpAddr {
+    let fwd = || req.headers.get("x-forwarded-for").and_then(|v| v.split(',').next()).and_then(|v| v.trim().parse().ok());
+    if peer.ip().is_loopback() { fwd().unwrap_or(peer.ip()) } else { peer.ip() }
+}
+
+fn login(c: &mut TcpStream, req: &Req, peer: SocketAddr) -> io::Result<()> {
+    let from = source(req, peer);
+    // (A lock that has run out starts the count afresh.)
+    let locked = |f: &mut (u32, Option<Instant>)| match f.1 {
+        Some(until) if Instant::now() < until => true,
+        Some(_) => { *f = (0, None); false }
+        None => false,
+    };
     {
-        let mut f = FAILS.lock().unwrap();
-        if let Some(until) = f.1 {
-            if Instant::now() < until {
-                return json_resp(c, "429 Too Many Requests", json!({"error": "잠시 후 다시 시도하세요 (PIN을 여러 번 틀렸습니다)"}));
-            }
-            *f = (0, None);
+        let mut g = FAILS.lock().unwrap();
+        let f = g.get_or_insert_with(Fails::default);
+        if locked(&mut f.all) || f.per.get_mut(&from).is_some_and(locked) {
+            return json_resp(c, "429 Too Many Requests", json!({"error": "잠시 후 다시 시도하세요 (PIN을 여러 번 틀렸습니다)"}));
         }
     }
     let pin = serde_json::from_slice::<serde_json::Value>(&req.body).ok().and_then(|v| v["pin"].as_str().map(str::to_string)).unwrap_or_default();
     if !eq_ct(pin.trim().as_bytes(), store::web_pin(false).as_bytes()) {
-        let mut f = FAILS.lock().unwrap();
-        f.0 += 1;
-        if f.0 >= MAX_FAILS {
-            f.1 = Some(Instant::now() + LOCKOUT);
+        let mut g = FAILS.lock().unwrap();
+        let f = g.get_or_insert_with(Fails::default);
+        if !f.per.contains_key(&from) && f.per.len() >= MAX_SOURCES {
+            // Bounded memory: keep the sources still locked out; past that, only the total counts.
+            f.per.retain(|_, x| x.1.is_some_and(|u| Instant::now() < u));
         }
-        crate::log!("web: wrong PIN ({})", f.0);
+        let n = if f.per.contains_key(&from) || f.per.len() < MAX_SOURCES {
+            let mine = f.per.entry(from).or_insert((0, None));
+            mine.0 += 1;
+            if mine.0 >= MAX_FAILS {
+                mine.1 = Some(Instant::now() + LOCKOUT);
+            }
+            mine.0
+        } else {
+            0
+        };
+        f.all.0 += 1;
+        if f.all.0 >= MAX_ALL_FAILS {
+            f.all.1 = Some(Instant::now() + LOCKOUT);
+        }
+        crate::log!("web: wrong PIN from {from} ({n})");
         return json_resp(c, "401 Unauthorized", json!({"error": "PIN이 맞지 않습니다"}));
     }
-    *FAILS.lock().unwrap() = (0, None);
+    if let Some(f) = FAILS.lock().unwrap().as_mut() {
+        f.per.remove(&from);
+    }
     let cookie = new_session(false);
     respond(c, "200 OK", "application/json; charset=utf-8", &cookie, b"{\"ok\":true}")
 }
@@ -690,7 +786,7 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
         ("GET", "/icon-512.png") => asset(&mut c, &req, "image/png", ICON_PNG_512),
         ("GET", "/sw.js") => respond(&mut c, "200 OK", "text/javascript; charset=utf-8", "", SW.as_bytes()),
         ("GET", "/auth") if local => local_auth(&mut c, &req),
-        ("POST", "/api/login") if same_origin(&req) && !local => login(&mut c, &req),
+        ("POST", "/api/login") if same_origin(&req) && !local => login(&mut c, &req, peer),
         ("POST", "/api/logout") if same_origin(&req) => {
             if let Some(t) = token_of(&req) {
                 TOKENS.lock().unwrap().retain(|(k, _, _)| *k != t);
@@ -711,7 +807,10 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
         ("POST", "/api/edit") if ok && same_origin(&req) => edit(&mut c, &req),
         ("GET", _) if ok && p.starts_with("/thumb/") => {
             let id = p.trim_start_matches("/thumb/").trim_end_matches(".png");
-            match std::fs::read(store::shown_thumb_path(id)).ok().filter(|_| id.chars().all(|c| c.is_ascii_hexdigit())) {
+            // (The id is checked before it becomes a path: on Windows a "\\\\host\\share" one
+            // would otherwise reach out over SMB.)
+            let id = Some(id).filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit()));
+            match id.and_then(|id| std::fs::read(store::shown_thumb_path(id)).ok()) {
                 // Asked for by version (?v=), so the browser may keep it.
                 Some(b) => send(&mut c, "200 OK", "image/png", "private, max-age=86400", "", &b),
                 None => respond(&mut c, "404 Not Found", "text/plain", "", b"not found"),
@@ -793,10 +892,14 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
     let host = &host.reachable();
     let at_lan = !host.key_alias.is_empty();
     if host.is_rdp() {
-        // At its LAN address the server must show the key it had at its own address.
-        let expect = if at_lan { Some(store::rdp_key(&host.id).ok_or_else(|| rfb::denied("저장된 기기인지 확인할 수 없어 같은 네트워크 주소로 연결하지 않았습니다"))?) } else { None };
-        let (raw, key) = crate::rdp::open(&host.host, &login.user, &pass, size.filter(|_| host.opts.resize), expect.as_deref())?;
-        if !at_lan {
+        // The server must show the key it had the first time (checked before the login goes
+        // out); at the LAN address there must be one already.
+        let saved = store::rdp_key(&host.id);
+        if at_lan && saved.is_none() {
+            return Err(rfb::denied("저장된 기기인지 확인할 수 없어 같은 네트워크 주소로 연결하지 않았습니다"));
+        }
+        let (raw, key) = crate::rdp::open(&host.host, &login.user, &pass, size.filter(|_| host.opts.resize), saved.as_deref())?;
+        if saved.is_none() {
             store::set_rdp_key(&host.id, &key);
         }
         return Ok(raw);
@@ -921,6 +1024,66 @@ fn kind_code(kind: &str) -> u16 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wrong_pins_count_per_source() {
+        let req = |xff: Option<&str>| super::Req { method: "POST".into(), path: "/api/login".into(), query: String::new(), headers: xff.map(|v| [("x-forwarded-for".to_string(), v.to_string())].into_iter().collect()).unwrap_or_default(), body: Vec::new() };
+        let lan: std::net::SocketAddr = "192.168.0.9:5000".parse().unwrap();
+        let local: std::net::SocketAddr = "127.0.0.1:5000".parse().unwrap();
+        // Direct clients can't pick their own source with a header.
+        assert_eq!(super::source(&req(Some("10.9.9.9")), lan), lan.ip());
+        // Behind tailscale serve (from this machine): the address it forwards for.
+        assert_eq!(super::source(&req(Some("100.64.1.2, 127.0.0.1")), local).to_string(), "100.64.1.2");
+        assert_eq!(super::source(&req(None), local), local.ip());
+    }
+
+    #[test]
+    fn request_heads_are_bounded() {
+        use std::io::Write;
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let send = |bytes: Vec<u8>| {
+            let mut c = std::net::TcpStream::connect(addr).unwrap();
+            std::thread::spawn(move || { let _ = c.write_all(&bytes); std::thread::sleep(std::time::Duration::from_millis(200)); });
+            let (s, _) = l.accept().unwrap();
+            super::read_req(&mut std::io::BufReader::new(s))
+        };
+        let ok = send(b"GET /x?a=1 HTTP/1.1\r\nHost: h\r\n\r\n".to_vec()).unwrap();
+        assert_eq!((ok.path.as_str(), ok.query.as_str()), ("/x", "a=1"));
+        // A line without an end, longer than MAX_LINE: refused, not buffered without limit.
+        let mut long = b"GET /".to_vec();
+        long.resize(super::MAX_LINE as usize * 4, b'a');
+        assert!(send(long).is_err());
+        let mut header = b"GET / HTTP/1.1\r\nX: ".to_vec();
+        header.resize(super::MAX_LINE as usize * 2, b'b');
+        assert!(send(header).is_err());
+        // A byte at a time stays under every per-read timeout but not the whole-head deadline.
+        let mut c = std::net::TcpStream::connect(addr).unwrap();
+        let drip = std::thread::spawn(move || {
+            for b in b"GET /slow HTTP/1.1\r\nHost: h\r\n\r\n".iter().cycle().take(400) {
+                if c.write_all(&[*b]).is_err() { break; }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        let (s, _) = l.accept().unwrap();
+        let t = std::time::Instant::now();
+        let r = super::read_req(&mut std::io::BufReader::new(s));
+        // (The first 30 bytes make a whole request well within the deadline.)
+        assert!(r.is_ok() && t.elapsed() < super::REQUEST_TIME, "{:?}", r.err());
+        let _ = drip.join();
+        let mut c = std::net::TcpStream::connect(addr).unwrap();
+        let drip = std::thread::spawn(move || {
+            for _ in 0..200 {
+                if c.write_all(b"a").is_err() { break; }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        let (s, _) = l.accept().unwrap();
+        let t = std::time::Instant::now();
+        let r = super::read_req(&mut std::io::BufReader::new(s));
+        assert!(r.is_err() && t.elapsed() < super::REQUEST_TIME + std::time::Duration::from_millis(500), "slow head allowed for {:?}", t.elapsed());
+        let _ = drip.join();
+    }
+
     use super::*;
 
     #[test]

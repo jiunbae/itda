@@ -259,7 +259,13 @@ pub fn run(c: Conn, l: Launch) {
     let Conn { sess, addr, dial, secure, creds } = c;
     SWAP.store(l.opts.swap, Relaxed);
     VIEW_ONLY.store(l.opts.view_only, Relaxed);
-    net::init(sess.writer, sess.width, sess.height);
+    if let Err(e) = net::init(sess.writer, sess.width, sess.height) {
+        crate::session::emit(serde_json::json!({"ev": "error", "kind": "other", "msg": e.to_string()}));
+        if !crate::session::managed() {
+            message(&e.to_string(), true);
+        }
+        return;
+    }
     sh().auto_reconnect.store(l.opts.reconnect, Relaxed);
     set_view(View { actual: l.opts.actual, ..View::default() });
     let toolbar_mode = if l.toolbar.is_empty() { "auto".to_string() } else { l.toolbar.clone() };

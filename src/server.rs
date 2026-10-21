@@ -288,10 +288,10 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
         // The waker keeps the channel open, so say when the viewer is gone (also on a panic).
         let gone = Gone(tx);
         let mut input = platform::Input::new(cfg2.cmd_as_ctrl, cfg2.view_only);
-        let _ = read_client(BufReader::new(reader), &gone.0, &mut input);
+        let _ = read_client(BufReader::new(reader), &gone.0, &mut input, cfg2.view_only);
         input.release_all();
     });
-    let r = Outbox::new(c.try_clone()?).and_then(|out| pump(&out, &rx, &woken, &cap, size, stop));
+    let r = Outbox::new(c.try_clone()?).and_then(|out| pump(&out, &rx, &woken, &cap, size, stop, cfg.view_only));
     drop(waker);
     let _ = c.shutdown(Shutdown::Both);
     VIEWERS.lock().unwrap().retain(|(i, _, _)| *i != id);
@@ -301,7 +301,8 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
 }
 
 /// Client → server messages. Input is applied right here; the rest goes to the pump.
-fn read_client(mut r: BufReader<TcpStream>, tx: &Sender<Msg>, input: &mut platform::Input) -> io::Result<()> {
+/// `view_only`: besides input, the viewer's clipboard isn't taken either.
+fn read_client(mut r: BufReader<TcpStream>, tx: &Sender<Msg>, input: &mut platform::Input, view_only: bool) -> io::Result<()> {
     loop {
         // A held Ctrl/Alt/Win must not outlive the person holding it: a phone that goes to
         // sleep mid-gesture keeps the socket open but silent, and the PC would keep zooming
@@ -325,7 +326,7 @@ fn read_client(mut r: BufReader<TcpStream>, tx: &Sender<Msg>, input: &mut platfo
         match t {
             0 => {
                 let b: [u8; 19] = rd(&mut r)?;
-                let _ = tx.send(Msg::Format(PixelFormat::parse(&b[3..])));
+                let _ = tx.send(Msg::Format(PixelFormat::from_viewer(&b[3..])?));
             }
             2 => {
                 let b: [u8; 3] = rd(&mut r)?;
@@ -351,7 +352,7 @@ fn read_client(mut r: BufReader<TcpStream>, tx: &Sender<Msg>, input: &mut platfo
                 let n = i32::from_be_bytes([b[3], b[4], b[5], b[6]]);
                 let mut d = vec![0u8; n.unsigned_abs().min(16 << 20) as usize];
                 r.read_exact(&mut d)?;
-                if n > 0 {
+                if n > 0 && !view_only {
                     let text = String::from_utf8(d).unwrap_or_else(|e| e.into_bytes().iter().map(|&b| b as char).collect());
                     platform::clipboard_set(&text);
                 }
@@ -452,7 +453,7 @@ impl Drop for Gone {
     }
 }
 
-fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platform::Capture>, mut size: (usize, usize), stop: &AtomicBool) -> io::Result<()> {
+fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platform::Capture>, mut size: (usize, usize), stop: &AtomicBool, view_only: bool) -> io::Result<()> {
     let mut pf = PixelFormat::parse(&PIXEL_FORMAT);
     let mut encs: Vec<i32> = Vec::new();
     let mut demand = Demand::default();
@@ -538,8 +539,8 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
             next = rx.try_recv().ok();
         }
         out.send(reply)?;
-        // Local clipboard changed → offer it to the viewer.
-        if clip_check.elapsed() > Duration::from_millis(500) {
+        // Local clipboard changed → offer it to the viewer (not one that may only watch).
+        if !view_only && clip_check.elapsed() > Duration::from_millis(500) {
             clip_check = Instant::now();
             let seq = platform::clipboard_seq();
             if seq != clip_seq {

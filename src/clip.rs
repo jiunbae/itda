@@ -79,7 +79,8 @@ pub fn on_extended(s: &Shared, p: &[u8]) {
         }
     } else if flags & PROVIDE != 0 && flags & TEXT != 0 {
         let mut inner = Vec::new();
-        let _ = ZlibDecoder::new(data).read_to_end(&mut inner);
+        // (At most 16 MB of text: a small compressed message must not expand without end.)
+        let _ = ZlibDecoder::new(data).take(16 << 20).read_to_end(&mut inner);
         if inner.len() < 4 {
             return;
         }

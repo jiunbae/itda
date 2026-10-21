@@ -23,6 +23,17 @@ impl PixelFormat {
         PixelFormat { bpp: b[0], big_endian: b[2] != 0, max: [u16_at(4), u16_at(6), u16_at(8)], shift: [b[10], b[11], b[12]] }
     }
 
+    /// A viewer's SetPixelFormat: only what this encoder can write (true colour in 8, 16 or 32
+    /// bits, each channel inside the pixel); anything else ends the connection.
+    pub fn from_viewer(b: &[u8]) -> std::io::Result<PixelFormat> {
+        let pf = PixelFormat::parse(b);
+        let fits = pf.shift.iter().zip(pf.max).all(|(&s, m)| m > 0 && (s as u32) + (32 - (m as u32).leading_zeros()) <= pf.bpp as u32);
+        if ![8, 16, 32].contains(&pf.bpp) || b[3] == 0 || !fits {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported pixel format"));
+        }
+        Ok(pf)
+    }
+
     pub fn bytes(&self) -> usize {
         (self.bpp as usize / 8).max(1)
     }
@@ -376,6 +387,21 @@ fn solid<'a>(rows: impl Iterator<Item = &'a [u32]>, pal: &mut [u32; 16]) -> usiz
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn viewer_pixel_formats_are_checked() {
+        // bpp, depth, big endian, true colour, max r/g/b, shift r/g/b
+        let pf = |bpp: u8, tc: u8, max: u16, shift: [u8; 3]| {
+            let m = max.to_be_bytes();
+            [bpp, 24, 0, tc, m[0], m[1], m[0], m[1], m[0], m[1], shift[0], shift[1], shift[2], 0, 0, 0]
+        };
+        assert!(PixelFormat::from_viewer(&pf(32, 1, 255, [16, 8, 0])).is_ok());
+        assert!(PixelFormat::from_viewer(&pf(16, 1, 31, [10, 5, 0])).is_ok());
+        assert!(PixelFormat::from_viewer(&pf(8, 1, 3, [4, 2, 0])).is_ok());
+        for bad in [pf(248, 1, 255, [16, 8, 0]), pf(24, 1, 255, [16, 8, 0]), pf(32, 0, 255, [16, 8, 0]), pf(32, 1, 255, [200, 8, 0]), pf(16, 1, 255, [10, 5, 0]), pf(32, 1, 0, [16, 8, 0])] {
+            assert!(PixelFormat::from_viewer(&bad).is_err(), "{bad:?}");
+        }
+    }
+
     use super::*;
     use crate::rfb::PIXEL_FORMAT;
 

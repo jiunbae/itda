@@ -38,7 +38,7 @@ pub fn newer(v: &str, than: &str) -> bool {
 }
 
 fn curl() -> Command {
-    let mut c = Command::new(if cfg!(windows) { "curl.exe" } else { "/usr/bin/curl" });
+    let mut c = Command::new(if cfg!(windows) { system_tool("curl.exe") } else { "/usr/bin/curl".into() });
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -236,7 +236,7 @@ fn swap(dir: &Path, new: &Path) -> io::Result<()> {
     // swallow them as more source text).
     let helper = std::env::temp_dir().join("itda-update-restart.ps1");
     std::fs::write(&helper, "param([int]$ProcessId, [string]$Exe)\r\nWait-Process -Id $ProcessId -ErrorAction SilentlyContinue\r\nStart-Process -FilePath $Exe\r\n")?;
-    let mut c = Command::new("powershell.exe");
+    let mut c = Command::new(system_tool("powershell.exe"));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -272,6 +272,19 @@ pub fn cleanup() {
     if let Ok(exe) = std::env::current_exe() {
         let _ = std::fs::remove_file(exe.with_extension("exe.old"));
     }
+}
+
+/// A Windows tool from the system folder by full path, so a file of the same name next to
+/// Itda (the default search looks there first) can't stand in for it. Elsewhere: the name.
+pub fn system_tool(exe: &str) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        let root = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap_or_else(|| r"C:\Windows".into());
+        let sub = if exe.eq_ignore_ascii_case("powershell.exe") { r"System32\WindowsPowerShell\v1.0" } else { "System32" };
+        return root.join(sub).join(exe);
+    }
+    #[allow(unreachable_code)]
+    std::path::PathBuf::from(exe)
 }
 
 #[cfg(test)]
