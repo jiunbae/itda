@@ -392,8 +392,9 @@ fn local_auth(c: &mut TcpStream, req: &Req) -> io::Result<()> {
         return respond(c, "403 Forbidden", "text/plain", "", b"forbidden");
     }
     let open: String = arg("open=").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    let trace = if arg("trace=") == "1" { "&trace=1" } else { "" };
     let cookie = new_session(true);
-    respond(c, "302 Found", "text/plain", &format!("{cookie}Location: /?open={open}\r\n"), b"")
+    respond(c, "302 Found", "text/plain", &format!("{cookie}Location: /?open={open}{trace}\r\n"), b"")
 }
 
 /// The address-book entry that stands for this PC itself (when "Share this PC" is on).

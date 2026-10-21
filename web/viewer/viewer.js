@@ -57,17 +57,20 @@ const APP = !!(OPEN && window.ipc);
 const post = (m) => { try { window.ipc.postMessage(JSON.stringify(m)); } catch (_) {} };
 
 // Where an H.264 frame spends its time in this viewer (TRACE only), p50/p95 in ms every 5 s:
-//   decode  — handed to the VideoDecoder → decoded picture out
-//   draw    — decoded → drawn to the visible canvas (noVNC's flip)
-//   present — drawn → the next animation frame, when the compositor takes it up (about the
-//             next display refresh; the glass itself is one refresh later)
-// Frames leave the decoder in order, so each step pairs with the oldest one waiting for it.
+//   decode  — handed to its VideoDecoder → that frame out (matched by the chunk's timestamp)
+//   draw    — decoded → copied to the visible canvas (noVNC draws it to its back buffer, then
+//             a flip copies that to the screen canvas)
+//   nextRaf — on the visible canvas → the next animation-frame callback: when the browser
+//             next gets to render, a scheduling proxy, not when the glass shows it
+// `counts` keeps totals since the start (for tests).
 const viewerTrace = (() => {
-  const stats = { decode: [], draw: [], present: [] };
-  const submitted = [], decoded = [];
+  const stats = { decode: [], draw: [], nextRaf: [] };
+  const counts = { decode: 0, draw: 0, nextRaf: 0 };
+  const decodedAt = new WeakMap(); // VideoFrame → when it came out of its decoder
   let since = performance.now();
   const add = (k, ms) => {
     stats[k].push(ms);
+    counts[k]++;
     if (performance.now() - since < 5000) return;
     const q = (v, p) => v[Math.min(v.length - 1, Math.round((v.length - 1) * p))];
     const text = Object.entries(stats).filter(([, v]) => v.length).map(([k, v]) => {
@@ -83,24 +86,51 @@ const viewerTrace = (() => {
     const Base = window.VideoDecoder;
     window.VideoDecoder = class extends Base {
       constructor(init) {
-        super({ ...init, output: (f) => { const t = submitted.shift(); if (t !== undefined) { add('decode', performance.now() - t); decoded.push(performance.now()); } init.output(f); } });
+        // This decoder's frames in flight: chunk timestamp → when it was handed over.
+        const submitted = new Map();
+        super({ ...init, output: (f) => {
+          const t = submitted.get(f.timestamp);
+          submitted.delete(f.timestamp);
+          if (t !== undefined) {
+            const now = performance.now();
+            add('decode', now - t);
+            decodedAt.set(f, now);
+          }
+          init.output(f);
+        } });
+        this.itdaSubmitted = submitted;
       }
-      decode(chunk) { submitted.push(performance.now()); return super.decode(chunk); }
-      reset() { submitted.length = 0; return super.reset(); }
+      decode(chunk) {
+        if (this.itdaSubmitted.size > 64) this.itdaSubmitted.clear(); // (errors leave entries)
+        this.itdaSubmitted.set(chunk.timestamp, performance.now());
+        return super.decode(chunk);
+      }
+      reset() { this.itdaSubmitted.clear(); return super.reset(); }
+      close() { this.itdaSubmitted.clear(); return super.close(); }
     };
   }
   return {
+    counts,
     attach(rfb) {
       const d = rfb._display;
-      if (!d || typeof d.flip !== 'function') return;
-      const flip = d.flip.bind(d);
-      d.flip = (...a) => {
-        const r = flip(...a);
-        const t = decoded.shift();
-        if (t !== undefined) {
-          const drawn = performance.now();
-          add('draw', drawn - t);
-          requestAnimationFrame(() => add('present', performance.now() - drawn));
+      const back = d && d._drawCtx, screen = d && d._targetCtx;
+      if (!back || !screen) return;
+      // The newest decoded frame drawn to the back buffer and not yet on the visible canvas.
+      let pending;
+      const toBack = back.drawImage.bind(back);
+      back.drawImage = (img, ...a) => {
+        const t = decodedAt.get(img);
+        if (t !== undefined) pending = t;
+        return toBack(img, ...a);
+      };
+      const toScreen = screen.drawImage.bind(screen);
+      screen.drawImage = (img, ...a) => {
+        const r = toScreen(img, ...a);
+        if (pending !== undefined && img === d._backbuffer) {
+          const now = performance.now();
+          add('draw', now - pending);
+          pending = undefined;
+          requestAnimationFrame(() => add('nextRaf', performance.now() - now));
         }
         return r;
       };

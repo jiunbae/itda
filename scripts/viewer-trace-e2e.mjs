@@ -1,6 +1,8 @@
 // The viewer's ITDA_HP_TRACE timing (web/viewer/viewer.js, viewerTrace) in a real browser: a
 // real H.264 key frame through the patched VideoDecoder, a drawn frame, and the 5 s report
-// with decode/draw/present. Off without trace=1: VideoDecoder is left alone.
+// with decode/draw/nextRaf, two decoders paired by their own frames, and flips without a new
+// frame not counted. Off without trace=1: VideoDecoder is left alone.
+// The real noVNC render path is covered by h264_e2e (ENGINE=webkit scripts/h264-e2e.mjs).
 //   PLAYWRIGHT=/path/to/playwright/index.mjs ENGINE=webkit [WEBKIT=/path/to/pw_run.sh] node scripts/viewer-trace-e2e.mjs
 // (ENGINE=chromium with CHROMIUM=…: Chromium's own builds have no H.264 and skip.)
 import http from "node:http";
@@ -32,24 +34,35 @@ try {
     const TRACE = trace, post = (m) => posted.push(m);
     const viewerTrace = (0, eval)(`(TRACE, post) => { ${block}; return viewerTrace; }`)(TRACE, post);
     const patched = window.VideoDecoder !== Original;
-    // A display whose flip draws the decoded frame, like noVNC's.
-    const display = { flip() {} };
+    // A display like noVNC's: frames go to a back buffer, a flip copies it to the screen canvas.
+    const mk = () => { const c = document.createElement('canvas'); c.width = 64; c.height = 64; return c; };
+    const backbuffer = mk(), screen = mk();
+    const display = { _backbuffer: backbuffer, _drawCtx: backbuffer.getContext('2d'), _targetCtx: screen.getContext('2d') };
     viewerTrace.attach({ _display: display });
+    const flip = () => display._targetCtx.drawImage(display._backbuffer, 0, 0);
     let frames = 0;
-    const dec = new VideoDecoder({ output: (f) => { frames++; f.close(); display.flip(); }, error: (e) => { throw e; } });
-    dec.configure({ codec: "avc1.42401f", codedWidth: 1920, codedHeight: 1080, optimizeForLatency: true });
+    const decoder = () => new VideoDecoder({ output: (f) => { frames++; display._drawCtx.drawImage(f, 0, 0, 64, 64); f.close(); flip(); }, error: (e) => { throw e; } });
     const data = Uint8Array.from(atob(key), (c) => c.charCodeAt(0));
-    dec.decode(new EncodedVideoChunk({ timestamp: 0, type: "key", data }));
-    await dec.flush();
+    const cfg = { codec: "avc1.42401f", codedWidth: 1920, codedHeight: 1080, optimizeForLatency: true };
+    // Two decoders (noVNC keeps one per rectangle): each frame pairs with its own decoder's.
+    const a = decoder(), b = decoder();
+    a.configure(cfg); b.configure(cfg);
+    a.decode(new EncodedVideoChunk({ timestamp: 10, type: "key", data }));
+    b.decode(new EncodedVideoChunk({ timestamp: 20, type: "key", data }));
+    await Promise.all([a.flush(), b.flush()]);
+    // A flip with nothing new decoded, and a non-video draw, count as no frame.
+    flip();
+    display._drawCtx.fillRect(0, 0, 8, 8); flip();
     await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 50)));
+    const early = { ...viewerTrace.counts };
     if (trace) {
       // The next frame after 5 s triggers the report.
       await new Promise((r) => setTimeout(r, 5100));
-      dec.decode(new EncodedVideoChunk({ timestamp: 1, type: "key", data }));
-      await dec.flush();
+      a.decode(new EncodedVideoChunk({ timestamp: 30, type: "key", data }));
+      await a.flush();
     }
     window.VideoDecoder = Original;
-    return { patched, frames, posted };
+    return { patched, frames, posted, early };
   }, [block, key, trace]);
   // Builds without H.264 (Chromium's own) can't decode it, and noVNC wouldn't use it there.
   const decodes = await page.evaluate(async (key) => {
@@ -66,11 +79,13 @@ try {
     process.exit(0);
   }
   const off = await run(false);
-  assert(!off.patched && off.frames === 1 && off.posted.length === 0, `trace off changed something: ${JSON.stringify(off)}`);
+  assert(!off.patched && off.frames === 2 && off.posted.length === 0, `trace off changed something: ${JSON.stringify(off)}`);
   const on = await run(true);
-  assert(on.patched && on.frames === 2, `decoder: ${JSON.stringify(on)}`);
+  assert(on.patched && on.frames === 3, `decoder: ${JSON.stringify(on)}`);
+  // Two decoded frames, each drawn and copied once; the empty flip and the plain draw added none.
+  assert(on.early.decode === 2 && on.early.draw === 2 && on.early.nextRaf === 2, `counts ${JSON.stringify(on.early)}`);
   const report = on.posted.find((m) => m.ev === "trace");
-  assert(report && /decode n=\d+ p50=[\d.]+/.test(report.text) && /draw n=\d+/.test(report.text) && /present n=\d+/.test(report.text), `report: ${JSON.stringify(on.posted)}`);
+  assert(report && /decode n=\d+ p50=[\d.]+/.test(report.text) && /draw n=\d+/.test(report.text) && /nextRaf n=\d+/.test(report.text), `report: ${JSON.stringify(on.posted)}`);
   console.log(`PASS (${engine}): trace off leaves VideoDecoder alone; on: ${report.text}`);
 } finally {
   await browser.close();
