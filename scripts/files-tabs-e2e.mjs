@@ -24,8 +24,8 @@ try{
   await c.addInitScript(()=>{
    const entry=(name,dir=false)=>({name,dir,size:100,modified:1780000000});
    // studio and build answer; slow never finishes connecting (used for cancel).
-   const homes={studio:'/Users/alex',build:'/home/dev'};
-   const tree={'/Users/alex':[entry('Docs',true),entry('Alpha-A.txt')],'/Users/alex/Docs':[entry('Inside-A.txt')],'/home/dev':[entry('Beta-B.txt')],'/local':[entry('Local.txt')]};
+   const homes={studio:'/Users/alex',build:'/home/dev',fresh:'/fresh'};
+   const tree={'/Users/alex':[entry('Docs',true),entry('Alpha-A.txt')],'/Users/alex/Docs':[entry('Inside-A.txt')],'/home/dev':[entry('Beta-B.txt')],'/fresh':[entry('Fresh.txt')],'/local':[entry('Local.txt')]};
    window.testPackets=[];
    window.ipc={postMessage:raw=>{const m=JSON.parse(raw);if(m.cmd==='files_clipboard'||m.cmd==='files_sort'){testPackets.push(m);return;}if(m.cmd!=='files')return;testPackets.push(m);
     const result={...m,type:'files_result',ok:true};
@@ -38,7 +38,7 @@ try{
   const p=await c.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
   if(platform==='windows'&&process.platform!=='win32')await p.route('**/icons.js',route=>route.fulfill({contentType:'text/javascript',body:fs.readFileSync(path.join(root,'web/icons.js'),'utf8').replace('if (/Windows/.test(navigator.userAgent)) return;','')}));
   await p.goto(base+'/web/');
-  const launch=()=>p.evaluate(()=>{const files={method:'sftp',user:'alex'};S.hosts=[{id:'studio',name:'Studio Mac',host:'studio.local',os:'mac',kind:'vnc',login_user:'alex',has_pw:true,files},{id:'build',name:'Build Server',host:'build.local',os:'linux',kind:'vnc',login_user:'dev',has_pw:true,files},{id:'slow',name:'Slow Box',host:'slow.local',os:'linux',kind:'vnc',login_user:'dev',has_pw:true,files}];S.settings={...S.settings,onboarded:true,theme:'light'};render();ItdaFiles.message({type:'state',files_clipboard:{cid:'before-window',host:'build',window:'prior-page',side:'remote',path:'/home/dev',names:['Beta-B.txt'],move:false}});ItdaFiles.launch(S.hosts[0]);});
+  const launch=()=>p.evaluate(()=>{const files={method:'sftp',user:'alex'};S.hosts=[{id:'studio',name:'Studio Mac',host:'studio.local',os:'mac',kind:'vnc',login_user:'alex',has_pw:true,files},{id:'build',name:'Build Server',host:'build.local',os:'linux',kind:'vnc',login_user:'dev',has_pw:true,files},{id:'fresh',name:'Fresh Server',host:'fresh.local',os:'linux',login_user:'dev',files},{id:'slow',name:'Slow Box',host:'slow.local',os:'linux',kind:'vnc',login_user:'dev',has_pw:true,files}];S.settings={...S.settings,onboarded:true,theme:'light'};render();ItdaFiles.message({type:'state',files_clipboard:{cid:'before-window',host:'build',window:'prior-page',side:'remote',path:'/home/dev',names:['Beta-B.txt'],move:false}});ItdaFiles.launch(S.hosts[0]);});
   await launch();
   const layer=p.locator('.files-layer'),row=name=>layer.locator('[data-index]').filter({hasText:name}).first();
   const packets=()=>p.evaluate(()=>testPackets),mod=platform==='mac'?'Meta':'Control';
@@ -179,6 +179,30 @@ try{
   await p.locator('.files-prompt [data-choice="ok"]').click();
   const sent=(await packets()).filter(x=>x.op==='transfer').at(-1);
   assert(sent?.id==='studio'&&sent.source==='/Users/alex/Docs'&&sent.destination==='/Users/alex','Same-device tab drop ran on the active device: '+JSON.stringify(sent));
+  // Sidebar device drop: an existing tab is reused, including Shift-to-move.
+  const deviceDrop=async(name,id,move=false)=>{
+    const a=await row(name).boundingBox(),b=await layer.locator(`[data-device="${id}"]`).first().boundingBox();
+    await p.mouse.move(a.x+60,a.y+a.height/2);await p.mouse.down();
+    if(move)await p.keyboard.down('Shift');
+    await p.mouse.move(b.x+b.width/2,b.y+b.height/2,{steps:12});
+    assert(await layer.locator(`[data-device="${id}"].files-drop-target`).count()===1,'Device drop target has no feedback');
+    await p.mouse.up();if(move)await p.keyboard.up('Shift');
+  };
+  await deviceDrop('Beta-B.txt','studio',true);
+  await p.locator('.files-prompt [data-choice="ok"]').click();
+  {const t=(await packets()).filter(x=>x.op==='transfer').at(-1);assert(t.id==='studio'&&t.from_id==='build'&&t.move&&t.destination==='/Users/alex','Sidebar existing-device move: '+JSON.stringify(t));}
+  // A device without a tab connects in a new tab without releasing the source.
+  const releases=await count('studio','release');
+  await deviceDrop('Alpha-A.txt','fresh');await row('Fresh.txt').waitFor();
+  await p.locator('.files-prompt [data-choice="ok"]').click();
+  {const t=(await packets()).filter(x=>x.op==='transfer').at(-1);assert(t.id==='fresh'&&t.from_id==='studio'&&t.source==='/Users/alex'&&t.destination==='/fresh'&&!t.move,'Sidebar new-device copy: '+JSON.stringify(t));}
+  assert(await count('studio','release')===releases,'Device drop released its source');
+  // A cancelled connection must never leave a deferred transfer for a later open.
+  const transfers=(await packets()).filter(x=>x.op==='transfer').length;
+  await deviceDrop('Fresh.txt','slow');await p.locator('.files-setup [data-close]').click();
+  await row('Fresh.txt').waitFor();
+  await layer.locator('[data-device="studio"]').first().click();await row('Alpha-A.txt').waitFor();
+  assert((await packets()).filter(x=>x.op==='transfer').length===transfers,'Cancelled device drop later transferred files');
   assert(!errors.length,errors.join('\n'));
   await c.close();
  }
