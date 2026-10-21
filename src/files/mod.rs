@@ -321,6 +321,7 @@ pub fn password_key(h: &Host) -> String {
     }
 }
 fn cfg(h: &Host, login: &Login, password: Option<String>) -> io::Result<SshCfg> {
+    let h = &h.probed();
     let o = &h.files;
     let (default, _) = crate::tunnel::split_host(&h.host, 0);
     let host = if o.host.is_empty() {

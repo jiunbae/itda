@@ -51,6 +51,9 @@ pub struct Peer {
     /// "macOS" | "windows" | "linux" | "iOS" | …
     pub os: String,
     pub online: bool,
+    /// The direct path to it ("ip:port"), empty when relayed.
+    #[serde(skip)]
+    pub cur: String,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -70,7 +73,14 @@ fn peer(v: &Value) -> Peer {
         ip: v["TailscaleIPs"].get(0).and_then(Value::as_str).unwrap_or("").to_string(),
         os: v["OS"].as_str().unwrap_or("").to_string(),
         online: v["Online"].as_bool().unwrap_or(false),
+        cur: v["CurAddr"].as_str().unwrap_or("").to_string(),
     }
+}
+
+/// The local-network IPv4 of a direct path ("192.168.0.5:41641"), if it is one.
+pub fn lan_ip(cur: &str) -> Option<String> {
+    let ip: std::net::Ipv4Addr = cur.rsplit_once(':')?.0.parse().ok()?;
+    ip.is_private().then(|| ip.to_string())
 }
 
 pub fn status() -> Status {
@@ -146,5 +156,17 @@ pub fn serve(port: u16, on: bool) -> Result<(), String> {
                 line.to_string()
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn only_a_private_direct_path_is_a_lan_address() {
+        assert_eq!(super::lan_ip("192.168.32.32:41641").as_deref(), Some("192.168.32.32"));
+        assert_eq!(super::lan_ip("10.0.0.7:41641").as_deref(), Some("10.0.0.7"));
+        assert_eq!(super::lan_ip("211.234.10.1:41641"), None);
+        assert_eq!(super::lan_ip(""), None);
+        assert_eq!(super::lan_ip("[fd00::1]:41641"), None);
     }
 }

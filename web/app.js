@@ -1157,6 +1157,8 @@ ${quick ? sshBox : ''}
       <div class="field"><label>연결 방법</label></div>
       ${sshBox}
       ${hpBox}
+      <div class="field"><label>같은 네트워크 주소 (선택)</label><input class="input" id="f-lan" value="${esc(h.lan || '')}" placeholder="예: 192.168.0.10">
+        <span class="hint">주소로 연결되지 않을 때(예: 그 기기의 Tailscale이 꺼져 있을 때) 이 주소로 연결합니다. 같은 네트워크에서 Tailscale이 직접 연결되면 자동으로 채워지기도 합니다.</span></div>
       ${optRow('clipboard', '클립보드 공유', '복사한 텍스트를 양쪽에서 붙여 넣을 수 있습니다', o.clipboard)}
       ${optRow('reconnect', '자동 재연결', '네트워크가 끊기면 다시 연결합니다', o.reconnect)}
     </div>`;
@@ -1254,6 +1256,7 @@ ${quick ? sshBox : ''}
       host.group = host.groups.join(', ');
     }
     host.user = v('#f-user');
+    if (m.querySelector('#f-lan')) host.lan = v('#f-lan');
     const acct = m.querySelector('#f-account').value;
     host.account = acct === '__new' ? '' : acct;
     const k = KINDS[(m.querySelector('.kind-seg button.on') || { dataset: { kind: K0 } }).dataset.kind];

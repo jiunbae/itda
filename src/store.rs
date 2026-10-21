@@ -145,6 +145,9 @@ pub struct Host {
     pub files: crate::files::Options,
     /// Itda's high-performance sharing set up on this Mac (reached over SSH).
     pub hp: Hp,
+    /// Its address on the local network (no port), tried when `host` doesn't answer, e.g. a
+    /// Tailscale name while Tailscale is down there. Learned from Tailscale's direct path.
+    pub lan: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
@@ -167,6 +170,63 @@ impl Host {
 
     pub fn is_rdp(&self) -> bool {
         self.kind == "rdp"
+    }
+
+    /// Where a connection to `address` (this host's, or its LAN one) is first answered: Remote
+    /// Desktop, SSH when the screen goes through it, else the VNC port.
+    pub fn probe_addr(&self, address: &str) -> String {
+        let t = address.trim();
+        if self.is_rdp() {
+            if t.rsplit_once(':').is_some_and(|(_, p)| p.parse::<u16>().is_ok()) { t.to_string() } else { format!("{t}:3389") }
+        } else if self.ssh.on || self.hp.on {
+            let (host, _) = crate::tunnel::split_host(t, 5900);
+            let port = if self.ssh.port == 0 { 22 } else { self.ssh.port };
+            if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") }
+        } else {
+            crate::rfb::addr(t)
+        }
+    }
+
+    /// This host at its LAN address (keeping any port given with `host`).
+    pub fn at_lan(&self) -> Host {
+        let (_, port) = crate::tunnel::split_host(&self.host, 0);
+        let lan = self.lan.trim();
+        let mut h = self.clone();
+        h.host = if port == 0 { lan.to_string() } else if lan.contains(':') { format!("[{lan}]:{port}") } else { format!("{lan}:{port}") };
+        h
+    }
+
+    /// The host to connect to: itself, or at its LAN address when only that answers. (Waits
+    /// up to ANSWER for each; immediate without a LAN address.)
+    pub fn reachable(&self) -> Host {
+        if self.lan.trim().is_empty() || answers(&self.probe_addr(&self.host)) {
+            return self.clone();
+        }
+        let alt = self.at_lan();
+        if answers(&alt.probe_addr(&alt.host)) {
+            crate::log!("{}: not answering, using its LAN address {}", self.host, alt.host);
+            return alt;
+        }
+        self.clone()
+    }
+}
+
+const ANSWER: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Does something accept a TCP connection at `addr` ("host:port") soon?
+pub fn answers(addr: &str) -> bool {
+    use std::net::ToSocketAddrs;
+    addr.to_socket_addrs().is_ok_and(|mut it| it.any(|sa| std::net::TcpStream::connect_timeout(&sa, ANSWER).is_ok()))
+}
+
+/// Saved hosts whose own address stopped answering but whose LAN address does (from the
+/// background probes): connections start there without waiting.
+pub static VIA_LAN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+impl Host {
+    /// `reachable` from the last probe, without waiting.
+    pub fn probed(&self) -> Host {
+        if !self.lan.trim().is_empty() && VIA_LAN.lock().unwrap().contains(&self.id) { self.at_lan() } else { self.clone() }
     }
 }
 
@@ -676,6 +736,29 @@ pub fn set_password_checked(id: &str, pass: Option<&str>) -> std::io::Result<()>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lan_address_keeps_the_port_and_the_way_in() {
+        let mut h = super::Host { host: "jiun-home.tail.ts.net".into(), lan: "192.168.32.32".into(), kind: "rdp".into(), ..Default::default() };
+        assert_eq!(h.at_lan().host, "192.168.32.32");
+        assert_eq!(h.probe_addr(&h.at_lan().host), "192.168.32.32:3389");
+        h.host = "jiun-home.tail.ts.net:3390".into();
+        assert_eq!(h.at_lan().host, "192.168.32.32:3390");
+        assert_eq!(h.probe_addr(&h.at_lan().host), "192.168.32.32:3390");
+        h.kind = String::new();
+        h.ssh.on = true;
+        assert_eq!(h.probe_addr("192.168.32.32:5901"), "192.168.32.32:22");
+        // Without a LAN address nothing is probed or changed.
+        h.lan.clear();
+        assert_eq!(h.reachable().host, h.host);
+        assert_eq!(h.probed().host, h.host);
+        // Known from the probes to answer only there.
+        h.lan = "192.168.32.32".into();
+        h.id = "lan-test".into();
+        super::VIA_LAN.lock().unwrap().push(h.id.clone());
+        assert_eq!(h.probed().host, "192.168.32.32:3390");
+        super::VIA_LAN.lock().unwrap().clear();
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn keychain_password_format_preserves_unicode_quotes_and_literal_hex() {

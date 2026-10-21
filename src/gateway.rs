@@ -787,6 +787,7 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u3
 }
 
 fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mut Option<Arc<Tunnel>>, size: Option<(u32, u32)>) -> io::Result<rfb::Raw> {
+    let host = &host.reachable();
     if host.is_rdp() {
         return crate::rdp::open(&host.host, &login.user, &pass, size.filter(|_| host.opts.resize));
     }
