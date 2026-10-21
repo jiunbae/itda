@@ -234,6 +234,7 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
     w.write_all(&[1])?;
     let width = rd_u16(&mut r)?;
     let height = rd_u16(&mut r)?;
+    check_size(width as usize, height as usize)?;
     let pf = rd_vec(&mut r, 16)?;
     let n = rd_u32(&mut r)? as usize;
     let name_bytes = rd_vec(&mut r, n)?;
@@ -246,6 +247,19 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
     server_init.extend_from_slice(&(n as u32).to_be_bytes());
     server_init.extend_from_slice(&name_bytes);
     Ok(Raw { reader: r, writer: w, width, height, name, server_init })
+}
+
+/// The most a server's screen may be: wider than any monitor row people use, and no more
+/// pixels than a few 8K displays (a 32-bit picture of it is ~400 MB).
+pub const MAX_SIDE: usize = 32768;
+pub const MAX_PIXELS: usize = 100 << 20;
+
+/// A screen size from a server, before anything is allocated for it.
+pub fn check_size(w: usize, h: usize) -> io::Result<()> {
+    if w > MAX_SIDE || h > MAX_SIDE || w * h > MAX_PIXELS {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("화면 공유 서버가 너무 큰 화면 크기를 보냈습니다 ({w}x{h})")));
+    }
+    Ok(())
 }
 
 /// An authenticated connection right after ServerInit, before any client setup.
@@ -370,6 +384,14 @@ fn put_cstr(dst: &mut [u8], s: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn server_screen_sizes_are_bounded() {
+        assert!(super::check_size(5120, 2880).is_ok());
+        assert!(super::check_size(15360, 4320).is_ok()); // three 5K side by side
+        assert!(super::check_size(65535, 65535).is_err());
+        assert!(super::check_size(40000, 10).is_err());
+    }
+
     #[test]
     fn apple_auth_rejects_bad_keys_instead_of_panicking() {
         for (klen, p) in [(0u16, vec![]), (8, vec![0u8; 8]), (128, vec![0u8; 128])] {

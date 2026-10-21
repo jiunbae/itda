@@ -284,11 +284,11 @@ fn head_line(r: &mut BufReader<TcpStream>, deadline: Instant) -> io::Result<Stri
         let take = buf.iter().position(|&b| b == b'\n').map_or(buf.len(), |i| i + 1);
         line.extend_from_slice(&buf[..take]);
         r.consume(take);
-        if line.ends_with(b"\n") {
-            break;
-        }
         if line.len() as u64 > MAX_LINE {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "request line too long"));
+        }
+        if line.ends_with(b"\n") {
+            break;
         }
     }
     Ok(String::from_utf8_lossy(&line).into_owned())

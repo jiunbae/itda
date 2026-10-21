@@ -203,7 +203,11 @@ pub fn spawn(mut reader: BufReader<Rx>, dial: Dial, creds: Creds) {
                     *s.out.lock().unwrap() = sess.writer;
                     let (w, h) = (sess.width as u32, sess.height as u32);
                     if s.size() != (w, h) {
-                        s.fb.lock().unwrap().resize(w as usize, h as usize);
+                        if !s.fb.lock().unwrap().resize(w as usize, h as usize) {
+                            *s.error.lock().unwrap() = Some("화면 크기를 바꿀 메모리가 부족합니다".into());
+                            s.post(WM_NETERR);
+                            return;
+                        }
                         s.fb_w.store(w, Relaxed);
                         s.fb_h.store(h, Relaxed);
                         s.post(WM_RESIZED);
@@ -326,7 +330,8 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                             s.post(WM_CURSOR);
                         }
                         ENC_DESKTOP_SIZE => {
-                            resize(s, w, h);
+                            crate::rfb::check_size(w, h)?;
+                            resize(s, w, h)?;
                             resized = true;
                         }
                         ENC_EXT_DESKTOP_SIZE => {
@@ -349,7 +354,8 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                             crate::log!("ExtendedDesktopSize reason={x} status={y} {w}x{h} screens={screens:?}");
                             *s.screens.lock().unwrap() = screens;
                             if !(x == 1 && y != 0) && s.size() != (w as u32, h as u32) {
-                                resize(s, w, h);
+                                crate::rfb::check_size(w, h)?;
+                                resize(s, w, h)?;
                                 resized = true;
                             }
                             s.post(WM_RESIZED);
@@ -389,11 +395,14 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
     }
 }
 
-fn resize(s: &Shared, w: usize, h: usize) {
-    s.fb.lock().unwrap().resize(w, h);
+fn resize(s: &Shared, w: usize, h: usize) -> io::Result<()> {
+    if !s.fb.lock().unwrap().resize(w, h) {
+        return Err(io::Error::other("화면 크기를 바꿀 메모리가 부족합니다"));
+    }
     s.fb_w.store(w as u32, Relaxed);
     s.fb_h.store(h as u32, Relaxed);
     s.post(WM_RESIZED);
+    Ok(())
 }
 
 /// Inflate one ZRLE rect's worth of data (the zlib stream persists across rects).

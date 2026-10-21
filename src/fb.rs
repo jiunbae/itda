@@ -32,20 +32,29 @@ impl Fb {
         fb
     }
 
-    pub fn resize(&mut self, w: usize, h: usize) {
+    /// False if the picture couldn't be allocated (then it is 1x1, and the caller ends the
+    /// session instead of the process).
+    pub fn resize(&mut self, w: usize, h: usize) -> bool {
+        let mut ok = true;
+        let (mut w, mut h) = (w, h);
         unsafe {
             if !self.hbm.is_null() {
                 DeleteObject(self.hbm);
             }
-            let bi = dib_info(w.max(1) as i32, h.max(1) as i32);
             let mut bits = null_mut();
-            self.hbm = CreateDIBSection(null_mut(), &bi, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
-            assert!(!self.hbm.is_null(), "CreateDIBSection failed");
+            self.hbm = CreateDIBSection(null_mut(), &dib_info(w.max(1) as i32, h.max(1) as i32), DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+            if self.hbm.is_null() {
+                crate::log!("CreateDIBSection {w}x{h} failed");
+                (ok, w, h) = (false, 1, 1);
+                self.hbm = CreateDIBSection(null_mut(), &dib_info(1, 1), DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+                assert!(!self.hbm.is_null(), "CreateDIBSection 1x1 failed");
+            }
             self.bits = bits as *mut u32;
         }
         self.w = w;
         self.h = h;
         self.dirty.everything();
+        ok
     }
 
     #[inline]
