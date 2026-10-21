@@ -402,6 +402,34 @@ pub(crate) trait VideoEncode: Send {
 pub(crate) type Video = Box<dyn VideoEncode>;
 
 /// Server → client: capture, diff, encode, send.
+/// Frames the encoder gave nothing for. Skipping them is right for a rate-control drop, which
+/// the next attempt makes up for; but nothing may stay unsent for long (an encoder that keeps
+/// answering empty, the last picture before the screen stops): past MAX_SKIP the picture goes
+/// out losslessly instead, as before.
+#[derive(Default)]
+struct Drops {
+    since: Option<Instant>,
+}
+
+const MAX_SKIP: Duration = Duration::from_millis(100);
+
+impl Drops {
+    /// The encoder gave nothing at `now`: skip this frame?
+    fn skip(&mut self, now: Instant) -> bool {
+        let since = *self.since.get_or_insert(now);
+        if now.duration_since(since) < MAX_SKIP {
+            return true;
+        }
+        self.since = None; // sent losslessly: the next drop may be skipped again
+        false
+    }
+
+    /// The encoder gave a picture.
+    fn clear(&mut self) {
+        self.since = None;
+    }
+}
+
 /// How long a macOS video pump waits for its next capture: the rest of the frame gap once a
 /// new frame has arrived, else until the fallback poll.
 fn video_wait(gap: Duration, since_capture: Duration, arrived: bool) -> Duration {
@@ -437,6 +465,10 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
     let mut last_capture = Instant::now() - FRAME;
     // A capture frame arrived since the last capture (macOS): send it once the gap allows.
     let mut arrived = false;
+    // The encoder dropped the last frame (macOS: its rate control under heavy motion): encode
+    // the picture again at the next frame time, even if the capture has nothing newer.
+    let mut redo = false;
+    let mut drops = Drops::default();
     let mut prev: Vec<u32> = Vec::new();
     let mut enc = Encoder::new();
     // H.264 for this viewer: the encoder (made when first needed), whether the platform has
@@ -463,7 +495,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         // clipboard check. Captures stay FRAME apart also when the screen doesn't change.
         let gap = if video.is_some() { VIDEO_FRAME } else { FRAME };
         let wait = match demand.due() {
-            Some(_) if out.room() && video.is_some() && cfg!(target_os = "macos") => video_wait(gap, last_capture.elapsed(), arrived),
+            Some(_) if out.room() && video.is_some() && cfg!(target_os = "macos") => video_wait(gap, last_capture.elapsed(), arrived || redo),
             Some(_) if out.room() => gap.saturating_sub(last_capture.elapsed()),
             _ => gap,
         };
@@ -531,13 +563,14 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         // With video and nothing new captured, there is nothing to encode until the still
         // repaint is due: skip the copy and compare of a whole frame.
         // (A viewer whose history was just reset, with `prev` cleared, always grabs.)
-        if video.is_some() && incremental && !prev.is_empty() && last_change.elapsed() < REFINE && !cap.lock().unwrap().fresh_since(seen) {
+        if video.is_some() && incremental && !prev.is_empty() && last_change.elapsed() < REFINE && !redo && !cap.lock().unwrap().fresh_since(seen) {
             // (A Frame can name a frame this pump already took: back to the fallback poll.)
             arrived = false;
             continue;
         }
         last_capture = Instant::now();
         arrived = false;
+        redo = false;
         // The size this viewer was last given (another viewer's capture may have resized it).
         let (w0, h0) = size;
         #[cfg(target_os = "macos")]
@@ -609,6 +642,14 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                 let encoded = v.encode(frame, w, key);
                 crate::trace::since("encode", encode);
                 match encoded {
+                    // Dropped by the encoder's rate control (macOS, heavy motion such as video):
+                    // send nothing now and encode the picture again next frame. A lossless
+                    // repaint of fast-changing pixels would be large and hold up what follows.
+                    Ok(data) if data.is_empty() && cfg!(target_os = "macos") && incremental && !full && u.rects == 0 && drops.skip(Instant::now()) => {
+                        crate::trace::add("dropped", 1.0);
+                        redo = true;
+                        continue;
+                    }
                     // Nothing out for this frame (an encoder still buffering): send it losslessly
                     // and keep any pending reset for the first real picture.
                     Ok(data) if data.is_empty() => {
@@ -618,6 +659,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                         lossless = full || (exact.len() == prev.len() && exact[..] == prev[..]);
                     }
                     Ok(data) => {
+                        drops.clear();
                         u.h264(0, 0, vw as u16, vh as u16, if reset { crate::enc::H264_RESET } else { 0 }, &data);
                         reset = false;
                         lossless = false;
@@ -657,6 +699,29 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dropped_frames_are_skipped_only_briefly() {
+        use super::{Drops, MAX_SKIP};
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut d = Drops::default();
+        // A few drops, then a picture: all skipped, and the next drops start afresh.
+        assert!(d.skip(at(0)) && d.skip(at(16)) && d.skip(at(32)));
+        d.clear();
+        assert!(d.skip(at(200)));
+        // Empty answers that go on (the last picture before the screen stops, a failing
+        // encoder): past MAX_SKIP the picture is sent losslessly.
+        let mut t = 200;
+        while d.skip(at(t)) {
+            t += 16;
+            assert!(Duration::from_millis(t - 200) <= MAX_SKIP + Duration::from_millis(16), "skipped for {t} ms");
+        }
+        assert!(Duration::from_millis(t - 200) >= MAX_SKIP);
+        // Then a following drop may be skipped again.
+        assert!(d.skip(at(t + 16)));
+    }
+
     #[test]
     fn video_waits_for_the_frame_gap_or_the_fallback_poll() {
         use super::{video_wait, VIDEO_FRAME, VIDEO_POLL};
