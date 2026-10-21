@@ -26,16 +26,10 @@ const FENCE_SUPPORTED: u32 = 0;
 /// BASE_FRAMES as before; video frames are ~10-20 KB and acks over a tunnel take 70+ ms, so
 /// up to MAX_FRAMES while the oldest unacked update is younger than FRESH: the stream keeps
 /// its rate through ordinary latency, but a long stall still stops it instead of queueing a
-/// backlog the viewer would show late. Once acks have been timed, "young" is the link's
-/// quickest recent round trip plus QUEUE_SLACK (within MIN_FRESH..FRESH), so frames don't
-/// pile up in the tunnel's buffers well past what the path itself takes.
+/// backlog the viewer would show late.
 const BASE_FRAMES: usize = 4;
 const MAX_FRAMES: usize = 16;
 const FRESH: Duration = Duration::from_millis(150);
-const MIN_FRESH: Duration = Duration::from_millis(50);
-const QUEUE_SLACK: Duration = Duration::from_millis(30);
-/// How long the quickest round trip stands before a newer sample replaces it (the path changes).
-const RTT_WINDOW: Duration = Duration::from_secs(10);
 const MAX_BYTES: usize = 1 << 20;
 /// A viewer that leaves an update unacknowledged this long has stopped reading.
 const ACK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -83,8 +77,6 @@ pub struct Demand {
     seq: u32,
     /// Fenced updates not yet acknowledged: (sequence, bytes, sent at).
     inflight: VecDeque<(u32, usize, Instant)>,
-    /// The quickest recent round trip of a fenced update, and when it was measured.
-    rtt: Option<(Duration, Instant)>,
 }
 
 impl Demand {
@@ -124,10 +116,8 @@ impl Demand {
                 if let Ok(b) = <[u8; 4]>::try_from(&payload[..]) {
                     let seq = u32::from_be_bytes(b);
                     if let Some(i) = self.inflight.iter().position(|&(s, ..)| s == seq) {
-                        let rtt = self.inflight[i].2.elapsed();
-                        crate::trace::add("ack", rtt.as_secs_f32() * 1000.0);
-                        if self.rtt.is_none_or(|(best, at)| rtt <= best || at.elapsed() > RTT_WINDOW) {
-                            self.rtt = Some((rtt, Instant::now()));
+                        if crate::trace::on() {
+                            crate::trace::add("ack", self.inflight[i].2.elapsed().as_secs_f32() * 1000.0);
                         }
                         // A fence answers everything sent before it too.
                         self.inflight.drain(..=i);
@@ -152,8 +142,7 @@ impl Demand {
         }
         if self.region.is_some() {
             let bytes: usize = self.inflight.iter().map(|&(_, b, _)| b).sum();
-            let fresh = self.rtt.map_or(FRESH, |(best, _)| (best + QUEUE_SLACK).clamp(MIN_FRESH, FRESH));
-            let young = self.inflight.front().is_some_and(|&(.., at)| at.elapsed() < fresh);
+            let young = self.inflight.front().is_some_and(|&(.., at)| at.elapsed() < FRESH);
             let n = self.inflight.len();
             let room = n == 0 || (bytes < MAX_BYTES && (n < BASE_FRAMES || (n < MAX_FRAMES && young)));
             return room.then_some(true);
@@ -272,22 +261,6 @@ mod tests {
         std::thread::sleep(FRESH + Duration::from_millis(20));
         assert_eq!(d.due(), None, "a stalled link stops at the base window");
         ack(&mut d, 1);
-        assert_eq!(d.due(), Some(true), "back under the base window");
-    }
-
-    #[test]
-    fn window_follows_the_round_trip() {
-        let mut d = Demand::default();
-        on(&mut d);
-        d.sent(1000, &mut Vec::new());
-        ack(&mut d, 1); // a quick link: "young" shrinks to MIN_FRESH
-        for _ in 0..BASE_FRAMES {
-            d.sent(1000, &mut Vec::new());
-        }
-        assert_eq!(d.due(), Some(true), "young");
-        std::thread::sleep(MIN_FRESH + Duration::from_millis(20));
-        assert_eq!(d.due(), None, "queued well past the round trip");
-        ack(&mut d, 2);
         assert_eq!(d.due(), Some(true), "back under the base window");
     }
 
