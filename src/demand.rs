@@ -22,10 +22,14 @@ const FENCE_REQUEST: u32 = 1 << 31;
 const FENCE_SUPPORTED: u32 = 0;
 
 /// Unacknowledged updates allowed on the wire: always one, more while they are small. The
-/// byte figure is a soft limit: the update that crosses it still goes out whole. Video frames
-/// are ~10-20 KB, and over a tunnel acks take 70-300 ms: a short window paused the stream on
-/// every latency spike (35 fps over SSH against 50 locally, measured).
+/// byte figure is a soft limit: the update that crosses it still goes out whole. Up to
+/// BASE_FRAMES as before; video frames are ~10-20 KB and acks over a tunnel take 70+ ms, so
+/// up to MAX_FRAMES while the oldest unacked update is younger than FRESH: the stream keeps
+/// its rate through ordinary latency, but a long stall still stops it instead of queueing a
+/// backlog the viewer would show late.
+const BASE_FRAMES: usize = 4;
 const MAX_FRAMES: usize = 16;
+const FRESH: Duration = Duration::from_millis(150);
 const MAX_BYTES: usize = 1 << 20;
 /// A viewer that leaves an update unacknowledged this long has stopped reading.
 const ACK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -135,7 +139,9 @@ impl Demand {
         }
         if self.region.is_some() {
             let bytes: usize = self.inflight.iter().map(|&(_, b, _)| b).sum();
-            let room = self.inflight.is_empty() || (self.inflight.len() < MAX_FRAMES && bytes < MAX_BYTES);
+            let young = self.inflight.front().is_some_and(|&(.., at)| at.elapsed() < FRESH);
+            let n = self.inflight.len();
+            let room = n == 0 || (bytes < MAX_BYTES && (n < BASE_FRAMES || (n < MAX_FRAMES && young)));
             return room.then_some(true);
         }
         self.want
@@ -239,6 +245,20 @@ mod tests {
         ack(&mut d, 99); // unknown: ignored
         ack(&mut d, MAX_FRAMES as u32);
         assert!(d.inflight.is_empty());
+    }
+
+    #[test]
+    fn window_grows_only_while_acks_are_recent() {
+        let mut d = Demand::default();
+        on(&mut d);
+        for _ in 0..BASE_FRAMES {
+            d.sent(1000, &mut Vec::new());
+        }
+        assert_eq!(d.due(), Some(true), "young: beyond the base window");
+        std::thread::sleep(FRESH + Duration::from_millis(20));
+        assert_eq!(d.due(), None, "a stalled link stops at the base window");
+        ack(&mut d, 1);
+        assert_eq!(d.due(), Some(true), "back under the base window");
     }
 
     #[test]

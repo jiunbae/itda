@@ -211,6 +211,9 @@ pub(crate) struct Capture {
     pub(crate) h: usize,
     buf: Vec<u32>,
     latest: Latest,
+    /// Counts frames copied into `buf`: each viewer remembers the one it last grabbed, since
+    /// all viewers share this capture and the first to grab takes the pending frame.
+    generation: u64,
     stream: Option<Retained<SCStream>>,
     _output: Option<Retained<Output>>,
 }
@@ -223,7 +226,7 @@ impl Capture {
         let b = CGDisplayBounds(CGMainDisplayID());
         let (w, h) = ((b.size.width as usize).max(16) & !1, (b.size.height as usize).max(16) & !1);
         let latest: Latest = Arc::new(Mutex::new(None));
-        let mut c = Capture { x: 0, y: 0, w, h, buf: vec![0; w * h], latest: latest.clone(), stream: None, _output: None };
+        let mut c = Capture { x: 0, y: 0, w, h, buf: vec![0; w * h], latest: latest.clone(), generation: 0, stream: None, _output: None };
         match start_stream(w, h, latest) {
             Ok((stream, output)) => (c.stream, c._output) = (Some(stream), Some(output)),
             Err(e) => crate::log!("hp: screen capture unavailable ({e}); viewers see a black screen"),
@@ -239,13 +242,20 @@ impl Capture {
     /// The capture's size is fixed for its life (one display, in points).
     pub(crate) fn fit(&mut self) {}
 
-    /// A frame arrived since the last grab (ScreenCaptureKit sends none while nothing changes).
-    pub(crate) fn fresh(&self) -> bool {
-        self.latest.lock().unwrap().is_some()
+    /// Has a frame arrived that the viewer who last grabbed at `seen` hasn't had? (Pending, or
+    /// grabbed by another viewer since. ScreenCaptureKit sends none while nothing changes.)
+    pub(crate) fn fresh_since(&self, seen: u64) -> bool {
+        self.generation != seen || self.latest.lock().unwrap().is_some()
+    }
+
+    /// The frame `buf` holds, for `fresh_since`.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub(crate) fn grab(&mut self) -> (usize, usize, &[u32]) {
         if let Some(pb) = self.latest.lock().unwrap().take() {
+            self.generation = self.generation.wrapping_add(1);
             let pb = &*pb;
             if unsafe { CVPixelBufferLockBaseAddress(pb, CVPixelBufferLockFlags::ReadOnly) } == 0 {
                 let base = CVPixelBufferGetBaseAddress(pb) as *const u8;

@@ -401,6 +401,8 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
     let mut reset = true;
     let mut exact: Vec<u32> = Vec::new();
     let mut last_change = Instant::now();
+    // The shared capture's frame this viewer last grabbed (see Capture::fresh_since).
+    let mut seen = u64::MAX;
     let mut u = Update::default();
     let mut clip_seq = platform::clipboard_seq();
     let mut clip_check = Instant::now();
@@ -477,7 +479,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
         }
         // With video and nothing new captured, there is nothing to encode until the still
         // repaint is due: skip the copy and compare of a whole frame.
-        if video.is_some() && incremental && last_change.elapsed() < REFINE && !cap.lock().unwrap().fresh() {
+        if video.is_some() && incremental && last_change.elapsed() < REFINE && !cap.lock().unwrap().fresh_since(seen) {
             continue;
         }
         last_capture = Instant::now();
@@ -486,6 +488,9 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
         let mut cap = cap.lock().unwrap();
         cap.fit(); // (grab does too) the virtual desktop's corner, read before the frame borrows cap
         let (ox, oy) = (cap.x, cap.y);
+        // The frame this grab gives (one that turns up meanwhile only costs an extra pass).
+        let g = cap.generation();
+        seen = g.wrapping_add(u64::from(cap.fresh_since(g)));
         let (w, h, frame) = cap.grab();
         size = (w, h);
         u.start();
