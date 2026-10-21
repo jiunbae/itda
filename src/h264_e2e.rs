@@ -40,11 +40,6 @@ fn frame(t: Duration, f: &mut [u32], _: bool) {
     }
 }
 
-fn still(x: usize, y: usize) -> u32 {
-    let mut f = vec![0u32; W * H];
-    frame(MOVING, &mut f, false);
-    f[y * W + x]
-}
 const MOVING: Duration = Duration::from_secs(5);
 const SESSION: Duration = Duration::from_secs(8);
 /// How long the picture stands still before its lossless repaint.
@@ -187,9 +182,12 @@ fn h264_e2e() {
     let mut stats = Vec::new();
     for c in l.incoming() {
         let mut c = c.unwrap();
+        // Browsers can preconnect an idle HTTP socket. It must not block the next
+        // viewer/report forever on this intentionally single-threaded test server.
+        c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         let mut r = BufReader::new(c.try_clone().unwrap());
         let mut line = String::new();
-        r.read_line(&mut line).unwrap();
+        if !matches!(r.read_line(&mut line), Ok(n) if n > 0) { continue; }
         let path = line.split(' ').nth(1).unwrap_or("/").to_string();
         let (mut key, mut len) = (String::new(), 0);
         loop {
@@ -210,6 +208,7 @@ fn h264_e2e() {
             let _ = c.write_all(body);
         };
         if path.starts_with("/ws") {
+            c.set_read_timeout(None).unwrap();
             let h264 = path.contains("mode=h264");
             write!(c, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n", ws::accept_key(&key)).unwrap();
             c.set_nodelay(true).unwrap();
@@ -221,8 +220,12 @@ fn h264_e2e() {
             r.read_exact(&mut body).unwrap();
             let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
             let samples = v["samples"].as_array().unwrap();
+            // Build the expected still image once, rather than regenerating two
+            // million pixels for every one of the hundreds of sampled points.
+            let mut expected = vec![0; W * H];
+            frame(MOVING, &mut expected, false);
             let off = |a: u32, b: u32| (0..3).map(|i| ((a >> (8 * i)) & 255).abs_diff((b >> (8 * i)) & 255)).max().unwrap();
-            let worst = samples.iter().map(|s| off(s[2].as_u64().unwrap() as u32, still(s[0].as_u64().unwrap() as usize, s[1].as_u64().unwrap() as usize))).max().unwrap();
+            let worst = samples.iter().map(|s| off(s[2].as_u64().unwrap() as u32, expected[s[1].as_u64().unwrap() as usize * W + s[0].as_u64().unwrap() as usize])).max().unwrap();
             println!("report {}: webcodecs={} canvas {}x{}, {} samples, worst channel error {worst}", v["mode"], v["h264"], v["w"], v["h"], samples.len());
             assert!(worst <= 24, "picture differs from the source");
             reply(&mut c, "text/plain", b"ok");
