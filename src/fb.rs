@@ -26,10 +26,10 @@ pub fn dib_info(w: i32, h: i32) -> BITMAPINFO {
 }
 
 impl Fb {
-    pub fn new(w: usize, h: usize) -> Fb {
+    /// None if the picture can't be allocated.
+    pub fn new(w: usize, h: usize) -> Option<Fb> {
         let mut fb = Fb { w: 0, h: 0, hbm: null_mut(), bits: null_mut(), dirty: crate::enc::Damage::default() };
-        fb.resize(w, h);
-        fb
+        fb.resize(w, h).then_some(fb)
     }
 
     /// False if the picture couldn't be allocated (then it is 1x1, and the caller ends the
@@ -87,6 +87,9 @@ impl Fb {
     }
 
     pub fn raw(&mut self, x: usize, y: usize, w: usize, h: usize, data: &[u8]) {
+        if w == 0 {
+            return; // (chunks of zero bytes don't exist)
+        }
         let stride = self.w;
         let px = self.px();
         for (j, src) in data.chunks_exact(w * 4).take(h).enumerate() {

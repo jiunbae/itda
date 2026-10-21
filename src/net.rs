@@ -75,9 +75,10 @@ pub fn sh() -> &'static Shared {
     SHARED.get().unwrap()
 }
 
-pub fn init(out: TcpStream, w: u16, h: u16) {
+pub fn init(out: TcpStream, w: u16, h: u16) -> io::Result<()> {
+    let fb = Fb::new(w as usize, h as usize).ok_or_else(|| io::Error::other("화면을 그릴 메모리가 부족합니다"))?;
     let s = Shared {
-        fb: Mutex::new(Fb::new(w as usize, h as usize)),
+        fb: Mutex::new(fb),
         screens: Mutex::new(Vec::new()),
         ext_clip: AtomicBool::new(false),
         clip_out: Mutex::new(String::new()),
@@ -96,6 +97,7 @@ pub fn init(out: TcpStream, w: u16, h: u16) {
         pending: AtomicBool::new(false),
     };
     let _ = SHARED.set(s);
+    Ok(())
 }
 
 impl Shared {
@@ -292,7 +294,8 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                             raw.resize(w * h * 4, 0);
                             r.read_exact(&mut raw)?;
                             let mut fb = s.fb.lock().unwrap();
-                            if fb.fits(x, y, w, h) {
+                            // (An empty rectangle has nothing to draw.)
+                            if w > 0 && h > 0 && fb.fits(x, y, w, h) {
                                 fb.raw(x, y, w, h, &raw);
                                 fb.mark(x, y, w, h);
                             }
@@ -318,7 +321,7 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                             r.read_exact(&mut zin)?;
                             inflate(&mut z, &zin, &mut zout, most)?;
                             let mut fb = s.fb.lock().unwrap();
-                            if fb.fits(x, y, w, h) {
+                            if w > 0 && h > 0 && fb.fits(x, y, w, h) {
                                 fb.zrle(&zout, x, y, w, h).ok_or_else(|| io::Error::other("bad ZRLE data"))?;
                                 fb.mark(x, y, w, h);
                             }
