@@ -96,8 +96,31 @@ try {
   await page.locator("#f-group").press("ArrowDown"); // with nothing typed: first suggestion
   await page.locator("#f-group").press("Enter");
   assert((await chips()).length === 2, `arrow + Enter: ${await chips()}`);
-  await page.locator(`#group-suggest [data-sug]`).first().dispatchEvent("mousedown");
-  assert((await chips()).length === 3, `click: ${await chips()}`);
+  // The active choice is exposed to assistive tech.
+  await page.locator("#f-group").press("Backspace"); // removes the last chip: suggested again
+  assert(JSON.stringify((await sugs()).sort()) === JSON.stringify(["집", "회사"].sort()), `Backspace did not refresh suggestions: ${await sugs()}`);
+  await page.locator("#f-group").press("ArrowDown");
+  const aria = () => page.evaluate(() => { const g = document.querySelector("#f-group"); const a = g.getAttribute("aria-activedescendant"); return { expanded: g.getAttribute("aria-expanded"), active: a, selected: a && document.getElementById(a)?.getAttribute("aria-selected") }; });
+  let a = await aria();
+  assert(a.expanded === "true" && a.active === "group-sug-0" && a.selected === "true", `ARIA ${JSON.stringify(a)}`);
+  // Keys while composing (Korean IME) are the IME's: no highlight move, and Escape neither
+  // closes the list nor the dialog.
+  const composing = (key) => page.locator("#f-group").evaluate((g, key) => { const e = new KeyboardEvent("keydown", { key, isComposing: true, bubbles: true, cancelable: true }); g.dispatchEvent(e); return e.defaultPrevented; }, key);
+  assert(!(await composing("ArrowDown")) && !(await composing("ArrowUp")), "composing arrows taken by the list");
+  assert((await aria()).active === "group-sug-0", "composing arrow moved the highlight");
+  await composing("Escape");
+  assert(await page.locator("#group-suggest").isVisible() && await page.locator("#modals .scrim").count() === 1, "composing Escape closed something");
+  // Escape closes the list (and says so); typing brings it back.
+  await page.locator("#f-group").press("Escape");
+  a = await aria();
+  assert(await page.locator("#group-suggest").isHidden() && a.expanded === "false" && !a.active, `Escape ${JSON.stringify(a)}`);
+  assert(await page.locator("#modals .scrim").count() === 1, "Escape in the list closed the dialog");
+  // A real click on a choice picks it and leaves the focus in the field.
+  await page.locator("#f-group").pressSequentially("집");
+  await page.locator('#group-suggest [data-sug="집"]').click();
+  assert(JSON.stringify(await chips()) === JSON.stringify(["Home", "집"]), `click: ${await chips()}`);
+  assert(await page.evaluate(() => document.activeElement.id) === "f-group", "click took the focus");
+  await page.locator('#group-suggest [data-sug="회사"]').click();
   assert(await page.locator("#group-suggest").isHidden(), "suggestions left with nothing to suggest");
   // A new group still goes in as typed, and Enter didn't save the dialog on the way.
   await page.locator("#f-group").fill("여행");

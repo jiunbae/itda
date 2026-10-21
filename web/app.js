@@ -1215,24 +1215,34 @@ ${quick ? sshBox : ''}
       const list = groups().filter((g) => !have.includes(g.toLowerCase()) && (!q || g.toLowerCase().includes(q)))
         .sort((a, b) => (b.toLowerCase().startsWith(q) - a.toLowerCase().startsWith(q))).slice(0, 8);
       pick = q && list.length ? 0 : -1;
-      box.innerHTML = list.map((g, i) => `<button type="button" class="sug${i === pick ? ' on' : ''}" role="option" data-sug="${esc(g)}">${esc(g)}</button>`).join('');
-      box.hidden = !list.length || document.activeElement !== gin;
-      gin.setAttribute('aria-expanded', String(!box.hidden));
+      box.innerHTML = list.map((g, i) => `<button type="button" class="sug" role="option" id="group-sug-${i}" tabindex="-1" data-sug="${esc(g)}">${esc(g)}</button>`).join('');
+      show(!!list.length && document.activeElement === gin);
+      mark();
     };
-    const mark = () => shown().forEach((b, i) => b.classList.toggle('on', i === pick));
-    box.addEventListener('mousedown', (e) => {
+    const show = (on) => { box.hidden = !on; gin.setAttribute('aria-expanded', String(on)); };
+    // The highlighted choice, for the eye (.on) and for screen readers (selected, active).
+    const mark = () => {
+      shown().forEach((b, i) => { b.classList.toggle('on', i === pick); b.setAttribute('aria-selected', String(i === pick)); });
+      if (pick >= 0 && !box.hidden) gin.setAttribute('aria-activedescendant', `group-sug-${pick}`);
+      else gin.removeAttribute('aria-activedescendant');
+    };
+    // Pressing a choice must not take the focus from the field; the click picks it.
+    box.addEventListener('pointerdown', (e) => e.preventDefault());
+    box.addEventListener('mousedown', (e) => e.preventDefault());
+    box.addEventListener('click', (e) => {
       const b = e.target.closest('[data-sug]');
       if (!b) return;
-      e.preventDefault(); // keep the focus in the field
       add(b.dataset.sug);
+      gin.focus();
       suggest();
     });
     gin.addEventListener('focus', suggest);
-    gin.addEventListener('blur', () => { box.hidden = true; gin.setAttribute('aria-expanded', 'false'); });
+    gin.addEventListener('blur', () => { show(false); mark(); });
     gin.addEventListener('keydown', (e) => {
+      // While composing (Korean IME), keys belong to the IME: arrows move its candidates and
+      // Enter only commits the syllable. Nothing here, and nothing reaching the dialog.
+      if (e.isComposing || e.keyCode === 229) { if (e.key === 'Enter' || e.key === 'Escape') e.stopPropagation(); return; }
       // Enter adds a group here; it must not also save the dialog. (Empty Enter still saves.)
-      // Enter that finishes Korean composition only commits the syllable.
-      if (e.key === 'Enter' && (e.isComposing || e.keyCode === 229)) { e.stopPropagation(); return; }
       if (!box.hidden && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
         e.preventDefault();
         const n = shown().length;
@@ -1240,13 +1250,13 @@ ${quick ? sshBox : ''}
         mark();
         return;
       }
-      if (!box.hidden && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); box.hidden = true; return; }
+      if (!box.hidden && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); show(false); mark(); return; }
       // A highlighted suggestion wins over the typed text (Enter or Tab).
       if (!box.hidden && pick >= 0 && (e.key === 'Enter' || e.key === 'Tab' && gin.value.trim()) && !e.isComposing) {
         e.preventDefault(); e.stopPropagation(); add(shown()[pick].dataset.sug); suggest(); return;
       }
-      if ((e.key === 'Enter' && gin.value.trim() || e.key === ',') && !e.isComposing) { e.preventDefault(); e.stopPropagation(); add(gin.value); suggest(); }
-      else if (e.key === 'Backspace' && !gin.value && !e.isComposing && e.keyCode !== 229) { const last = [...chips.querySelectorAll('[data-chip]')].pop(); if (last) { last.remove(); gin.placeholder = current().length ? '' : '없음 — 예: 집, 회사'; } }
+      if (e.key === 'Enter' && gin.value.trim() || e.key === ',') { e.preventDefault(); e.stopPropagation(); add(gin.value); suggest(); }
+      else if (e.key === 'Backspace' && !gin.value) { const last = [...chips.querySelectorAll('[data-chip]')].pop(); if (last) { last.remove(); gin.placeholder = current().length ? '' : '없음 — 예: 집, 회사'; suggest(); } }
     });
     gin.addEventListener('input', () => { if (gin.value.includes(',')) add(gin.value); suggest(); });
     chips.addEventListener('click', (e) => {
