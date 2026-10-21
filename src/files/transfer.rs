@@ -196,6 +196,8 @@ struct Context {
     /// Both ends are one filesystem (same device, or both this computer): a move may be a
     /// rename. Between two devices a rename would act on the source device alone.
     same_fs: bool,
+    target_windows: bool,
+    normalizing_tree: bool,
     done: u64,
     last: Instant,
 }
@@ -230,7 +232,7 @@ impl Context {
                 before.name
             )));
         }
-        let mut to = to.to_string();
+        let mut to = destination_leaf(to, self.target_windows);
         let mut existing = dst.stat(&to)?;
         if existing.is_some() && self.policy == "exclusive" {
             return Err(error("대상에 같은 이름의 파일이 있습니다"));
@@ -244,6 +246,7 @@ impl Context {
         }
         if self.moving
             && self.same_fs
+            && !(self.normalizing_tree && before.dir)
             && src.sftp.is_some() == dst.sftp.is_some()
             && existing.is_none()
             && src.rename(from, &to, false).is_ok()
@@ -449,7 +452,7 @@ pub(super) fn export_batch(files: &[super::export::File], targets: &[PathBuf], e
         let mut src=if file.remote { Endpoint::new(Some(&*connection(&file.id)?),&control)? } else { Endpoint{sftp:None,cfg:None} };
         let mut dst=Endpoint{sftp:None,cfg:None};
         let mut cx=Context{control:control.clone(),emit:emit.clone(),id:file.id.clone(),job:job.clone(),
-            policy:"exclusive".into(),moving:false,modes:true,same_fs:false,done:0,last:Instant::now()-Duration::from_secs(1)};
+            policy:"exclusive".into(),moving:false,modes:true,same_fs:false,target_windows:false,normalizing_tree:false,done:0,last:Instant::now()-Duration::from_secs(1)};
         for(file,target)in files.iter().zip(targets){cx.copy(&mut src,&mut dst,&file.path()?.to_string_lossy(),&target.to_string_lossy(),0)?;}
         Ok(())
     })();
@@ -573,6 +576,8 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                 moving,
                 modes: !(from_remote && src_windows),
                 same_fs,
+                target_windows: dst_windows,
+                normalizing_tree: false,
                 done: 0,
                 last: Instant::now() - Duration::from_secs(1),
             };
@@ -582,19 +587,26 @@ pub fn start(v: Value, host: Host, emit: Emit) {
             let mut delta = None;
             // Every name written to a Windows side is checked before anything is created, so
             // a refused name deep in a folder leaves no half-copied folder behind.
+            let mut normalizing = std::collections::HashSet::new();
             if dst_windows {
+                let mut unique = std::collections::HashSet::new();
                 for n in names {
                     let n = n.as_str().ok_or_else(|| error("잘못된 파일 이름"))?;
                     name(n)?;
                     windows_target(n, n)?;
+                    if !unique.insert(windows_name_key(n)) { return Err(error("Windows에서 같은 이름이 되는 파일이 여러 개 있습니다. 이름을 바꾼 뒤 복사하세요")); }
+                    // rsync can rename the top-level argument explicitly; only names
+                    // inside a folder need the component-by-component SFTP path.
+                    let mut changes = false;
                     let from = if from_remote {
                         join(&src_path, n)?
                     } else {
                         Path::new(&src_path).join(n).to_string_lossy().into_owned()
                     };
                     if src.stat(&from)?.is_some_and(|e| e.dir && !e.link) {
-                        windows_tree(&mut src, &from, n, 0, &control)?;
+                        changes |= windows_tree(&mut src, &from, n, 0, &control)?;
                     }
+                    if changes { normalizing.insert(n.to_string()); }
                 }
             }
             for n in names {
@@ -606,15 +618,17 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                 } else {
                     Path::new(&src_path).join(n).to_string_lossy().into_owned()
                 };
+                cx.normalizing_tree = normalizing.contains(n);
+                let to_name = destination_name(n,dst_windows);
                 let to = if to_remote {
-                    join(&dst_path, n)?
+                    join(&dst_path, &to_name)?
                 } else {
-                    Path::new(&dst_path).join(n).to_string_lossy().into_owned()
+                    Path::new(&dst_path).join(&to_name).to_string_lossy().into_owned()
                 };
                 let compare = |p: &str| {
                     let p = p.replace('\\', "/");
                     if src_windows {
-                        p.to_lowercase()
+                        windows_name_key(&p)
                     } else {
                         p
                     }
@@ -640,7 +654,10 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                         "파일/폴더 종류가 충돌하거나 대상이 심볼릭 링크입니다",
                     ));
                 }
-                let candidate = (requested == "rsync" || entry.dir || destination.is_some())
+                if requested == "rsync" && cx.normalizing_tree {
+                    return Err(error("Windows에 한글 파일명을 완성형으로 저장하려면 자동 또는 일반 전송을 선택하세요"));
+                }
+                let candidate = !cx.normalizing_tree && (requested == "rsync" || entry.dir || destination.is_some())
                     && requested != "sftp"
                     && from_remote != to_remote
                     && !moving
@@ -699,19 +716,23 @@ pub fn start(v: Value, host: Host, emit: Emit) {
     });
 }
 /// Every name under a source folder, checked against what Windows can store.
-fn windows_tree(src: &mut Endpoint, path: &str, shown: &str, depth: usize, c: &Control) -> io::Result<()> {
+fn windows_tree(src: &mut Endpoint, path: &str, shown: &str, depth: usize, c: &Control) -> io::Result<bool> {
     c.check()?;
     if depth > 128 {
         return Err(error("폴더가 너무 깊습니다"));
     }
+    let mut changes = false;
+    let mut unique = std::collections::HashSet::new();
     for e in src.list(path)? {
         let shown = format!("{shown}/{}", e.name);
         windows_target(&e.name, &shown)?;
+        if !unique.insert(windows_name_key(&e.name)) { return Err(error(format!("Windows에서 같은 이름이 되는 파일이 여러 개 있습니다: {shown}"))); }
+        changes |= destination_name(&e.name,true) != e.name;
         if e.dir && !e.link {
-            windows_tree(src, &join(path, &e.name)?, &shown, depth + 1, c)?;
+            changes |= windows_tree(src, &join(path, &e.name)?, &shown, depth + 1, c)?;
         }
     }
-    Ok(())
+    Ok(changes)
 }
 fn rsync_exe() -> Option<PathBuf> {
     let name = if cfg!(windows) { "rsync.exe" } else { "rsync" };
@@ -898,10 +919,51 @@ mod tests {
             moving: false,
             modes: true,
             same_fs: true,
+            target_windows: false,
+            normalizing_tree: false,
             done: 0,
             last: Instant::now() - Duration::from_secs(1),
         };
         (root, Endpoint { sftp: None, cfg: None }, Endpoint { sftp: None, cfg: None }, cx)
+    }
+
+    #[test]
+    fn windows_destinations_compose_names_and_keep_source_bytes() {
+        let nfd="정보공개 결정통지서(접수번호_12345678).pdf";
+        let nfc="정보공개 결정통지서(접수번호_12345678).pdf";
+        assert_eq!(destination_name(nfd,true),nfc);
+        assert_eq!(destination_name(nfd,false),nfd);
+        assert_eq!(windows_name_key(nfd),windows_name_key(nfc));
+        assert_eq!(destination_leaf(&format!("/existing/가/{nfd}"),true),format!("/existing/가/{nfc}"));
+        let (root,mut src,mut dst,mut cx)=fixture();
+        let from=root.join("from"); let to=root.join("to");
+        std::fs::create_dir(from.join("폴더")).unwrap();
+        std::fs::write(from.join(nfd),b"%PDF-1.4 synthetic bytes\n").unwrap();
+        std::fs::write(from.join("폴더/한글.txt"),b"nested bytes").unwrap();
+        assert!(windows_tree(&mut src,&from.to_string_lossy(),"source",0,&cx.control).unwrap());
+        cx.target_windows=true; cx.normalizing_tree=true; cx.policy="replace".into();
+        cx.copy(&mut src,&mut dst,&from.to_string_lossy(),&to.to_string_lossy(),0).unwrap();
+        assert_eq!(std::fs::read(to.join(nfc)).unwrap(),b"%PDF-1.4 synthetic bytes\n");
+        assert_eq!(std::fs::read(to.join("폴더/한글.txt")).unwrap(),b"nested bytes");
+        assert_eq!(std::fs::read(from.join(nfd)).unwrap(),b"%PDF-1.4 synthetic bytes\n");
+        #[cfg(windows)]
+        for entry in std::fs::read_dir(&to).unwrap() { let name=entry.unwrap().file_name().to_string_lossy().into_owned(); assert_eq!(destination_name(&name,true),name); }
+        // Existing normalized names still use the normal conflict policy.
+        cx.policy="keep".into();
+        cx.copy(&mut src,&mut dst,&from.join(nfd).to_string_lossy(),&to.join(nfd).to_string_lossy(),0).unwrap();
+        assert_eq!(std::fs::read_dir(&to).unwrap().count(),3);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn normalization_aliases_are_rejected_before_writing() {
+        let (root,mut src,_,cx)=fixture();
+        std::fs::write(root.join("from/가.txt"),b"composed").unwrap();
+        std::fs::write(root.join("from/가.txt"),b"decomposed").unwrap();
+        assert_eq!(std::fs::read_dir(root.join("from")).unwrap().count(),2);
+        assert!(windows_tree(&mut src,&root.join("from").to_string_lossy(),"source",0,&cx.control).is_err());
+        assert_eq!(std::fs::read_dir(root.join("to")).unwrap().count(),0);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
