@@ -104,6 +104,12 @@ pub(crate) struct Capture {
 // GDI objects and the D3D context are used by one viewer's thread at a time (the mutex).
 unsafe impl Send for Capture {}
 
+/// (Windows has no frame-arrival signal: its pump captures on a timer.)
+pub(crate) fn on_frame(_wake: Box<dyn Fn() + Send>) -> u64 {
+    0
+}
+pub(crate) fn off_frame(_id: u64) {}
+
 impl Capture {
     fn new() -> Capture {
         let mut c = Capture { x: 0, y: 0, w: 0, h: 0, mdc: null_mut(), bmp: null_mut(), bits: null_mut(), dup: None, dup_retry: Instant::now(), under: None, gdi_logged: false };

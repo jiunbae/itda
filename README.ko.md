@@ -6,18 +6,16 @@
 
 **내 기기를 잇다.** · Your devices, within reach.
 
-**Mac**, **Windows PC**, **Linux**를 여는 작고 빠른 원격 데스크톱입니다. iPhone과 Mac을 포함한 **모든 브라우저**에서도 내 기기들을 볼 수 있습니다.
+**Windows와 Mac에서 다른 기기의 화면과 파일에 연결하세요.** 파일은 별도 창에서 탐색하고, 휴대폰과 태블릿에서는 브라우저로 저장한 기기를 열 수 있습니다.
 
-[![Release](https://img.shields.io/github/v/release/jiunbae/itda?style=flat-square&color=4744b0)](https://github.com/jiunbae/itda/releases/latest)
-[![CI](https://img.shields.io/github/actions/workflow/status/jiunbae/itda/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/jiunbae/itda/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-33d1c2?style=flat-square)](LICENSE)
-![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=flat-square&logo=windows)
-![macOS 12+](https://img.shields.io/badge/macOS-12%2B-555?style=flat-square&logo=apple)
-![Rust](https://img.shields.io/badge/Rust-~6%20MB%20exe-ff6a43?style=flat-square&logo=rust)
+[![Release](https://img.shields.io/github/v/release/jiunbae/itda?style=flat-square&color=4744b0)](https://github.com/jiunbae/itda/releases/latest) [![CI](https://img.shields.io/github/actions/workflow/status/jiunbae/itda/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/jiunbae/itda/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-33d1c2?style=flat-square)](LICENSE) ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=flat-square&logo=windows) ![macOS 12+](https://img.shields.io/badge/macOS-12%2B-555?style=flat-square&logo=apple) ![Rust](https://img.shields.io/badge/Built_with-Rust-ff6a43?style=flat-square&logo=rust)
 
 [**다운로드**](https://github.com/jiunbae/itda/releases/latest) · [웹사이트](https://jiun.dev/itda/) · [시작하기](https://jiun.dev/itda/start.html) · [보안](SECURITY.md) · [English](README.md)
 
-<img src="web/help/itda-home.webp" width="860" alt="Itda 홈: 저장된 Mac과 PC가 미리보기 카드로 보입니다">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/home-window-dark.png">
+  <img src="docs/img/home-window-light.png" width="960" alt="저장한 기기, 그룹과 파일 브라우저가 있는 Itda 주소록">
+</picture>
 
 </div>
 
@@ -27,12 +25,13 @@
 
 |  |  |
 |---|---|
-| ⚡ **가볍고 빠릅니다** | 설치 없이 실행하는 6 MB짜리 exe 하나입니다. 원격 화면은 Win32 렌더러가 직접 그리고(ZRLE, 바뀐 부분만 다시 그리기, 모니터별 DPI), 연결마다 별도 프로세스에서 돌아갑니다. |
+| ⚡ **가볍고 빠릅니다** | Windows 실행 파일과 Apple 실리콘·Intel용 Mac 앱을 제공합니다. 로컬 커서와 변경 영역 갱신으로 화면 전송을 줄이고, 원격 화면은 각각의 창으로 엽니다. |
 | 🍎 **macOS 화면 공유에 맞췄습니다** | Apple ARD 로그인(DH + AES), Mac 단축키(⌘Space, ⌘Tab, Mission Control…), 한/영 키, 여러 모니터, 양방향 클립보드를 지원합니다. |
 | 🪟 **Windows PC도 엽니다** | **이 PC 공유**를 켜면 어떤 Windows든 ‘허용할까요?’를 묻는 VNC 서버가 됩니다. **원격 데스크톱**은 PC에서는 `mstsc`로, 브라우저와 Mac 앱에서는 내장 RDP 브리지로 열고, 해상도가 창 크기를 따라갑니다. |
 | 🌐 **브라우저가 곧 뷰어** | 웹 뷰어를 켜고 QR 코드를 찍으면 iPhone, Android, Mac, Linux에서 앱 설치 없이 내 기기와 *이 PC*를 엽니다. 앱처럼 설치할 수도 있습니다(PWA). |
-| 🔒 **암호는 밖으로 나가지 않습니다** | 암호는 Windows 자격 증명 관리자(Mac은 키체인)에만 저장되고 브라우저로 전달되지 않습니다. **SSH 터널** 암호화, 잠금이 걸리는 PIN 로그인, 출처 확인을 지원합니다. |
+| 🔒 **암호는 안전하게 보관합니다** | 암호는 Windows 자격 증명 관리자(Mac은 키체인)에만 저장되고 브라우저로 전달되지 않습니다. **SSH 터널** 암호화, 잠금이 걸리는 PIN 로그인, 출처 확인을 지원합니다. |
 | 🛰️ **Tailscale로 어디서나** | tailnet의 기기가 자동으로 나타나고, 웹 뷰어에 `https://…ts.net` 주소가 생깁니다. 포트 포워딩이 필요 없습니다. |
+| 📁 **파일은 별도 창에서** | 저장 계정으로 SSH/SFTP에 연결해 탭, 미리보기, 복사·이동과 지원 환경의 rsync 증분 전송을 사용합니다. Mac과 Windows 각각에 맞춘 파일 창을 제공합니다. |
 | 👤 **계정** | 로그인 정보를 한 번 저장해 여러 기기에 씁니다. 암호를 한 번만 바꾸면 그 계정을 쓰는 모든 기기에 적용됩니다. |
 | 🧭 **친절합니다** | 첫 실행 안내, 스크린샷이 있는 사용 시나리오별 도움말, 무엇을 해야 하는지 알려 주는 오류 안내가 있습니다. |
 
@@ -41,7 +40,7 @@
 [릴리스](https://github.com/jiunbae/itda/releases/latest)에서 `Itda-macos-universal.zip`을 받으세요. macOS 12 이상, Apple 실리콘과 Intel 모두에서 실행됩니다.
 
 1. 압축을 풀고 **Itda.app**을 응용 프로그램 폴더로 옮깁니다.
-2. 아직 공증을 받지 않은 앱입니다. 처음 열 때 ‘Apple이 확인할 수 없습니다’가 뜨면 **완료**를 누르고, **시스템 설정 → 개인정보 보호 및 보안** 아래쪽의 **그래도 열기**를 누릅니다. macOS 14 이하에서는 **오른쪽 클릭 → 열기 → 열기**로 실행합니다.
+2. **Itda.app**을 엽니다. 공식 Mac 릴리스는 Developer ID 서명과 Apple 공증을 거칩니다.
 3. **기기 추가:** **주변 기기**(Bonjour와 Tailscale)에서 고르거나 주소를 직접 입력합니다.
 
 Windows판과 같은 홈을 Mac에 맞는 말로 보여 줍니다. 미리보기가 있는 주소록, 주변 기기, 계정, 휴대폰용 웹 뷰어(QR + PIN), 도움말, 설정이 모두 있습니다.
@@ -53,15 +52,31 @@ Windows판과 같은 홈을 Mac에 맞는 말로 보여 줍니다. 미리보기�
 
 내부적으로 각 연결 창은 `127.0.0.1`의 전용 게이트웨이에 붙은 웹 뷰어(noVNC)이고, 실행할 때마다 새로 만든 토큰으로 로그인합니다.
 
+### Mac 고성능 화면 공유
+
+호환되는 원격 Mac의 기기 메뉴에서 SSH로 Itda를 설치·업데이트하고 **고성능 모드**를 켤 수 있습니다. 기본 VNC 화면 전송 대신 ScreenCaptureKit과 H.264를 사용합니다. 화면을 제공하는 Mac에서 화면 기록·손쉬운 사용 권한이 필요하며, **설정 → 권한 도우미 열기**로 상태를 확인하고 관련 시스템 설정을 엽니다. macOS 자체의 캡처 확인 안내는 별도로 표시될 수 있습니다. 캡처·인코딩 개선은 화면을 제공하는 Mac에도 새 버전을 설치해야 적용됩니다.
+
+고성능 모드는 macOS 로그인 화면의 조작을 제공하지 않습니다. 해당 로그인 경로가 필요하면 Mac에서 **Apple 화면 공유 앱에서 열기**를 사용하세요. 성능은 캡처 내용·네트워크·수신 환경에 따라 달라지며, 단일 뷰어 지연 개선은 [측정 보고서](docs/hp-performance-2026-10-21.md)에서 진행 상황을 확인할 수 있습니다.
+
 ## 🚀 빠른 시작
 
-1. [릴리스](https://github.com/jiunbae/itda/releases/latest)에서 `itda.exe`를 **받아 실행**합니다. WebView2는 Windows 11에 기본으로 들어 있고, Windows 10에서 없다면 [WebView2 런타임](https://go.microsoft.com/fwlink/p/?LinkId=2124703)을 설치하세요.
+1. [릴리스](https://github.com/jiunbae/itda/releases/latest)에서 Windows는 `itda.exe`, Mac은 `Itda-macos-universal.zip`을 받습니다. Windows 실행 파일을 열거나, 압축을 푼 Mac 앱을 응용 프로그램 폴더로 옮겨 엽니다. WebView2는 Windows 11에 기본으로 들어 있고, Windows 10에서 없다면 [WebView2 런타임](https://go.microsoft.com/fwlink/p/?LinkId=2124703)을 설치하세요.
 2. **연결할 기기를 준비합니다**
    - **Mac:** 시스템 설정 → 일반 → 공유 → **화면 공유** 켜기.
    - **Windows:** Itda → **공유** → **이 PC 공유**를 켜거나, Pro 에디션이라면 원격 데스크톱을 켭니다.
    - **Linux:** 아무 VNC 서버나 실행합니다.
 3. **연결합니다.** 첫 실행 안내가 차례로 알려 주고, 같은 네트워크의 기기는 저절로 나타납니다.
 4. **휴대폰이나 Mac 브라우저에서:** **공유** → **모두 켜기** → QR 코드 찍기 → PIN 입력.
+
+### SSH로 다른 기기에 설치·설정 공유
+
+먼저 Itda의 SSH 파일 탐색이나 SSH 화면 연결로 대상 기기에 연결한 뒤 **설정 → 원격 기기에 설치·설정 공유** 또는 기기 메뉴의 같은 동작을 엽니다. 대상과 보낼 연결 프로필·앱 설정을 선택하고 확인 후 설치합니다. 대상은 macOS 원격 로그인 또는 Windows OpenSSH 서버가 필요하며, 기존에 신뢰한 SSH 호스트 키를 엄격하게 확인합니다.
+
+암호와 계정에 명시적으로 연결한 SSH 개인 키는 기본으로 선택되지 않는 별도 옵션입니다. 공유를 선택하면 SSH 표준 입력으로 보내 대상의 자격 증명 저장소와 개인 키 폴더에 보관합니다. 기본 `~/.ssh` 전체, 호스트 신뢰 기록, 공유·웹 공개 설정과 macOS 권한은 복제하지 않습니다. 기존 대상 프로필은 유지하며 가져온 프로필만 갱신합니다. 대상 앱이 실행 중이면 먼저 종료해야 하며, 강제로 종료하지 않습니다. 대화형 데스크탑이 없는 SSH 세션에서는 설치 후 대상에서 앱을 직접 열도록 안내합니다.
+
+### Itda 업데이트
+
+**설정 → 업데이트 확인**에서 새 버전을 확인합니다. 사용자가 설치를 확인하면 내려받아 앱을 다시 시작하며, 열린 연결은 종료됩니다. 릴리스의 SHA-256 체크섬을 확인하고, Developer ID로 서명된 Mac 앱은 같은 팀의 서명이 있는 업데이트만 설치합니다.
 
 ## 📁 화면과 별도로 파일 열기
 
@@ -73,16 +88,40 @@ macOS의 **Finder 연결 폴더**는 저장된 기기의 `.inetloc` 바로가기
 
 macOS 파일 창의 복사는 Finder용 파일 URL을 만듭니다. 원격 파일은 먼저 준비되며, **파일 복사 준비 완료** 안내 뒤 Finder에서 붙여넣습니다. 준비 중에는 오래된 HTML 클립보드를 비워 `.textClipping`으로 잘못 붙여넣지 않게 합니다. 원격 복사본은 앱을 종료해도 붙여넣을 수 있도록 `…/Itda/file-exports`에 유지됩니다. 창 안 드래그는 기존 폴더·탭 전송을 사용하고, 창 밖 드래그는 Finder가 수락한 뒤 파일 약속으로 내려받습니다. 외부 드래그는 복사만 하며 원격 원본을 삭제하지 않습니다. 이 경로는 파일 브라우저용이며 원격 화면의 Finder 클립보드와는 별개입니다.
 
-<img src="web/help/itda-files-browser.png" width="860" alt="File browser tab in the isolated SSH test fixture">
+**macOS**
 
-<img src="web/help/itda-files.png" width="860" alt="격리된 SSH 테스트 환경에서 내 기기와 원격 기기 사이의 파일 전송을 확인한 macOS 파일 창">
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/img/files-mobile-dark.png">
+  <source media="(max-width: 600px)" srcset="docs/img/files-mobile-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-focus-dark.png">
+  <img src="docs/img/files-focus-light.png" width="960" alt="폴더 탭, 사이드바와 한 줄 경로·항목 표시가 있는 macOS 파일 브라우저">
+</picture>
 
-_격리된 SSH 테스트 환경의 파일 창입니다._
+**Windows**
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/img/files-windows-mobile-dark.png">
+  <source media="(max-width: 600px)" srcset="docs/img/files-windows-mobile-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-windows-dark.png">
+  <img src="docs/img/files-windows-light.png" width="960" alt="주소 표시줄, 명령 모음, 탐색 영역과 자세히 목록이 있는 Windows 파일 브라우저">
+</picture>
 
 macOS 파일 창은 단일 도구 모음, 너비를 조절할 수 있는 사이드바, 하단 경로 막대와 이름·수정한 날짜·크기·종류 열을 제공합니다. 목록의 열 너비도 조절할 수 있습니다. ⌘1/⌘2/⌘3/⌘4는 아이콘/목록/열/갤러리 보기, ⌘[/⌘]는 뒤로/앞으로, ⌘⇧G는 폴더로 이동, ⌘⇧.은 숨김 파일 표시입니다. 폴더별 탭(⌘T/⌘W, Control+Tab)은 경로·이동 기록·선택·보기 방식을 각각 유지합니다. 미리보기 패널과 Space 훑어보기에서 텍스트·이미지·macOS에서 PDF 첫 페이지·브라우저가 지원하는 오디오/동영상을 표시합니다. 텍스트는 512KiB, 미디어는 16MiB로 제한하고, 지원하지 않는 형식은 정보와 명시적인 열기 동작을 제공합니다. HTML/SVG는 실행 가능한 콘텐츠로 표시하지 않습니다. 드래그 중 텍스트 선택을 막고, 폴더·즐겨찾기·다른 폴더 탭을 전송 대상으로 지원합니다. 동작 팝업에서 분할 보기·전송 내역·연결 설정에 접근합니다.
 
-<img src="web/help/itda-files-columns.png" width="860" alt="Itda 열 보기">
-<img src="web/help/itda-files-gallery.png" width="860" alt="Itda 갤러리 보기와 미리보기">
+<details>
+<summary>열 보기와 갤러리 보기</summary>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-columns-dark.png">
+  <img src="docs/img/files-columns-light.png" width="960" alt="상위 폴더를 유지하는 열 보기">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-gallery-dark.png">
+  <img src="docs/img/files-gallery-light.png" width="960" alt="텍스트 미리보기를 표시한 갤러리 보기">
+</picture>
+
+</details>
 
 기기의 저장 계정을 기본으로 사용하고, 파일용으로 다른 저장 계정을 선택해도 화면 연결 계정은 바뀌지 않습니다. 연결 방법·주소·포트는 접힌 **연결 설정**에서 변경합니다. 자동 모드는 지정된 공유폴더가 있으면 Finder/탐색기를 열고, 그 외에는 SFTP를 시도합니다. SSH를 사용할 수 없고 SMB 서비스가 확인되는 경우 운영체제 파일 관리자로 이어집니다. 인증 실패는 계정 수정을 안내합니다. SMB 로그인은 운영체제에서 관리하므로 별도 확인이 필요할 수 있습니다.
 
@@ -95,7 +134,7 @@ macOS 파일 창은 단일 도구 모음, 너비를 조절할 수 있는 사이�
 
 **증분 전송:** 자동 모드는 폴더 또는 8MiB 이상 파일을 ‘바꾸기’로 복사할 때 로컬/상대편 rsync와 호환 SSH 셸을 확인해 변경된 파일·블록만 전송합니다. 지원하지 않으면 SFTP로 복사합니다. rsync는 설치되어 있어야 하며 Windows 로컬 rsync는 함께 제공되는 `cygpath.exe`가 있는 호환 배포판만 자동 감지합니다. ‘일반 전송’은 rsync를 실행하지 않습니다. rsync 중단 파일은 `.itda-partial`로 남겨 다음 전송에 재사용합니다. SFTP 전송의 블록 증분과 중단 지점 재개는 아직 제공하지 않습니다.
 
-탐색용 SSH와 전송용 SSH는 분리되어 대용량 복사 중에도 탐색할 수 있습니다. 동시에 실행하는 전송은 두 개, 파일당 미응답 SFTP 요청은 최대 64개(32KiB씩)로 제한합니다. 영구 삭제·삭제를 전파하는 미러 동기화·심볼릭 링크 따라가기는 기본 작업에 포함하지 않습니다. 일반 SFTP 복사는 심볼릭 링크를 만나면 원본을 유지하고 오류를 표시합니다. 목록에서 폴더 펼치기, rclone/WebDAV, Itda 간 자체 공유 서버, SFTP 파일을 Finder/탐색기로 끌어내는 가상 파일 제공, ACL/확장 속성 전체 보존은 후속 범위입니다. 모든 Finder/탐색기 기능을 대체하는 것으로 표시하지 않습니다.
+탐색용 SSH와 전송용 SSH는 분리되어 대용량 복사 중에도 탐색할 수 있습니다. 동시에 실행하는 전송은 두 개, 파일당 미응답 SFTP 요청은 최대 64개(32KiB씩)로 제한합니다. 영구 삭제·삭제를 전파하는 미러 동기화·심볼릭 링크 따라가기는 기본 작업에 포함하지 않습니다. 일반 SFTP 복사는 심볼릭 링크를 만나면 원본을 유지하고 오류를 표시합니다. 목록에서 폴더 펼치기, rclone/WebDAV, Itda 간 자체 공유 서버, Windows에서 SFTP 파일을 탐색기로 끌어내는 가상 파일 제공, ACL/확장 속성 전체 보존은 후속 범위입니다. 모든 Finder/탐색기 기능을 대체하는 것으로 표시하지 않습니다.
 
 ## 다중 모니터
 
@@ -109,17 +148,33 @@ macOS 앱 종료 시 모든 WebView와 창을 Objective-C thread-local 정리 �
 
 ## 🖼️ 스크린샷
 
-| 공유 페이지: 웹 뷰어 QR, PIN, 이 PC | 연결 편집 (Mac / Windows / RDP / Linux) |
-|---|---|
-| <img src="web/help/itda-web.webp" alt="공유 페이지"> | <img src="web/help/itda-edit.webp" alt="연결 편집"> |
-| **주변 기기** (Bonjour + Tailscale) | **계정**: 로그인 하나를 여러 기기에 |
-| <img src="web/help/itda-nearby.webp" alt="주변 기기"> | <img src="web/help/itda-accounts.webp" alt="계정"> |
+### 주변 기기에서 바로 추가
+
+Bonjour와 Tailscale에서 찾은 기기를 같은 화면에서 추가합니다.
+
+<img src="docs/img/nearby-window.png" width="960" alt="Bonjour와 Tailscale에서 찾은 Mac과 PC가 표시된 주변 기기 화면">
+
+### 휴대폰에서는 브라우저로
+
+웹 뷰어를 켜고 QR 코드를 찍은 뒤 PIN을 입력합니다.
+
+<img src="docs/img/share.png" width="960" alt="웹 뷰어 주소, QR 코드와 PIN이 표시된 공유 설정">
 
 <p align="center">
-<img src="web/help/phone-list.webp" width="240" alt="휴대폰 웹 뷰어: 기기 목록">
-<img src="web/help/phone-view.webp" width="240" alt="휴대폰 웹 뷰어: Mac 화면">
-<img src="web/help/phone-edit.webp" width="240" alt="휴대폰 웹 뷰어: 기기 편집">
+<img src="docs/img/phone-list.png" width="360" alt="저장한 기기들이 표시된 휴대폰 웹 뷰어">
 </p>
+
+<details>
+<summary>연결 편집과 저장 계정</summary>
+
+<img src="docs/img/editor.png" width="960" alt="화면과 파일 연결을 설정하는 연결 편집">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/accounts-dark.png">
+  <img src="docs/img/accounts-light.png" width="960" alt="여러 기기에서 함께 사용하는 저장 계정">
+</picture>
+
+</details>
 
 ## 🧩 동작 방식
 
@@ -293,7 +348,9 @@ Mac에서는 `scripts/macos-bundle.sh universal`로 `dist/Itda-macos-universal.z
 - [x] Mac 앱 (Mac용 Itda)
 - [ ] Linux 앱 (지금은 웹 뷰어를 쓰세요)
 - [ ] 브라우저 RDP: 클립보드, 소리, 드라이브, RD 게이트웨이
-- [ ] 서명된 설치 프로그램과 자동 업데이트
+- [x] 사용자 확인 후 앱 내 업데이트
+- [x] Mac 릴리스 Developer ID 서명과 Apple 공증
+- [ ] 서명된 Windows 설치 프로그램
 
 ## 🤝 기여와 보안
 

@@ -116,6 +116,9 @@ impl Demand {
                 if let Ok(b) = <[u8; 4]>::try_from(&payload[..]) {
                     let seq = u32::from_be_bytes(b);
                     if let Some(i) = self.inflight.iter().position(|&(s, ..)| s == seq) {
+                        if crate::trace::on() {
+                            crate::trace::add("ack", self.inflight[i].2.elapsed().as_secs_f32() * 1000.0);
+                        }
                         // A fence answers everything sent before it too.
                         self.inflight.drain(..=i);
                     }

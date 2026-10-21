@@ -144,7 +144,7 @@ function onMessage(m) {
   if (window.ItdaFiles && window.ItdaFiles.message(m)) return;
   switch (m.type) {
     case 'state':
-      Object.assign(S, { accounts: m.accounts || [], hosts: m.hosts, settings: m.settings, sessions: m.sessions || {}, fileWindows: m.file_windows || [], online: m.online || {}, found: m.found || [], version: m.version, sysDark: !!m.dark, sshOk: m.ssh_ok, tailnet: m.tailnet, update: m.update || null });
+      Object.assign(S, { accounts: m.accounts || [], hosts: m.hosts, settings: m.settings, sessions: m.sessions || {}, fileWindows: m.file_windows || [], online: m.online || {}, found: m.found || [], version: m.version, sysDark: !!m.dark, sshOk: m.ssh_ok, tailnet: m.tailnet, update: m.update || null, loginItem: m.login_item || null });
       applyTheme();
       render();
       window.ItdaFiles?.boot();
@@ -152,6 +152,11 @@ function onMessage(m) {
       if (m.update_failed) toast(`지난 업데이트를 마치지 못했습니다 — ${m.update_failed}`, 'E7BA', true);
       if (m.quick) quickConnect(m.quick);
       else if (!S.settings.onboarded && !S.hosts.length && !topModal()) showOnboarding();
+      break;
+    case 'login_item':
+      S.loginItem = m.state;
+      if (S.settings) S.settings.login_start = m.state !== 'off';
+      if (S.page === 'settings') render();
       break;
     case 'apple_screen_sharing_result':
       toast(m.ok ? 'Apple 화면 공유 앱에 연결을 요청했습니다' : m.error || 'Apple 화면 공유 앱을 열 수 없습니다', 'E7F4', !m.ok);
@@ -805,6 +810,9 @@ function renderSettings() {
 
     <div class="group-title">앱${more('app')}</div>
     ${MAC ? '' : setting('E8A5', '창을 닫으면 알림 영역에서 계속 실행', '알림 영역 아이콘으로 빠르게 다시 연결할 수 있습니다', toggle('tray', st.tray))}
+    ${S.loginItem === 'approval' || S.loginItem === 'disabled'
+      ? setting('E7E8', S.loginItem === 'approval' ? '로그인하면 Itda 실행 — 허용 필요' : '로그인하면 Itda 실행 — 시작 앱에서 꺼짐', S.loginItem === 'approval' ? '시스템 설정 › 일반 › 로그인 항목에서 Itda를 허용해야 로그인할 때 열립니다' : 'Windows 설정 › 앱 › 시작 프로그램(또는 작업 관리자)에서 Itda가 꺼져 있습니다. 거기서 켜야 로그인할 때 시작합니다', `<button class="btn" data-act="login-item-settings">${S.loginItem === 'approval' ? '로그인 항목 열기' : '시작 앱 설정 열기'}</button>${toggle('login_start', true)}`)
+      : setting('E7E8', '로그인하면 Itda 실행', MAC ? '이 Mac에 로그인하면 Itda가 열립니다. 시스템 설정 › 일반 › 로그인 항목에서도 바꿀 수 있습니다' : '이 PC에 로그인하면 알림 영역에서 시작합니다. 이 PC 공유가 켜져 있으면 바로 다른 기기에서 접속할 수 있습니다', toggle('login_start', !!st.login_start))}
     ${setting('EA8F', '알림', '연결이 끊기거나 다시 연결될 때 알려 줍니다', toggle('notify', st.notify))}
     ${setting('E91B', '미리보기 저장', `마지막 화면을 ${HERE}에만 작게 저장해 주소록에 표시합니다`, toggle('thumbnails', st.thumbnails), true)}
 
@@ -931,6 +939,7 @@ function go(page) {
   $('#content').scrollTop = 0;
   if (page === 'nearby' && !S.found.length) scan();
   if (page === 'share') { send('web_info'); send('share_info'); }
+  if (page === 'settings') send('login_item');
   render();
 }
 
@@ -1583,6 +1592,7 @@ function act(a, el) {
     case 'new': return openEdit();
     case 'quick': return quickConnect(S.query);
     case 'page': return go(el.dataset.page);
+    case 'login-item-settings': return send('login_item_settings');
     case 'scan': return scan();
     case 'add-found': {
       const os = el.dataset.os;

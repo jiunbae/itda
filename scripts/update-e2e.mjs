@@ -60,8 +60,24 @@ try {
     await page.locator('input[data-set="auto_update"]').evaluate((e) => e.click());
     const saved = (await sent("settings")).at(-1);
     assert(saved && saved.settings.auto_update === false, "Turning off the automatic check was not saved");
+    // Starting at login is off until turned on.
+    const login = page.locator('input[data-set="login_start"]');
+    assert(!(await login.isChecked()), "Login start on by default");
+    await login.evaluate((e) => e.click());
+    assert((await sent("settings")).at(-1).settings.login_start === true, "Turning on login start was not saved");
+    // The system's answer wins: waiting for approval offers System Settings, and an item
+    // removed there shows as off.
+    assert((await sent("login_item")).length >= 1, "Opening settings did not ask for the login item's state");
+    await page.evaluate(() => itda.recv({ type: "login_item", state: "approval" }));
+    await page.locator('[data-act="login-item-settings"]').click();
+    assert((await sent("login_item_settings")).length === 1, "Login Items not opened");
+    await page.evaluate(() => itda.recv({ type: "login_item", state: "disabled" }));
+    assert((await page.locator("#content").textContent()).includes("시작 앱에서 꺼짐"), "Startup-apps disable not shown");
+    await page.evaluate(() => itda.recv({ type: "login_item", state: "off" }));
+    assert(!(await page.locator('input[data-set="login_start"]').isChecked()), "Removed login item still shown on");
+    assert(await page.locator('[data-act="login-item-settings"]').isHidden(), "Approval prompt left after removal");
     assert(!errors.length, errors.join("\n"));
     await page.close();
   }
-  console.log("PASS: update offered in sidebar/settings, manual check, confirm before install with open connections, progress/error, auto-check toggle");
+  console.log("PASS: update offered in sidebar/settings, manual check, confirm before install with open connections, progress/error, auto-check and login-start toggles");
 } finally { await browser.close(); server.close(); }

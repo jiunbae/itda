@@ -341,6 +341,8 @@ pub struct Settings {
     pub announce: bool,
     /// Look for a newer release at launch and once a day (installing still asks).
     pub auto_update: bool,
+    /// Start Itda (in the notification area on Windows) when the person here logs in.
+    pub login_start: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -396,6 +398,7 @@ impl Default for Settings {
             share: Share::default(),
             announce: true,
             auto_update: true,
+            login_start: false,
         }
     }
 }
