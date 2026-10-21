@@ -371,7 +371,9 @@ pub struct Share {
 
 impl Default for Share {
     fn default() -> Self {
-        Share { on: false, port: 5900, ask: true, trust_near: true, cmd_as_ctrl: true, view_only: false }
+        // Nearby trust is off for new installs: an address range doesn't prove a device is
+        // yours (shared Wi-Fi). Settings saved before keep their own choice.
+        Share { on: false, port: 5900, ask: true, trust_near: false, cmd_as_ctrl: true, view_only: false }
     }
 }
 
@@ -770,6 +772,13 @@ pub fn set_password_checked(id: &str, pass: Option<&str>) -> std::io::Result<()>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nearby_trust_is_off_for_new_installs_and_kept_for_old_ones() {
+        assert!(!super::Settings::default().share.trust_near);
+        let old: super::Settings = serde_json::from_str(r#"{"share":{"on":true,"port":5900,"ask":true,"trust_near":true}}"#).unwrap();
+        assert!(old.share.trust_near, "a saved choice must survive the new default");
+    }
+
     #[test]
     fn lan_address_keeps_the_port_and_the_way_in() {
         let mut h = super::Host { host: "jiun-home.tail.ts.net".into(), lan: "192.168.32.32".into(), kind: "rdp".into(), ..Default::default() };

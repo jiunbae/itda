@@ -290,7 +290,7 @@ Open **공유** in the sidebar → **웹 뷰어** (or **모두 켜기**). Open t
 - Desktop Duplication capture with GDI fallback, 64×64 tile diff, ZRLE
 - SendInput for the mouse and keyboard; a Mac's ⌘ acts as Ctrl
 - clipboard in both directions
-- a random VNC password plus optional approval (enabled by default). Nearby trust is also on by default: private/link-local/ULA and `100.64.0.0/10` addresses skip approval after the password succeeds. These ranges do not establish device ownership; turn off **공유 → 내 기기는 묻지 않기** to require approval
+- a random VNC password plus optional approval (enabled by default). Nearby trust (**공유 → 내 기기는 묻지 않기**) is off by default for new installs; when turned on, private/link-local/ULA and `100.64.0.0/10` addresses skip approval after the password succeeds. These ranges do not establish device ownership, so keep it off on shared networks
 - notifications and a tray badge while someone is watching, and a button that disconnects everyone
 - view-only mode and Bonjour registration
 
