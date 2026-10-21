@@ -119,6 +119,10 @@ jobs:
         run: node scripts/permissions-e2e.mjs
         env:
           SCREENSHOT_DIR: test-artifacts/permissions
+      - name: Connection editor (groups, suggestions, OS badges, HP block)
+        run: node scripts/editor-e2e.mjs
+      - name: Monitors and pointer batching
+        run: node scripts/monitors-e2e.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

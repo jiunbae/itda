@@ -12,7 +12,7 @@
   const inNewWindow = (e) => MAC ? e.metaKey : e.ctrlKey;
   if (window.ITDA_FILE_HOST) document.body.classList.add("file-window");
   const pageToken = crypto.randomUUID();
-  let pendingFolder = null, tabSwitch = null;
+  let pendingFolder = null, tabSwitch = null, pendingDeviceDrop = null;
   let host,
     layer,
     setup,
@@ -50,9 +50,13 @@
       return (sorting.desc ? -1 : 1) * (n || names(a, b));
     });
   }
-  function setSort(key, desc = sorting.desc) {
+  // `from_other`: the change came from another file window (don't echo it back).
+  function setSort(key, desc = sorting.desc, from_other = false) {
+    if (sorting.key === key && sorting.desc === desc && from_other) return;
     sorting = { key, desc };
     try { localStorage.setItem("itda.file.sort", JSON.stringify(sorting)); } catch {}
+    // Every open file window follows at once, not only the next one opened.
+    if (!from_other) send("files_sort", { sort: sorting });
     // Indices and virtual-list offsets belonged to the old order; selections are names.
     const states = [panes, ...fileTabs.map(t => t.panes).filter(Boolean)];
     for (const state of states) for (const p of Object.values(state)) {
@@ -660,6 +664,7 @@
     setup.querySelector('[name="account"]').onchange = refresh;
     refresh();
     setup.querySelector("[data-close]").onclick = () => {
+      pendingDeviceDrop = null;
       if (tabSwitch) {
         // Cancelled: the tab returns to its previous device untouched.
         if (setupStarted && !fileTabs.some(t => t.host?.id === host.id)) call("disconnect");
@@ -768,6 +773,11 @@
     renderJobs();
     if (pendingFolder) { const path = pendingFolder; pendingFolder = null; nav("remote", path); }
     layer.querySelector(".files-list")?.focus({ preventScroll: true });
+    if (pendingDeviceDrop?.id === host.id) {
+      const { drag: d, move } = pendingDeviceDrop;
+      pendingDeviceDrop = null;
+      transfer(d.side, d.path, d.names, "remote", panes.remote.path, move, host.id, d.side === "remote" ? { id: d.host } : null);
+    }
   }
   function workspace(data) {
     if (fileWindow()) send("files_window_context", { window: fileWindow(), id: host.id, page: pageToken });
@@ -1313,6 +1323,7 @@
     fail("");
     switch (action) {
       case "close":
+        pendingDeviceDrop = null;
         if (window.ITDA_FILE_HOST) {
           send("files_window", { id: host.id, window: fileWindow(), close: true });
           return;
@@ -1851,7 +1862,7 @@
       const row = target?.closest("[data-index]");
       const side = row?.closest("[data-pane]")?.dataset.pane;
       if (side && visible(side)[Number(row.dataset.index)]?.dir) row.classList.add("files-drop-target");
-      else target?.closest("[data-bookmark],[data-tab]")?.classList.add("files-drop-target");
+      else target?.closest("[data-bookmark],[data-tab],[data-device]")?.classList.add("files-drop-target");
       const scroller = target?.closest(".files-list,.files-column");
       if (scroller) {
         const r = scroller.getBoundingClientRect();
@@ -1860,6 +1871,24 @@
       }
     }
   });
+  // A device shortcut is a destination, even when it has not been opened yet. Keep
+  // the source tab alive while connecting so a cancelled/failed connection loses no files.
+  function dropOnDevice(d, id, move) {
+    const h = hostById(id);
+    if (!h || setup) return;
+    const t = fileTabs.find(t => (t.id === currentTab ? host : t.host)?.id === id);
+    if (t) {
+      switchTab(t.id);
+      active = "remote"; networkMode = false; renderPanes();
+      const to = panes.remote.path;
+      if (d.host !== id || d.side !== "remote" || d.path !== to)
+        transfer(d.side, d.path, d.names, "remote", to, move, id, d.side === "remote" && d.host !== id ? { id: d.host } : null);
+      return;
+    }
+    pendingDeviceDrop = { id, drag: d, move };
+    newTab();
+    launch(h);
+  }
   function finishDrag(e) {
       if (!drag) return;
       const d = drag;
@@ -1875,6 +1904,8 @@
       // The tab may have changed device during the drag: remote files come from where they were.
       const origin = d.side === "remote" && d.host !== host.id ? { id: d.host } : null;
       if (!pane) {
+        const device = target?.closest("[data-device]");
+        if (device) { dropOnDevice(d, device.dataset.device, e.shiftKey); return; }
         const bookmark = target?.closest("[data-bookmark]");
         if (bookmark) {
           const p = panes[active];
@@ -1911,6 +1942,11 @@
     // same private in-app clipboard; opening a device must not discard it.
     if (m.type === "state" && m.files_clipboard) message({ type: "files_clipboard", clip: m.files_clipboard });
     if (["files_result", "files_job", "files_native_paste", "files_native_drag_end"].includes(m.type) && m.window !== pageToken) return true;
+    if (m.type === "files_sort") {
+      const s = m.sort || {};
+      if (sortKeys.includes(s.key)) setSort(s.key, s.desc === true, true);
+      return true;
+    }
     if (m.type === "files_clipboard") {
       // Another window copied (or used a cut): the latest Copy/Cut is what Paste uses here too.
       const c = m.clip || {};
@@ -2043,6 +2079,7 @@
       return true;
     }
     if (m.op === "native") {
+      if (pendingDeviceDrop) { pendingDeviceDrop = null; toast("기기 간 전송은 SSH / SFTP로 연결한 뒤 다시 시도해 주세요", "E8B7"); }
       if (window.ITDA_FILE_HOST)
         send("files_window", { id: host.id, window: fileWindow(), close: true });
       setup?.remove();
