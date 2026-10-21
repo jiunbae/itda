@@ -44,11 +44,22 @@ try{
  assert(await recovery.evaluate(()=>reads)>=2,'Lost first IPC reply permanently blocked checks');
  const recoveredReads=await recovery.evaluate(()=>reads);await recovery.clock.fastForward(1600);
  assert(await recovery.evaluate(()=>reads)>recoveredReads,'Guide without a requested permission did not poll');await recovery.close();
+ // The guide beside System Settings: when a switch doesn't take, it opens its help and offers
+ // to remove the earlier build's entry (the request goes to the app; nothing is changed here).
+ const g=await browser.newPage({viewport:{width:300,height:470}});await g.addInitScript(()=>{window.sent=[];window.ipc={postMessage:raw=>sent.push(JSON.parse(raw))};});
+ await g.goto(`http://127.0.0.1:${server.address().port}/permission-guide.html`);await g.evaluate(()=>itda.recv({type:'guide',permission:'screen'}));
+ assert(!await g.locator('#stale').evaluate(d=>d.open),'Stale help open before any wait');
+ await g.evaluate(()=>itda.recv({type:'guide',stale:true}));assert(await g.locator('#stale').evaluate(d=>d.open),'Stale help not opened');
+ await g.locator('[data-act="reset"]').click();assert(await g.evaluate(()=>sent.at(-1).cmd)==='guide_reset','Reset not routed to the app');
+ await g.evaluate(()=>itda.recv({type:'guide',stale:false}));assert(!await g.locator('#stale').evaluate(d=>d.open),'Stale help left open after reset');await g.close();
  // The remote panel must not confuse a stale report with a running server.
  await p.goto(`http://127.0.0.1:${server.address().port}/index.html`);await p.evaluate(()=>{window.remoteEvents=[];window.done=0;window.cancelled=0;const screen=document.createElement('div');screen.id='existing-session';screen.textContent='connected';document.body.append(screen);ItdaHpSetup.begin({id:'remote',name:'Studio Mac',send:(op,extra)=>remoteEvents.push({op,...extra}),done:()=>done++,cancel:()=>cancelled++});});
  await p.evaluate(()=>ItdaHpSetup.message({id:'other',ready:true,screen:true,access:true}));assert(await p.evaluate(()=>done)===0,'Other device completed setup');
  await p.evaluate(()=>ItdaHpSetup.message({id:'remote',error:'Temporary SSH failure'}));await p.getByRole('button',{name:'다시 시도',exact:true}).click();assert(await p.evaluate(()=>remoteEvents.at(-1).op)==='upgrade','Upgrade retry unavailable');
- await p.evaluate(()=>ItdaHpSetup.message({id:'remote',ready:true,screen:false,access:false}));await p.locator('[data-hp-open="screen"]').click();assert(await p.evaluate(()=>remoteEvents.at(-1).op==='permissions'&&remoteEvents.at(-1).permission==='screen'),'Settings action was not routed to remote');
+ // The remote helper opened by setup guides the steps: the panel only follows its progress.
+ await p.evaluate(()=>ItdaHpSetup.message({id:'remote',ready:true,screen:false,access:false}));assert(await p.locator('[data-hp-remote]').isVisible()&&await p.locator('[data-hp-open="screen"]').isHidden(),'Remote helper steps repeated in the local panel');assert((await p.locator('[data-hp-action="helper"]').textContent()).includes('다시 열기'),'Reopen action missing');
+ // When the remote helper couldn't be opened, the steps and their buttons come back.
+ await p.evaluate(()=>ItdaHpSetup.message({id:'remote',ready:true,screen:false,access:false,helper_error:'원격 Mac 화면에 로그인한 계정으로 연결해 주세요'}));assert(await p.locator('[data-hp-remote]').isHidden(),'Compact mode without a remote helper');await p.locator('[data-hp-open="screen"]').click();assert(await p.evaluate(()=>remoteEvents.at(-1).op==='permissions'&&remoteEvents.at(-1).permission==='screen'),'Settings action was not routed to remote');
  await p.evaluate(()=>ItdaHpSetup.message({id:'remote',status:true,error:'SSH temporarily unavailable'}));assert(await p.locator('[data-hp-error]').isVisible(),'Status failure not shown');
  await p.evaluate(()=>ItdaHpSetup.message({id:'remote',status:true,running:true,screen:true,access:false}));assert(await p.locator('[data-hp-error]').isHidden(),'Recovered status retained stale error');
  await p.evaluate(()=>ItdaHpSetup.message({id:'remote',status:true,running:false,screen:true,access:true}));assert(await p.evaluate(()=>done)===0,'Stopped server reported complete');

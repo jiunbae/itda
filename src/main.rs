@@ -128,6 +128,11 @@ fn main() {
     if host_mac::enabled() {
         host_mac::start_background();
     }
+    // Started over SSH to turn on high-performance sharing: only the permission helper shows.
+    #[cfg(target_os = "macos")]
+    if autostart::background_launch(std::env::args().skip(1)) {
+        autostart::AT_LOGIN.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     #[cfg(target_os = "macos")]
     home::run(None);
     #[cfg(not(target_os = "macos"))]
