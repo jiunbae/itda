@@ -742,10 +742,16 @@ pub fn run(quick: Option<String>) {
     let menu = menu();
     menu.init_for_nsapp();
     let dark = home(|m| is_dark(&m.settings));
+    // Started in the background (another Itda turning on high-performance sharing here over
+    // SSH): no home window, only the permission helper; the Dock icon brings the home back.
+    // Also when macOS reopens it mid-setup ("Quit & Reopen" after a permission is switched on).
+    let background = crate::autostart::AT_LOGIN.load(std::sync::atomic::Ordering::Relaxed)
+        || (crate::host_mac::enabled() && permission_guide::pending_recently());
     let window = WindowBuilder::new()
         .with_title(crate::APP)
         .with_inner_size(LogicalSize::new(1080.0, 720.0))
         .with_min_inner_size(LogicalSize::new(720.0, 500.0))
+        .with_visible(!background)
         .build(&event_loop)
         .expect("window");
     let view = match home_view(&window, dark, None, None, None) {

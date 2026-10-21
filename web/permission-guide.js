@@ -15,6 +15,8 @@
   if(m.app_path!==undefined)$('path').textContent=m.app_path||'';
   if(m.state!==undefined){const s=$('state');s.textContent=m.state||'';s.classList.toggle('error',!!m.error);}
   if(m.done){$('done-text').textContent=m.done;$('done').hidden=false;}
+  // Not granted after a while: open the "on but doesn't take" help with its reset button.
+  if(m.stale!==undefined)$('stale').open=!!m.stale;
  }};
  const app=$('app');
  app.addEventListener('pointerdown',e=>{if(e.button===0)drag={x:e.clientX,y:e.clientY};});
