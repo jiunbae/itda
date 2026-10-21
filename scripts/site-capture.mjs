@@ -5,7 +5,8 @@ import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const pw=await import(process.env.PLAYWRIGHT?pathToFileURL(process.env.PLAYWRIGHT).href:'playwright');
-const out=path.join(root,'docs/img');
+const out=path.resolve(process.env.CAPTURE_DIR||path.join(root,'docs/img'));
+fs.mkdirSync(out,{recursive:true});
 const hosts=[
   {id:'a1',name:'Studio Mac',os:'mac',host:'studio.local',user:'alex',favorite:true,group:'작업 공간',last_used:1780000000,remote_size:'2560×1600'},
   {id:'b2',name:'Office PC',os:'windows',host:'office.local',user:'',favorite:true,group:'작업 공간',last_used:1779999800,remote_size:'1920×1080'},
@@ -37,7 +38,15 @@ try{
     window.fixtureHosts=hosts;window.fixtureEntries=entries;
     window.ipc={postMessage:raw=>{
       const m=JSON.parse(raw);
-      if(m.cmd==='files'&&m.op==='connect')queueMicrotask(()=>itda.recv({type:'files_result',id:m.id,window:m.window,op:'connect',ok:true,data:{path:'/Users/alex/Documents',entries,local_path:'/Users/alex',local_entries:entries,rsync:true}}));
+      if(m.cmd!=='files')return;
+      const dir=name=>({name,dir:true,size:0,modified:1780000000});
+      const tree={'/':[dir('Users')],'/Users':[dir('alex')],'/Users/alex':[dir('Documents'),dir('Downloads'),dir('Desktop')],'/Users/alex/Documents':entries,'/Users/alex/Documents/Projects':[dir('Website'),{name:'Sprint notes.md',dir:false,size:1260,modified:1780000000}]};
+      const result={...m,type:'files_result',ok:true};
+      if(m.op==='connect')result.data={path:'/Users/alex/Documents',entries,local_path:'/Users/alex',local_entries:tree['/Users/alex'],rsync:true};
+      else if(m.op==='list')result.data={path:m.path,entries:tree[m.path]||[]};
+      else if(m.op==='preview')result.data={mime:'text/plain',text:'# Design notes\n\nItda website refresh\n\n- Keep devices easy to find\n- Open screens and files separately\n- Use familiar controls on each platform\n\nNext review: Thursday, 10:00'};
+      else return;
+      queueMicrotask(()=>itda.recv(result));
     }};
   },{hosts,entries});
   const page=await context.newPage();
@@ -54,6 +63,27 @@ try{
     await prepare(theme);await page.screenshot({path:path.join(out,`home-${theme}.png`)});
     await page.evaluate(()=>ItdaFiles.launch(S.hosts[0]));await page.locator('.files-list [data-index]').first().waitFor();
     await page.screenshot({path:path.join(out,`files-${theme}.png`)});
+  }
+  // README uses the same product captures as the landing page, including view modes.
+  for(const theme of ['light','dark']){
+    await page.setViewportSize({width:1100,height:680});await prepare(theme);
+    await page.evaluate(()=>{S.page='accounts';render();});
+    await page.screenshot({path:path.join(out,`accounts-${theme}.png`)});
+    await page.setViewportSize({width:1100,height:580});await prepare(theme);
+    await page.evaluate(()=>{document.documentElement.style.zoom='1.25';ItdaFiles.launch(S.hosts[0]);});
+    await page.locator('.files-list [data-index]').first().waitFor();
+    await page.locator('[data-mode="columns"]').click();
+    await page.locator('.files-column').last().getByText('Projects',{exact:true}).click();
+    await page.locator('.files-column[data-column="/Users/alex/Documents/Projects"] [data-index]').first().waitFor();
+    if(await page.locator('.files-column').count()<2)throw Error('Column view lost its ancestors');
+    await page.screenshot({path:path.join(out,`files-columns-${theme}.png`)});
+    await page.locator('[data-action="back"]').click();
+    await page.locator('[data-mode="gallery"]').click();
+    await page.locator('.files-list [data-index]').filter({hasText:'Design notes.md'}).click();
+    // Preview timers use the fixed screenshot clock.
+    await page.clock.runFor(250);
+    await page.locator('.files-preview pre').waitFor();
+    await page.screenshot({path:path.join(out,`files-gallery-${theme}.png`)});
   }
   await prepare('light');
   await page.evaluate(()=>{S.found=[{name:'Design Mac',host:'design.local',hostname:'design.local',ip:'192.0.2.21',os:'mac',itda:true,share:true},{name:'Meeting PC',host:'meeting.local',hostname:'meeting.local',ip:'192.0.2.22',os:'windows',itda:true,share:true}];S.tailnet={running:true,me:{name:'My Mac'},peers:[{name:'Lab Mac',dns:'lab.example.ts.net',ip:'100.64.0.20',os:'macOS',online:true}]};S.page='nearby';render();});
