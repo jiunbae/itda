@@ -118,7 +118,7 @@ pub fn run(quick: Option<String>) {
         CreateMutexW(null(), 0, wide(&name).as_ptr());
         if GetLastError() == ERROR_ALREADY_EXISTS {
             let w = FindWindowW(wide("itda_home").as_ptr(), wide(&title).as_ptr());
-            if !w.is_null() {
+            if !w.is_null() && !crate::autostart::AT_LOGIN.load(Relaxed) {
                 if let Some(q) = &quick {
                     // Hand the address to the running home.
                     let b = q.as_bytes();
@@ -178,8 +178,11 @@ pub fn run(quick: Option<String>) {
         resize_webview(h);
         tray_add(h);
         TRAY_MSG.store(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()), Relaxed);
-        ShowWindow(h, SW_SHOW);
-        SetForegroundWindow(h);
+        // Started at login: wait in the notification area (when the tray icon is on).
+        if !(crate::autostart::AT_LOGIN.load(Relaxed) && home(|m| m.settings.tray)) {
+            ShowWindow(h, SW_SHOW);
+            SetForegroundWindow(h);
+        }
         super::started();
 
         let mut msg: MSG = std::mem::zeroed();

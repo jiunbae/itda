@@ -133,7 +133,8 @@ fn init(quick: Option<String>) {
             }
         }
     });
-    let settings = store::load_settings();
+    let mut settings = store::load_settings();
+    settings.login_start = crate::autostart::state().on();
     let hosts = store::load_hosts();
     let accounts = store::load_accounts();
     home(|m| {
@@ -168,6 +169,14 @@ fn started() {
     announce();
     start_discovery();
     start_update_checks();
+    // Again each launch: the entry names this exe, which may have moved. (Only while the entry
+    // is there: one removed in Windows' settings stays removed. On macOS the item follows the app.)
+    #[cfg(windows)]
+    if crate::autostart::state().on() {
+        if let Err(e) = crate::autostart::set(true) {
+            crate::log!("login start: {e}");
+        }
+    }
 }
 
 /// A newer release found by the background check, offered to the page.
@@ -349,6 +358,7 @@ fn send_state() {
             "hosts": m.hosts.iter().map(|h| host_json(h, &m.accounts)).collect::<Vec<_>>(),
             "accounts": accounts_json(m),
             "settings": m.settings,
+            "login_item": crate::autostart::state().name(),
             "sessions": sessions_json(m),
             "file_windows": plat::file_windows(),
             "online": m.online,
@@ -641,7 +651,17 @@ fn on_ipc(v: Value) {
             send_hosts();
         }
         "settings" => {
-            if let Ok(st) = serde_json::from_value::<Settings>(v["settings"].clone()) {
+            if let Ok(mut st) = serde_json::from_value::<Settings>(v["settings"].clone()) {
+                // The system holds this one: keep what it actually did.
+                if st.login_start != home(|m| m.settings.login_start) {
+                    let (login, err) = crate::autostart::apply(st.login_start, crate::autostart::set, crate::autostart::state);
+                    st.login_start = login.on();
+                    if let Some(e) = err {
+                        crate::log!("login start: {e}");
+                        send(json!({"type": "toast", "text": format!("로그인 시 실행을 바꾸지 못했습니다: {e}"), "err": true}));
+                    }
+                    send(json!({"type": "login_item", "state": login.name()}));
+                }
                 let old = home(|m| std::mem::replace(&mut m.settings, st.clone()));
                 store::save_settings(&st);
                 plat::apply_theme(is_dark(&st));
@@ -682,6 +702,13 @@ fn on_ipc(v: Value) {
         // uses it. Progress and the outcome go to the pages as {type:"hp"}.
         "hp_upgrade" => hp_upgrade(&id),
         "update_check" => update_check(),
+        // Settings opened: the login item may have been changed in the system's settings.
+        "login_item" => {
+            let s = crate::autostart::state();
+            home(|m| m.settings.login_start = s.on());
+            send(json!({"type": "login_item", "state": s.name()}));
+        }
+        "login_item_settings" => crate::autostart::open_settings(),
         "update_install" => update_install(),
         "remote_setup_probe"=>remote_setup_probe(v),
         "remote_setup_apply"=>{
