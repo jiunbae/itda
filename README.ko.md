@@ -134,7 +134,7 @@ macOS 파일 창은 단일 도구 모음, 너비를 조절할 수 있는 사이�
 
 **증분 전송:** 자동 모드는 폴더 또는 8MiB 이상 파일을 ‘바꾸기’로 복사할 때 로컬/상대편 rsync와 호환 SSH 셸을 확인해 변경된 파일·블록만 전송합니다. 지원하지 않으면 SFTP로 복사합니다. rsync는 설치되어 있어야 하며 Windows 로컬 rsync는 함께 제공되는 `cygpath.exe`가 있는 호환 배포판만 자동 감지합니다. ‘일반 전송’은 rsync를 실행하지 않습니다. rsync 중단 파일은 `.itda-partial`로 남겨 다음 전송에 재사용합니다. SFTP 전송의 블록 증분과 중단 지점 재개는 아직 제공하지 않습니다.
 
-탐색용 SSH와 전송용 SSH는 분리되어 대용량 복사 중에도 탐색할 수 있습니다. 동시에 실행하는 전송은 두 개, 파일당 미응답 SFTP 요청은 최대 64개(32KiB씩)로 제한합니다. 영구 삭제·삭제를 전파하는 미러 동기화·심볼릭 링크 따라가기는 기본 작업에 포함하지 않습니다. 일반 SFTP 복사는 심볼릭 링크를 만나면 원본을 유지하고 오류를 표시합니다. 목록에서 폴더 펼치기, rclone/WebDAV, Itda 간 자체 공유 서버, Windows에서 SFTP 파일을 탐색기로 끌어내는 가상 파일 제공, ACL/확장 속성 전체 보존은 후속 범위입니다. 모든 Finder/탐색기 기능을 대체하는 것으로 표시하지 않습니다.
+탐색용 SSH와 전송용 SSH는 분리되어 대용량 복사 중에도 탐색할 수 있습니다. 동시에 실행하는 전송은 두 개, 파일당 미응답 SFTP 요청은 최대 64개(32KiB씩)로 제한합니다. 영구 삭제·삭제를 전파하는 미러 동기화·심볼릭 링크 따라가기는 기본 작업에 포함하지 않습니다. 일반 SFTP 복사는 심볼릭 링크를 만나면 원본을 유지하고 오류를 표시합니다. 목록에서 폴더 펼치기, rclone/WebDAV, Itda 간 자체 공유 서버, ACL/확장 속성 전체 보존은 후속 범위입니다. 모든 Finder/탐색기 기능을 대체하는 것으로 표시하지 않습니다. Windows에서 탐색기로 끌어내기는 가상 파일 스트리밍으로 구현되어 있으며 복사만 수행합니다. 실제 탐색기가 드롭을 수락하는 동작은 추가 검증이 필요합니다.
 
 ## 다중 모니터
 
@@ -210,13 +210,15 @@ flowchart LR
 | 주변 기기 | Bonjour(mDNS)로 화면 공유가 켜진 Mac과 Itda가 실행 중인 모든 PC·Mac을 찾습니다. 공유가 꺼져 있어도 나타나고, 켜는 방법을 알려 줍니다. 30초마다 새로 찾고, Tailscale 기기도 함께 보여 줍니다. 한 번 눌러 추가합니다. |
 | 연결 중 | 단계(주소 → 연결 → 로그인 → 화면)를 보여 줍니다. 취소하거나 뒤에서 계속 진행하게 둘 수 있습니다. |
 | 오류 | 원인과 해결 방법을 기기 종류(Mac, PC, RDP, Linux)에 맞는 말로 설명합니다. |
-| 설정 | 테마, **화면 크기(Ctrl +/−, Ctrl+휠; Mac은 ⌘)**, 툴바 방식, 단축키, 새 연결 기본값, 알림 영역, 알림, 미리보기. |
+| 설정 | 테마, **화면 크기(Ctrl +/−, Ctrl+휠; Mac은 ⌘)**, 새 연결 기본값, 알림, 미리보기. Windows는 네이티브 접속 창 툴바·단축키와 알림 영역 설정도 제공합니다. |
 
 **접속 창 툴바** (Windows, 위쪽 가운데, 자동 숨김): 전체 화면, 맞춤 또는 1:1, 모니터 선택, Mac 특수 키, 클립보드, 보기 전용, 스크린샷(`사진\Itda`), 통계, 고정, 연결 끊기.
 
-**단축키** (Ctrl+Alt 또는 Ctrl+Shift): `Enter` 전체 화면 · `0` 맞춤 · `1` 1:1 · `S` 통계 · `V` 보기 전용 · `P` 스크린샷 · `I` 정보 · `T` 툴바 고정 · `R` 재연결 · `M` 메뉴.
+**Windows 네이티브 접속 창 단축키** (Ctrl+Alt 또는 Ctrl+Shift): `Enter` 전체 화면 · `0` 맞춤 · `1` 1:1 · `S` 통계 · `V` 보기 전용 · `P` 스크린샷 · `I` 정보 · `T` 툴바 고정 · `R` 재연결 · `M` 메뉴.
 
-**키 대응:**
+FPS/Mbps/RTT 통계 표시와 위 단축키는 Windows 네이티브 VNC 접속 창 기능입니다. Mac 앱과 브라우저 뷰어는 각 절에서 안내한 컨트롤 바와 단축키 메뉴를 사용하며, 같은 통계 표시는 제공하지 않습니다.
+
+**Windows 키보드 → 원격 Mac 키 대응:**
 
 | Windows | Mac |
 |---|---|
@@ -227,9 +229,10 @@ flowchart LR
 
 네트워크가 끊기면 화면이 어두워지고 **자동으로 다시 연결**합니다. 접속 중에 바꾼 옵션은 그 연결에 저장됩니다.
 
-**명령줄:**
+**Windows 명령줄** (주소와 `-u`/`-p` 옵션은 Mac 앱 CLI에서 지원하지 않습니다):
+
 - `itda <주소>`: 홈을 열고 연결합니다.
-- `itda <주소> -u <사용자> -p <암호>`: 바로 연결합니다.
+- `itda <주소> -u <사용자> -p <암호>`: 바로 연결합니다. `-p` 암호는 프로세스 목록과 셸 기록에 보일 수 있으므로 앱에 저장한 로그인을 권장합니다.
 </details>
 
 <details>
@@ -254,7 +257,7 @@ flowchart LR
   - Chrome/Edge/Android: **앱 설치**. Tailscale의 `https://…ts.net` 주소가 필요합니다.
 - **보안:**
   - 12시간짜리 HttpOnly 쿠키
-  - PIN을 5번 틀리면 1분 동안 로그인이 막힘
+  - PIN을 5번 틀리면 모든 클라이언트의 새 로그인이 1분 동안 막힘(기존 세션은 유지)
   - 출처(same-origin) 확인
   - 새 PIN을 만들면 모두 로그아웃
   - 브라우저 ↔ PC 구간은 일반 HTTP입니다. 내 Wi-Fi나 Tailscale에서만 쓰고 **인터넷에 포트를 열지 마세요**.
@@ -283,10 +286,10 @@ flowchart LR
 | **원격 데스크톱** | Windows Pro / Enterprise / Education | 편집기에서 *Windows 원격 데스크톱*을 고릅니다. Windows의 Itda는 계정을 `mstsc`에 넘겨 열고, Mac의 Itda와 웹 뷰어는 Itda가 직접 연결(IronRDP: TLS + NLA)해 화면을 보여 줍니다. |
 
 **이 PC 공유의 동작:**
-- 모든 모니터를 GDI로 캡처, 64×64 타일 비교, ZRLE
+- Desktop Duplication으로 캡처하고 사용할 수 없으면 GDI로 전환, 64×64 타일 비교, ZRLE
 - 마우스·키보드는 SendInput; Mac의 ⌘은 Ctrl로 동작
 - 양방향 클립보드
-- 무작위 VNC 암호와 연결마다 ‘허용할까요?’ 묻기 (기본으로 켜짐). 같은 네트워크와 내 Tailscale 기기는 암호만으로 바로 연결
+- 무작위 VNC 암호와 승인 요청(기본으로 켜짐). 주변 기기 신뢰도 기본으로 켜져 있어 사설·링크 로컬·ULA·`100.64.0.0/10` 주소는 암호 확인 뒤 승인을 생략합니다. 주소 범위가 내 기기임을 증명하지는 않으므로, 매번 승인하려면 **공유 → 내 기기는 묻지 않기**를 끄세요
 - 누가 보고 있는 동안 알림과 알림 영역 표시, 모두 끊기 버튼
 - 보기 전용 모드와 Bonjour 등록
 
@@ -301,7 +304,7 @@ Windows 보안 정책상 잠금 화면, UAC 창, 관리자 권한 창은 원격�
 | `%APPDATA%\Itda\hosts.json`, `accounts.json`, `settings.json` (Mac: `~/Library/Application Support/Itda/`) | 주소록, 계정, 설정 |
 | `…\Itda\thumbs\` | 마지막 화면의 작은 미리보기 (끌 수 있음) |
 | Windows 자격 증명 관리자 `Itda/…` (Mac: 로그인 키체인의 `Itda` 항목) | 암호, 키 암호, 웹 PIN, 공유 암호 |
-| `%TEMP%\itda.log`, `%TEMP%\itda\session-*.log` | 진단 로그 (암호는 기록하지 않음) |
+| Windows: `%TEMP%\itda.log`, `%TEMP%\itda\session-*.log`; Mac: `$TMPDIR/itda.log` | 진단 로그. 공유하기 전에 기기 이름·주소·경로를 확인하세요 |
 </details>
 
 ## 🛠️ 소스에서 빌드
@@ -322,12 +325,12 @@ Mac에서는 `scripts/macos-bundle.sh universal`로 `dist/Itda-macos-universal.z
 |---|---|
 | `home.rs` · `home_win.rs` · `home_mac.rs` | 홈 창과 페이지 IPC, 세션, 응답 확인. 플랫폼별: WebView2 + 알림 영역 + 세션 프로세스(Windows), WKWebView + 메뉴 막대 + 뷰어 창(macOS) |
 | `web/` | 홈 UI (HTML/CSS/JS, 바이너리에 포함; `ITDA_WEB_DIR`로 디스크에서 제공 가능) |
-| `session.rs` · `ui.rs` · `toolbar.rs` | 세션 프로세스와 창: 그리기, 입력, 툴바, 재연결, 스크린샷 |
+| `session.rs` · `ui.rs` · `toolbar.rs` | Windows 네이티브 세션 프로세스와 창: 그리기, 입력, 툴바, 재연결, 스크린샷 |
 | `rfb.rs` · `net.rs` · `fb.rs` · `clip.rs` | RFB 핸드셰이크/인증, 수신 루프와 재연결, 디코더, 클립보드 |
 | `tunnel.rs` | OpenSSH를 쓰는 SSH 터널 |
 | `gateway.rs` · `ws.rs` · `web/viewer/` | 웹 뷰어: HTTP/WebSocket, PIN, 주소록 API, RFB 중계, PWA |
 | `rdp.rs` | RDP → RFB 브리지 (IronRDP, TLS + NLA → 프레임버퍼 → ZRLE) |
-| `share.rs` | 이 PC 공유: VNC 서버 (GDI 캡처, 타일 비교, ZRLE, SendInput, Bonjour) |
+| `share.rs` | 이 PC 공유: Windows VNC 서버 (Desktop Duplication 및 GDI 대체 경로, 타일 비교, ZRLE, SendInput, Bonjour) |
 | `enc.rs` | RFB 픽셀 형식과 Raw/ZRLE 사각형 (`share.rs`와 `rdp.rs`가 함께 씀) |
 | `web/icons.js` · `scripts/macos-bundle.sh` | Mac용 Itda: Segoe Fluent 글리프 대신 선 아이콘, `.app` 번들 |
 | `store.rs` · `mdns.rs` · `tailscale.rs` | 저장소와 자격 증명, Bonjour, Tailscale CLI |
@@ -337,7 +340,7 @@ Mac에서는 `scripts/macos-bundle.sh universal`로 `dist/Itda-macos-universal.z
 | 프로토콜 | RFB 3.8 (macOS 3.889). 인증: None, VNC (DES), Apple ARD (DH + AES-128) |
 | 인코딩 | ZRLE, CopyRect, Raw, 그리고 Cursor, DesktopSize, ExtendedDesktopSize, Extended Clipboard |
 | 지연 시간 | TCP_NODELAY, 파이프라인 업데이트 요청, 로컬 커서, 응답 확인 |
-| 그리기 | DIB 섹션, 바뀐 영역만 blit, 1:1은 `BitBlt` / 축소는 `StretchBlt(HALFTONE)`, 모니터별 DPI v2 |
+| Windows 네이티브 그리기 | DIB 섹션, 바뀐 영역만 blit, 1:1은 `BitBlt` / 축소는 `StretchBlt(HALFTONE)`, 모니터별 DPI v2 |
 
 테스트용 환경 변수 `ITDA_TEST_HTTP`, `ITDA_TEST_SNAP`, `ITDA_DEBUG_PORT`는 설정하지 않으면 아무 일도 하지 않습니다.
 </details>
