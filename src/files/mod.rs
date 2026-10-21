@@ -12,6 +12,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use unicode_normalization::UnicodeNormalization;
 use sftp::Sftp;
 use std::{
     collections::HashMap,
@@ -144,9 +145,20 @@ pub fn name(n: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Windows stores names as provided, including decomposed Hangul from macOS.
+/// Normalize destination components only; source lookups must retain the exact name.
+fn destination_name(n: &str, windows: bool) -> String {
+    if windows { n.nfc().collect() } else { n.to_string() }
+}
+fn windows_name_key(n: &str) -> String { destination_name(n, true).to_lowercase() }
+fn destination_leaf(path: &str, windows: bool) -> String {
+    let at = path.rfind(['/', '\\']).map_or(0, |at|at+1);
+    format!("{}{}", &path[..at],destination_name(&path[at..],windows))
+}
+
 /// A name about to be written on a Windows side, refused with the item it names.
 fn windows_target(n: &str, shown: &str) -> io::Result<()> {
-    if windows_name(n) {
+    if windows_name(&destination_name(n, true)) {
         Ok(())
     } else {
         Err(error(format!("Windows에서 쓸 수 없는 파일 이름입니다: {shown}")))
