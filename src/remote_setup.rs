@@ -291,7 +291,7 @@ fn private_dir(path: &Path) -> io::Result<()> {
         );
         let command = ps(&script);
         let encoded = command.split_whitespace().last().unwrap();
-        let ok = Command::new("powershell.exe")
+        let ok = Command::new(crate::update::system_tool("powershell.exe"))
             .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded])
             .creation_flags(0x08000000)
             .stdout(Stdio::null())
@@ -590,7 +590,7 @@ fn other_app_running() -> io::Result<bool> {
             std::process::id()
         );
         let bytes: Vec<_> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        let out = std::process::Command::new("powershell.exe")
+        let out = std::process::Command::new(crate::update::system_tool("powershell.exe"))
             .args([
                 "-NoProfile",
                 "-NonInteractive",
@@ -1041,6 +1041,10 @@ fn run(cfg: &crate::tunnel::SshCfg, command: &str, input: &[u8]) -> io::Result<S
                     .as_str()
                     .unwrap_or("원격 설정 적용에 실패했습니다"),
             ));
+        }
+        // (The Windows script throws this in English: PowerShell's stderr over SSH isn't UTF-8.)
+        if stderr.contains("Checksum verification failed") {
+            return Err(error("내려받은 Itda 파일이 릴리스와 다릅니다 (체크섬 불일치). 잠시 뒤 다시 시도하세요"));
         }
         return Err(crate::tunnel::classify(&stderr));
     }

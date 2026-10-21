@@ -1189,10 +1189,18 @@ fn drain() {
                 scan_tailnet();
                 send(web_info());
             }
-            Event::WebEdit(v, done) => {
+            Event::WebEdit(mut v, done) => {
                 // Provisioning can export credentials; it is native-app-only, not
                 // an address-book operation exposed by the web viewer.
-                if !v["cmd"].as_str().is_some_and(|cmd|cmd.starts_with("remote_setup_")) {on_ipc(v);}
+                if !v["cmd"].as_str().is_some_and(|cmd|cmd.starts_with("remote_setup_")) {
+                    if v["cmd"] == "save_host" {
+                        let wipe = home(|m| web_save_guard(&mut v["host"], &m.hosts));
+                        if let Some(id) = wipe {
+                            forget_saved_logins(&id);
+                        }
+                    }
+                    on_ipc(v);
+                }
                 let _ = done.send(());
             }
             Event::Page(v) => {
@@ -1230,6 +1238,36 @@ static PROBE_CV: std::sync::Condvar = std::sync::Condvar::new();
 fn probe_now() {
     *PROBE_WAKE.lock().unwrap() = true;
     PROBE_CV.notify_all();
+}
+
+/// A connection saved from the web viewer (a browser signed in with the PIN) must not be able
+/// to send this PC's saved logins somewhere else: pointing an entry at another address (or way
+/// in) drops its saved passwords and shared account, and an account can't be attached from
+/// there at all. Returns the id whose saved logins to forget.
+fn web_save_guard(h: &mut Value, hosts: &[store::Host]) -> Option<String> {
+    let id = h["id"].as_str().unwrap_or("").to_string();
+    let Some(old) = hosts.iter().find(|x| !id.is_empty() && x.id == id) else {
+        h["account"] = json!("");
+        return None;
+    };
+    let new: store::Host = serde_json::from_value(h.clone()).ok()?;
+    let to = |x: &store::Host| (x.host.trim().to_lowercase(), x.kind.clone(), x.ssh.clone(), x.hp.clone(), x.lan.trim().to_string());
+    if to(&new) == to(old) {
+        h["account"] = json!(old.account);
+        return None;
+    }
+    h["account"] = json!("");
+    Some(id)
+}
+
+/// Forget the passwords saved for a connection (screen, high-performance, files).
+fn forget_saved_logins(id: &str) {
+    store::set_password(id, None);
+    store::set_password(&crate::hp_upgrade::password_key(id), None);
+    store::set_password(&format!("files-{id}"), None);
+    if let Some(h) = home(|m| m.hosts.iter().find(|h| h.id == id).cloned()) {
+        store::set_password(&crate::files::password_key(&h), None);
+    }
 }
 
 /// Remember the LAN address of saved hosts that Tailscale reaches directly on this network, for
@@ -1480,5 +1518,34 @@ mod lan_tests {
         assert!(!super::learn_lan(&mut hosts, &peers2));
         assert_eq!(hosts[0].lan, "192.168.32.32");
         assert!(!super::learn_lan(&mut hosts, &peers), "nothing new");
+    }
+}
+
+#[cfg(test)]
+mod web_edit_tests {
+    use serde_json::json;
+
+    #[test]
+    fn web_edits_cannot_redirect_saved_logins() {
+        let old = crate::store::Host { id: "a".into(), host: "mac.local".into(), account: "acct".into(), ..Default::default() };
+        let hosts = [old.clone()];
+        let as_json = |h: &crate::store::Host| serde_json::to_value(h).unwrap();
+        // Same address, other details: kept, and the account can't be swapped for another.
+        let mut v = as_json(&crate::store::Host { name: "renamed".into(), account: "other".into(), ..old.clone() });
+        assert_eq!(super::web_save_guard(&mut v, &hosts), None);
+        assert_eq!(v["account"], json!("acct"));
+        // Pointed elsewhere (address, or SSH): saved logins go, and so does the account.
+        for changed in [
+            crate::store::Host { host: "evil.example".into(), ..old.clone() },
+            crate::store::Host { ssh: crate::store::Ssh { on: true, user: String::new(), port: 2222 }, ..old.clone() },
+        ] {
+            let mut v = as_json(&changed);
+            assert_eq!(super::web_save_guard(&mut v, &hosts).as_deref(), Some("a"));
+            assert_eq!(v["account"], json!(""));
+        }
+        // A new entry can't take an account's password along.
+        let mut v = as_json(&crate::store::Host { id: String::new(), host: "evil.example".into(), account: "acct".into(), ..Default::default() });
+        assert_eq!(super::web_save_guard(&mut v, &hosts), None);
+        assert_eq!(v["account"], json!(""));
     }
 }

@@ -293,10 +293,16 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                             }
                         }
                         ENC_ZRLE => {
+                            // A rectangle's data can't sensibly be larger than its pixels; a
+                            // server claiming more (or inflating past that) is cut off.
+                            let most = w * h * 4 + (1 << 20);
                             let len = rd_u32(&mut r)? as usize;
+                            if len > most {
+                                return Err(io::Error::new(io::ErrorKind::InvalidData, "ZRLE rectangle too large"));
+                            }
                             zin.resize(len, 0);
                             r.read_exact(&mut zin)?;
-                            inflate(&mut z, &zin, &mut zout)?;
+                            inflate(&mut z, &zin, &mut zout, most)?;
                             let mut fb = s.fb.lock().unwrap();
                             if fb.fits(x, y, w, h) {
                                 fb.zrle(&zout, x, y, w, h).ok_or_else(|| io::Error::other("bad ZRLE data"))?;
@@ -381,10 +387,13 @@ fn resize(s: &Shared, w: usize, h: usize) {
 }
 
 /// Inflate one ZRLE rect's worth of data (the zlib stream persists across rects).
-fn inflate(z: &mut Decompress, input: &[u8], out: &mut Vec<u8>) -> io::Result<()> {
+fn inflate(z: &mut Decompress, input: &[u8], out: &mut Vec<u8>, most: usize) -> io::Result<()> {
     out.clear();
     let mut used = 0;
     loop {
+        if out.len() > most {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "ZRLE data inflates too far"));
+        }
         if out.capacity() - out.len() < 1 << 16 {
             out.reserve(out.capacity().max(1 << 18));
         }

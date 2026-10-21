@@ -134,6 +134,13 @@ fn random_token() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+static OPEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+const MAX_CONNECTIONS: usize = 128;
+/// A request line or header longer than this, or a head slower than REQUEST_TIME, ends the
+/// connection (before anyone has signed in, so it must not hold memory or a thread for long).
+const MAX_LINE: u64 = 8 << 10;
+const REQUEST_TIME: Duration = Duration::from_secs(15);
+
 /// Blocking accept, so a new connection is served at once; `stop()` wakes it with a connect.
 fn serve(l: TcpListener, local: bool, stop: Arc<AtomicBool>) -> io::Result<std::thread::JoinHandle<()>> {
     Ok(std::thread::spawn(move || {
@@ -141,12 +148,20 @@ fn serve(l: TcpListener, local: bool, stop: Arc<AtomicBool>) -> io::Result<std::
             match l.accept() {
                 Ok(_) if stop.load(Relaxed) => break,
                 Ok((c, peer)) => {
+                    // Each connection has its own thread: past MAX_CONNECTIONS (viewer windows,
+                    // file panes and page loads stay far below it) new ones are turned away.
+                    if OPEN.fetch_add(1, Relaxed) >= MAX_CONNECTIONS {
+                        OPEN.fetch_sub(1, Relaxed);
+                        drop(c);
+                        continue;
+                    }
                     // Small frames (cursor, one tile) must not wait for Nagle + delayed ACK.
                     let _ = c.set_nodelay(true);
                     std::thread::spawn(move || {
                         if let Err(e) = handle(c, peer, local) {
                             crate::log!("web {peer}: {e}");
                         }
+                        OPEN.fetch_sub(1, Relaxed);
                     });
                 }
                 Err(e) => {
@@ -239,9 +254,22 @@ struct Req {
     body: Vec<u8>,
 }
 
-fn read_req(r: &mut BufReader<TcpStream>) -> io::Result<Req> {
+/// One line of the request head, at most MAX_LINE long.
+fn head_line(r: &mut BufReader<TcpStream>, started: Instant) -> io::Result<String> {
+    if started.elapsed() > REQUEST_TIME {
+        return Err(io::Error::new(io::ErrorKind::TimedOut, "request too slow"));
+    }
     let mut line = String::new();
-    r.read_line(&mut line)?;
+    let n = r.by_ref().take(MAX_LINE).read_line(&mut line)?;
+    if n as u64 == MAX_LINE && !line.ends_with('\n') {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "request line too long"));
+    }
+    Ok(line)
+}
+
+fn read_req(r: &mut BufReader<TcpStream>) -> io::Result<Req> {
+    let started = Instant::now();
+    let line = head_line(r, started)?;
     let mut it = line.split_whitespace();
     let method = it.next().unwrap_or("").to_string();
     let target = it.next().unwrap_or("/");
@@ -249,8 +277,8 @@ fn read_req(r: &mut BufReader<TcpStream>) -> io::Result<Req> {
     let (path, query) = (path.to_string(), query.to_string());
     let mut headers = HashMap::new();
     loop {
-        let mut h = String::new();
-        if r.read_line(&mut h)? == 0 || h.trim().is_empty() {
+        let h = head_line(r, started)?;
+        if h.is_empty() || h.trim().is_empty() {
             break;
         }
         if let Some((k, v)) = h.split_once(':') {
@@ -708,7 +736,10 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
         ("POST", "/api/edit") if ok && same_origin(&req) => edit(&mut c, &req),
         ("GET", _) if ok && p.starts_with("/thumb/") => {
             let id = p.trim_start_matches("/thumb/").trim_end_matches(".png");
-            match std::fs::read(store::shown_thumb_path(id)).ok().filter(|_| id.chars().all(|c| c.is_ascii_hexdigit())) {
+            // (The id is checked before it becomes a path: on Windows a "\\\\host\\share" one
+            // would otherwise reach out over SMB.)
+            let id = Some(id).filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit()));
+            match id.and_then(|id| std::fs::read(store::shown_thumb_path(id)).ok()) {
                 // Asked for by version (?v=), so the browser may keep it.
                 Some(b) => send(&mut c, "200 OK", "image/png", "private, max-age=86400", "", &b),
                 None => respond(&mut c, "404 Not Found", "text/plain", "", b"not found"),
@@ -918,6 +949,28 @@ fn kind_code(kind: &str) -> u16 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn request_heads_are_bounded() {
+        use std::io::Write;
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let send = |bytes: Vec<u8>| {
+            let mut c = std::net::TcpStream::connect(addr).unwrap();
+            std::thread::spawn(move || { let _ = c.write_all(&bytes); std::thread::sleep(std::time::Duration::from_millis(200)); });
+            let (s, _) = l.accept().unwrap();
+            super::read_req(&mut std::io::BufReader::new(s))
+        };
+        let ok = send(b"GET /x?a=1 HTTP/1.1\r\nHost: h\r\n\r\n".to_vec()).unwrap();
+        assert_eq!((ok.path.as_str(), ok.query.as_str()), ("/x", "a=1"));
+        // A line without an end, longer than MAX_LINE: refused, not buffered without limit.
+        let mut long = b"GET /".to_vec();
+        long.resize(super::MAX_LINE as usize * 4, b'a');
+        assert!(send(long).is_err());
+        let mut header = b"GET / HTTP/1.1\r\nX: ".to_vec();
+        header.resize(super::MAX_LINE as usize * 2, b'b');
+        assert!(send(header).is_err());
+    }
+
     use super::*;
 
     #[test]
