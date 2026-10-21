@@ -152,6 +152,7 @@ fn init(quick: Option<String>) {
 
 /// The window is up: start the background work.
 fn started() {
+    crate::tunnel::migrate_known_hosts();
     plat::apply_zoom(home(|m| m.settings.zoom));
     start_probes();
     let w = home(|m| m.settings.web.clone());

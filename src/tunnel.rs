@@ -10,7 +10,7 @@ use std::net::TcpListener;
 use std::os::windows::io::AsRawHandle;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -93,7 +93,7 @@ fn ssh_command_with_check(c:&SshCfg,strict:bool)->io::Result<Command> {
     let exe = ssh_exe().ok_or_else(|| err(io::ErrorKind::NotFound, "OpenSSH 클라이언트를 찾을 수 없습니다"))?;
     let mut cmd = Command::new(exe);
     cmd.arg("-T").args(["-o", if strict{"StrictHostKeyChecking=yes"}else{"StrictHostKeyChecking=accept-new"}, "-o"])
-        .arg(format!("UserKnownHostsFile={}", known_hosts().display()))
+        .arg(known_hosts_option(&known_hosts()))
         .args(["-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3", "-o", "ConnectTimeout=10", "-o", "NumberOfPasswordPrompts=1", "-o", "BatchMode=no"])
         .arg("-p").arg(c.port.to_string())
         .args(if c.user.is_empty() { None } else { Some(["-l", c.user.as_str()]) }.into_iter().flatten())
@@ -106,6 +106,66 @@ fn ssh_command_with_check(c:&SshCfg,strict:bool)->io::Result<Command> {
 
 pub fn known_hosts() -> PathBuf {
     crate::store::dir().join("known_hosts")
+}
+
+/// ssh reads this option's value as a whitespace-separated list of files, and macOS's data
+/// folder is in "Application Support": quote it, or ssh uses "~/Library/Application".
+fn known_hosts_option(path: &Path) -> String {
+    let p = path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+    format!("UserKnownHostsFile=\"{p}\"")
+}
+
+/// Earlier Itda passed that path unquoted, so ssh kept Itda's trusted host keys in the file
+/// named by the path's first word ("~/Library/Application"). Bring them into the real file
+/// once; the stray file goes away when everything in it was a host key line.
+pub fn migrate_known_hosts() {
+    let real = known_hosts();
+    let full = real.to_string_lossy().into_owned();
+    if let Some(first) = full.split_whitespace().next().filter(|f| *f != full) {
+        if let Err(e) = merge_known_hosts(Path::new(first), &real) {
+            crate::log!("known_hosts migration: {e}");
+        }
+    }
+}
+
+fn known_host_line(l: &str) -> bool {
+    let f: Vec<&str> = l.split_whitespace().collect();
+    f.len() >= 3 && !f[0].starts_with('#') && (f[1].starts_with("ssh-") || f[1].starts_with("ecdsa-") || f[1].starts_with("sk-"))
+}
+
+fn merge_known_hosts(stray: &Path, real: &Path) -> io::Result<()> {
+    if !stray.is_file() || stray == real {
+        return Ok(());
+    }
+    let old = std::fs::read_to_string(stray)?;
+    let mut have = std::fs::read_to_string(real).unwrap_or_default();
+    let lines: Vec<&str> = old.lines().filter(|l| !l.trim().is_empty()).collect();
+    let all_keys = lines.iter().all(|l| known_host_line(l));
+    let mut added = 0;
+    for l in lines.iter().filter(|l| known_host_line(l)) {
+        if !have.lines().any(|h| h == *l) {
+            if !have.is_empty() && !have.ends_with('\n') { have.push('\n'); }
+            have.push_str(l);
+            have.push('\n');
+            added += 1;
+        }
+    }
+    if added > 0 {
+        if let Some(dir) = real.parent() { std::fs::create_dir_all(dir)?; }
+        let tmp = real.with_extension("migrating");
+        std::fs::write(&tmp, &have)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        }
+        std::fs::rename(&tmp, real)?;
+    }
+    if all_keys {
+        std::fs::remove_file(stray)?;
+    }
+    crate::log!("known_hosts migration: {added} host keys moved{}", if all_keys { ", stray file removed" } else { "" });
+    Ok(())
 }
 
 /// `host[:port]` → (host, port), keeping bracketed IPv6 intact.
@@ -289,6 +349,33 @@ pub fn forget_host_key(host: &str, port: u16) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn known_hosts_path_with_spaces_is_one_ssh_value() {
+        assert_eq!(known_hosts_option(Path::new("/Users/a/Library/Application Support/Itda/known_hosts")), "UserKnownHostsFile=\"/Users/a/Library/Application Support/Itda/known_hosts\"");
+        assert_eq!(known_hosts_option(Path::new(r"C:\Users\A B\AppData\Roaming\Itda\known_hosts")), r#"UserKnownHostsFile="C:\\Users\\A B\\AppData\\Roaming\\Itda\\known_hosts""#);
+    }
+
+    #[test]
+    fn stray_known_hosts_move_into_the_real_file() {
+        let root = std::env::temp_dir().join(format!("itda-kh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Itda")).unwrap();
+        let (stray, real) = (root.join("Application"), root.join("Itda/known_hosts"));
+        let a = "mbp.local ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA";
+        let b = "[pc.local]:2222 ecdsa-sha2-nistp256 AAAAE2VjZHNh";
+        std::fs::write(&real, format!("{a}\n")).unwrap();
+        std::fs::write(&stray, format!("{a}\n{b}\n\n")).unwrap();
+        merge_known_hosts(&stray, &real).unwrap();
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), format!("{a}\n{b}\n"));
+        assert!(!stray.exists(), "a stray file of host keys only is removed");
+        // Anything else in it: keys are copied, the file stays.
+        std::fs::write(&stray, "not a host key\n").unwrap();
+        merge_known_hosts(&stray, &real).unwrap();
+        assert!(stray.exists());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), format!("{a}\n{b}\n"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     use super::*;
 
     #[test]
