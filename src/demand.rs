@@ -22,8 +22,10 @@ const FENCE_REQUEST: u32 = 1 << 31;
 const FENCE_SUPPORTED: u32 = 0;
 
 /// Unacknowledged updates allowed on the wire: always one, more while they are small. The
-/// byte figure is a soft limit: the update that crosses it still goes out whole.
-const MAX_FRAMES: usize = 4;
+/// byte figure is a soft limit: the update that crosses it still goes out whole. Video frames
+/// are ~10-20 KB, and over a tunnel acks take 70-300 ms: a short window paused the stream on
+/// every latency spike (35 fps over SSH against 50 locally, measured).
+const MAX_FRAMES: usize = 16;
 const MAX_BYTES: usize = 1 << 20;
 /// A viewer that leaves an update unacknowledged this long has stopped reading.
 const ACK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -235,7 +237,7 @@ mod tests {
         ack(&mut d, 2); // acknowledges 1 and 2
         assert_eq!(d.due(), Some(true));
         ack(&mut d, 99); // unknown: ignored
-        ack(&mut d, 4);
+        ack(&mut d, MAX_FRAMES as u32);
         assert!(d.inflight.is_empty());
     }
 

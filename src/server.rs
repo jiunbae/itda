@@ -360,9 +360,13 @@ const ENC_DESKTOP_SIZE: i32 = -223;
 
 /// Shortest time between two updates (~30 fps), and with a video encoder (~60 fps).
 const FRAME: Duration = Duration::from_millis(33);
-const VIDEO_FRAME: Duration = Duration::from_millis(16);
-/// How long the screen stands still before video is repainted losslessly.
-const REFINE: Duration = Duration::from_millis(250);
+const VIDEO_FRAME: Duration = Duration::from_millis(14);
+/// With video, how often to look for a new captured frame: it goes out as soon as it arrives
+/// (VIDEO_FRAME apart), instead of on a fixed timer that adds up to a frame of delay.
+const VIDEO_POLL: Duration = Duration::from_millis(3);
+/// How long the screen stands still before video is repainted losslessly. Long enough that a
+/// short pause in motion doesn't start a full lossless repaint that delays the next frames.
+const REFINE: Duration = Duration::from_millis(500);
 /// Largest picture sent as video (hardware encoders and the viewers' decoders handle this).
 const VIDEO_MAX: usize = 4096;
 
@@ -411,6 +415,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
         // clipboard check. Captures stay FRAME apart also when the screen doesn't change.
         let gap = if video.is_some() { VIDEO_FRAME } else { FRAME };
         let wait = match demand.due() {
+            Some(_) if out.room() && video.is_some() => gap.saturating_sub(last_capture.elapsed()).max(VIDEO_POLL),
             Some(_) if out.room() => gap.saturating_sub(last_capture.elapsed()),
             _ => gap,
         };
@@ -469,6 +474,11 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
         let Some(incremental) = demand.due() else { continue };
         if last_capture.elapsed() < gap || !out.room() {
             continue; // (a viewer that's behind gets the changes together later)
+        }
+        // With video and nothing new captured, there is nothing to encode until the still
+        // repaint is due: skip the copy and compare of a whole frame.
+        if video.is_some() && incremental && last_change.elapsed() < REFINE && !cap.lock().unwrap().fresh() {
+            continue;
         }
         last_capture = Instant::now();
         // The size this viewer was last given (another viewer's capture may have resized it).

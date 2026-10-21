@@ -239,6 +239,11 @@ impl Capture {
     /// The capture's size is fixed for its life (one display, in points).
     pub(crate) fn fit(&mut self) {}
 
+    /// A frame arrived since the last grab (ScreenCaptureKit sends none while nothing changes).
+    pub(crate) fn fresh(&self) -> bool {
+        self.latest.lock().unwrap().is_some()
+    }
+
     pub(crate) fn grab(&mut self) -> (usize, usize, &[u32]) {
         if let Some(pb) = self.latest.lock().unwrap().take() {
             let pb = &*pb;
