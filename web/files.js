@@ -45,9 +45,13 @@
       return (sorting.desc ? -1 : 1) * (n || names(a, b));
     });
   }
-  function setSort(key, desc = sorting.desc) {
+  // `from_other`: the change came from another file window (don't echo it back).
+  function setSort(key, desc = sorting.desc, from_other = false) {
+    if (sorting.key === key && sorting.desc === desc && from_other) return;
     sorting = { key, desc };
     try { localStorage.setItem("itda.file.sort", JSON.stringify(sorting)); } catch {}
+    // Every open file window follows at once, not only the next one opened.
+    if (!from_other) send("files_sort", { sort: sorting });
     // Indices and virtual-list offsets belonged to the old order; selections are names.
     const states = [panes, ...fileTabs.map(t => t.panes).filter(Boolean)];
     for (const state of states) for (const p of Object.values(state)) {
@@ -1893,6 +1897,11 @@
     // same private in-app clipboard; opening a device must not discard it.
     if (m.type === "state" && m.files_clipboard) message({ type: "files_clipboard", clip: m.files_clipboard });
     if (["files_result", "files_job", "files_native_paste", "files_native_drag_end"].includes(m.type) && m.window !== pageToken) return true;
+    if (m.type === "files_sort") {
+      const s = m.sort || {};
+      if (sortKeys.includes(s.key)) setSort(s.key, s.desc === true, true);
+      return true;
+    }
     if (m.type === "files_clipboard") {
       // Another window copied (or used a cut): the latest Copy/Cut is what Paste uses here too.
       const c = m.clip || {};
