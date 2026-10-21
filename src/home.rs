@@ -424,6 +424,8 @@ fn on_ipc(v: Value) {
                 plat::files_window_context(s(&v, "window").as_str(), &id, s(&v, "page").as_str());
             }
         }
+        #[cfg(any(target_os = "macos", windows))]
+        "files_drag_release" => { if let Some(token) = v["drag"].as_str() { crate::files::drag::release(token); } },
         "files_release_page" => crate::files::release_page(s(&v, "page").as_str()),
         // Copy/Cut in one file window is what Paste uses in every other one.
         "files_clipboard" => {

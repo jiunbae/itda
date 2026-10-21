@@ -10,7 +10,7 @@ use objc2_app_kit::{
     NSApp, NSDragOperation, NSDraggingContext, NSDraggingItem, NSDraggingSession, NSDraggingSource,
     NSEvent, NSEventModifierFlags, NSEventType, NSFilePromiseProvider,
     NSFilePromiseProviderDelegate, NSImage, NSPasteboard, NSPasteboardTypeFileURL,
-    NSPasteboardWriting, NSView,
+    NSPasteboardWriting, NSView, NSPasteboardNameDrag,
 };
 use objc2_foundation::{
     NSArray, NSData, NSDictionary, NSError, NSLocalizedDescriptionKey, NSOperationQueue, NSPoint,
@@ -203,7 +203,8 @@ define_class!(
         #[unsafe(method(draggingSession:endedAtPoint:operation:))]
         fn ended(&self, _session: &NSDraggingSession, _point: NSPoint, operation: NSDragOperation) {
             let _keep_alive = self.retain();
-            if operation == NSDragOperation::None {
+            let internal = files::drag::finish(&self.ivars().drag);
+            if operation == NSDragOperation::None || internal {
                 let _ = PROMISES.try_with(|p| {
                     let mut p = p.borrow_mut();
                     for token in &self.ivars().tokens {
@@ -221,6 +222,7 @@ define_class!(
 /// Finder accepts the drop, on an NSOperationQueue, directly into its chosen URL.
 pub fn drag(nsview: &NSView, v: Value) -> Result<(), String> {
     let selection = files::export::selection(&v).map_err(|e| e.to_string())?;
+    let origin_files = selection.clone();
     let mtm = MainThreadMarker::new().ok_or("파일 드래그는 UI 스레드에서 시작해야 합니다")?;
     if NSEvent::pressedMouseButtons() & 1 == 0 {
         return Err("파일을 누른 채 Finder로 끌어 주세요".into());
@@ -281,7 +283,13 @@ pub fn drag(nsview: &NSView, v: Value) -> Result<(), String> {
         unsafe { item.setDraggingFrame_contents(frame, Some(&image)) };
         items.push(item);
     }
-    let token = crate::store::new_id();
+    let token = match files::drag::begin(&v, &origin_files) {
+        Ok(token) => token,
+        Err(e) => {
+            PROMISES.with(|p| { let mut p=p.borrow_mut(); for token in tokens { p.remove(&token); } });
+            return Err(e.to_string());
+        }
+    };
     let state = Source::alloc(mtm).set_ivars(DragState {
         drag: token.clone(),
         tokens,
@@ -295,12 +303,34 @@ pub fn drag(nsview: &NSView, v: Value) -> Result<(), String> {
     DRAGS.with(|d| {
         d.borrow_mut().insert(token, source.clone());
     });
-    content.beginDraggingSessionWithItems_event_source(
+    let session = content.beginDraggingSessionWithItems_event_source(
         &NSArray::from_retained_slice(&items),
         &event,
         ProtocolObject::from_ref(&*source),
     );
+    let board = session.draggingPasteboard();
+    if !write_marker(&board, &source.ivars().drag) {
+        files::drag::release(&source.ivars().drag);
+    }
     Ok(())
+}
+
+pub fn register_drop(view: &NSView) {
+    let mut types: Vec<_> = view.registeredDraggedTypes().iter().map(|kind|kind.retain()).collect();
+    types.push(NSString::from_str("dev.jiun.itda.file-drag"));
+    view.registerForDraggedTypes(&NSArray::from_retained_slice(&types));
+}
+fn write_marker(board: &NSPasteboard, token: &str) -> bool {
+    let kind = NSString::from_str("dev.jiun.itda.file-drag");
+    unsafe { board.addTypes_owner(&NSArray::arrayWithObject(&*kind), None); }
+    board.setString_forType(&NSString::from_str(token), &kind)
+}
+fn board_origin(board: &NSPasteboard) -> Option<Value> {
+    let token = board.stringForType(&NSString::from_str("dev.jiun.itda.file-drag"))?.to_string();
+    files::drag::accept(&token)
+}
+pub fn drop_origin() -> Option<Value> {
+    board_origin(&NSPasteboard::pasteboardWithName(unsafe { NSPasteboardNameDrag }))
 }
 
 pub fn promise_done(v: &Value) {
@@ -346,6 +376,27 @@ pub fn system_edit(action: &str) {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    #[test]
+    fn private_drag_board_preserves_urls_and_checks_native_session() {
+        let board = NSPasteboard::pasteboardWithUniqueName();
+        board.clearContents();
+        assert!(board.writeObjects(&NSArray::from_retained_slice(&[
+            ProtocolObject::<dyn NSPasteboardWriting>::from_retained(NSURL::fileURLWithPath(&NSString::from_str("/tmp/itda-drag-fixture.txt")))
+        ])));
+        let v = json!({"id":"source","window":"source-window","side":"local","path":"/tmp","items":[{"name":"itda-drag-fixture.txt"}]});
+        let files = files::export::selection(&v).unwrap();
+        let token = files::drag::begin(&v,&files).unwrap();
+        assert!(write_marker(&board,&token));
+        assert!(board.types().unwrap().containsObject(unsafe { NSPasteboardTypeFileURL }),"marker removed native file URLs");
+        let origin = board_origin(&board).unwrap();
+        assert_eq!(origin["window"],"source-window"); assert_eq!(origin["names"],json!(["itda-drag-fixture.txt"]));
+        assert!(board_origin(&board).is_none(),"drop token could be replayed");
+        files::drag::finish(&token); files::drag::release(&token);
+        assert!(write_marker(&board,"00000000000000000000000000000000"));
+        assert!(board_origin(&board).is_none());
+        board.clearContents();
+    }
+
     #[test]
     fn finder_promise_writes_and_never_overwrites_or_removes_source() {
         let root =

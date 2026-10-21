@@ -2,6 +2,8 @@
 pub mod locations;
 #[cfg(any(target_os = "macos", windows))]
 pub mod export;
+#[cfg(any(target_os = "macos", windows))]
+pub mod drag;
 mod sftp;
 mod transfer;
 #[cfg(any(windows, test))]
@@ -407,7 +409,11 @@ pub fn remember_clipboard_source(clip: &Value) {
         *kept = connection(&key).ok().map(|connection| ClipboardSource { cid, key, connection });
     } else { *kept = None; }
 }
-fn transfer_source(key: &str, clipboard: Option<&str>) -> io::Result<Arc<Connection>> {
+fn transfer_source(key: &str, clipboard: Option<&str>, drag_token: Option<&str>) -> io::Result<Arc<Connection>> {
+    #[cfg(any(target_os = "macos", windows))]
+    if let Some(token) = drag_token { return drag::source(key, token).ok_or_else(|| io::Error::other("끌어 놓은 파일의 연결이 만료되었습니다. 다시 끌어 놓아 주세요")); }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let _ = drag_token;
     if let Some(cid) = clipboard {
         if let Some(kept) = CLIPBOARD_SOURCE.lock().unwrap().as_ref().filter(|k| k.cid == cid && k.key == key) {
             return Ok(kept.connection.clone());

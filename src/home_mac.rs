@@ -641,7 +641,7 @@ fn home_view(window: &Window, dark: bool, file: Option<&str>, file_window: Optio
     let bg = if dark { (32, 32, 32, 255) } else { (243, 243, 243, 255) };
     let drop_id = file_window.map(str::to_string);
     let drag_id = file_window.map(str::to_string);
-    WebViewBuilder::new()
+    let view = WebViewBuilder::new()
         .with_initialization_script(&format!("window.itdaNativeFiles=true;window.ITDA_FILE_PATH={};", json!(file_path)))
         .with_accept_first_mouse(file.is_some())
         .with_custom_protocol("itda".into(), |_id, req| {
@@ -653,7 +653,7 @@ fn home_view(window: &Window, dark: bool, file: Option<&str>, file_window: Optio
         })
         .with_drag_drop_handler(move |event| {
             if let wry::DragDropEvent::Drop { paths, position } = event {
-                super::post(Event::Page(json!({"type":"files_drop","window":drop_id,"paths":paths,"position":[position.0,position.1]})));
+                super::post(Event::Page(json!({"type":"files_drop","window":drop_id,"paths":paths,"position":[position.0,position.1],"origin":native_files::drop_origin()})));
             }
             true
         })
@@ -707,7 +707,9 @@ fn home_view(window: &Window, dark: bool, file: Option<&str>, file_window: Optio
         .with_background_color(bg)
         .with_devtools(std::env::var_os("ITDA_DEVTOOLS").is_some())
         .with_back_forward_navigation_gestures(false)
-        .build(window)
+        .build(window)?;
+    native_files::register_drop(&view.webview());
+    Ok(view)
 }
 
 pub fn run(quick: Option<String>) {
