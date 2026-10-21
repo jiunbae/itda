@@ -127,13 +127,18 @@ impl<F: FnMut(u64)> Write for RelayWriter<'_, F> {
         Ok(data.len())
     }
     fn flush(&mut self) -> io::Result<()> {
+        let mut failure = None;
         while !self.pending.is_empty() {
             self.control.check()?;
             let mut r = self.dst.packet()?;
             let i = self.pending.iter().position(|&id| id == r.id).ok_or_else(|| err("SFTP 중계 쓰기 응답 오류"))?;
             self.pending.remove(i);
-            if r.status()? != 0 { return Err(err("SFTP 중계 쓰기 실패")); }
+            let checked = r.status().and_then(|status| if status == 0 { Ok(()) } else { Err(err("SFTP 중계 쓰기 실패")) });
+            // Drain the rest even after a write rejection: CLOSE and staging cleanup
+            // must not mistake an old WRITE reply for their own response.
+            if let Err(e) = checked { if failure.is_none() { failure = Some(e); } }
         }
+        if let Some(e) = failure { return Err(e); }
         (self.progress)(self.offset);
         Ok(())
     }
@@ -456,7 +461,8 @@ impl Sftp {
         let handle = dst.open(to, 2 | 8 | 16 | 32)?;
         let mut sink = RelayWriter { dst, handle, pending: Vec::new(), offset: 0, control, progress };
         let copied = self.download(from, size, &mut sink, control, |_| {});
-        // Even a failed source read must finish queued replies before CLOSE / cleanup.
+        // Drain queued replies before CLOSE / cleanup while the transport is available.
+        // Cancellation kills both sessions; the transfer then reconnects to discard staging.
         let flushed = sink.flush();
         let closed = sink.dst.close(&sink.handle);
         copied.and(flushed).and(closed)?;
@@ -567,6 +573,22 @@ mod tests {
         assert!(std::fs::metadata(&cancelled).unwrap().len() < bytes.len() as u64);
         assert_eq!(std::fs::read(&from).unwrap(), bytes);
         drop((src, dst));
+        #[cfg(unix)]
+        {
+            // A real server returns WRITE failures once this child's file-size limit
+            // is reached. Its following replies must still be drained for cleanup.
+            let control = Control::default();
+            let mut src = session(&control);
+            let child = std::process::Command::new("/bin/sh")
+                .args(["-c", "trap '' XFSZ; ulimit -f 1024; exec \"$1\"", "itda-limited-sftp"])
+                .arg(&server).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+            let mut dst = Sftp::start(child, &control).unwrap();
+            let rejected = root.join("rejected.partial").to_string_lossy().into_owned();
+            assert!(src.relay_to(&from, bytes.len() as u64, &mut dst, &rejected, &control, |_| {}).is_err());
+            assert!(dst.stat(&rejected).unwrap().unwrap().size < bytes.len() as u64);
+            dst.remove(&rejected, false).unwrap();
+            assert!(!std::path::Path::new(&rejected).exists());
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 
