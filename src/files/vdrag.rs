@@ -58,6 +58,10 @@ impl Remote {
             }
             walk(&mut s, &path, &f.name, &e, &mut out)?;
         }
+        let mut unique = std::collections::HashSet::new();
+        for item in &out {
+            if !unique.insert(windows_name_key(&item.rel)) { return Err(error(format!("Windows에서 같은 이름이 되는 파일이 여러 개 있습니다: {}",item.rel))); }
+        }
         *self.idle.lock().unwrap() = Some(s);
         Ok(out)
     }
@@ -100,7 +104,7 @@ fn walk(s: &mut Sftp, path: &str, rel: &str, e: &Entry, out: &mut Vec<Item>) -> 
     if rel.encode_utf16().count() >= 200 {
         return Err(error(format!("경로가 너무 깁니다: {}", rel.replace('\\', "/"))));
     }
-    out.push(Item { rel: rel.to_string(), dir: e.dir, size: if e.dir { 0 } else { e.size }, modified: e.modified, path: path.to_string() });
+    out.push(Item { rel: destination_name(rel,true), dir: e.dir, size: if e.dir { 0 } else { e.size }, modified: e.modified, path: path.to_string() });
     if e.dir {
         let mut children = s.list(path)?;
         children.sort_by(|a, b| a.name.cmp(&b.name));
