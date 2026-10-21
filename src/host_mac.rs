@@ -164,6 +164,9 @@ pub(crate) fn monitors() -> Vec<(u32, i32, i32, i32, i32)> {
 /// The newest captured frame, handed from ScreenCaptureKit's queue to the pump.
 type Latest = Arc<Mutex<Option<CFRetained<CVPixelBuffer>>>>;
 
+/// When the pending frame arrived (ITDA_HP_TRACE only).
+static ARRIVED: Mutex<Option<Instant>> = Mutex::new(None);
+
 /// Called when a new frame arrives.
 type Waker = Box<dyn Fn() + Send>;
 static FRAME_WAKERS: Mutex<Vec<(u64, Waker)>> = Mutex::new(Vec::new());
@@ -198,6 +201,12 @@ define_class!(
             }
             // Idle frames (nothing changed) carry no image.
             if let Some(image) = unsafe { sample.image_buffer() } {
+                if crate::trace::on() {
+                    // From the frame's display time to its delivery here.
+                    let (now, shown) = unsafe { (objc2_core_media::CMClock::host_time_clock().time().seconds(), sample.presentation_time_stamp().seconds()) };
+                    crate::trace::add("sck", ((now - shown) * 1000.0) as f32);
+                    *ARRIVED.lock().unwrap() = Some(Instant::now());
+                }
                 *self.ivars().latest.lock().unwrap() = Some(image);
                 // Wake every viewer's pump now, rather than at its next poll.
                 for (_, wake) in FRAME_WAKERS.lock().unwrap().iter() {
@@ -292,6 +301,10 @@ impl Capture {
     fn update(&mut self) {
         let pending = self.latest.lock().unwrap().take();
         if let Some(pb) = pending {
+            if let Some(at) = ARRIVED.lock().unwrap().take() {
+                crate::trace::since("wait", at);
+            }
+            let copy = Instant::now();
             if unsafe { CVPixelBufferLockBaseAddress(&pb, CVPixelBufferLockFlags::ReadOnly) } == 0 {
                 let base = CVPixelBufferGetBaseAddress(&pb) as *const u8;
                 let (bw, bh, bpr) = (CVPixelBufferGetWidth(&pb), CVPixelBufferGetHeight(&pb), CVPixelBufferGetBytesPerRow(&pb));
@@ -313,6 +326,7 @@ impl Capture {
                 }
                 unsafe { CVPixelBufferUnlockBaseAddress(&pb, CVPixelBufferLockFlags::ReadOnly) };
             }
+            crate::trace::since("copy", copy);
         }
     }
 

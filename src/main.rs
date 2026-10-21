@@ -33,6 +33,7 @@ mod rdp;
 mod rfb;
 mod store;
 mod tailscale;
+mod trace;
 mod tunnel;
 mod ws;
 

@@ -125,6 +125,7 @@ impl Demand {
                     let seq = u32::from_be_bytes(b);
                     if let Some(i) = self.inflight.iter().position(|&(s, ..)| s == seq) {
                         let rtt = self.inflight[i].2.elapsed();
+                        crate::trace::add("ack", rtt.as_secs_f32() * 1000.0);
                         if self.rtt.is_none_or(|(best, at)| rtt <= best || at.elapsed() > RTT_WINDOW) {
                             self.rtt = Some((rtt, Instant::now()));
                         }

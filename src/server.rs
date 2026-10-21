@@ -601,11 +601,13 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
             Some(v) if full || prev[..] != frame[..] => {
                 let (vw, vh) = v.size();
                 let key = reset || !incremental;
+                let encode = Instant::now();
                 #[cfg(target_os = "macos")]
                 let encoded = snapshot.native.as_deref().and_then(|buffer| v.encode_buffer(buffer, key))
                     .unwrap_or_else(|| v.encode(frame, w, key));
                 #[cfg(not(target_os = "macos"))]
                 let encoded = v.encode(frame, w, key);
+                crate::trace::since("encode", encode);
                 match encoded {
                     // Nothing out for this frame (an encoder still buffering): send it losslessly
                     // and keep any pending reset for the first real picture.
@@ -647,6 +649,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         }
         demand.sent(u.buf.len(), &mut u.buf);
         out.send(std::mem::replace(&mut u.buf, out.buffer()))?;
+        crate::trace::since("update", last_capture);
         prev.clear();
         prev.extend_from_slice(frame);
     }
