@@ -376,6 +376,12 @@ pub(crate) trait VideoEncode: Send {
     fn size(&self) -> (usize, usize);
     /// Encode a frame (rows of `stride` pixels); `key` asks for an IDR with parameter sets.
     fn encode(&mut self, px: &[u32], stride: usize, key: bool) -> io::Result<Vec<u8>>;
+    /// macOS can encode the immutable SCK buffer itself, avoiding an encoder staging copy.
+    /// Other implementations can keep using the CPU-pixel path.
+    #[cfg(target_os = "macos")]
+    fn encode_buffer(&mut self, _buffer: &objc2_core_video::CVPixelBuffer, _key: bool) -> Option<io::Result<Vec<u8>>> {
+        None
+    }
 }
 pub(crate) type Video = Box<dyn VideoEncode>;
 
@@ -486,12 +492,27 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
         last_capture = Instant::now();
         // The size this viewer was last given (another viewer's capture may have resized it).
         let (w0, h0) = size;
+        #[cfg(target_os = "macos")]
+        let snapshot = cap.lock().unwrap().snapshot();
+        #[cfg(target_os = "macos")]
+        let (ox, oy, w, h, frame) = (snapshot.x, snapshot.y, snapshot.w, snapshot.h, snapshot.pixels.as_slice());
+        #[cfg(target_os = "macos")]
+        { seen = snapshot.generation; }
+        // Windows keeps its Desktop Duplication frame borrowed until this update is done.
+        // On macOS the capture lock is already released: slow encoders and lossless
+        // repaints cannot stop another viewer from taking its own immutable snapshot.
+        #[cfg(not(target_os = "macos"))]
         let mut cap = cap.lock().unwrap();
+        #[cfg(not(target_os = "macos"))]
         cap.fit(); // (grab does too) the virtual desktop's corner, read before the frame borrows cap
+        #[cfg(not(target_os = "macos"))]
         let (ox, oy) = (cap.x, cap.y);
         // The frame this grab gives (one that turns up meanwhile only costs an extra pass).
+        #[cfg(not(target_os = "macos"))]
         let g = cap.generation();
-        seen = g.wrapping_add(u64::from(cap.fresh_since(g)));
+        #[cfg(not(target_os = "macos"))]
+        { seen = g.wrapping_add(u64::from(cap.fresh_since(g))); }
+        #[cfg(not(target_os = "macos"))]
         let (w, h, frame) = cap.grab();
         size = (w, h);
         u.start();
@@ -531,7 +552,13 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, cap: &Mutex<platform::Capture>, mut si
         match video.as_mut().filter(|_| want_video) {
             Some(v) if full || prev[..] != frame[..] => {
                 let (vw, vh) = v.size();
-                match v.encode(frame, w, reset || !incremental) {
+                let key = reset || !incremental;
+                #[cfg(target_os = "macos")]
+                let encoded = snapshot.native.as_deref().and_then(|buffer| v.encode_buffer(buffer, key))
+                    .unwrap_or_else(|| v.encode(frame, w, key));
+                #[cfg(not(target_os = "macos"))]
+                let encoded = v.encode(frame, w, key);
+                match encoded {
                     // Nothing out for this frame (an encoder still buffering): send it losslessly
                     // and keep any pending reset for the first real picture.
                     Ok(data) if data.is_empty() => {

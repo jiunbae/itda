@@ -136,6 +136,9 @@ impl VideoEncode for Hw {
     fn encode(&mut self, px: &[u32], stride: usize, key: bool) -> io::Result<Vec<u8>> {
         self.0.encode(px, stride, key).map(|u| u.data).map_err(io::Error::other)
     }
+    fn encode_buffer(&mut self, buffer: &CVPixelBuffer, key: bool) -> Option<io::Result<Vec<u8>>> {
+        Some(self.0.encode_buffer(buffer, key).map(|u| u.data).map_err(io::Error::other))
+    }
 }
 
 pub(crate) fn video(w: usize, h: usize) -> Option<Video> {
@@ -209,13 +212,26 @@ pub(crate) struct Capture {
     pub(crate) y: i32,
     pub(crate) w: usize,
     pub(crate) h: usize,
-    buf: Vec<u32>,
+    buf: Arc<Vec<u32>>,
+    native: Option<CFRetained<CVPixelBuffer>>,
     latest: Latest,
     /// Counts frames copied into `buf`: each viewer remembers the one it last grabbed, since
     /// all viewers share this capture and the first to grab takes the pending frame.
     generation: u64,
     stream: Option<Retained<SCStream>>,
     _output: Option<Retained<Output>>,
+}
+
+/// One immutable capture shared with a viewer. Keep both representations together: the
+/// native buffer encodes the same image that `pixels` compares and repaints losslessly.
+pub(crate) struct Snapshot {
+    pub x: i32,
+    pub y: i32,
+    pub w: usize,
+    pub h: usize,
+    pub pixels: Arc<Vec<u32>>,
+    pub native: Option<CFRetained<CVPixelBuffer>>,
+    pub generation: u64,
 }
 
 // The stream and output are only touched under the mutex; frames arrive through `latest`.
@@ -226,7 +242,7 @@ impl Capture {
         let b = CGDisplayBounds(CGMainDisplayID());
         let (w, h) = ((b.size.width as usize).max(16) & !1, (b.size.height as usize).max(16) & !1);
         let latest: Latest = Arc::new(Mutex::new(None));
-        let mut c = Capture { x: 0, y: 0, w, h, buf: vec![0; w * h], latest: latest.clone(), generation: 0, stream: None, _output: None };
+        let mut c = Capture { x: 0, y: 0, w, h, buf: Arc::new(vec![0; w * h]), native: None, latest: latest.clone(), generation: 0, stream: None, _output: None };
         match start_stream(w, h, latest) {
             Ok((stream, output)) => (c.stream, c._output) = (Some(stream), Some(output)),
             Err(e) => crate::log!("hp: screen capture unavailable ({e}); viewers see a black screen"),
@@ -253,25 +269,41 @@ impl Capture {
         self.generation
     }
 
-    pub(crate) fn grab(&mut self) -> (usize, usize, &[u32]) {
-        if let Some(pb) = self.latest.lock().unwrap().take() {
-            self.generation = self.generation.wrapping_add(1);
-            let pb = &*pb;
-            if unsafe { CVPixelBufferLockBaseAddress(pb, CVPixelBufferLockFlags::ReadOnly) } == 0 {
-                let base = CVPixelBufferGetBaseAddress(pb) as *const u8;
-                let (bw, bh, bpr) = (CVPixelBufferGetWidth(pb), CVPixelBufferGetHeight(pb), CVPixelBufferGetBytesPerRow(pb));
+    fn update(&mut self) {
+        let pending = self.latest.lock().unwrap().take();
+        if let Some(pb) = pending {
+            if unsafe { CVPixelBufferLockBaseAddress(&pb, CVPixelBufferLockFlags::ReadOnly) } == 0 {
+                let base = CVPixelBufferGetBaseAddress(&pb) as *const u8;
+                let (bw, bh, bpr) = (CVPixelBufferGetWidth(&pb), CVPixelBufferGetHeight(&pb), CVPixelBufferGetBytesPerRow(&pb));
                 if !base.is_null() {
                     let (cw, ch) = (bw.min(self.w), bh.min(self.h));
+                    // A viewer may still be encoding the previous image. Reuse its storage
+                    // only when unshared; never overwrite a snapshot another viewer holds.
+                    let pixels = Arc::make_mut(&mut self.buf);
                     for y in 0..ch {
                         let row = unsafe { std::slice::from_raw_parts(base.add(y * bpr) as *const u32, cw) };
-                        for (d, s) in self.buf[y * self.w..y * self.w + cw].iter_mut().zip(row) {
+                        for (d, s) in pixels[y * self.w..y * self.w + cw].iter_mut().zip(row) {
                             *d = s & 0x00ff_ffff;
                         }
                     }
+                    self.generation = self.generation.wrapping_add(1);
+                    // A cropped/mismatched SCK image still uses the existing CPU fallback;
+                    // the encoder must never receive a differently sized native buffer.
+                    self.native = (bw == self.w && bh == self.h).then(|| pb.clone());
                 }
-                unsafe { CVPixelBufferUnlockBaseAddress(pb, CVPixelBufferLockFlags::ReadOnly) };
+                unsafe { CVPixelBufferUnlockBaseAddress(&pb, CVPixelBufferLockFlags::ReadOnly) };
             }
         }
+    }
+
+    pub(crate) fn snapshot(&mut self) -> Snapshot {
+        self.update();
+        Snapshot { x: self.x, y: self.y, w: self.w, h: self.h, pixels: self.buf.clone(),
+            native: self.native.clone(), generation: self.generation }
+    }
+
+    pub(crate) fn grab(&mut self) -> (usize, usize, &[u32]) {
+        self.update();
         (self.w, self.h, &self.buf)
     }
 }
@@ -281,6 +313,70 @@ impl Drop for Capture {
         if let Some(s) = &self.stream {
             unsafe { s.stopCaptureWithCompletionHandler(None) };
         }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use objc2_core_video::{CVPixelBufferCreate, kCVPixelFormatType_32BGRA};
+    use std::ptr::{null_mut, NonNull};
+
+    fn buffer(w: usize, h: usize, color: u32) -> CFRetained<CVPixelBuffer> {
+        let mut raw = null_mut();
+        let status = unsafe { CVPixelBufferCreate(None, w, h, kCVPixelFormatType_32BGRA, None, NonNull::from(&mut raw)) };
+        assert_eq!(status, 0);
+        let pb = unsafe { CFRetained::from_raw(NonNull::new(raw).unwrap()) };
+        unsafe {
+            assert_eq!(CVPixelBufferLockBaseAddress(&pb, CVPixelBufferLockFlags(0)), 0);
+            let base = CVPixelBufferGetBaseAddress(&pb) as *mut u8;
+            let stride = CVPixelBufferGetBytesPerRow(&pb);
+            for y in 0..h {
+                std::slice::from_raw_parts_mut(base.add(y * stride) as *mut u32, w).fill(color);
+            }
+            assert_eq!(CVPixelBufferUnlockBaseAddress(&pb, CVPixelBufferLockFlags(0)), 0);
+        }
+        pb
+    }
+
+    fn capture() -> Capture {
+        Capture { x: 0, y: 0, w: 16, h: 16, buf: Arc::new(vec![0; 256]), native: None,
+            latest: Arc::new(Mutex::new(None)), generation: 0, stream: None, _output: None }
+    }
+
+    #[test]
+    fn held_snapshot_survives_next_capture_and_capture_drop() {
+        let mut c = capture();
+        *c.latest.lock().unwrap() = Some(buffer(16, 16, 0xff123456));
+        let first = c.snapshot();
+        let unchanged = c.snapshot();
+        assert!(Arc::ptr_eq(&first.pixels, &unchanged.pixels));
+        assert!(!c.fresh_since(first.generation));
+        *c.latest.lock().unwrap() = Some(buffer(16, 16, 0xff654321));
+        assert!(c.fresh_since(first.generation));
+        let next = c.snapshot();
+        assert_ne!(first.generation, next.generation);
+        assert!(c.fresh_since(first.generation)); // A second viewer still sees the change.
+        assert!(!c.fresh_since(next.generation));
+        assert!(first.pixels.iter().all(|p| *p == 0x123456));
+        assert!(next.pixels.iter().all(|p| *p == 0x654321));
+        drop(c);
+        let pb = first.native.as_ref().unwrap();
+        unsafe {
+            assert_eq!(CVPixelBufferLockBaseAddress(pb, CVPixelBufferLockFlags::ReadOnly), 0);
+            assert_eq!(*(CVPixelBufferGetBaseAddress(pb) as *const u32), 0xff123456);
+            CVPixelBufferUnlockBaseAddress(pb, CVPixelBufferLockFlags::ReadOnly);
+        }
+    }
+
+    #[test]
+    fn mismatched_buffer_uses_cpu_fallback() {
+        let mut c = capture();
+        *c.latest.lock().unwrap() = Some(buffer(20, 20, 0xffabcdef));
+        let s = c.snapshot();
+        assert!(s.native.is_none());
+        assert_eq!((s.w, s.h), (16, 16));
+        assert!(s.pixels.iter().all(|p| *p == 0xabcdef));
     }
 }
 
