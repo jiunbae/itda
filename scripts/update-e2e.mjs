@@ -60,8 +60,13 @@ try {
     await page.locator('input[data-set="auto_update"]').evaluate((e) => e.click());
     const saved = (await sent("settings")).at(-1);
     assert(saved && saved.settings.auto_update === false, "Turning off the automatic check was not saved");
+    // Starting at login is off until turned on.
+    const login = page.locator('input[data-set="login_start"]');
+    assert(!(await login.isChecked()), "Login start on by default");
+    await login.evaluate((e) => e.click());
+    assert((await sent("settings")).at(-1).settings.login_start === true, "Turning on login start was not saved");
     assert(!errors.length, errors.join("\n"));
     await page.close();
   }
-  console.log("PASS: update offered in sidebar/settings, manual check, confirm before install with open connections, progress/error, auto-check toggle");
+  console.log("PASS: update offered in sidebar/settings, manual check, confirm before install with open connections, progress/error, auto-check and login-start toggles");
 } finally { await browser.close(); server.close(); }

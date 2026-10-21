@@ -168,6 +168,14 @@ fn started() {
     announce();
     start_discovery();
     start_update_checks();
+    // Again each launch: the entry names this exe, which may have moved. (Not on macOS, where
+    // the login item follows the app, and turning it off in System Settings must stay off.)
+    #[cfg(windows)]
+    if home(|m| m.settings.login_start) {
+        if let Err(e) = crate::autostart::set(true) {
+            crate::log!("login start: {e}");
+        }
+    }
 }
 
 /// A newer release found by the background check, offered to the page.
@@ -647,6 +655,12 @@ fn on_ipc(v: Value) {
                 plat::apply_theme(is_dark(&st));
                 if old.zoom != st.zoom {
                     plat::apply_zoom(st.zoom);
+                }
+                if old.login_start != st.login_start {
+                    if let Err(e) = crate::autostart::set(st.login_start) {
+                        crate::log!("login start: {e}");
+                        send(json!({"type": "toast", "text": format!("로그인 시 실행을 바꾸지 못했습니다: {e}"), "err": true}));
+                    }
                 }
                 send(json!({"type": "settings", "settings": st}));
                 // Restart servers only when their own settings changed (restarts drop viewers).

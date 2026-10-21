@@ -805,6 +805,7 @@ function renderSettings() {
 
     <div class="group-title">앱${more('app')}</div>
     ${MAC ? '' : setting('E8A5', '창을 닫으면 알림 영역에서 계속 실행', '알림 영역 아이콘으로 빠르게 다시 연결할 수 있습니다', toggle('tray', st.tray))}
+    ${setting('E7E8', '로그인하면 Itda 실행', MAC ? '이 Mac에 로그인하면 Itda가 열립니다. 시스템 설정 › 일반 › 로그인 항목에서도 바꿀 수 있습니다' : '이 PC에 로그인하면 알림 영역에서 시작합니다. 이 PC 공유가 켜져 있으면 바로 다른 기기에서 접속할 수 있습니다', toggle('login_start', !!st.login_start))}
     ${setting('EA8F', '알림', '연결이 끊기거나 다시 연결될 때 알려 줍니다', toggle('notify', st.notify))}
     ${setting('E91B', '미리보기 저장', `마지막 화면을 ${HERE}에만 작게 저장해 주소록에 표시합니다`, toggle('thumbnails', st.thumbnails), true)}
 
