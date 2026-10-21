@@ -57,9 +57,9 @@ pub fn password_key(id: &str) -> String {
 
 const RELEASES: &str = "https://github.com/jiunbae/itda/releases/download";
 const BUNDLE_ID: &str = "dev.jiun.itda";
-/// Sets `bg` for `open`: Itda from 1.0 starts in the background when asked to (only the
+/// Sets `bg` for `open`: Itda from 0.9.20 starts in the background when asked to (only the
 /// permission helper shows); older ones would reject the argument.
-const BACKGROUND: &str = r#"case "$(defaults read "$app/Contents/Info" CFBundleShortVersionString 2>/dev/null)" in 0.*|"") bg="" ;; *) bg="--args --background" ;; esac"#;
+const BACKGROUND: &str = r#"case "$(defaults read "$app/Contents/Info" CFBundleShortVersionString 2>/dev/null)" in 0.[0-8].*|0.9.[0-9]|0.9.1[0-9]|"") bg="" ;; *) bg="--args --background" ;; esac"#;
 
 /// Run `script` with bash on the Mac, returning stdout; with `upload`, the script is
 /// instead the remote command and `upload` is its stdin (e.g. `cat > file`).
