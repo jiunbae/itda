@@ -111,7 +111,9 @@ pub fn local_url(id: &str) -> io::Result<String> {
     }
     let (port, tok) = g.as_ref().unwrap();
     let id: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
-    Ok(format!("http://127.0.0.1:{port}/auth?t={tok}&open={id}"))
+    // (ITDA_HP_TRACE: the viewer also times its own part of each frame.)
+    let trace = if crate::trace::on() { "&trace=1" } else { "" };
+    Ok(format!("http://127.0.0.1:{port}/auth?t={tok}&open={id}{trace}"))
 }
 
 /// Use this password (typed, not saved) for connection `id`; None forgets it.

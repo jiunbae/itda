@@ -51,8 +51,62 @@ const S = { hosts: [], accounts: [], rfb: null, ws: null, host: null, fit: true,
 // to the app's home instead of offering the list.
 const OPEN = new URLSearchParams(location.search).get('open');
 const MIRROR = new URLSearchParams(location.search).get('mirror');
+// ITDA_HP_TRACE (the app adds trace=1): time this viewer's part of each H.264 frame.
+const TRACE = new URLSearchParams(location.search).get('trace') === '1';
 const APP = !!(OPEN && window.ipc);
 const post = (m) => { try { window.ipc.postMessage(JSON.stringify(m)); } catch (_) {} };
+
+// Where an H.264 frame spends its time in this viewer (TRACE only), p50/p95 in ms every 5 s:
+//   decode  — handed to the VideoDecoder → decoded picture out
+//   draw    — decoded → drawn to the visible canvas (noVNC's flip)
+//   present — drawn → the next animation frame, when the compositor takes it up (about the
+//             next display refresh; the glass itself is one refresh later)
+// Frames leave the decoder in order, so each step pairs with the oldest one waiting for it.
+const viewerTrace = (() => {
+  const stats = { decode: [], draw: [], present: [] };
+  const submitted = [], decoded = [];
+  let since = performance.now();
+  const add = (k, ms) => {
+    stats[k].push(ms);
+    if (performance.now() - since < 5000) return;
+    const q = (v, p) => v[Math.min(v.length - 1, Math.round((v.length - 1) * p))];
+    const text = Object.entries(stats).filter(([, v]) => v.length).map(([k, v]) => {
+      v.sort((a, b) => a - b);
+      return `${k} n=${v.length} p50=${q(v, 0.5).toFixed(1)} p95=${q(v, 0.95).toFixed(1)}`;
+    }).join(' | ');
+    for (const k in stats) stats[k] = [];
+    since = performance.now();
+    console.log('viewer trace:', text);
+    post({ ev: 'trace', text });
+  };
+  if (TRACE && window.VideoDecoder) {
+    const Base = window.VideoDecoder;
+    window.VideoDecoder = class extends Base {
+      constructor(init) {
+        super({ ...init, output: (f) => { const t = submitted.shift(); if (t !== undefined) { add('decode', performance.now() - t); decoded.push(performance.now()); } init.output(f); } });
+      }
+      decode(chunk) { submitted.push(performance.now()); return super.decode(chunk); }
+      reset() { submitted.length = 0; return super.reset(); }
+    };
+  }
+  return {
+    attach(rfb) {
+      const d = rfb._display;
+      if (!d || typeof d.flip !== 'function') return;
+      const flip = d.flip.bind(d);
+      d.flip = (...a) => {
+        const r = flip(...a);
+        const t = decoded.shift();
+        if (t !== undefined) {
+          const drawn = performance.now();
+          add('draw', drawn - t);
+          requestAnimationFrame(() => add('present', performance.now() - drawn));
+        }
+        return r;
+      };
+    },
+  };
+})();
 const monitors = new MonitorController({S,app:APP,post,api,render:renderTools,toast,close:leave});
 const opt = (k, dflt) => (S.host && S.host.opts && k in S.host.opts ? S.host.opts[k] : dflt);
 // What to call the remote device in messages.
@@ -459,6 +513,7 @@ function open(h) {
   S.ws = ws;
   const rfb = new window.RFB($('#screen'), ws, { shared: true });
   S.rfb = rfb;
+  if (TRACE) viewerTrace.attach(rfb);
   monitors.attach(rfb);
   rfb.scaleViewport = S.fit;
   rfb.clipViewport = !S.fit;
