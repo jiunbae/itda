@@ -874,6 +874,17 @@ fn ps(script: &str) -> String {
         crate::ws::base64(&bytes)
     )
 }
+/// A known_hosts record as `ssh-keygen -l` can read it, for display only: comments and revoked
+/// keys are dropped, and a CA's marker removed (ssh itself still applies both when connecting).
+/// known_hosts allows blanks before a record and after its marker.
+fn fingerprint_input(line: &str) -> Option<&str> {
+    let line = line.trim_start();
+    if line.is_empty() || line.starts_with('#') || line.starts_with("@revoked") {
+        return None;
+    }
+    Some(line.strip_prefix("@cert-authority").map_or(line, str::trim_start))
+}
+
 fn trusted_fingerprints(cfg: &crate::tunnel::SshCfg) -> io::Result<Vec<String>> {
     // Resolve SSH aliases locally, before making any authenticated connection.
     let mut resolve = crate::tunnel::ssh_command_strict(cfg)?;
@@ -922,10 +933,7 @@ fn trusted_fingerprints(cfg: &crate::tunnel::SshCfg) -> io::Result<Vec<String>> 
             .output()?;
         if keys.status.success() {
             for line in String::from_utf8_lossy(&keys.stdout).lines() {
-                if !line.starts_with('#') && !line.starts_with("@revoked") && !line.trim().is_empty() {
-                    // Display only: ssh-keygen -l reads "host type key"; a CA's marker would
-                    // make it fail. ssh itself still applies the marker when connecting.
-                    let line = line.strip_prefix("@cert-authority ").unwrap_or(line);
+                if let Some(line) = fingerprint_input(line) {
                     found.extend_from_slice(line.as_bytes());
                     found.push(b'\n');
                 }
@@ -1259,6 +1267,17 @@ pub fn install(token: &str, progress: &dyn Fn(&str)) -> io::Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fingerprint_input_reads_like_known_hosts() {
+        let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA";
+        assert_eq!(fingerprint_input(&format!("host {key}")), Some(format!("host {key}").as_str()));
+        assert_eq!(fingerprint_input(&format!("@cert-authority *.lan {key}")), Some(format!("*.lan {key}").as_str()));
+        assert_eq!(fingerprint_input(&format!("  \t@cert-authority\t *.lan {key}")), Some(format!("*.lan {key}").as_str()));
+        assert_eq!(fingerprint_input(&format!(" @revoked host {key}")), None);
+        assert_eq!(fingerprint_input("  # comment"), None);
+        assert_eq!(fingerprint_input("   "), None);
+    }
+
     use super::*;
     #[cfg(windows)]
     #[test]
