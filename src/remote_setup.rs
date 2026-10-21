@@ -874,6 +874,17 @@ fn ps(script: &str) -> String {
         crate::ws::base64(&bytes)
     )
 }
+/// A known_hosts record as `ssh-keygen -l` can read it, for display only: comments and revoked
+/// keys are dropped, and a CA's marker removed (ssh itself still applies both when connecting).
+/// known_hosts allows blanks before a record and after its marker.
+fn fingerprint_input(line: &str) -> Option<&str> {
+    let line = line.trim_start();
+    if line.is_empty() || line.starts_with('#') || line.starts_with("@revoked") {
+        return None;
+    }
+    Some(line.strip_prefix("@cert-authority").map_or(line, str::trim_start))
+}
+
 fn trusted_fingerprints(cfg: &crate::tunnel::SshCfg) -> io::Result<Vec<String>> {
     // Resolve SSH aliases locally, before making any authenticated connection.
     let mut resolve = crate::tunnel::ssh_command_strict(cfg)?;
@@ -905,18 +916,31 @@ fn trusted_fingerprints(cfg: &crate::tunnel::SshCfg) -> io::Result<Vec<String>> 
         } else {
             "ssh-keygen"
         });
-    let known = crate::tunnel::known_hosts();
-    if !known.is_file() {
+    // Every file ssh trusts from (including the one earlier Itda wrote by mistake); a revoked
+    // key is never shown as a trusted fingerprint (ssh refuses it anyway).
+    let files: Vec<_> = crate::tunnel::known_hosts_files().into_iter().filter(|f| f.is_file()).collect();
+    if files.is_empty() {
         return Err(error("처음 SSH로 연결하는 기기입니다. 먼저 Itda의 파일 열기 또는 SSH 화면 연결에서 기기를 확인한 뒤 다시 시도하세요. 원격 설치에서는 새 SSH 호스트 키를 자동 수락하지 않습니다"));
     }
-    let keys = std::process::Command::new(&keygen)
-        .arg("-F")
-        .arg(&lookup)
-        .arg("-f")
-        .arg(&known)
-        .stdin(Stdio::null())
-        .output()?;
-    if !keys.status.success() {
+    let mut found = Vec::new();
+    for known in &files {
+        let keys = std::process::Command::new(&keygen)
+            .arg("-F")
+            .arg(&lookup)
+            .arg("-f")
+            .arg(known)
+            .stdin(Stdio::null())
+            .output()?;
+        if keys.status.success() {
+            for line in String::from_utf8_lossy(&keys.stdout).lines() {
+                if let Some(line) = fingerprint_input(line) {
+                    found.extend_from_slice(line.as_bytes());
+                    found.push(b'\n');
+                }
+            }
+        }
+    }
+    if found.is_empty() {
         return Err(error("이 기기의 SSH 호스트 키를 아직 신뢰하지 않았습니다. 먼저 파일 열기 또는 SSH 화면 연결에서 기기를 확인한 뒤 다시 시도하세요"));
     }
     let mut child = std::process::Command::new(&keygen)
@@ -925,7 +949,7 @@ fn trusted_fingerprints(cfg: &crate::tunnel::SshCfg) -> io::Result<Vec<String>> 
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?;
-    child.stdin.take().unwrap().write_all(&keys.stdout)?;
+    child.stdin.take().unwrap().write_all(&found)?;
     let output = child.wait_with_output()?;
     let fingerprints: Vec<_> = String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -1243,6 +1267,17 @@ pub fn install(token: &str, progress: &dyn Fn(&str)) -> io::Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fingerprint_input_reads_like_known_hosts() {
+        let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA";
+        assert_eq!(fingerprint_input(&format!("host {key}")), Some(format!("host {key}").as_str()));
+        assert_eq!(fingerprint_input(&format!("@cert-authority *.lan {key}")), Some(format!("*.lan {key}").as_str()));
+        assert_eq!(fingerprint_input(&format!("  \t@cert-authority\t *.lan {key}")), Some(format!("*.lan {key}").as_str()));
+        assert_eq!(fingerprint_input(&format!(" @revoked host {key}")), None);
+        assert_eq!(fingerprint_input("  # comment"), None);
+        assert_eq!(fingerprint_input("   "), None);
+    }
+
     use super::*;
     #[cfg(windows)]
     #[test]

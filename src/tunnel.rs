@@ -93,7 +93,7 @@ fn ssh_command_with_check(c:&SshCfg,strict:bool)->io::Result<Command> {
     let exe = ssh_exe().ok_or_else(|| err(io::ErrorKind::NotFound, "OpenSSH 클라이언트를 찾을 수 없습니다"))?;
     let mut cmd = Command::new(exe);
     cmd.arg("-T").args(["-o", if strict{"StrictHostKeyChecking=yes"}else{"StrictHostKeyChecking=accept-new"}, "-o"])
-        .arg(format!("UserKnownHostsFile={}", known_hosts().display()))
+        .arg(known_hosts_option(&known_hosts_files()))
         .args(["-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3", "-o", "ConnectTimeout=10", "-o", "NumberOfPasswordPrompts=1", "-o", "BatchMode=no"])
         .arg("-p").arg(c.port.to_string())
         .args(if c.user.is_empty() { None } else { Some(["-l", c.user.as_str()]) }.into_iter().flatten())
@@ -106,6 +106,28 @@ fn ssh_command_with_check(c:&SshCfg,strict:bool)->io::Result<Command> {
 
 pub fn known_hosts() -> PathBuf {
     crate::store::dir().join("known_hosts")
+}
+
+/// The file earlier Itda wrote to by mistake: it passed the path unquoted, and ssh took the
+/// first word ("~/Library/Application"). Still read, so host keys, revocations and CAs trusted
+/// back then keep their effect. Itda never moves or deletes it; new keys go to the first file,
+/// while an explicit "forget changed key" and ssh's own UpdateHostKeys may edit entries in it.
+fn legacy_known_hosts() -> Option<PathBuf> {
+    let full = known_hosts().to_string_lossy().into_owned();
+    let first = full.split_whitespace().next()?;
+    (first != full).then(|| PathBuf::from(first)).filter(|p| p.is_file())
+}
+
+/// Trust files ssh reads, in order; it writes new host keys to the first one only.
+pub fn known_hosts_files() -> Vec<PathBuf> {
+    std::iter::once(known_hosts()).chain(legacy_known_hosts()).collect()
+}
+
+/// ssh reads this option's value as a whitespace-separated list of files, and macOS's data
+/// folder is in "Application Support": each path is quoted.
+fn known_hosts_option(files: &[PathBuf]) -> String {
+    let quoted: Vec<String> = files.iter().map(|f| format!("\"{}\"", f.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\""))).collect();
+    format!("UserKnownHostsFile={}", quoted.join(" "))
 }
 
 /// `host[:port]` → (host, port), keeping bracketed IPv6 intact.
@@ -282,13 +304,23 @@ pub fn forget_host_key(host: &str, port: u16) {
     let Some(ssh) = ssh_exe() else { return };
     let keygen = ssh.with_file_name(if cfg!(windows) { "ssh-keygen.exe" } else { "ssh-keygen" });
     let name = if port == 22 { host.to_string() } else { format!("[{host}]:{port}") };
-    let mut cmd = Command::new(keygen);
-    cmd.args(["-R", &name, "-f"]).arg(known_hosts()).stdout(Stdio::null()).stderr(Stdio::null());
-    let _ = quiet(&mut cmd).status();
+    for file in known_hosts_files().into_iter().filter(|f| f.is_file()) {
+        let mut cmd = Command::new(&keygen);
+        cmd.args(["-R", &name, "-f"]).arg(file).stdout(Stdio::null()).stderr(Stdio::null());
+        let _ = quiet(&mut cmd).status();
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn known_hosts_paths_with_spaces_stay_whole() {
+        let mac = PathBuf::from("/Users/a/Library/Application Support/Itda/known_hosts");
+        assert_eq!(known_hosts_option(&[mac.clone()]), "UserKnownHostsFile=\"/Users/a/Library/Application Support/Itda/known_hosts\"");
+        assert_eq!(known_hosts_option(&[mac, PathBuf::from("/Users/a/Library/Application")]), "UserKnownHostsFile=\"/Users/a/Library/Application Support/Itda/known_hosts\" \"/Users/a/Library/Application\"");
+        assert_eq!(known_hosts_option(&[PathBuf::from(r"C:\Users\A B\AppData\Roaming\Itda\known_hosts")]), r#"UserKnownHostsFile="C:\\Users\\A B\\AppData\\Roaming\\Itda\\known_hosts""#);
+    }
+
     use super::*;
 
     #[test]
