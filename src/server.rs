@@ -700,6 +700,76 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
 
 #[cfg(test)]
 mod tests {
+    /// Real VideoToolbox -> production pump -> TCP -> independent ZRLE solid-tile reader.
+    /// Opt-in: no screen capture, input, permissions or production listener involved.
+    /// ITDA_REFINE_DIMS=3840x2160 cargo test --release fixed_frame_refines -- --ignored --nocapture
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn fixed_frame_refines_losslessly_after_video() {
+        use super::*;
+        let dims = std::env::var("ITDA_REFINE_DIMS").unwrap_or_else(|_| "1920x1080".into());
+        let (w, h) = dims.split_once('x').unwrap();
+        let (w, h): (usize, usize) = (w.parse().unwrap(), h.parse().unwrap());
+        assert!((16..=4096).contains(&w) && (16..=4096).contains(&h));
+        let frame: Vec<u32> = (0..w*h).map(|i| if (i % w / 64 + i / w / 64) % 2 == 0 { 0xffffff } else { 0x202020 }).collect();
+        let cap = Mutex::new(platform::fixed_capture(w, h, frame.clone()));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let (socket, _) = listener.accept().unwrap();
+        let (tx, rx) = channel();
+        let worker = std::thread::spawn(move || {
+            let out = Outbox::new(socket).unwrap();
+            pump(&out, &rx, &AtomicBool::new(false), &cap, (w, h), &AtomicBool::new(false), true).unwrap();
+        });
+        tx.send(Msg::Encodings(vec![ENC_H264, ENC_ZRLE])).unwrap();
+        tx.send(Msg::Request { incremental: false }).unwrap();
+        let read = |c: &mut TcpStream| {
+            let mut header = [0; 4]; c.read_exact(&mut header).unwrap();
+            assert_eq!(header[0], 0);
+            let count = u16::from_be_bytes([header[2], header[3]]);
+            let mut rects = Vec::new();
+            for _ in 0..count {
+                let mut r = [0; 12]; c.read_exact(&mut r).unwrap();
+                let enc = i32::from_be_bytes(r[8..12].try_into().unwrap());
+                assert!(enc == ENC_H264 || enc == ENC_ZRLE);
+                let mut len = [0; 4]; c.read_exact(&mut len).unwrap();
+                let len = u32::from_be_bytes(len) as usize; assert!(len < 64*1024*1024);
+                if enc == ENC_H264 { let mut flags = [0; 4]; c.read_exact(&mut flags).unwrap(); }
+                let mut bytes = vec![0; len]; c.read_exact(&mut bytes).unwrap();
+                rects.push((r, enc, bytes));
+            }
+            rects
+        };
+        let video = read(&mut client);
+        assert_eq!(video.len(), 1); assert_eq!(video[0].1, ENC_H264);
+        let last_video = Instant::now();
+        tx.send(Msg::Request { incremental: true }).unwrap();
+        let exact = read(&mut client);
+        let delay = last_video.elapsed();
+        let (mut area, mut bytes) = (0, 0);
+        let mut z = flate2::Decompress::new(true);
+        for (r, enc, payload) in exact {
+            assert_eq!(enc, ENC_ZRLE);
+            let u16_at = |i| u16::from_be_bytes([r[i], r[i+1]]) as usize;
+            let (x, y, rw, rh) = (u16_at(0), u16_at(2), u16_at(4), u16_at(6));
+            let mut raw = Vec::with_capacity(rw*rh*4+4096);
+            z.decompress_vec(&payload, &mut raw, flate2::FlushDecompress::Sync).unwrap();
+            let mut at = 0;
+            for ty in (0..rh).step_by(64) { for tx in (0..rw).step_by(64) {
+                assert_eq!(raw[at], 1, "expected independent solid-tile representation");
+                let v = (frame[(y+ty)*w+x+tx] & 255) as u8;
+                assert_eq!(&raw[at+1..at+4], &[v, v, v]); at += 4;
+            }}
+            assert_eq!(at, raw.len()); area += rw*rh; bytes += payload.len();
+        }
+        assert_eq!(area, w*h, "refinement covers every framebuffer pixel");
+        assert!(delay >= REFINE.saturating_sub(Duration::from_millis(20)) && delay < REFINE+Duration::from_secs(2), "{delay:?}");
+        tx.send(Msg::Gone).unwrap(); worker.join().unwrap();
+        println!("refine {w}x{h}: received after {:.2} ms; {bytes} compressed bytes; {area} exact pixels", delay.as_secs_f64()*1000.);
+    }
+
     #[test]
     fn dropped_frames_are_skipped_only_briefly() {
         use super::{Drops, MAX_SKIP};
