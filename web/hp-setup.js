@@ -5,17 +5,19 @@
  const clear=()=>{clearTimeout(timer);current?.panel.remove();current=null;};
  function render(){
   const c=current;if(!c)return;
-  c.panel.querySelector('h2').textContent=`${c.name} 고성능 모드`;
-  c.panel.querySelector('[data-hp-stage]').textContent=c.stage;
+  // The helper on the remote Mac guides each step: here only a one-line progress, not the
+  // same steps again. (Without it, e.g. it couldn't be opened, the steps and their buttons stay.)
+  const remote=!!c.remoteHelper&&!c.error;
+  const allowed=['access','screen'].filter(k=>c[k]===true).length;
+  c.panel.querySelector('h2').textContent=remote?`${c.name} 고성능 모드 · 권한 ${allowed}/2`:`${c.name} 고성능 모드`;
+  c.panel.querySelector('[data-hp-stage]').textContent=remote?'원격 Mac 화면의 권한 도우미를 따라 주세요. 끝나면 자동으로 이어집니다.':c.stage;
   for(const key of ['access','screen']){const row=c.panel.querySelector(`[data-hp-permission="${key}"]`),done=c[key]===true;row.querySelector('.hp-result').textContent=done?'✓ 허용됨':c[key]===false?'허용 필요':'확인 중';row.classList.toggle('done',done);row.querySelector('button').disabled=!c.ready||done;}
   c.panel.querySelector('[data-hp-action="helper"]').disabled=!c.ready;
-  // The helper on the remote Mac guides each step: here only its progress, not the same steps
-  // again. (Without it, e.g. it couldn't be opened, the steps and their buttons stay.)
-  const remote=!!c.remoteHelper&&!c.error;
   c.panel.classList.toggle('hp-compact',remote);
   c.panel.querySelector('[data-hp-remote]').hidden=!remote;
   c.panel.querySelectorAll('[data-hp-manual]').forEach(p=>p.hidden=remote);
-  c.panel.querySelector('[data-hp-action="helper"]').textContent=remote?'원격 도우미 다시 열기':'원격 Mac의 도우미 열기';
+  c.panel.querySelector('[data-hp-action="helper"]').textContent=remote?'도우미 다시 열기':'원격 Mac의 도우미 열기';
+  c.panel.querySelector('[data-hp-action="check"]').hidden=remote;
   for(const key of ['access','screen'])c.panel.querySelector(`[data-hp-open="${key}"]`).hidden=remote;
   const check=c.panel.querySelector('[data-hp-action="check"]');check.disabled=!c.ready&&!c.failed;check.textContent=c.failed?'다시 시도':'다시 확인';
   const error=c.panel.querySelector('[data-hp-error]');error.hidden=!c.error;error.textContent=c.error||'';
