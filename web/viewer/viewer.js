@@ -547,8 +547,11 @@ function open(h) {
   // Remote Desktop follows this window's size (not on phones: a desktop that small is no use).
   const follow = h.kind === 'rdp' && opt('resize', true) && !opt('monitor_layout', 0) && opt('monitor_mode',0)!==2 && (APP || matchMedia('(pointer: fine)').matches);
   const scr = $('#screen');
-  const size = follow && scr.clientWidth ? `?w=${Math.round(scr.clientWidth)}&h=${Math.round(scr.clientHeight)}` : '';
-  const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}${size}`, ['binary']);
+  const size = follow && scr.clientWidth ? `w=${Math.round(scr.clientWidth)}&h=${Math.round(scr.clientHeight)}&` : '';
+  // This attempt's own token: its high-performance outcome, not another viewer's.
+  const attempt = crypto.randomUUID();
+  S.hpFallback = null; renderTools();
+  const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}?${size}attempt=${attempt}`, ['binary']);
   let closeInfo = null;
   ws.addEventListener('close', (e) => { closeInfo = e; });
   S.ws = ws;
@@ -571,9 +574,9 @@ function open(h) {
     rfb.focus();
     dimToolsSoon();
     // High-performance mode is the saved choice; say so when this connection didn't get it.
-    S.hpFallback = null;
-    if (APP && S.host?.hp?.on) fetch(`/api/mode/${encodeURIComponent(h.id)}`).then(r => r.json()).then(m => {
-      if (S.host?.id !== h.id || !m || m.hp !== false) return;
+    if (APP && S.host?.hp?.on) fetch(`/api/mode/${encodeURIComponent(h.id)}?attempt=${attempt}`).then(r => r.json()).then(m => {
+      if (S.rfb !== rfb || S.host?.id !== h.id || !m) return;
+      if (m.hp !== false) { if (S.hpFallback) { S.hpFallback = null; renderTools(); } return; }
       S.hpFallback = m.reason || '연결하지 못했습니다';
       renderTools();
       toast(`고성능 모드로 연결하지 못해 기본 화면 공유로 연결했습니다 — ${S.hpFallback}`);

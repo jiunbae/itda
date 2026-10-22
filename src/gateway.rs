@@ -685,8 +685,24 @@ fn accounts_json() -> serde_json::Value {
 /// Applies an address-book change through the home window (so its list stays in step);
 /// set by the home. Returns once the change is saved.
 pub static ON_EDIT: std::sync::OnceLock<fn(serde_json::Value) -> bool> = std::sync::OnceLock::new();
-/// Per device: whether its last connection got high-performance sharing ({"hp":bool,"reason"}).
-static MODES: Mutex<std::collections::BTreeMap<String, serde_json::Value>> = Mutex::new(std::collections::BTreeMap::new());
+/// Per connection attempt (device id + the viewer's attempt token): whether it got
+/// high-performance sharing ({"hp":bool,"reason"}). Kept 10 minutes.
+static MODES: Mutex<std::collections::BTreeMap<String, (Instant, serde_json::Value)>> = Mutex::new(std::collections::BTreeMap::new());
+thread_local! {
+    /// The attempt this connection thread is opening (from the viewer's ?attempt=).
+    static ATTEMPT: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+fn record_mode(id: &str, v: serde_json::Value) {
+    let attempt = ATTEMPT.with(|a| a.borrow().clone());
+    if attempt.is_empty() {
+        return;
+    }
+    let mut m = MODES.lock().unwrap();
+    m.retain(|_, (at, _)| at.elapsed() < Duration::from_secs(600));
+    if m.len() < 256 {
+        m.insert(format!("{id}\x1f{attempt}"), (Instant::now(), v));
+    }
+}
 
 /// Add, change or remove a connection or account from the browser.
 fn edit(c: &mut TcpStream, req: &Req) -> io::Result<()> {
@@ -809,7 +825,9 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
         // How the last connection to a device with high-performance mode on was made.
         ("GET", _) if ok && p.starts_with("/api/mode/") => {
             let id = p.trim_start_matches("/api/mode/");
-            json_resp(&mut c, "200 OK", MODES.lock().unwrap().get(id).cloned().unwrap_or(serde_json::Value::Null))
+            let attempt = req.query.split('&').find_map(|kv| kv.strip_prefix("attempt=")).unwrap_or("");
+            let mode = MODES.lock().unwrap().get(&format!("{id}\x1f{attempt}")).map(|(_, v)| v.clone());
+            json_resp(&mut c, "200 OK", mode.unwrap_or(serde_json::Value::Null))
         }
         ("POST", "/api/edit") if ok && same_origin(&req) => edit(&mut c, &req),
         ("GET", _) if ok && p.starts_with("/thumb/") => {
@@ -843,6 +861,9 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             // The viewer's size, for a Remote Desktop that can match it.
             let arg = |k: &str| req.query.split('&').find_map(|kv| kv.strip_prefix(k)).and_then(|v| v.parse::<u32>().ok());
             let size = arg("w=").zip(arg("h="));
+            // (Tells this attempt's high-performance outcome apart from another viewer's.)
+            let attempt: String = req.query.split('&').find_map(|kv| kv.strip_prefix("attempt=")).unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(64).collect();
+            ATTEMPT.with(|a| *a.borrow_mut() = attempt);
             proxy(c, &id, peer, local, size)
         }
         (_, _) if p.starts_with("/api/") || p.starts_with("/thumb/") => {
@@ -917,14 +938,14 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
         match open_hp(host, login, &pass) {
             Ok((t, raw)) => {
                 *tunnel = Some(t);
-                MODES.lock().unwrap().insert(host.id.clone(), json!({"hp": true}));
+                record_mode(&host.id, json!({"hp": true}));
                 return Ok(raw);
             }
             Err(e) if at_lan && !host.ssh.on => return Err(e), // (plain VNC can't check the device there)
             Err(e) => {
                 crate::log!("high-performance sharing on {} unavailable, using Screen Sharing: {e}", host.host);
                 // The viewer shows what it actually got, not the saved choice.
-                MODES.lock().unwrap().insert(host.id.clone(), json!({"hp": false, "reason": e.to_string()}));
+                record_mode(&host.id, json!({"hp": false, "reason": e.to_string()}));
             }
         }
     }
