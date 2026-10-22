@@ -131,6 +131,18 @@ try{
           await p.screenshot({path:path.join(out,'nearby-window.png')});
         }
       }else{
+        if(theme==='light'){
+          await p.setViewportSize({width:1440,height:1250});
+          await p.evaluate(qr=>{
+            S.settings.web={on:true,port:8780};S.settings.share={on:true,port:5900,ask:true,trust_near:false,cmd_as_ctrl:true};
+            S.web={running:true,pin:'123456',urls:[{url:'http://192.0.2.10:8780',kind:'lan'}],qr};
+            S.share={running:true,name:'Office PC',password:'example8',addrs:[{addr:'192.0.2.10:5900',kind:'lan'}],viewers:[]};
+            S.page='share';render();
+          },fs.readFileSync(path.join(root,'scripts/fixtures/site-qr.svg'),'utf8'));
+          if(await p.locator('#share-pw').count()!==1)throw Error('Windows sharing capture lacks the share password');
+          await p.screenshot({path:path.join(out,'share-windows.png')});
+          await p.evaluate(()=>{S.page='home';render();});
+        }
         await p.setViewportSize({width:1200,height:700});
         await p.evaluate(()=>{document.documentElement.style.zoom='1.25';ItdaFiles.launch(S.hosts[0]);});
         await p.locator('.files-layer.windows .files-list [data-index]').first().waitFor();
@@ -159,7 +171,7 @@ try{
   // Optional refresh of shared help images embedded in the app (requires cwebp).
   if(process.argv.includes('--help-images')){
     const help=path.join(root,'web/help');
-    const sources={'itda-home':'home-window-light','itda-nearby':'nearby-window','itda-accounts':'accounts-light','itda-edit':'editor','itda-share':'share','phone-list':'phone-list'};
+    const sources={'itda-home':'home-window-light','itda-nearby':'nearby-window','itda-accounts':'accounts-light','itda-edit':'editor','itda-share':'share-windows','itda-web':'share-windows','phone-list':'phone-list'};
     for(const [name,source]of Object.entries(sources))execFileSync('cwebp',['-quiet','-q','92',path.join(out,source+'.png'),'-o',path.join(help,name+'.webp')]);
   }
   console.log('Captured product frontend with fictional data: desktop, files, nearby, editor, phone and readable details');

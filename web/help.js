@@ -122,8 +122,8 @@ function iosShare() {
 // ---------------------------------------------------------------- real screenshots
 
 function shot(name, caption, kind = 'desk') {
-  const [w, h] = kind === 'phone' ? [780, 1215] : [1400, 834];
-  return `<figure class="shot ${kind}"><img src="help/${name}.webp" alt="${esc(caption)}" width="${w}" height="${h}" decoding="async"><figcaption>${caption}</figcaption></figure>`;
+  const [w, h] = name === 'phone-list' ? [780, 1440] : kind === 'phone' ? [780, 1215] : [1400, 834];
+  return `<figure class="shot ${kind}"><img ${name === 'phone-list' ? 'style="aspect-ratio:780 / 1440" ' : ''}src="help/${name}.webp" alt="${esc(caption)}" width="${w}" height="${h}" decoding="async"><figcaption>${caption}</figcaption></figure>`;
 }
 
 function step(n, title, body, figure = '') {
