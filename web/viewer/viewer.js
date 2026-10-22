@@ -549,7 +549,7 @@ function open(h) {
   const scr = $('#screen');
   const size = follow && scr.clientWidth ? `w=${Math.round(scr.clientWidth)}&h=${Math.round(scr.clientHeight)}&` : '';
   // This attempt's own token: its high-performance outcome, not another viewer's.
-  const attempt = crypto.randomUUID();
+  const attempt = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
   S.hpFallback = null; renderTools();
   const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}?${size}attempt=${attempt}`, ['binary']);
   let closeInfo = null;
