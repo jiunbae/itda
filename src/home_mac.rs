@@ -797,8 +797,9 @@ pub fn run(quick: Option<String>) {
             TaoEvent::UserEvent(Wake::Quit) => *flow = ControlFlow::Exit,
             TaoEvent::UserEvent(Wake::Permissions(v)) => permission_guide::handle(v,target),
             TaoEvent::UserEvent(Wake::Menu(id)) => on_menu(&id),
-            // Clicking the Dock icon brings the home back.
-            TaoEvent::Reopen { .. } => show_home(),
+            // Clicking the Dock icon brings the home back; during permission setup (also when
+            // `open` reaches the running app to show the helper) the helper instead, alone.
+            TaoEvent::Reopen { .. } => if permission_guide::showing() { permission_helper(None) } else { show_home() },
             TaoEvent::Opened { urls } => {
                 for url in urls {
                     match url.as_str().trim_end_matches('/') {
