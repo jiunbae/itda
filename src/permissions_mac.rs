@@ -259,6 +259,11 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
                 return Ok(());
             }
             "show" => {
+                // Asked again (e.g. the remote setup opening the helper) while the guide sits
+                // beside Settings: keep that one window, don't bring the helper back too.
+                if v["permission"].is_null() && GUIDE.with(|g| g.borrow().as_ref().map(|g| g.pane.window.set_focus()).is_some()) {
+                    return Ok(());
+                }
                 open(target)?;
                 if let Some(permission) = v["permission"].as_str() {
                     request(permission)?;
@@ -562,6 +567,11 @@ fn start_guide(permission: &str, target: &EventLoopWindowTarget<Wake>) -> Result
         }
     });
     Ok(())
+}
+
+/// The helper or its guide is on screen (then it, not the home, is what Itda shows).
+pub(super) fn showing() -> bool {
+    GUIDE.with(|g| g.borrow().is_some()) || PANE.with(|p| p.borrow().as_ref().is_some_and(|p| p.window.is_visible()))
 }
 
 fn close_guide() {

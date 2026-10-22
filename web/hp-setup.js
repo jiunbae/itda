@@ -10,14 +10,16 @@
   const remote=!!c.remoteHelper&&!c.error;
   const allowed=['access','screen'].filter(k=>c[k]===true).length;
   c.panel.querySelector('h2').textContent=remote?`${c.name} 고성능 모드 · 권한 ${allowed}/2`:`${c.name} 고성능 모드`;
-  c.panel.querySelector('[data-hp-stage]').textContent=remote?'원격 Mac 화면의 권한 도우미를 따라 주세요. 끝나면 자동으로 이어집니다.':c.stage;
+  // (After the bounded wait, say so and offer the check again.)
+  const waiting=remote&&Date.now()<=c.deadline;
+  c.panel.querySelector('[data-hp-stage]').textContent=waiting?'원격 Mac 화면의 권한 도우미를 따라 주세요. 끝나면 자동으로 이어집니다.':c.stage;
   for(const key of ['access','screen']){const row=c.panel.querySelector(`[data-hp-permission="${key}"]`),done=c[key]===true;row.querySelector('.hp-result').textContent=done?'✓ 허용됨':c[key]===false?'허용 필요':'확인 중';row.classList.toggle('done',done);row.querySelector('button').disabled=!c.ready||done;}
   c.panel.querySelector('[data-hp-action="helper"]').disabled=!c.ready;
   c.panel.classList.toggle('hp-compact',remote);
   c.panel.querySelector('[data-hp-remote]').hidden=!remote;
   c.panel.querySelectorAll('[data-hp-manual]').forEach(p=>p.hidden=remote);
   c.panel.querySelector('[data-hp-action="helper"]').textContent=remote?'도우미 다시 열기':'원격 Mac의 도우미 열기';
-  c.panel.querySelector('[data-hp-action="check"]').hidden=remote;
+  c.panel.querySelector('[data-hp-action="check"]').hidden=waiting;
   for(const key of ['access','screen'])c.panel.querySelector(`[data-hp-open="${key}"]`).hidden=remote;
   const check=c.panel.querySelector('[data-hp-action="check"]');check.disabled=!c.ready&&!c.failed;check.textContent=c.failed?'다시 시도':'다시 확인';
   const error=c.panel.querySelector('[data-hp-error]');error.hidden=!c.error;error.textContent=c.error||'';
@@ -27,7 +29,7 @@
   clear();const panel=document.createElement('aside');panel.className='hp-setup';panel.setAttribute('aria-label','고성능 모드 설정');
   panel.innerHTML='<header><span>⚡</span><h2></h2></header><p data-hp-stage role="status" aria-live="polite"></p><p class="hp-explain" data-hp-remote hidden>원격 Mac 화면에 <b>Itda 권한 도우미</b>가 열려 있어요. 아래 화면에서 도우미를 따라 허용하면 자동으로 이어집니다.</p><p class="hp-explain" data-hp-manual>설정은 <b>원격 Mac</b>에서 진행합니다. 이 창 아래의 기존 화면 공유로 설정을 조작할 수 있어요.</p><div class="hp-permission" data-hp-permission="access"><div><strong>1. 키보드·마우스 조작</strong><span class="hp-result"></span></div><button data-hp-open="access">원격 조작 권한 설정 열기 ↗</button></div><div class="hp-permission" data-hp-permission="screen"><div><strong>2. 화면 보기</strong><span class="hp-result"></span></div><button data-hp-open="screen">원격 화면 권한 설정 열기 ↗</button></div><p class="hp-explain" data-hp-manual>Itda 스위치를 켜세요. ‘종료 후 다시 열기’가 나오면 선택하세요. 준비가 끝나면 자동으로 이어집니다.</p><p data-hp-error role="alert" hidden></p><footer><button data-hp-action="helper">원격 Mac의 도우미 열기</button><button data-hp-action="check">다시 확인</button><button data-hp-action="later">나중에</button></footer>';
   current={...options,panel,stage:'원격 Mac을 준비하고 있어요…',ready:false,screen:null,access:null,deadline:Date.now()+300000};
-  panel.addEventListener('click',e=>{const c=current;if(!c)return;const permission=e.target.closest('[data-hp-open]')?.dataset.hpOpen;if(permission){c.error='';c.send('permissions',{permission});render();return;}const action=e.target.closest('[data-hp-action]')?.dataset.hpAction;if(action==='helper')c.send('permissions');if(action==='check'){c.deadline=Date.now()+300000;c.error='';const failed=c.failed;c.failed=false;c.stage=failed?'다시 준비하고 있어요…':c.stage;c.send(failed?'upgrade':'status');render();}if(action==='later'){const cancel=c.cancel;clear();cancel?.();}});
+  panel.addEventListener('click',e=>{const c=current;if(!c)return;const permission=e.target.closest('[data-hp-open]')?.dataset.hpOpen;if(permission){c.error='';c.send('permissions',{permission});render();return;}const action=e.target.closest('[data-hp-action]')?.dataset.hpAction;if(action==='helper'){c.deadline=Date.now()+300000;c.send('permissions');poll();}if(action==='check'){c.deadline=Date.now()+300000;c.error='';const failed=c.failed;c.failed=false;c.stage=failed?'다시 준비하고 있어요…':c.stage;c.send(failed?'upgrade':'status');render();}if(action==='later'){const cancel=c.cancel;clear();cancel?.();}});
   document.body.append(panel);render();
  }
  function message(m){
