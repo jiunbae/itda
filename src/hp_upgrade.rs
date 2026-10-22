@@ -272,7 +272,7 @@ mod tests {
 
         // Then the viewer's way in: the gateway's SSH tunnel + VNC password, asking for H.264.
         use std::io::{Read, Write};
-        let host = crate::store::Host { id: format!("hp-test-{}", crate::store::new_id()), host: host.into(), os: "mac".into(), ssh: crate::store::Ssh { on: false, user: user.into(), port: 0 }, hp: crate::store::Hp { on: true, port: 0 }, ..Default::default() };
+        let host = crate::store::Host { id: format!("hp-test-{}", crate::store::new_id()), host: host.into(), os: "mac".into(), ssh: crate::store::Ssh { on: false, user: user.into(), port: 0 }, hp: crate::store::Hp { on: true, port: 0, native: false }, ..Default::default() };
         crate::store::set_password(&password_key(&host.id), Some(&password));
         let opened = crate::gateway::open_hp(&host, &crate::store::Login::default(), "");
         crate::store::set_password(&password_key(&host.id), None);
