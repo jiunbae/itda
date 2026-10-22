@@ -759,7 +759,7 @@ fn on_ipc(v: Value) {
             }
         }
         "remote_setup_discard"=>crate::remote_setup::discard(&s(&v,"token")),
-        "hp_status" => hp_status(&id),
+        "hp_status" => hp_status(&id, s(&v, "req")),
         "hp_permissions" => hp_permissions(&id,v["permission"].as_str().map(str::to_string)),
         #[cfg(target_os = "macos")]
         "permission_helper" => plat::permission_helper(None),
@@ -1039,14 +1039,15 @@ fn remote_setup_probe(v:Value) {
 }
 
 /// Whether that Mac's Itda can show its screen yet (the viewer waits for the permission).
-fn hp_status(id: &str) {
+/// `req`: the viewer's token for this request, echoed so it can drop a late answer.
+fn hp_status(id: &str, req: String) {
     let Some((host, login)) = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| (h.clone(), store::resolve(h, &m.accounts)))) else { return };
     std::thread::spawn(move || {
         let pass = crate::gateway::typed(&host.id).or_else(|| login.pass.clone()).unwrap_or_default();
         let r = crate::hp_upgrade::status(&crate::hp_upgrade::ssh_cfg_with(&host, &login, pass));
         post(Event::Page(match r {
-            Ok(status) => json!({"type":"hp","id":host.id,"status":true,"screen":status.screen,"access":status.access,"running":status.running,"quality":status.quality,"quality_active":status.quality_active,"capture_width":status.capture.0,"capture_height":status.capture.1}),
-            Err(e) => json!({"type":"hp","id":host.id,"status":true,"error":e.to_string()}),
+            Ok(status) => json!({"type":"hp","id":host.id,"req":req,"status":true,"screen":status.screen,"access":status.access,"running":status.running,"quality":status.quality,"quality_active":status.quality_active,"capture_width":status.capture.0,"capture_height":status.capture.1}),
+            Err(e) => json!({"type":"hp","id":host.id,"req":req,"status":true,"error":e.to_string()}),
         }));
     });
 }
@@ -1074,7 +1075,7 @@ fn hp_quality(id: &str, native: bool) {
 fn on_session(id: &str, v: Value) {
     match s(&v, "ev").as_str() {
         "hp-upgrade" => hp_upgrade(id),
-        "hp-status" => hp_status(id),
+        "hp-status" => hp_status(id, v["req"].as_str().unwrap_or("").to_string()),
         "hp-permissions" => hp_permissions(id,v["permission"].as_str().map(str::to_string)),
         "hp-quality" => hp_quality(id, v["native"] == true),
         "hp-off" => on_ipc(json!({"cmd":"hp_off","id":id})),

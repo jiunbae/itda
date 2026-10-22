@@ -551,7 +551,7 @@ function open(h) {
   const size = follow && scr.clientWidth ? `w=${Math.round(scr.clientWidth)}&h=${Math.round(scr.clientHeight)}&` : '';
   // This attempt's own token: its high-performance outcome, not another viewer's.
   const attempt = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
-  S.hpFallback = null; renderTools();
+  S.hpFallback = null; S.hpActual = false; S.hpQuality = null; S.hpStatusReq = null; renderTools();
   const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}?${size}attempt=${attempt}`, ['binary']);
   let closeInfo = null;
   ws.addEventListener('close', (e) => { closeInfo = e; });
@@ -580,7 +580,7 @@ function open(h) {
       if (m.hp !== false) {
         S.hpFallback = null; S.hpActual = m.hp === true; S.hpQuality = null; renderTools();
         // What the Mac actually serves (points or native pixels), for the sharpness toggle.
-        if (S.hpActual) post({ ev: 'hp-status' });
+        if (S.hpActual) { S.hpStatusReq = attempt; S.hpStatusTries = 0; post({ ev: 'hp-status', req: attempt }); }
         return;
       }
       S.hpActual = false;
@@ -597,6 +597,7 @@ function open(h) {
   rfb.addEventListener('disconnect', () => {
     if (S.rfb !== rfb) return;
     S.rfb = null;
+    S.hpActual = false; S.hpQuality = null; S.hpStatusReq = null;
     if (APP) return setTimeout(() => appDropped(h, closeInfo), 50);
     setTimeout(() => {
       const known = closeInfo && CLOSE_TEXT[closeInfo.code];
@@ -731,10 +732,18 @@ function hpToggle() {
 window.itdaHp = (m) => {
   if (S.host?.id !== m.id) return;
   // The Mac's report of what it serves: the toggle shows that, not just the saved choice.
-  if (m.status && typeof m.quality === 'string') {
-    // (While connected the capture is active; a report saying otherwise is stale: unknown.)
-    S.hpQuality = m.quality && !m.quality_active ? null : { quality: m.quality, active: !!m.quality_active, w: m.capture_width, h: m.capture_height };
+  // Only the answer to this connection's own request (an older one may arrive late).
+  if (m.status && typeof m.quality === 'string' && m.req && m.req === S.hpStatusReq) {
+    // While connected the capture is active with a real size; a report saying otherwise is
+    // stale or settling: unknown.
+    const real = m.quality === '' || (m.quality_active && m.capture_width > 0 && m.capture_height > 0);
+    S.hpQuality = real ? { quality: m.quality, active: !!m.quality_active, w: m.capture_width, h: m.capture_height } : null;
     renderTools();
+    // Settling (the status file is rewritten every 2 s): ask again a few times, same request.
+    if (!real && (S.hpStatusTries = (S.hpStatusTries || 0) + 1) < 5) {
+      const req = m.req;
+      setTimeout(() => { if (S.hpStatusReq === req && S.rfb) post({ ev: 'hp-status', req }); }, 2500);
+    }
   }
   if (typeof m.quality === 'boolean') {
     S.hpQualityBusy = false;
