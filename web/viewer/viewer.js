@@ -732,7 +732,8 @@ window.itdaHp = (m) => {
   if (S.host?.id !== m.id) return;
   // The Mac's report of what it serves: the toggle shows that, not just the saved choice.
   if (m.status && typeof m.quality === 'string') {
-    S.hpQuality = { quality: m.quality, active: !!m.quality_active, w: m.capture_width, h: m.capture_height };
+    // (While connected the capture is active; a report saying otherwise is stale: unknown.)
+    S.hpQuality = m.quality && !m.quality_active ? null : { quality: m.quality, active: !!m.quality_active, w: m.capture_width, h: m.capture_height };
     renderTools();
   }
   if (typeof m.quality === 'boolean') {
@@ -753,7 +754,7 @@ function hpQualityLabel() {
   if (q === '') return '선명하게 (Retina) — 원격 Mac의 Itda를 업데이트하면 쓸 수 있습니다';
   if (want && q === 'native') return `선명하게 (Retina) 켜짐 · ${S.hpQuality.w}×${S.hpQuality.h} — 누르면 빠르게로 바꿉니다`;
   if (want) return '선명하게 (Retina) 적용 대기 — 이 Mac의 다른 고성능 연결이 모두 끝나면 적용됩니다';
-  if (q === 'native') return '지금은 선명하게로 보는 중 (다른 연결이 켠 설정) — 누르면 빠르게로 바꿉니다';
+  if (q === 'native') return '지금은 선명하게로 보는 중 (이 Mac의 다른 연결이 켠 설정) — 누르면 이 Mac을 빠르게로 바꿉니다';
   return '선명하게 (Retina) — 글자가 또렷해지고 프레임은 조금 줄어듭니다';
 }
 
@@ -804,7 +805,8 @@ $('#tools').addEventListener('click', (e) => {
     case 'hp-quality':
       if (S.hpQualityBusy) return;
       S.hpQualityBusy = true; renderTools();
-      return post({ ev: 'hp-quality', native: !S.host.hp?.native });
+      // The opposite of what is on screen now (or of the saved choice while that is unknown).
+      return post({ ev: 'hp-quality', native: !(S.hpQuality ? hpQualityShown() : !!S.host.hp?.native) });
     case 'monitors': return toggleSheet('monitors');
     case 'clip': return toggleSheet('clip');
     case 'scale':
