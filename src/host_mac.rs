@@ -189,6 +189,14 @@ fn capture_dimensions(points: (usize, usize), pixels: (usize, usize), native: bo
     (w.max(16) & !1, h.max(16) & !1)
 }
 
+fn backing_dimensions(points: (usize, usize), mode_points: (usize, usize), mode_pixels: (usize, usize)) -> (usize, usize) {
+    if mode_points.0 == 0 || mode_points.1 == 0 { return points; }
+    // Apply backing density to the desktop bounds, rather than using the mode's
+    // orientation. A portrait desktop can have a landscape display-mode record.
+    (points.0.saturating_mul(mode_pixels.0) / mode_points.0,
+     points.1.saturating_mul(mode_pixels.1) / mode_points.1)
+}
+
 fn display_dimensions(native: bool) -> (usize, usize) {
     let id = CGMainDisplayID();
     let b = CGDisplayBounds(id);
@@ -196,7 +204,7 @@ fn display_dimensions(native: bool) -> (usize, usize) {
     // CGDisplayPixelsWide/High can return the logical mode dimensions on HiDPI
     // displays. The display mode's pixel dimensions describe the Retina backing.
     let mode = CGDisplayCopyDisplayMode(id);
-    let pixels = mode.as_deref().map(|m| (CGDisplayMode::pixel_width(Some(m)), CGDisplayMode::pixel_height(Some(m)))).unwrap_or(points);
+    let pixels = mode.as_deref().map(|m| backing_dimensions(points, (CGDisplayMode::width(Some(m)), CGDisplayMode::height(Some(m))), (CGDisplayMode::pixel_width(Some(m)), CGDisplayMode::pixel_height(Some(m))))).unwrap_or(points);
     capture_dimensions(points, pixels, native)
 }
 
@@ -425,6 +433,9 @@ mod snapshot_tests {
 
     #[test]
     fn retina_geometry_preserves_aspect_and_input_coordinates() {
+        assert_eq!(backing_dimensions((1512, 982), (1512, 982), (3024, 1964)), (3024, 1964));
+        assert_eq!(backing_dimensions((1692, 3008), (3008, 1692), (6016, 3384)), (3384, 6016));
+        assert_eq!(backing_dimensions((1512, 982), (0, 0), (0, 0)), (1512, 982));
         assert_eq!(capture_dimensions((1512, 982), (3024, 1964), false), (1512, 982));
         assert_eq!(capture_dimensions((1512, 982), (3024, 1964), true), (3024, 1964));
         assert_eq!(capture_dimensions((3008, 1692), (6016, 3384), true), (4096, 2304));
@@ -542,6 +553,9 @@ fn start_stream(w: usize, h: usize, latest: Latest) -> Result<(Retained<SCStream
 // ---------------------------------------------------------------- input
 
 pub(crate) struct Input {
+    // A connection holds the same shared capture for its whole life. Do not take
+    // the capture mutex on every mouse event while a large snapshot is copying.
+    frame_size: (usize, usize),
     view_only: bool,
     buttons: u8,
     /// keysym → key code pressed for it, so the release matches.
@@ -605,7 +619,7 @@ fn post(e: Option<CFRetained<CGEvent>>) {
 
 impl Input {
     pub(crate) fn new(_cmd_as_ctrl: bool, view_only: bool) -> Input {
-        Input { view_only, buttons: 0, down: HashMap::new(), flags: CGEventFlags(0), last_key: Instant::now(), last_click: (Instant::now() - Duration::from_secs(5), 0, 0, 0), at: (0, 0) }
+        Input { frame_size: frame_dimensions(), view_only, buttons: 0, down: HashMap::new(), flags: CGEventFlags(0), last_key: Instant::now(), last_click: (Instant::now() - Duration::from_secs(5), 0, 0, 0), at: (0, 0) }
     }
 
     pub(crate) fn modifiers_held(&self) -> bool {
@@ -663,7 +677,7 @@ impl Input {
             return;
         }
         let b = CGDisplayBounds(CGMainDisplayID());
-        let (px, py) = point_from_frame(x, y, frame_dimensions(), (b.size.width, b.size.height));
+        let (px, py) = point_from_frame(x, y, self.frame_size, (b.size.width, b.size.height));
         let at = CGPoint { x: b.origin.x + px, y: b.origin.y + py };
         self.at = (x, y);
         let changed = mask ^ self.buttons;
