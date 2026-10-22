@@ -1,5 +1,7 @@
 # macOS high-performance sharing qualification, 2026-10-21
 
+This is a dated pipeline measurement report, not a current release performance guarantee. For the later points/Retina comparison and its quality/frame-rate trade-offs, see the [2026-10-22 quality report](https://github.com/jiunbae/itda/blob/main/scripts/hp-quality.md).
+
 The bounded change retains ScreenCaptureKit buffers for VideoToolbox and releases
 the shared capture mutex before comparison, encoding and lossless repaint. CPU
 pixels remain available for exact change detection and still-frame repaint. This

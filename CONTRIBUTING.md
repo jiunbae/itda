@@ -1,36 +1,50 @@
 # Contributing
 
-Thanks for helping! Itda is a small Windows app written in Rust with a WebView2 UI.
+Itda is a Rust app for Windows and macOS, with a shared HTML/CSS/JavaScript interface. Remote screens, file browsing and the mobile web viewer use platform-specific native bridges where needed. UI text is Korean; public guides are available in Korean and English.
 
 ## Build
 
-You need:
+Use stable Rust and Git. On Windows, install the MSVC build tools and WebView2 Runtime (included in Windows 11). On macOS, install Xcode Command Line Tools; a universal bundle also needs both Rust targets:
 
-- Windows 10/11
-- Rust (stable, MSVC toolchain)
-- WebView2 Runtime (built into Windows 11)
+```sh
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+```
 
-```powershell
-cargo build --release      # target\release\itda.exe
+On either platform:
+
+```sh
+cargo build --release
 cargo test --release
 ```
 
-For a release, build with `scripts/windows-release.ps1` (and `scripts/macos-bundle.sh universal` on a Mac) so the binaries don't carry your home folder's path.
+The executable is `target/release/itda.exe` on Windows or `target/release/itda` on Mac. Package with `scripts/windows-release.ps1` or `scripts/macos-bundle.sh universal`; these scripts also remove build-machine paths. The Mac script writes `dist/Itda.app` and `dist/Itda-macos-universal.zip`. Signing and notarization require the release credentials; a local development bundle is not an official signed release.
 
-The home UI lives in `web/` and is embedded in the exe. To edit it without rebuilding, set `ITDA_WEB_DIR=<path to web>` to serve it from disk.
+The interface is embedded from `web/`. Set `ITDA_WEB_DIR` to an absolute `web/` directory for local iteration without embedding each edit. Restart when changing native Rust code. Static public documentation is in `docs/`, published by GitHub Pages.
+
+## Check a change
+
+Run the checks that exercise the affected behavior. CI builds/tests Windows and universal macOS, and runs browser regressions on Windows. Browser fixtures use Playwright:
+
+```sh
+npm install --no-save --package-lock=false playwright
+npx playwright install chromium
+node scripts/secure-context-check.mjs
+node scripts/files-windows-e2e.mjs
+```
+
+Other focused suites include `files-tabs-e2e.mjs`, `files-network-local-e2e.mjs`, `editor-e2e.mjs`, `permissions-e2e.mjs`, `remote-setup-e2e.mjs`, `update-e2e.mjs`, and `monitors-e2e.mjs`. See `.github/workflows/ci.yml` for current CI coverage. Browser IPC fixtures verify the frontend, not real SSH, native OS drag acceptance, macOS permission grants or physical monitor behavior. Record those runtime checks separately when relevant.
+
+For public screenshots and site checks, follow [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md). Performance methodology and reproducible quality probes are in [scripts/hp-quality.md](scripts/hp-quality.md) and [scripts/hp-performance.md](scripts/hp-performance.md).
 
 ## Guidelines
 
-- **Keep it small and fast.** New dependencies need a good reason; check how much they add to the exe size.
-- **Match the surrounding style.** Short doc comments, Korean UI text, and no warnings (`cargo build` must be clean).
-- **UI text is Korean.** Write for people who aren't technical, and explain what to do, not just what went wrong.
-- **Never test on your own desktop by accident.** GUI and input tests drive real windows and `SendInput`.
-- **Keep secrets in Credential Manager.** Never write a password to a file, a log or the web viewer.
+- **Keep it small and fast.** New dependencies need a clear reason.
+- **Match the surrounding style.** Use short comments and keep builds free of warnings.
+- **Write actionable Korean UI text.** Explain the next step in words a nontechnical person can follow. Update both public languages when behavior changes.
+- **Use isolated fixtures.** GUI/input tests can affect real windows, accounts and files. Do not inject input, change permissions or replace a running installation as a side effect of an ordinary unit/UI test.
+- **Keep secrets in the OS vault.** Use Windows Credential Manager or the macOS Keychain. Never put passwords, key material or live QR/PIN credentials into logs, fixtures, screenshots or browser responses.
+- **Keep documentation honest.** Separate a saved preference from active behavior, implementation from physical verification, and supported features from remaining work.
 
 ## Pull requests
 
-Open an issue first for anything big. Describe:
-
-- what changed
-- how you tested it
-- screenshots, for UI changes
+Describe the concrete behavior changed, how it was checked, and any remaining limitations. Include screenshots for visual changes. For major work, discuss scope before starting; security reports belong in the [private advisory form](SECURITY.md), not a public issue.
