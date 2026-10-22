@@ -41,8 +41,9 @@ pub(super) fn pending_recently() -> bool {
 pub(super) fn next_missing() -> Option<&'static str> {
     if !pending() { return None; }
     match crate::host_mac::permissions() {
-        (false, _) => Some("screen"),
-        (true, false) => Some("access"),
+        // Keyboard and mouse first: switching on screen recording reopens Itda, so it goes last.
+        (_, false) => Some("access"),
+        (false, true) => Some("screen"),
         _ => None,
     }
 }
@@ -54,7 +55,7 @@ fn app_path() -> Option<PathBuf> {
 }
 fn state() -> Value {
     let (screen, access) = crate::host_mac::permissions();
-    let mut v = json!({"type":"permissions","screen":screen,"access":access,"app_path":app_path(),"version":crate::home::VERSION,"enabled":crate::host_mac::enabled(),"requested":REQUESTED.with(|r|r.borrow().clone()),"requested_seq":REQUEST_SEQ.with(Cell::get)});
+    let mut v = json!({"type":"permissions","screen":screen,"access":access,"app_path":app_path(),"version":crate::home::VERSION,"enabled":crate::host_mac::enabled(),"hp_serving":crate::host_mac::enabled() && std::fs::metadata(crate::store::dir().join("hp-status")).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|d| d.as_secs() < 10)),"requested":REQUESTED.with(|r|r.borrow().clone()),"requested_seq":REQUEST_SEQ.with(Cell::get)});
     FRESH.with(|fresh| {
         if let Some(fresh) = fresh.borrow().as_ref() {
             v["configured_screen"] = fresh["screen"].clone();
@@ -490,11 +491,13 @@ fn guide_reply(v: Value) {
 fn guide_intro() {
     let permission = GUIDE.with(|g| g.borrow().as_ref().map(|g| g.permission.clone()));
     let Some(permission) = permission else { return };
-    let step = if permission == "screen" { "1/2 단계 · 화면 보기" } else { "2/2 단계 · 키보드·마우스 조작" };
+    let step = if permission == "access" { "1/2 단계 · 키보드·마우스 조작" } else { "2/2 단계 · 화면 보기 (켜면 Itda가 다시 열려요)" };
     guide_reply(json!({"type":"guide","permission":permission,"step":step,"app_path":app_path(),"state":"설정 창의 목록이 보이면 Itda를 켜세요."}));
 }
 
 fn start_guide(permission: &str, target: &EventLoopWindowTarget<Wake>) -> Result<(), String> {
+    // One window at a time: while the guide sits beside Settings, the helper steps aside.
+    PANE.with(|p| if let Some(p) = p.borrow().as_ref() { p.window.set_visible(false); });
     let now = std::time::Instant::now();
     let reused = GUIDE.with(|g| {
         let mut g = g.borrow_mut();
@@ -565,6 +568,8 @@ fn close_guide() {
     GUIDE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let guide = GUIDE.with(|g| g.borrow_mut().take());
     drop(guide);
+    // One window at a time: the helper comes back once the guide beside Settings is gone.
+    PANE.with(|p| if let Some(p) = p.borrow().as_ref() { p.window.set_visible(true); });
 }
 
 fn ns_window(w: &tao::window::Window) -> &objc2_app_kit::NSWindow {

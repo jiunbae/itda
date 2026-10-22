@@ -103,6 +103,8 @@ jobs:
         run: npm install --no-save --package-lock=false playwright
       - name: Install Chromium
         run: npx playwright install chromium
+      - name: No secure-context-only APIs (web viewer runs on plain HTTP)
+        run: node scripts/secure-context-check.mjs
       - name: Explorer and Finder frontend regression
         run: node scripts/files-windows-e2e.mjs
         env:

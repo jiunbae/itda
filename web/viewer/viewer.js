@@ -547,8 +547,11 @@ function open(h) {
   // Remote Desktop follows this window's size (not on phones: a desktop that small is no use).
   const follow = h.kind === 'rdp' && opt('resize', true) && !opt('monitor_layout', 0) && opt('monitor_mode',0)!==2 && (APP || matchMedia('(pointer: fine)').matches);
   const scr = $('#screen');
-  const size = follow && scr.clientWidth ? `?w=${Math.round(scr.clientWidth)}&h=${Math.round(scr.clientHeight)}` : '';
-  const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}${size}`, ['binary']);
+  const size = follow && scr.clientWidth ? `w=${Math.round(scr.clientWidth)}&h=${Math.round(scr.clientHeight)}&` : '';
+  // This attempt's own token: its high-performance outcome, not another viewer's.
+  const attempt = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+  S.hpFallback = null; renderTools();
+  const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}?${size}attempt=${attempt}`, ['binary']);
   let closeInfo = null;
   ws.addEventListener('close', (e) => { closeInfo = e; });
   S.ws = ws;
@@ -570,6 +573,14 @@ function open(h) {
     status(null);
     rfb.focus();
     dimToolsSoon();
+    // High-performance mode is the saved choice; say so when this connection didn't get it.
+    if (APP && S.host?.hp?.on) fetch(`/api/mode/${encodeURIComponent(h.id)}?attempt=${attempt}`).then(r => r.json()).then(m => {
+      if (S.rfb !== rfb || S.host?.id !== h.id || !m) return;
+      if (m.hp !== false) { if (S.hpFallback) { S.hpFallback = null; renderTools(); } return; }
+      S.hpFallback = m.reason || '연결하지 못했습니다';
+      renderTools();
+      toast(`고성능 모드로 연결하지 못해 기본 화면 공유로 연결했습니다 — ${S.hpFallback}`);
+    }).catch(() => {});
     if (!APP) return toast(`${h.label}에 연결했습니다`);
     post(S.tries ? { ev: 'reconnected' } : { ev: 'connected', name, w: rfb._fbWidth || 0, h: rfb._fbHeight || 0 });
     S.ever = true;
@@ -690,6 +701,12 @@ function leave() {
 const hpCapable = () => APP && macHost(S.host) && S.host?.kind !== 'rdp';
 function hpToggle() {
   if (!hpCapable() || S.hpBusy) return;
+  // Saved on but this connection fell back: try high-performance again (e.g. after unlocking).
+  if (S.host.hp?.on && S.hpFallback) {
+    S.hpFallback = null;
+    toast('고성능 모드로 다시 연결합니다');
+    return open(S.host);
+  }
   if (S.host.hp?.on) {
     S.host.hp = { ...S.host.hp, on: false };
     post({ ev: 'hp-off' });
@@ -715,7 +732,7 @@ function renderTools() {
     ['keys', 'command', `${isWin(S.host) ? 'Windows' : 'Mac'} 특수 키`],
     ...(macHost(S.host) ? [['mac-actions', 'mission', 'Mac 화면 동작 — Mission Control · Exposé']] : []),
     ...(APP && /Mac/.test(navigator.platform) && !IOS && ['mac', 'macos'].includes(S.host?.os) && S.host?.kind !== 'rdp' ? [['apple-screen-sharing', 'monitor', 'Apple 화면 공유 앱에서 열기 · 별도 앱으로 직접 연결']] : []),
-    ...(hpCapable() ? [['hp', 'bolt', S.host.hp?.on ? '고성능 모드 켜짐 — 누르면 끕니다' : S.hpBusy ? '고성능 모드 준비 중…' : '고성능 모드 — 이 Mac에 Itda 고성능 공유를 켜고 전환합니다 (SSH)', !!S.host.hp?.on]] : []),
+    ...(hpCapable() ? [['hp', 'bolt', S.host.hp?.on && S.hpFallback ? `고성능 모드로 연결되지 않음 (${S.hpFallback}) — 누르면 다시 시도합니다` : S.host.hp?.on ? '고성능 모드 켜짐 — 누르면 끕니다' : S.hpBusy ? '고성능 모드 준비 중…' : '고성능 모드 — 이 Mac에 Itda 고성능 공유를 켜고 전환합니다 (SSH)', !!S.host.hp?.on && !S.hpFallback]] : []),
     ...(APP ? [] : [['clip', 'clip', '클립보드']]),
     'sep',
     ['monitors', 'monitor', '모니터 선택 및 창 배치'],

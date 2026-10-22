@@ -10,6 +10,12 @@ try{
  await p.goto(`http://127.0.0.1:${server.address().port}/permissions.html`);await p.getByText('0/2 완료',{exact:false}).waitFor();
  const initialReads=await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_status').length);await p.clock.fastForward(1600);assert(await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_status').length)>initialReads,'Deep-link guide did not automatically read permission status');
  assert(await p.locator('img').evaluateAll(xs=>xs.every(i=>i.complete&&i.naturalWidth)),'Guide icons missing');
+ // Keyboard and mouse come first: switching on screen recording reopens Itda, so it is last.
+ assert(JSON.stringify(await p.locator('section.permission').evaluateAll(xs=>xs.map(x=>x.dataset.permission)))==='["access","screen"]','Permission order: screen recording should be last');
+ // High-performance sharing has its own status line when it is on for this Mac.
+ await p.evaluate(()=>itda.recv({type:'permissions',...permissionState,enabled:true,hp_serving:false}));
+ assert((await p.locator('.hp-state').textContent()).includes('자동으로 켜집니다'),'HP status line missing');
+ await p.evaluate(()=>itda.recv({type:'permissions',...permissionState}));
  assert(!await p.evaluate(()=>sent.some(m=>m.cmd==='permission_request')),'Guide requested permissions without a user action');
  // A fresh-process grant is not a usable grant in the running app until restart.
  await p.evaluate(()=>{permissionState.configured_screen=true;itda.recv({type:'permissions',...permissionState});});
