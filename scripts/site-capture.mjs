@@ -1,5 +1,6 @@
 // Capture the real product frontend with fictional examples. No accounts, remote hosts or native IPC.
 import http from 'node:http';
+import {execFileSync} from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
@@ -155,5 +156,11 @@ try{
   await og.setContent(`<!doctype html><html lang="ko" data-lang="ko"><head><base href="${base}/docs/"><link rel="stylesheet" href="style.css"><style>body{width:1200px;height:630px;background:radial-gradient(ellipse at 70% 55%,#32305c,#100f1d 70%);display:grid;grid-template-columns:390px 1fr;gap:30px;align-items:center;padding:48px;overflow:hidden}.brand{font-size:28px;margin-bottom:36px}.brand img{width:44px;height:44px}h1{font-size:52px;line-height:1.18;letter-spacing:-.04em;margin:0 0 20px}.og-copy p{font-size:19px;color:#b7b4d3;line-height:1.7}.og-devices{width:640px}.og-devices .device-scene{padding-bottom:24px}.og-devices figcaption{display:none}.og-copy small{color:#a4a1ff;font-size:16px}.device-scene>.device-phone{width:22%}</style></head><body><div class="og-copy"><div class="brand"><img src="favicon.svg" alt="">Itda</div><h1>내 기기를,<br><span class="grad">잇다.</span></h1><p>Windows · Mac · 휴대폰<br>화면 공유와 파일 브라우저</p><small>무료 · 오픈 소스</small></div><div class="og-devices">${stage}</div></body></html>`);
   await og.evaluate(async()=>{await document.fonts.ready;await Promise.all([...document.images].map(i=>i.decode()));});
   await og.screenshot({path:path.join(out,'og.png')});await og.close();
+  // Optional refresh of shared help images embedded in the app (requires cwebp).
+  if(process.argv.includes('--help-images')){
+    const help=path.join(root,'web/help');
+    const sources={'itda-home':'home-window-light','itda-nearby':'nearby-window','itda-accounts':'accounts-light','itda-edit':'editor','itda-share':'share','phone-list':'phone-list'};
+    for(const [name,source]of Object.entries(sources))execFileSync('cwebp',['-quiet','-q','92',path.join(out,source+'.png'),'-o',path.join(help,name+'.webp')]);
+  }
   console.log('Captured product frontend with fictional data: desktop, files, nearby, editor, phone and readable details');
 }finally{await browser.close();for(const s of sockets)s.destroy();await new Promise(r=>server.close(r));}

@@ -56,7 +56,9 @@ Under the hood each connection window is the web viewer (noVNC) against a privat
 
 For a compatible remote Mac, the device menu can install or update Itda over SSH and enable **high-performance mode**. This uses ScreenCaptureKit and H.264 instead of the built-in VNC screen stream. The serving Mac needs Screen Recording and Accessibility permissions; **Settings → Permission helper** shows their status and opens the relevant system settings. macOS may still show its own capture confirmation. Updates to capture and encoding must also be installed on the Mac providing the screen.
 
-High-performance mode does not provide control of the macOS login window. Use **Open in Apple Screen Sharing** on Mac when that login path is needed. Performance depends on the capture workload, network and receiver; ongoing single-viewer latency work is described in the [measurement report](docs/hp-performance-2026-10-21.md).
+High-performance mode does not provide control of the macOS login window. Use **Open in Apple Screen Sharing** on Mac when that login path is needed. When the Mac is locked, another user owns its desktop, or capture/input permissions are missing, Itda falls back to built-in Screen Sharing and explains why. That path still requires Screen Sharing to be enabled and an allowed Mac account.
+
+The viewer’s **선명하게 (Retina)** control chooses native pixels for clearer text; **빠르게** keeps the default point resolution for smoother motion. The serving Mac shares one capture across viewers: a changed preference takes effect after all existing high-performance viewers disconnect. Reconnect after changing the Mac’s display resolution or scaling. Native capture is bounded to 4096 pixels on its longest edge and can reduce frame rate. See the [quality and speed measurements](scripts/hp-quality.md) and the earlier [pipeline report](docs/hp-performance-2026-10-21.md).
 
 ## 🚀 Quick start
 
@@ -76,13 +78,17 @@ First connect to the destination through Itda SSH file browsing or an SSH screen
 
 Installation requires an existing trusted SSH host key and uses strict checking; its SHA256 fingerprints appear in the confirmation. A newer destination app is never deliberately downgraded. Passwords and explicitly assigned account SSH private keys are separate, unchecked options. They travel over SSH stdin into the destination's OS credential store and private key folder. Default `~/.ssh` contents, agent keys, host trust records, sharing/public-web settings, and macOS permission grants are excluded. Existing destination profiles remain; sharing again updates only the imported profiles. Configuration backups are retained under `Itda/configuration-backups`. An already running destination app must be closed before applying; the optional cooperative close can be refused and never force-kills the app. On Windows, credential sharing is checked with a disposable test entry before installation; SSH logons without credential-vault access must omit passwords and key passphrases. An SSH session without an interactive desktop installs successfully but asks you to open Itda directly on the destination.
 
+### Start at login
+
+Enable **설정 → 로그인하면 Itda 실행** to start Itda after signing into your OS account. If macOS Login Items or Windows Startup Apps disables it, Itda shows that state and a shortcut to the system setting. This does not start a desktop session before login or grant capture/input permissions.
+
 ### Update Itda
 
 Open **Settings → Check for updates**. A newer release is offered for confirmation before downloading and restarting the app; open connections will close. Downloads are checked against the release SHA-256 sums, and a Developer ID-signed Mac app accepts only an update signed by the same team.
 
 ## 📁 Files without a screen connection
 
-The main window's **파일 브라우저 (File browser)** entry opens a separate file window, leaving the main screen available. Selecting a device or recent folder navigates in the current window using its saved account. **Cmd-click** on macOS or **Ctrl-click** on Windows opens another file window; **Cmd/Ctrl+N** opens the current location in a new window. Multiple windows can show the same device with independent browsing and transfers. The macOS path bar and item/selection count share one footer row.
+The main window's **파일 브라우저 (File browser)** entry opens a separate file window, leaving the main screen available. Selecting a device or recent folder navigates in the current window using its saved account. **Cmd-click** on macOS or **Ctrl-click** on Windows opens another file window; **Cmd/Ctrl+N** opens the current location in a new window. Multiple windows can show the same device with independent browsing and transfers. Windows integrates folder tabs into the top title area and adapts its controls to smaller windows. The macOS path bar and item/selection count share one footer row.
 
 On macOS, **Finder connection folder** creates `.inetloc` shortcuts in `…/Itda/Locations/Itda` and opens the folder in Finder. Each link opens the saved device through `itda://files/<device ID>` without embedding passwords, keys, or remote paths. The folder can be added to Finder's sidebar. This is a connection folder, not a mounted remote volume or File Provider; direct SSH browsing/editing inside Finder remains unimplemented. The Finder button opens actual SMB shares. Export from the CLI with `Itda.app/Contents/MacOS/itda --export-file-locations`.
 
@@ -135,7 +141,7 @@ Files inherit the device account by default. Selecting another saved account for
 
 **Delta copies:** Auto mode probes local/remote rsync and a compatible remote shell for replace-mode folder copies or files of at least 8MiB. It uses rsync over SSH when available and SFTP otherwise. Windows local rsync must include a compatible `cygpath.exe`. Normal mode never runs rsync. Rsync partial files remain in `.itda-partial` for reuse; SFTP block deltas and partial-file resume are not implemented. No default copy uses mirror/delete semantics.
 
-Browsing and transfers have separate SSH connections. At most two transfer jobs run concurrently; each pipelines up to 64 SFTP requests of 32KiB. Ordinary SFTP copy reports unsupported symlinks instead of following them. Inline folder disclosure, full ACL/xattr preservation, rclone/WebDAV, and an Itda-to-Itda file server remain follow-up work; the workspace does not claim complete Finder/Explorer feature parity. Windows outbound drag is implemented with streamed virtual files and copy-only semantics; native Explorer drop acceptance still needs runtime validation.
+Browsing and transfers have separate SSH connections. At most two transfer jobs run concurrently; each pipelines up to 64 SFTP requests of 32KiB. Ordinary SFTP copy reports unsupported symlinks instead of following them. Inline folder disclosure, full ACL/xattr preservation, rclone/WebDAV, and an Itda-to-Itda file server remain follow-up work; the workspace does not claim complete Finder/Explorer feature parity. Windows outbound drag uses streamed virtual files and copy-only semantics. Dragging to another saved device in the sidebar opens its destination picker; a cross-device move removes the source only after verification. New destination names on Windows use composed Unicode (NFC), including nested folder copies; existing names and source files are left intact. Normalization/case collisions are reported before copying.
 
 ## Multiple monitors
 
@@ -332,6 +338,9 @@ Run `cargo test files::` for file operation tests. On macOS, after `cargo build`
 | `gateway.rs` · `ws.rs` · `web/viewer/` | Web viewer: HTTP/WebSocket, PIN, address-book API, RFB relay, PWA |
 | `rdp.rs` | RDP → RFB bridge (IronRDP, TLS + NLA → framebuffer → ZRLE) |
 | `share.rs` | Share this PC: Windows VNC server (Desktop Duplication with GDI fallback, tile diff, ZRLE, SendInput, Bonjour) |
+| `host_mac.rs` · `h264_mac.rs` · `server.rs` · `hp_upgrade.rs` · `permissions_mac.rs` | Mac high-performance capture/encoding, SSH setup, permission helper and Retina quality |
+| `files/` · `files_mac.rs` · `files_win.rs` · `web/files.js` | SFTP browsing, queued transfers, cross-device moves and platform file-window UI |
+| `remote_setup.rs` · `update.rs` | SSH installation/configuration sharing and release updates |
 | `enc.rs` | RFB pixel formats and Raw/ZRLE rectangles (shared by `share.rs` and `rdp.rs`) |
 | `web/icons.js` · `scripts/macos-bundle.sh` | Itda for Mac: stroke icons in place of Segoe Fluent glyphs, `.app` bundle |
 | `store.rs` · `mdns.rs` · `tailscale.rs` | Storage and credentials, Bonjour, Tailscale CLI |
@@ -339,7 +348,7 @@ Run `cargo test files::` for file operation tests. On macOS, after `cargo build`
 | Area | Implementation |
 |---|---|
 | Protocol | RFB 3.8 (macOS 3.889). Auth: None, VNC (DES), Apple ARD (DH + AES-128) |
-| Encodings | ZRLE, CopyRect, Raw, plus Cursor, DesktopSize, ExtendedDesktopSize and Extended Clipboard |
+| Encodings | ZRLE, CopyRect, Raw, plus Cursor, DesktopSize, ExtendedDesktopSize and Extended Clipboard; H.264 for Mac high-performance mode |
 | Latency | TCP_NODELAY, pipelined update requests, local cursor, liveness probes |
 | Windows native rendering | DIB section, dirty-rect blits, `BitBlt` at 1:1 / `StretchBlt(HALFTONE)` when scaled, per-monitor DPI v2 |
 
