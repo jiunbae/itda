@@ -159,6 +159,8 @@ pub struct Hp {
     pub on: bool,
     /// Its port on the Mac (127.0.0.1 there); 0 = 5910.
     pub port: u16,
+    /// Sharper: the screen at its native (Retina) pixels rather than in points; slower to encode.
+    pub native: bool,
 }
 
 impl Host {

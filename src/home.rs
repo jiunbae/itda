@@ -766,7 +766,7 @@ fn on_ipc(v: Value) {
         "hp_ready" | "hp_off" => {
             let on = s(&v, "cmd") == "hp_ready";
             let port = v["port"].as_u64().unwrap_or(0) as u16;
-            let changed = home(|m| m.hosts.iter_mut().find(|h| h.id == id).map(|h| h.hp = store::Hp { on, port: if on { port } else { h.hp.port } }).is_some());
+            let changed = home(|m| m.hosts.iter_mut().find(|h| h.id == id).map(|h| h.hp = store::Hp { on, port: if on { port } else { h.hp.port }, native: h.hp.native }).is_some());
             if changed {
                 save_hosts();
                 send_hosts();
@@ -1060,11 +1060,23 @@ fn hp_permissions(id: &str, permission: Option<String>) {
     });
 }
 
+/// Sharper (native pixels) or faster (points) high-performance picture on that Mac: its Itda
+/// reads the choice when the capture next starts, so the viewer reconnects after.
+fn hp_quality(id: &str, native: bool) {
+    let Some((host, login)) = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| (h.clone(), store::resolve(h, &m.accounts)))) else { return };
+    std::thread::spawn(move || {
+        let pass = crate::gateway::typed(&host.id).or_else(|| login.pass.clone()).unwrap_or_default();
+        let r = crate::hp_upgrade::set_quality(&crate::hp_upgrade::ssh_cfg_with(&host, &login, pass), native);
+        post(Event::Page(json!({"type": "hp", "id": host.id, "quality": native, "ok": r.is_ok(), "error": r.err().map(|e| e.to_string())})));
+    });
+}
+
 fn on_session(id: &str, v: Value) {
     match s(&v, "ev").as_str() {
         "hp-upgrade" => hp_upgrade(id),
         "hp-status" => hp_status(id),
         "hp-permissions" => hp_permissions(id,v["permission"].as_str().map(str::to_string)),
+        "hp-quality" => hp_quality(id, v["native"] == true),
         "hp-off" => on_ipc(json!({"cmd":"hp_off","id":id})),
         "stage" => {
             home(|m| {
@@ -1243,6 +1255,14 @@ fn drain() {
             }
             Event::Page(v) => {
                 if v["type"] == "hp" {
+                    // A quality change that reached the Mac is this device's choice from now on.
+                    if v["ok"] == true && v["quality"].is_boolean() {
+                        let (id, native) = (v["id"].as_str().unwrap_or("").to_string(), v["quality"] == true);
+                        if home(|m| m.hosts.iter_mut().find(|h| h.id == id).map(|h| h.hp.native = native).is_some()) {
+                            save_hosts();
+                            send_hosts();
+                        }
+                    }
                     if let Some(id) = v["id"].as_str() {
                         plat::session_eval(id, &format!("window.itdaHp&&itdaHp({v})"));
                     }

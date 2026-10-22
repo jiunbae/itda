@@ -23,6 +23,7 @@ const P = {
   mission: '<rect x="3" y="4" width="8" height="7" rx="1"/><rect x="13" y="4" width="8" height="7" rx="1"/><rect x="7" y="13" width="10" height="7" rx="1"/>',
   monitor: '<rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M9 20h6M12 16.5V20"/>',
   bolt: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>',
+  sparkle: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>',
   lock: '<rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
@@ -704,7 +705,17 @@ function hpToggle() {
   });
   post({ ev: 'hp-upgrade' });
 }
-window.itdaHp = (m) => {if(S.host?.id===m.id)window.ItdaHpSetup?.message(m);};
+window.itdaHp = (m) => {
+  if (S.host?.id !== m.id) return;
+  if (m.quality !== undefined) {
+    S.hpQualityBusy = false;
+    if (!m.ok) { renderTools(); return toast(`화질을 바꾸지 못했습니다 — ${m.error || '원격 Mac에 연결할 수 없습니다'}`); }
+    S.host.hp = { ...(S.host.hp || {}), native: !!m.quality };
+    toast(m.quality ? '선명하게(Retina)로 다시 연결합니다 — 프레임은 조금 줄 수 있습니다' : '빠르게로 다시 연결합니다');
+    return open(S.host);
+  }
+  window.ItdaHpSetup?.message(m);
+};
 
 // ---------------------------------------------------------------- toolbar
 
@@ -715,6 +726,7 @@ function renderTools() {
     ['keys', 'command', `${isWin(S.host) ? 'Windows' : 'Mac'} 특수 키`],
     ...(macHost(S.host) ? [['mac-actions', 'mission', 'Mac 화면 동작 — Mission Control · Exposé']] : []),
     ...(APP && /Mac/.test(navigator.platform) && !IOS && ['mac', 'macos'].includes(S.host?.os) && S.host?.kind !== 'rdp' ? [['apple-screen-sharing', 'monitor', 'Apple 화면 공유 앱에서 열기 · 별도 앱으로 직접 연결']] : []),
+    ...(hpCapable() && S.host.hp?.on && !S.hpFallback ? [['hp-quality', 'sparkle', S.hpQualityBusy ? '화질 바꾸는 중…' : S.host.hp?.native ? '선명하게 (Retina) 켜짐 — 누르면 빠르게로 바꿉니다' : '선명하게 (Retina) — 글자가 또렷해지고 프레임은 조금 줄어듭니다', !!S.host.hp?.native]] : []),
     ...(hpCapable() ? [['hp', 'bolt', S.host.hp?.on ? '고성능 모드 켜짐 — 누르면 끕니다' : S.hpBusy ? '고성능 모드 준비 중…' : '고성능 모드 — 이 Mac에 Itda 고성능 공유를 켜고 전환합니다 (SSH)', !!S.host.hp?.on]] : []),
     ...(APP ? [] : [['clip', 'clip', '클립보드']]),
     'sep',
@@ -749,6 +761,10 @@ $('#tools').addEventListener('click', (e) => {
       }
       return;
     case 'hp': return hpToggle();
+    case 'hp-quality':
+      if (S.hpQualityBusy) return;
+      S.hpQualityBusy = true; renderTools();
+      return post({ ev: 'hp-quality', native: !S.host.hp?.native });
     case 'monitors': return toggleSheet('monitors');
     case 'clip': return toggleSheet('clip');
     case 'scale':

@@ -106,6 +106,12 @@ fn q(s: &str) -> String {
 /// Permission reports are trusted only while a live server is updating them.
 #[derive(Debug, PartialEq)]
 pub struct Status { pub screen: bool, pub access: bool, pub running: bool }
+/// The picture that Mac's Itda serves from its next capture: native (Retina) pixels, or points.
+pub fn set_quality(cfg: &SshCfg, native: bool) -> io::Result<()> {
+    let write = if native { r#"echo native > "$data/hp-quality""# } else { r#"rm -f "$data/hp-quality""# };
+    run(cfg, &format!("set -e\ndata=\"$HOME/Library/Application Support/Itda\"\nmkdir -p \"$data\"\n{write}\n"), None).map(|_| ())
+}
+
 pub fn status(cfg: &SshCfg) -> io::Result<Status> {
     let port=if cfg.vnc_port==0 {crate::host_mac_port()} else {cfg.vnc_port};
     let out = run(cfg, &format!(r#"
