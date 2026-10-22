@@ -11,7 +11,9 @@
   window.itdaWindowState = (m) => { maximized = !!m.maximized; tabBar(); };
   const inNewWindow = (e) => MAC ? e.metaKey : e.ctrlKey;
   if (window.ITDA_FILE_HOST) document.body.classList.add("file-window");
-  const pageToken = crypto.randomUUID();
+  // (crypto.randomUUID needs a secure context; the web viewer can be plain HTTP on a LAN.)
+  const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+  const pageToken = randomId();
   let pendingFolder = null, tabSwitch = null, pendingDeviceDrop = null;
   let host,
     layer,
@@ -1413,7 +1415,7 @@
       case "cut":
         if (p.selected.size) {
           clipboard = {
-            cid: crypto.randomUUID(),
+            cid: randomId(),
             host: host.id,
             window: pageToken,
             side: active,
@@ -1424,7 +1426,7 @@
           send("files_clipboard", { clip: clipboard });
           status();
           if(nativeFiles()) {
-            clipboard.seq=crypto.randomUUID();
+            clipboard.seq=randomId();
             send("files_native_copy",{id:host.id,window:pageToken,seq:clipboard.seq,side:active,path:p.path,items:exportItems(active,clipboard.names)});
             toast("Finder에서 붙여넣을 파일을 준비하고 있습니다", "E8B7");
           }

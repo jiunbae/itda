@@ -81,13 +81,28 @@ pub fn request_permissions() -> (bool, bool) {
     request_permission("screen"); request_permission("access"); permissions()
 }
 
-/// Can this Mac's screen be served: Screen Recording granted to this (re)launched app.
+/// Can this Mac's screen be served: Screen Recording granted to this (re)launched app, and the
+/// screen unlocked with this user at it. (Locked, or another user at the screen, capture shows
+/// only the desktop picture; the viewer's Itda then uses Screen Sharing, which shows the lock
+/// screen.)
 pub(crate) fn ready() -> Result<(), String> {
-    if CGPreflightScreenCaptureAccess() {
-        Ok(())
-    } else {
-        Err("Screen Recording permission is not granted on this Mac yet".into())
+    if !CGPreflightScreenCaptureAccess() {
+        return Err("이 Mac에서 화면 기록 권한이 아직 허용되지 않았습니다".into());
     }
+    match session_state() {
+        Some((true, _)) => Err("화면이 잠겨 있어 고성능 모드로 보여 줄 수 없습니다".into()),
+        Some((_, false)) => Err("다른 사용자가 이 Mac 화면을 쓰고 있어 고성능 모드로 보여 줄 수 없습니다".into()),
+        _ => Ok(()),
+    }
+}
+
+/// (screen locked, this session on the console) for the user Itda runs as.
+fn session_state() -> Option<(bool, bool)> {
+    use objc2_core_foundation::{CFBoolean, CFDictionary, CFString, CFType};
+    let d = objc2_core_graphics::CGSessionCopyCurrentDictionary()?;
+    let d: &CFDictionary<CFString, CFType> = unsafe { d.cast_unchecked() };
+    let flag = |key: &str| d.get(&CFString::from_str(key)).and_then(|v| v.downcast_ref::<CFBoolean>().map(|b| b.as_bool()));
+    Some((flag("CGSSessionScreenIsLocked").unwrap_or(false), flag("kCGSSessionOnConsoleKey").unwrap_or(true)))
 }
 
 // ---------------------------------------------------------------- consent and clipboard
@@ -796,5 +811,14 @@ pub fn serve_forever(port: u16) -> ! {
     }
     loop {
         std::thread::sleep(Duration::from_secs(3600));
+    }
+}
+
+#[cfg(test)]
+mod session_tests {
+    /// The session's lock and console state can be read (values depend on the machine).
+    #[test]
+    fn session_state_reads() {
+        eprintln!("session (locked, on console) = {:?}", super::session_state());
     }
 }

@@ -38,7 +38,7 @@ objc2-core-media = { version = "0.3.2", default-features = false, features = ["s
 objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBase", "CVPixelBuffer", "CVImageBuffer", "CVBuffer", "CVReturn", "CVPixelBufferPool", "objc2-io-surface"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFDictionary", "CFNumber", "CFString", "CFBase", "CFArray"] }
 objc2-screen-capture-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "dispatch2", "objc2-core-media", "objc2-core-graphics", "SCStream", "SCShareableContent", "SCError"] }
-objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation", "CGDirectDisplay", "CGError", "CGWindow"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation", "CGDirectDisplay", "CGError", "CGWindow", "CGSession"] }
 dispatch2 = { version = "0.3", default-features = false, features = ["std", "objc2"] }
 tao = "0.34"
 muda = "0.17"
