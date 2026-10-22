@@ -992,7 +992,7 @@ pub(crate) fn open_hp(host: &store::Host, login: &store::Login, ssh_pass: &str) 
     let t = Tunnel::open(crate::hp_upgrade::ssh_cfg_with(host, login, ssh_pass.to_string()))?;
     let raw = rfb::open(&t.addr()?, &Creds { user: String::new(), pass }).map_err(|e| match e.kind() {
         // Nothing answering behind the tunnel: sharing isn't on, or Itda isn't running there.
-        io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted => setup("원격 Mac에서 Itda 고성능 공유가 켜져 있지 않습니다"),
+        io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted => setup("원격 Mac의 Itda 고성능 공유에 연결하지 못했습니다"),
         // The password it has changed (e.g. Itda was reinstalled there).
         io::ErrorKind::PermissionDenied if e.to_string().starts_with("인증 실패") => setup("원격 Mac의 고성능 공유 암호가 바뀌었습니다"),
         _ => e,
