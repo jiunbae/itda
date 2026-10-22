@@ -945,7 +945,14 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
             Err(e) => {
                 crate::log!("high-performance sharing on {} unavailable, using Screen Sharing: {e}", host.host);
                 // The viewer shows what it actually got, not the saved choice.
-                record_mode(&host.id, json!({"hp": false, "reason": e.to_string()}));
+                // Nothing answering behind the tunnel: high-performance sharing isn't on (or Itda
+                // isn't running) there, so turning it on again is the fix, not a retry.
+                let off = matches!(e.kind(), io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted);
+                record_mode(&host.id, if off {
+                    json!({"hp": false, "setup": true, "reason": "원격 Mac에서 Itda 고성능 공유가 켜져 있지 않습니다"})
+                } else {
+                    json!({"hp": false, "reason": e.to_string()})
+                });
             }
         }
     }
