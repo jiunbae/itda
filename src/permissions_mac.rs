@@ -260,9 +260,15 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
             }
             "show" => {
                 // Asked again (e.g. the remote setup opening the helper) while the guide sits
-                // beside Settings: keep that one window, don't bring the helper back too.
-                if v["permission"].is_null() && GUIDE.with(|g| g.borrow().as_ref().map(|g| g.pane.window.set_focus()).is_some()) {
-                    return Ok(());
+                // beside Settings: keep that one window, don't bring the helper back too. A guide
+                // hidden because Settings went away can't be focused: then back to the helper.
+                if v["permission"].is_null() {
+                    let shown = GUIDE.with(|g| g.borrow().as_ref().map(|g| g.pane.window.is_visible() && !g.pane.window.is_minimized()));
+                    match shown {
+                        Some(true) => { GUIDE.with(|g| if let Some(g) = g.borrow().as_ref() { g.pane.window.set_focus() }); return Ok(()); }
+                        Some(false) => close_guide(),
+                        None => {}
+                    }
                 }
                 open(target)?;
                 if let Some(permission) = v["permission"].as_str() {
