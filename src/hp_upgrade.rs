@@ -105,7 +105,15 @@ fn q(s: &str) -> String {
 
 /// Permission reports are trusted only while a live server is updating them.
 #[derive(Debug, PartialEq)]
-pub struct Status { pub screen: bool, pub access: bool, pub running: bool }
+pub struct Status {
+    pub screen: bool,
+    pub access: bool,
+    pub running: bool,
+    /// What its capture serves: "native" or "points" ("" from an Itda before the option).
+    pub quality: String,
+    pub quality_active: bool,
+    pub capture: (u32, u32),
+}
 /// The picture that Mac's Itda serves from its next capture: native (Retina) pixels, or points.
 pub fn set_quality(cfg: &SshCfg, native: bool) -> io::Result<()> {
     let write = if native { r#"echo native > "$data/hp-quality""# } else { r#"rm -f "$data/hp-quality""# };
@@ -121,7 +129,9 @@ age=$(( $(date +%s) - $(stat -f%m "$p" 2>/dev/null || echo 0) ))
 if [ "$age" -ge 0 ] && [ "$age" -le 15 ] && lsof -nP -a -c itda -iTCP:{port} -sTCP:LISTEN -t >/dev/null 2>&1; then echo running=1; else echo running=0; fi
 "#), None)?;
     let yes = |k: &str| out.split_whitespace().any(|p| p == format!("{k}=1"));
-    Ok(Status {screen:yes("screen"),access:yes("access"),running:yes("running")})
+    let val = |k: &str| out.split_whitespace().find_map(|p| p.strip_prefix(k)?.strip_prefix('=')).unwrap_or("");
+    let quality = Some(val("quality")).filter(|q| matches!(*q, "native" | "points")).unwrap_or("").to_string();
+    Ok(Status {screen:yes("screen"),access:yes("access"),running:yes("running"),quality,quality_active:yes("quality_active"),capture:(val("capture_width").parse().unwrap_or(0),val("capture_height").parse().unwrap_or(0))})
 }
 
 /// The guide and system settings open on the remote Mac, never on the viewer's computer.

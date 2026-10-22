@@ -548,8 +548,11 @@ function open(h) {
   // Remote Desktop follows this window's size (not on phones: a desktop that small is no use).
   const follow = h.kind === 'rdp' && opt('resize', true) && !opt('monitor_layout', 0) && opt('monitor_mode',0)!==2 && (APP || matchMedia('(pointer: fine)').matches);
   const scr = $('#screen');
-  const size = follow && scr.clientWidth ? `?w=${Math.round(scr.clientWidth)}&h=${Math.round(scr.clientHeight)}` : '';
-  const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}${size}`, ['binary']);
+  const size = follow && scr.clientWidth ? `w=${Math.round(scr.clientWidth)}&h=${Math.round(scr.clientHeight)}&` : '';
+  // This attempt's own token: its high-performance outcome, not another viewer's.
+  const attempt = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+  S.hpFallback = null; renderTools();
+  const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}?${size}attempt=${attempt}`, ['binary']);
   let closeInfo = null;
   ws.addEventListener('close', (e) => { closeInfo = e; });
   S.ws = ws;
@@ -571,6 +574,20 @@ function open(h) {
     status(null);
     rfb.focus();
     dimToolsSoon();
+    // High-performance mode is the saved choice; say so when this connection didn't get it.
+    if (APP && S.host?.hp?.on) fetch(`/api/mode/${encodeURIComponent(h.id)}?attempt=${attempt}`).then(r => r.json()).then(m => {
+      if (S.rfb !== rfb || S.host?.id !== h.id || !m) return;
+      if (m.hp !== false) {
+        S.hpFallback = null; S.hpActual = m.hp === true; S.hpQuality = null; renderTools();
+        // What the Mac actually serves (points or native pixels), for the sharpness toggle.
+        if (S.hpActual) post({ ev: 'hp-status' });
+        return;
+      }
+      S.hpActual = false;
+      S.hpFallback = m.reason || '연결하지 못했습니다';
+      renderTools();
+      toast(`고성능 모드로 연결하지 못해 기본 화면 공유로 연결했습니다 — ${S.hpFallback}`);
+    }).catch(() => {});
     if (!APP) return toast(`${h.label}에 연결했습니다`);
     post(S.tries ? { ev: 'reconnected' } : { ev: 'connected', name, w: rfb._fbWidth || 0, h: rfb._fbHeight || 0 });
     S.ever = true;
@@ -691,6 +708,12 @@ function leave() {
 const hpCapable = () => APP && macHost(S.host) && S.host?.kind !== 'rdp';
 function hpToggle() {
   if (!hpCapable() || S.hpBusy) return;
+  // Saved on but this connection fell back: try high-performance again (e.g. after unlocking).
+  if (S.host.hp?.on && S.hpFallback) {
+    S.hpFallback = null;
+    toast('고성능 모드로 다시 연결합니다');
+    return open(S.host);
+  }
   if (S.host.hp?.on) {
     S.host.hp = { ...S.host.hp, on: false };
     post({ ev: 'hp-off' });
@@ -707,15 +730,32 @@ function hpToggle() {
 }
 window.itdaHp = (m) => {
   if (S.host?.id !== m.id) return;
-  if (m.quality !== undefined) {
+  // The Mac's report of what it serves: the toggle shows that, not just the saved choice.
+  if (m.status && typeof m.quality === 'string') {
+    S.hpQuality = { quality: m.quality, active: !!m.quality_active, w: m.capture_width, h: m.capture_height };
+    renderTools();
+  }
+  if (typeof m.quality === 'boolean') {
     S.hpQualityBusy = false;
     if (!m.ok) { renderTools(); return toast(`화질을 바꾸지 못했습니다 — ${m.error || '원격 Mac에 연결할 수 없습니다'}`); }
     S.host.hp = { ...(S.host.hp || {}), native: !!m.quality };
-    toast(m.quality ? '선명하게(Retina)로 다시 연결합니다 — 프레임은 조금 줄 수 있습니다' : '빠르게로 다시 연결합니다');
+    toast(m.quality ? '선명하게(Retina)로 다시 연결합니다' : '빠르게로 다시 연결합니다');
     return open(S.host);
   }
   window.ItdaHpSetup?.message(m);
 };
+// The sharpness toggle: the saved choice for this Mac against what it actually serves now.
+function hpQualityShown() { return S.hpQuality?.quality === 'native'; }
+function hpQualityLabel() {
+  if (S.hpQualityBusy) return '화질 바꾸는 중…';
+  const want = !!S.host.hp?.native, q = S.hpQuality?.quality;
+  if (q === undefined) return want ? '선명하게 (Retina) — 원격 Mac의 화질을 확인하는 중' : '선명하게 (Retina) — 글자가 또렷해지고 프레임은 조금 줄어듭니다';
+  if (q === '') return '선명하게 (Retina) — 원격 Mac의 Itda를 업데이트하면 쓸 수 있습니다';
+  if (want && q === 'native') return `선명하게 (Retina) 켜짐 · ${S.hpQuality.w}×${S.hpQuality.h} — 누르면 빠르게로 바꿉니다`;
+  if (want) return '선명하게 (Retina) 적용 대기 — 이 Mac의 다른 고성능 연결이 모두 끝나면 적용됩니다';
+  if (q === 'native') return '지금은 선명하게로 보는 중 (다른 연결이 켠 설정) — 누르면 빠르게로 바꿉니다';
+  return '선명하게 (Retina) — 글자가 또렷해지고 프레임은 조금 줄어듭니다';
+}
 
 // ---------------------------------------------------------------- toolbar
 
@@ -726,8 +766,8 @@ function renderTools() {
     ['keys', 'command', `${isWin(S.host) ? 'Windows' : 'Mac'} 특수 키`],
     ...(macHost(S.host) ? [['mac-actions', 'mission', 'Mac 화면 동작 — Mission Control · Exposé']] : []),
     ...(APP && /Mac/.test(navigator.platform) && !IOS && ['mac', 'macos'].includes(S.host?.os) && S.host?.kind !== 'rdp' ? [['apple-screen-sharing', 'monitor', 'Apple 화면 공유 앱에서 열기 · 별도 앱으로 직접 연결']] : []),
-    ...(hpCapable() && S.host.hp?.on && !S.hpFallback ? [['hp-quality', 'sparkle', S.hpQualityBusy ? '화질 바꾸는 중…' : S.host.hp?.native ? '선명하게 (Retina) 켜짐 — 누르면 빠르게로 바꿉니다' : '선명하게 (Retina) — 글자가 또렷해지고 프레임은 조금 줄어듭니다', !!S.host.hp?.native]] : []),
-    ...(hpCapable() ? [['hp', 'bolt', S.host.hp?.on ? '고성능 모드 켜짐 — 누르면 끕니다' : S.hpBusy ? '고성능 모드 준비 중…' : '고성능 모드 — 이 Mac에 Itda 고성능 공유를 켜고 전환합니다 (SSH)', !!S.host.hp?.on]] : []),
+    ...(hpCapable() && S.hpActual ? [['hp-quality', 'sparkle', hpQualityLabel(), hpQualityShown()]] : []),
+    ...(hpCapable() ? [['hp', 'bolt', S.host.hp?.on && S.hpFallback ? `고성능 모드로 연결되지 않음 (${S.hpFallback}) — 누르면 다시 시도합니다` : S.host.hp?.on ? '고성능 모드 켜짐 — 누르면 끕니다' : S.hpBusy ? '고성능 모드 준비 중…' : '고성능 모드 — 이 Mac에 Itda 고성능 공유를 켜고 전환합니다 (SSH)', !!S.host.hp?.on && !S.hpFallback]] : []),
     ...(APP ? [] : [['clip', 'clip', '클립보드']]),
     'sep',
     ['monitors', 'monitor', '모니터 선택 및 창 배치'],
