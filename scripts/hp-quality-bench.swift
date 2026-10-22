@@ -86,6 +86,7 @@ var hardwareRaw: UnsafeRawPointer?
 let hardwareStatus = VTSessionCopyProperty(s, key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder, allocator: nil, valueOut: &hardwareRaw)
 let hardwareValue = hardwareRaw.map { Unmanaged<AnyObject>.fromOpaque($0).takeRetainedValue() }
 VTCompressionSessionInvalidate(s)
+precondition(out.frames > 0 && out.errors.isEmpty, "no valid encoded frames")
 try out.data.write(to: URL(fileURLWithPath: dir + "/encoded.h264"))
 let ref = buffers[out.last % 8]; CVPixelBufferLockBaseAddress(ref, .readOnly)
 try Data(bytes: CVPixelBufferGetBaseAddress(ref)!, count: CVPixelBufferGetBytesPerRow(ref) * h).write(to: URL(fileURLWithPath: dir + "/reference.bgra"))

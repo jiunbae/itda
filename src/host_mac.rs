@@ -21,7 +21,7 @@ use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass, Message};
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
 use objc2_core_foundation::{CFRetained, CGPoint};
-use objc2_core_graphics::{CGDisplayBounds, CGDisplayPixelsWide, CGDisplayPixelsHigh, CGEvent, CGEventField, CGEventFlags, CGEventTapLocation, CGEventType, CGMainDisplayID, CGMouseButton, CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, CGScrollEventUnit};
+use objc2_core_graphics::{CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGEvent, CGEventField, CGEventFlags, CGEventTapLocation, CGEventType, CGMainDisplayID, CGMouseButton, CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, CGScrollEventUnit};
 use objc2_core_media::CMSampleBuffer;
 use objc2_core_video::{CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight, CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress};
 use objc2_foundation::{NSArray, NSError, NSString};
@@ -177,7 +177,12 @@ fn capture_dimensions(points: (usize, usize), pixels: (usize, usize), native: bo
 fn display_dimensions(native: bool) -> (usize, usize) {
     let id = CGMainDisplayID();
     let b = CGDisplayBounds(id);
-    capture_dimensions((b.size.width as usize, b.size.height as usize), (CGDisplayPixelsWide(id), CGDisplayPixelsHigh(id)), native)
+    let points = (b.size.width as usize, b.size.height as usize);
+    // CGDisplayPixelsWide/High can return the logical mode dimensions on HiDPI
+    // displays. The display mode's pixel dimensions describe the Retina backing.
+    let mode = CGDisplayCopyDisplayMode(id);
+    let pixels = mode.as_deref().map(|m| (CGDisplayMode::pixel_width(Some(m)), CGDisplayMode::pixel_height(Some(m)))).unwrap_or(points);
+    capture_dimensions(points, pixels, native)
 }
 
 fn active_capture() -> Option<Arc<Mutex<Capture>>> {
@@ -270,6 +275,14 @@ pub(crate) fn capture() -> Arc<Mutex<Capture>> {
         *g = Arc::downgrade(&c);
         c
     })
+}
+
+/// A fixed offscreen framebuffer for the opt-in real encoder/pump refinement probe.
+#[cfg(test)]
+pub(crate) fn fixed_capture(w: usize, h: usize, pixels: Vec<u32>) -> Capture {
+    assert_eq!(pixels.len(), w * h);
+    Capture { x: 0, y: 0, w, h, native_pixels: false, buf: Arc::new(pixels), native: None,
+        latest: Arc::new(Mutex::new(None)), generation: 0, stream: None, _output: None }
 }
 
 pub(crate) struct Capture {

@@ -9,9 +9,13 @@ def run(args):
  return p.stderr
 for d in sorted(root.iterdir()):
  if not d.is_dir() or not (d/'result.json').exists(): continue
- m=json.loads((d/'result.json').read_text()); w,h=m['width'],m['height'];stride=m['reference_stride']; raw=(d/'reference.bgra').read_bytes();(d/'packed.bgra').write_bytes(b''.join(raw[y*stride:y*stride+w*4] for y in range(h)))
+ m=json.loads((d/'result.json').read_text());
+ if not m['frames'] or m.get('errors'): raise RuntimeError(f'Invalid encoded trial: {d}')
+ for generated in ['reference.png', 'decoded.png']: (d/generated).unlink(missing_ok=True)
+ w,h=m['width'],m['height'];stride=m['reference_stride']; raw=(d/'reference.bgra').read_bytes();(d/'packed.bgra').write_bytes(b''.join(raw[y*stride:y*stride+w*4] for y in range(h)))
  run(['-y','-f','rawvideo','-pixel_format','bgra','-video_size',f'{w}x{h}','-i',str(d/'packed.bgra'),'-frames:v','1',str(d/'reference.png')])
  run(['-y','-i',str(d/'encoded.h264'),'-vf',f"select=eq(n\\,{m['frames']-1})",'-frames:v','1','-fps_mode','vfr',str(d/'decoded.png')])
+ if not (d/'decoded.png').is_file(): raise RuntimeError(f'Last accepted frame was not decoded: {d}')
  for metric in ['psnr','ssim']:
   log=run(['-i',str(d/'reference.png'),'-i',str(d/'decoded.png'),'-lavfi',f'[0:v]format=gbrp[a];[1:v]format=gbrp[b];[a][b]{metric}', '-f','null','-'])
   key='average:' if metric=='psnr' else 'All:'
