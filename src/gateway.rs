@@ -945,7 +945,10 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
             Err(e) => {
                 crate::log!("high-performance sharing on {} unavailable, using Screen Sharing: {e}", host.host);
                 // The viewer shows what it actually got, not the saved choice.
-                record_mode(&host.id, json!({"hp": false, "reason": e.to_string()}));
+                // Set up again (not retried) when it's high-performance sharing itself that is off
+                // or no longer matches; SSH problems keep their own message.
+                let setup = e.get_ref().is_some_and(|r| r.is::<HpSetup>());
+                record_mode(&host.id, json!({"hp": false, "setup": setup, "reason": e.to_string()}));
             }
         }
     }
@@ -974,10 +977,26 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
 }
 
 /// The connection's password for SSH (saved, or typed for it); the server's own for VNC.
+/// High-performance sharing itself is off or out of step on that Mac (SSH worked): setting it
+/// up again is the fix, not a retry.
+#[derive(Debug)]
+pub(crate) struct HpSetup(&'static str);
+impl std::fmt::Display for HpSetup {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { f.write_str(self.0) }
+}
+impl std::error::Error for HpSetup {}
+
 pub(crate) fn open_hp(host: &store::Host, login: &store::Login, ssh_pass: &str) -> io::Result<(Arc<Tunnel>, rfb::Raw)> {
-    let pass = store::get_password(&crate::hp_upgrade::password_key(&host.id)).ok_or_else(|| io::Error::other("no high-performance password"))?;
+    let setup = |why| io::Error::new(io::ErrorKind::NotFound, HpSetup(why));
+    let pass = store::get_password(&crate::hp_upgrade::password_key(&host.id)).ok_or_else(|| setup("이 기기에 고성능 공유 암호가 없습니다"))?;
     let t = Tunnel::open(crate::hp_upgrade::ssh_cfg_with(host, login, ssh_pass.to_string()))?;
-    let raw = rfb::open(&t.addr()?, &Creds { user: String::new(), pass })?;
+    let raw = rfb::open(&t.addr()?, &Creds { user: String::new(), pass }).map_err(|e| match e.kind() {
+        // Nothing answering behind the tunnel: sharing isn't on, or Itda isn't running there.
+        io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted => setup("원격 Mac에서 Itda 고성능 공유가 켜져 있지 않습니다"),
+        // The password it has changed (e.g. Itda was reinstalled there).
+        io::ErrorKind::PermissionDenied if e.to_string().starts_with("인증 실패") => setup("원격 Mac의 고성능 공유 암호가 바뀌었습니다"),
+        _ => e,
+    })?;
     Ok((t, raw))
 }
 
