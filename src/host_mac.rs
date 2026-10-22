@@ -5,7 +5,7 @@
 //! only: viewers come through an SSH tunnel (the same SSH that set it up), so the stream is
 //! encrypted and the macOS firewall never asks about a new incoming port.
 //!
-//! - capture: ScreenCaptureKit, the main display at its size in points, up to 60 fps, the
+//! - capture: ScreenCaptureKit, the main display in points (or opt-in native pixels), up to 60 fps, the
 //!   cursor drawn in (needs Screen Recording permission);
 //! - input: CGEvent posted to the HID tap, Mac key codes and modifiers; ⌘ stays Command
 //!   (needs Accessibility permission);
@@ -21,7 +21,7 @@ use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass, Message};
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
 use objc2_core_foundation::{CFRetained, CGPoint};
-use objc2_core_graphics::{CGDisplayBounds, CGEvent, CGEventField, CGEventFlags, CGEventTapLocation, CGEventType, CGMainDisplayID, CGMouseButton, CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, CGScrollEventUnit};
+use objc2_core_graphics::{CGDisplayBounds, CGDisplayPixelsWide, CGDisplayPixelsHigh, CGEvent, CGEventField, CGEventFlags, CGEventTapLocation, CGEventType, CGMainDisplayID, CGMouseButton, CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, CGScrollEventUnit};
 use objc2_core_media::CMSampleBuffer;
 use objc2_core_video::{CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight, CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress};
 use objc2_foundation::{NSArray, NSError, NSString};
@@ -155,10 +155,49 @@ pub(crate) fn video(w: usize, h: usize) -> Option<Video> {
 
 // ---------------------------------------------------------------- displays and capture
 
-/// The main display in desktop points: (id, left, top, right, bottom).
+/// Capture geometry is frozen for all viewers until the last one leaves. This keeps
+/// pointer input and monitor metadata in the same units as the shared framebuffer.
+static SHARED_CAPTURE: Mutex<std::sync::Weak<Mutex<Capture>>> = Mutex::new(std::sync::Weak::new());
+
+fn native_pixels_requested() -> bool {
+    std::env::args().any(|a| a == "--native-pixels") ||
+        std::fs::read_to_string(crate::store::dir().join("hp-quality")).is_ok_and(|s| s.trim() == "native")
+}
+
+fn capture_dimensions(points: (usize, usize), pixels: (usize, usize), native: bool) -> (usize, usize) {
+    let (mut w, mut h) = if native { pixels } else { points };
+    if native && w.max(h) > 4096 {
+        let longest = w.max(h);
+        w = w * 4096 / longest;
+        h = h * 4096 / longest;
+    }
+    (w.max(16) & !1, h.max(16) & !1)
+}
+
+fn display_dimensions(native: bool) -> (usize, usize) {
+    let id = CGMainDisplayID();
+    let b = CGDisplayBounds(id);
+    capture_dimensions((b.size.width as usize, b.size.height as usize), (CGDisplayPixelsWide(id), CGDisplayPixelsHigh(id)), native)
+}
+
+fn active_capture() -> Option<Arc<Mutex<Capture>>> {
+    SHARED_CAPTURE.lock().unwrap().upgrade()
+}
+
+fn frame_dimensions() -> (usize, usize) {
+    active_capture().map(|c| { let c = c.lock().unwrap(); (c.w, c.h) })
+        .unwrap_or_else(|| display_dimensions(native_pixels_requested()))
+}
+
+fn point_from_frame(x: u16, y: u16, frame: (usize, usize), points: (f64, f64)) -> (f64, f64) {
+    (f64::from(x).min(frame.0.saturating_sub(1) as f64) * points.0 / frame.0 as f64,
+     f64::from(y).min(frame.1.saturating_sub(1) as f64) * points.1 / frame.1 as f64)
+}
+
+/// The main display in framebuffer pixels: (id, left, top, right, bottom).
 pub(crate) fn monitors() -> Vec<(u32, i32, i32, i32, i32)> {
-    let b = CGDisplayBounds(CGMainDisplayID());
-    vec![(CGMainDisplayID(), 0, 0, b.size.width as i32, b.size.height as i32)]
+    let (w, h) = frame_dimensions();
+    vec![(CGMainDisplayID(), 0, 0, w as i32, h as i32)]
 }
 
 /// The newest captured frame, handed from ScreenCaptureKit's queue to the pump.
@@ -225,8 +264,7 @@ impl Output {
 /// The one capture all viewers share (each diffs it against its own last frame); stopped
 /// when the last viewer leaves.
 pub(crate) fn capture() -> Arc<Mutex<Capture>> {
-    static SHARED: Mutex<std::sync::Weak<Mutex<Capture>>> = Mutex::new(std::sync::Weak::new());
-    let mut g = SHARED.lock().unwrap();
+    let mut g = SHARED_CAPTURE.lock().unwrap();
     g.upgrade().unwrap_or_else(|| {
         let c = Arc::new(Mutex::new(Capture::new()));
         *g = Arc::downgrade(&c);
@@ -239,6 +277,7 @@ pub(crate) struct Capture {
     pub(crate) y: i32,
     pub(crate) w: usize,
     pub(crate) h: usize,
+    native_pixels: bool,
     buf: Arc<Vec<u32>>,
     native: Option<CFRetained<CVPixelBuffer>>,
     latest: Latest,
@@ -266,10 +305,10 @@ unsafe impl Send for Capture {}
 
 impl Capture {
     fn new() -> Capture {
-        let b = CGDisplayBounds(CGMainDisplayID());
-        let (w, h) = ((b.size.width as usize).max(16) & !1, (b.size.height as usize).max(16) & !1);
+        let native_pixels = native_pixels_requested();
+        let (w, h) = display_dimensions(native_pixels);
         let latest: Latest = Arc::new(Mutex::new(None));
-        let mut c = Capture { x: 0, y: 0, w, h, buf: Arc::new(vec![0; w * h]), native: None, latest: latest.clone(), generation: 0, stream: None, _output: None };
+        let mut c = Capture { x: 0, y: 0, w, h, native_pixels, buf: Arc::new(vec![0; w * h]), native: None, latest: latest.clone(), generation: 0, stream: None, _output: None };
         match start_stream(w, h, latest) {
             Ok((stream, output)) => (c.stream, c._output) = (Some(stream), Some(output)),
             Err(e) => crate::log!("hp: screen capture unavailable ({e}); viewers see a black screen"),
@@ -282,7 +321,7 @@ impl Capture {
         c
     }
 
-    /// The capture's size is fixed for its life (one display, in points).
+    /// The capture's size and quality are fixed for its life (one display).
     pub(crate) fn fit(&mut self) {}
 
     /// Has a frame arrived that the viewer who last grabbed at `seen` hasn't had? (Pending, or
@@ -356,6 +395,19 @@ mod snapshot_tests {
     use objc2_core_video::{CVPixelBufferCreate, kCVPixelFormatType_32BGRA};
     use std::ptr::{null_mut, NonNull};
 
+    #[test]
+    fn retina_geometry_preserves_aspect_and_input_coordinates() {
+        assert_eq!(capture_dimensions((1512, 982), (3024, 1964), false), (1512, 982));
+        assert_eq!(capture_dimensions((1512, 982), (3024, 1964), true), (3024, 1964));
+        assert_eq!(capture_dimensions((3008, 1692), (6016, 3384), true), (4096, 2304));
+        assert_eq!(capture_dimensions((1692, 3008), (3384, 6016), true), (2304, 4096));
+        assert_eq!(point_from_frame(1512, 982, (3024, 1964), (1512., 982.)), (756., 491.));
+        assert_eq!(point_from_frame(2048, 1152, (4096, 2304), (3008., 1692.)), (1504., 846.));
+        assert_eq!(point_from_frame(756, 491, (1512, 982), (1512., 982.)), (756., 491.));
+        let (x, y) = point_from_frame(u16::MAX, u16::MAX, (3024, 1964), (1512., 982.));
+        assert!(x < 1512. && y < 982.);
+    }
+
     fn buffer(w: usize, h: usize, color: u32) -> CFRetained<CVPixelBuffer> {
         let mut raw = null_mut();
         let status = unsafe { CVPixelBufferCreate(None, w, h, kCVPixelFormatType_32BGRA, None, NonNull::from(&mut raw)) };
@@ -374,7 +426,7 @@ mod snapshot_tests {
     }
 
     fn capture() -> Capture {
-        Capture { x: 0, y: 0, w: 16, h: 16, buf: Arc::new(vec![0; 256]), native: None,
+        Capture { x: 0, y: 0, w: 16, h: 16, native_pixels: false, buf: Arc::new(vec![0; 256]), native: None,
             latest: Arc::new(Mutex::new(None)), generation: 0, stream: None, _output: None }
     }
 
@@ -582,7 +634,9 @@ impl Input {
         if self.view_only {
             return;
         }
-        let at = CGPoint { x: x as f64, y: y as f64 };
+        let b = CGDisplayBounds(CGMainDisplayID());
+        let (px, py) = point_from_frame(x, y, frame_dimensions(), (b.size.width, b.size.height));
+        let at = CGPoint { x: b.origin.x + px, y: b.origin.y + py };
         self.at = (x, y);
         let changed = mask ^ self.buttons;
         let mouse = |kind: CGEventType, button: CGMouseButton, clicks: i64| {
@@ -683,7 +737,11 @@ pub fn set_enabled(on: bool) {
 /// Where the background server reports its permissions, for an Itda setting it up over SSH:
 /// `screen=0|1 access=0|1 port=N`.
 fn write_status(screen: bool, access: bool) {
-    let _ = std::fs::write(crate::store::dir().join("hp-status"), format!("screen={} access={} port={PORT}\n", screen as u8, access as u8));
+    let current = active_capture();
+    let (native, dimensions) = current.as_ref().map(|c| { let c = c.lock().unwrap(); (c.native_pixels, (c.w, c.h)) })
+        .unwrap_or_else(|| { let native = native_pixels_requested(); (native, display_dimensions(native)) });
+    let quality = if native { "native" } else { "points" };
+    let _ = std::fs::write(crate::store::dir().join("hp-status"), format!("screen={} access={} port={PORT} quality={quality} quality_active={} capture_width={} capture_height={}\n", screen as u8, access as u8, current.is_some() as u8, dimensions.0, dimensions.1));
 }
 
 /// Start serving in the background of the running app (when `enabled`).
