@@ -685,6 +685,8 @@ fn accounts_json() -> serde_json::Value {
 /// Applies an address-book change through the home window (so its list stays in step);
 /// set by the home. Returns once the change is saved.
 pub static ON_EDIT: std::sync::OnceLock<fn(serde_json::Value) -> bool> = std::sync::OnceLock::new();
+/// Per device: whether its last connection got high-performance sharing ({"hp":bool,"reason"}).
+static MODES: Mutex<std::collections::BTreeMap<String, serde_json::Value>> = Mutex::new(std::collections::BTreeMap::new());
 
 /// Add, change or remove a connection or account from the browser.
 fn edit(c: &mut TcpStream, req: &Req) -> io::Result<()> {
@@ -804,6 +806,11 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
         (_, "/api/hosts") if ok => json_resp(&mut c, "200 OK", hosts_json()),
         ("GET", "/api/nearby") if ok => json_resp(&mut c, "200 OK", nearby_json()),
         ("GET", "/api/accounts") if ok => json_resp(&mut c, "200 OK", accounts_json()),
+        // How the last connection to a device with high-performance mode on was made.
+        ("GET", _) if ok && p.starts_with("/api/mode/") => {
+            let id = p.trim_start_matches("/api/mode/");
+            json_resp(&mut c, "200 OK", MODES.lock().unwrap().get(id).cloned().unwrap_or(serde_json::Value::Null))
+        }
         ("POST", "/api/edit") if ok && same_origin(&req) => edit(&mut c, &req),
         ("GET", _) if ok && p.starts_with("/thumb/") => {
             let id = p.trim_start_matches("/thumb/").trim_end_matches(".png");
@@ -910,10 +917,15 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
         match open_hp(host, login, &pass) {
             Ok((t, raw)) => {
                 *tunnel = Some(t);
+                MODES.lock().unwrap().insert(host.id.clone(), json!({"hp": true}));
                 return Ok(raw);
             }
             Err(e) if at_lan && !host.ssh.on => return Err(e), // (plain VNC can't check the device there)
-            Err(e) => crate::log!("high-performance sharing on {} unavailable, using Screen Sharing: {e}", host.host),
+            Err(e) => {
+                crate::log!("high-performance sharing on {} unavailable, using Screen Sharing: {e}", host.host);
+                // The viewer shows what it actually got, not the saved choice.
+                MODES.lock().unwrap().insert(host.id.clone(), json!({"hp": false, "reason": e.to_string()}));
+            }
         }
     }
     let creds = Creds { user: login.user.clone(), pass: pass.clone() };

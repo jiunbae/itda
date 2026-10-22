@@ -9,3 +9,4 @@ main{padding-bottom:110px}footer{position:fixed;bottom:0;left:0;right:0;max-widt
 body.complete header img{animation:pop .5s ease-out}body.complete .progress{color:var(--ok);font-size:14px}
 @keyframes pop{0%{transform:scale(.8)}60%{transform:scale(1.08)}100%{transform:scale(1)}}
 .reminder p{color:var(--muted);line-height:1.6;margin:8px 0}
+.hp-state { margin: 4px 0 10px; font-size: 13px; color: var(--text-2, #666); }

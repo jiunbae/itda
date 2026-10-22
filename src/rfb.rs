@@ -225,6 +225,11 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
     if sec != 1 || minor == 8 {
         if rd_u32(&mut r)? != 0 {
             let why = if minor == 8 { rd_reason(&mut r).unwrap_or_default() } else { String::new() };
+            // A server that took the password but can't serve now (Itda: the screen is
+            // locked, permission missing) says why; only a plain refusal is a wrong password.
+            if !why.trim().is_empty() && !why.to_ascii_lowercase().contains("authentic") && !why.to_ascii_lowercase().contains("password") {
+                return Err(denied(why.trim().to_string()));
+            }
             return Err(denied(format!("인증 실패 — 사용자 이름/비밀번호를 확인하세요 {why}")));
         }
     }
