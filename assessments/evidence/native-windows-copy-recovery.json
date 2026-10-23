@@ -1,5 +1,5 @@
 {
-  "driver_sha256": "b3881818cb9583914cca33d5d5f740b608941565c309960c40d398b46378af59",
+  "driver_sha256": "f71381980af0c48d833eb2fff3f9882535f8df561e1a37ef520d7222f3ff4054",
   "source_commit": "0cafc9f3eed010d42aeebb4c8518ac1640408ae5",
   "binary_sha256": "6bc072cbacb04817d12da0b833077b5fa862d1bd4ae851be07be3736015c9897",
   "ci_run": 40012257699,
@@ -35,14 +35,14 @@
       "jobs": [
         {
           "state": "queued",
-          "req": "d100f3e8931e61298163f7df076d5f74"
+          "req": "2ab89131650b2ae2059161aa79ca4bcd"
         },
         {
           "state": "running"
         },
         {
           "state": "completed",
-          "req": "d100f3e8931e61298163f7df076d5f74",
+          "req": "2ab89131650b2ae2059161aa79ca4bcd",
           "error": null,
           "completed_names": [
             "Notes.txt"
@@ -56,30 +56,47 @@
       "jobs": [
         {
           "state": "queued",
-          "req": "d4a9ffc30b60e3ee28d71932c86a2574"
-        },
-        {
-          "state": "failed",
-          "req": "d4a9ffc30b60e3ee28d71932c86a2574",
-          "error": "원본 파일이 없습니다",
-          "completed_names": []
-        },
-        {
-          "state": "queued",
-          "req": "c671c0cac16dbbd0fdc2ea0daa83860a"
+          "req": "2ab89131650b2ae2059161aa79ca4bcd"
         },
         {
           "state": "running"
         },
         {
           "state": "completed",
-          "req": "c671c0cac16dbbd0fdc2ea0daa83860a",
+          "req": "2ab89131650b2ae2059161aa79ca4bcd",
+          "error": null,
+          "completed_names": [
+            "Notes.txt"
+          ]
+        },
+        {
+          "state": "queued",
+          "req": "dd2194cbffb6a6f3f52a1140065ab665"
+        },
+        {
+          "state": "failed",
+          "req": "dd2194cbffb6a6f3f52a1140065ab665",
+          "error": "원본 파일이 없습니다",
+          "completed_names": []
+        },
+        {
+          "state": "queued",
+          "req": "c1a7dfbdcc2e6eeedbf0aab866a73764"
+        },
+        {
+          "state": "running"
+        },
+        {
+          "state": "completed",
+          "req": "c1a7dfbdcc2e6eeedbf0aab866a73764",
           "error": null,
           "completed_names": [
             "Retry.txt"
           ]
         }
-      ]
+      ],
+      "confirmation_required": true,
+      "new_request_verified": true
     },
     {
       "check": "local-only folder supports Ctrl+T",
@@ -129,7 +146,7 @@
   },
   "assessment_id": "itda-quality-2026-10-23",
   "scope": "Actual native Windows candidate verification; no persona score certification or production rollout",
-  "hypothesis_result": "A suspected local-copy remote-connection error was not reproduced. Backend local_only rejects the irrelevant remote request without an error event. No product change was made for this hypothesis.",
-  "driver_note": "Private extension of the persisted driver at scripts/files-native-windows-ui-e2e.mjs. Only difference is repository lookup at an absolute isolated worktree for execution from /tmp. Assertions unchanged. Pass-through real job observation, renderer pointer drag between generated local-file rows, actual Rust-managed copy/failure/retry and SHA256 comparison; no native OLE/OS clipboard/physical input.",
-  "test_development_note": "First recovery run timed out because the probe expected the initial-copy title after clicking Retry. Product correctly displayed the distinct retry dialog. Corrected the probe to require 남은 파일 다시 복사 and 다시 복사, then reran successfully; no product change for this timeout."
+  "test_development_note": "First recovery run timed out because the probe expected the initial-copy title after clicking Retry. Product correctly displayed the distinct retry dialog. Corrected the probe to require 남은 파일 다시 복사 and 다시 복사, then reran successfully; no product change for this timeout.",
+  "driver_note": "Executed scripts/files-native-windows-ui-e2e.mjs directly from this isolated repository. driver_sha256 matches the persisted script byte-for-byte. Pass-through real job observation; renderer drag between generated local-file rows; actual Rust-managed copy/failure/retry and SHA256 comparison. No native OLE/OS clipboard/physical input.",
+  "hypothesis_result": "A suspected local-copy remote-connection error was not reproduced. No product change was made for that hypothesis."
 }
