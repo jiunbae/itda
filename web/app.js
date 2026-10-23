@@ -410,11 +410,14 @@ function thumb(h) {
     <span class="ph">${osIcon(h)}</span><span class="ph-initial">${initial}</span>${img}${mark}`;
 }
 
+// Every card and row has the same buttons: their names say which device they act on (the
+// visible words come first in the name, so voice control still finds them).
+const named = (h, what) => `aria-label="${esc(`${label(h)} ${what}`)}"`;
 function primaryAction(h) {
   const s = S.sessions[h.id];
-  if (!s) return `<button class="btn primary" data-act="connect" data-id="${esc(h.id)}">${I('E768')}화면 연결</button>`;
-  if (s.state === 'connecting') return `<button class="btn" data-act="cancel" data-id="${esc(h.id)}">${I('E711')}취소</button>`;
-  return `<button class="btn primary" data-act="focus" data-id="${esc(h.id)}">${I('E8A7')}창으로 이동</button>`;
+  if (!s) return `<button class="btn primary" data-act="connect" data-id="${esc(h.id)}" ${named(h, '화면 연결')}>${I('E768')}화면 연결</button>`;
+  if (s.state === 'connecting') return `<button class="btn" data-act="cancel" data-id="${esc(h.id)}" ${named(h, '연결 취소')}>${I('E711')}취소</button>`;
+  return `<button class="btn primary" data-act="focus" data-id="${esc(h.id)}" ${named(h, '창으로 이동')}>${I('E8A7')}창으로 이동</button>`;
 }
 
 function card(h) {
@@ -422,15 +425,15 @@ function card(h) {
   const lu = h.login_user || h.user;
   const who = (h.ssh && h.ssh.on ? `<span class="i lock" title="SSH로 암호화">&#xE72E;</span>` : '') + (lu ? `${esc(lu)}@${esc(h.host)}` : esc(h.host));
   const extra = [h.kind === 'rdp' ? '원격 데스크톱' : '', ago(h.last_used), h.remote_size, hostGroups(h).join(', ')].filter(Boolean).map(esc).join(' · ');
-  return `<div class="card${live}" tabindex="0" data-id="${esc(h.id)}">
+  return `<div class="card${live}" tabindex="0" data-id="${esc(h.id)}" role="group" aria-label="${esc(label(h))}">
     ${thumb(h)}
       ${badge(h)}
-      <button class="star i${h.favorite ? ' on' : ''}" data-act="fav" data-id="${esc(h.id)}" title="${h.favorite ? '즐겨찾기 해제' : '즐겨찾기'}">${h.favorite ? '&#xE735;' : '&#xE734;'}</button>
+      <button class="star i${h.favorite ? ' on' : ''}" data-act="fav" data-id="${esc(h.id)}" title="${h.favorite ? '즐겨찾기 해제' : '즐겨찾기'}" ${named(h, '즐겨찾기')} aria-pressed="${!!h.favorite}">${h.favorite ? '&#xE735;' : '&#xE734;'}</button>
       <div class="connect-overlay">${primaryAction(h)}</div>
     </div>
     <div class="meta">
       <div class="row1">${dot(h)}<span class="name" title="${esc(label(h))}">${esc(label(h))}</span>
-        <button class="more i" data-act="more" data-id="${esc(h.id)}" title="더보기">&#xE712;</button></div>
+        <button class="more i" data-act="more" data-id="${esc(h.id)}" title="더보기" ${named(h, '더보기')} aria-haspopup="menu">&#xE712;</button></div>
       <div class="sub">${who}</div>
       <div class="sub2">${extra}</div>
     </div>
@@ -450,14 +453,14 @@ function row(h) {
       : S.online[h.id] === false
         ? `<span class="pill mute">응답 없음</span>`
         : '';
-  return `<div class="list-row" tabindex="0" data-id="${esc(h.id)}">
+  return `<div class="list-row" tabindex="0" data-id="${esc(h.id)}" role="group" aria-label="${esc(label(h))}">
     ${thumb(h)}</div>
     <div class="nm"><b>${dot(h)}${esc(label(h))}${h.favorite ? ` <span class="i" style="color:#ffc83d;font-size:12px">&#xE735;</span>` : ''}</b><small>${h.ssh && h.ssh.on ? `<span class="i lock" title="SSH로 암호화">&#xE72E;</span>` : ''}${esc(h.host)}</small></div>
     <span class="col c-user">${h.user ? esc(h.user) : '<span style="color:var(--text-3)">VNC 암호</span>'}</span>
     <span class="col c-last">${esc(ago(h.last_used))}</span>
     <span class="col">${state}</span>
     <div class="actions">${primaryAction(h).replace('class="btn', 'class="btn sm')}
-      <button class="btn subtle icon" data-act="more" data-id="${esc(h.id)}" title="더보기">${I('E712')}</button></div>
+      <button class="btn subtle icon" data-act="more" data-id="${esc(h.id)}" title="더보기" ${named(h, '더보기')} aria-haspopup="menu">${I('E712')}</button></div>
   </div>`;
 }
 
@@ -1983,7 +1986,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'F5') { e.preventDefault(); return scan(); }
   if (typing) return;
   const c = e.target.closest && e.target.closest('.card, .list-row:not(.list-head)');
-  if (c) {
+  // A button inside the card (favorite, more, the primary action) does what it says itself.
+  if (c && !e.target.closest('button')) {
     if (e.key === 'Enter') { e.preventDefault(); connect(c.dataset.id); }
     else if (e.key === 'Delete' || (MAC && e.metaKey && e.key === 'Backspace')) askDelete(c.dataset.id);
     else if (e.key === 'F2') openEdit({ id: c.dataset.id });
