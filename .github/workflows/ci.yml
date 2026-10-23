@@ -127,6 +127,8 @@ jobs:
         run: node scripts/editor-e2e.mjs
       - name: Monitors and pointer batching
         run: node scripts/monitors-e2e.mjs
+      - name: Viewer mode diagnostics and drop/reconnect ownership
+        run: node scripts/viewer-mode-e2e.mjs
       - name: Phone web viewer (sign-in, lockout, expiry, login fix, toolbar)
         run: node scripts/viewer-phone-e2e.mjs
       - uses: actions/upload-artifact@v4
