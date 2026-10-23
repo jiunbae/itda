@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "assessment_id": "itda-quality-2026-10-23",
-  "status": "iteration-1-implementation",
+  "status": "iteration-2-native-verification",
   "goal": "Every persona scores at least 9/10 on verified core journeys, with no unresolved P1/P2 task blockers.",
   "baseline": {
     "commit": "521202025e7c5a984f089c1d1df77e846f63fd33",
@@ -467,7 +467,11 @@
         },
         {
           "scope": "mobile login/recovery/toolbar and browser onboarding",
-          "status": "peer-implementation"
+          "status": "merged; deployment pending",
+          "pr": 95,
+          "head": "e8e05994e9ef30d24e77ab31e19c09527a231579",
+          "merge_commit": "3a0992f",
+          "verification": "Independent Codex review after recovery race fixes; phone viewport, editor, monitors, secure-context and site fixtures passed; real phones and gateway still pending"
         },
         {
           "scope": "Local Network recovery, first connection and account name guidance",
@@ -476,10 +480,33 @@
           "head": "1442e5753c6cb49ccbb9a2b7dd1c640752583be5",
           "merge_commit": "f00ba2a769ee44386ca97892b2e0d8f1e003a87d",
           "verification": "editor fixture + helper actual open/close preserves editor/onboarding"
+        },
+        {
+          "pr": 94,
+          "head": "2a023bb6e6df66ded48e5ea239e15c32b93e1145",
+          "status": "merged; isolated Windows candidate verified; production deployment pending",
+          "scope": "Windows test data, WebView2 profile, logs, single-instance and startup isolation",
+          "verification": "Independent Claude review after startup/profile corrections; CI passed; actual console WebView2 private UDF and unchanged absent Run entry verified. Enabled-entry case not proven."
         }
       ],
       "native_transfer_evidence": "assessments/evidence/native-mac-to-windows-files.json",
       "acceptance_note": "Native backend evidence improves confidence for specific file journeys only; no persona is yet certified9/10 and frontend deployment remains pending."
+    },
+    {
+      "id": 2,
+      "status": "in-progress",
+      "native_windows_evidence": "assessments/evidence/native-windows-ui.json",
+      "changes": [
+        {
+          "pr": 96,
+          "head": "fe5e94a280ffed5f1d1d9d2b87964469d897be87",
+          "status": "merged; exact CI artifact passed native Windows candidate checks; production deployment pending",
+          "scope": "local/Home/Network tabs, native SMB handoff preserves workspace, late local home hydration, compact native file-window minimum",
+          "verification": "Independent Claude APPROVE fe5e94a; CI all jobs passed; WebKit fixtures passed; actual Windows console WebView2 8 checks PASS at 150% DPI, local Ctrl+T/button and compact 546px details overlay/Escape. Owned resource cleanup passed.",
+          "merge_commit": "3f5ec879784deb81fa5e25884bc0fa6f61a4fa7c"
+        }
+      ],
+      "acceptance_note": "Native candidate checks do not prove production rollout. Existing provisional baseline scores remain unchanged; no persona certified 9/10."
     }
   ]
 }
