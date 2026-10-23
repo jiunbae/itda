@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "assessment_id": "itda-quality-2026-10-23",
-  "status": "iteration-5-retry-and-quit-verification",
+  "status": "iteration-6-completion-audit-and-current-captures",
   "goal": "Every persona scores at least 9/10 on verified core journeys, with no unresolved P1/P2 task blockers.",
   "baseline": {
     "commit": "521202025e7c5a984f089c1d1df77e846f63fd33",
@@ -101,10 +101,12 @@
       ],
       "score": null,
       "dimension_scores": {},
-      "evidence": [],
+      "evidence": [
+        "assessments/evidence/completion-audit-2026-10-24.json"
+      ],
       "findings": [],
       "verification_gaps": [],
-      "status": "baseline-assessed; fixes-and-native-verification-pending",
+      "status": "current completion audit incomplete; verified core journeys pending",
       "baseline_assessment": {
         "id": "novice-family",
         "status": "provisional (native pending)",
@@ -138,7 +140,12 @@
         "reviewer": "e-ed-claude",
         "evidence_scope": "source-and-isolated-frontend-fixtures; native critical flows pending"
       },
-      "score_note": "score is the current VERIFIED result, still pending; see baseline_assessment.total for the provisional initial review"
+      "score_note": "score is the current VERIFIED result, still pending; see baseline_assessment.total for the provisional initial review",
+      "current_verification": {
+        "audit": "assessments/evidence/completion-audit-2026-10-24.json",
+        "status": "partial",
+        "verified_score": null
+      }
     },
     {
       "id": "retina-worker",
@@ -154,10 +161,12 @@
       ],
       "score": null,
       "dimension_scores": {},
-      "evidence": [],
+      "evidence": [
+        "assessments/evidence/completion-audit-2026-10-24.json"
+      ],
       "findings": [],
       "verification_gaps": [],
-      "status": "baseline-assessed; fixes-and-native-verification-pending",
+      "status": "current completion audit incomplete; verified core journeys pending",
       "baseline_assessment": {
         "id": "retina-worker",
         "dimension_scores": {
@@ -181,7 +190,12 @@
         "reviewer": "e-effie-codex",
         "evidence_scope": "source-and-isolated-frontend-fixtures; native critical flows pending"
       },
-      "score_note": "score is the current VERIFIED result, still pending; see baseline_assessment.total for the provisional initial review"
+      "score_note": "score is the current VERIFIED result, still pending; see baseline_assessment.total for the provisional initial review",
+      "current_verification": {
+        "audit": "assessments/evidence/completion-audit-2026-10-24.json",
+        "status": "partial",
+        "verified_score": null
+      }
     },
     {
       "id": "windows-office",
@@ -197,10 +211,12 @@
       ],
       "score": null,
       "dimension_scores": {},
-      "evidence": [],
+      "evidence": [
+        "assessments/evidence/completion-audit-2026-10-24.json"
+      ],
       "findings": [],
       "verification_gaps": [],
-      "status": "baseline-assessed; fixes-and-native-verification-pending",
+      "status": "current completion audit incomplete; verified core journeys pending",
       "baseline_assessment": {
         "id": "windows-office",
         "dimension_scores": {
@@ -233,7 +249,12 @@
         "reviewer": "e-ed-codex",
         "evidence_scope": "source-and-isolated-frontend-fixtures; native critical flows pending"
       },
-      "score_note": "score is the current VERIFIED result, still pending; see baseline_assessment.total for the provisional initial review"
+      "score_note": "score is the current VERIFIED result, still pending; see baseline_assessment.total for the provisional initial review",
+      "current_verification": {
+        "audit": "assessments/evidence/completion-audit-2026-10-24.json",
+        "status": "partial",
+        "verified_score": null
+      }
     },
     {
       "id": "cross-platform-files",
@@ -249,10 +270,12 @@
       ],
       "score": null,
       "dimension_scores": {},
-      "evidence": [],
+      "evidence": [
+        "assessments/evidence/completion-audit-2026-10-24.json"
+      ],
       "findings": [],
       "verification_gaps": [],
-      "status": "baseline-assessed; fixes-and-native-verification-pending",
+      "status": "current completion audit incomplete; verified core journeys pending",
       "baseline_assessment": {
         "id": "cross-platform-files",
         "dimension_scores": {
@@ -285,7 +308,12 @@
         "reviewer": "e-ed-codex",
         "evidence_scope": "source-and-isolated-frontend-fixtures; native critical flows pending"
       },
-      "score_note": "score is the current VERIFIED result, still pending; see baseline_assessment.total for the provisional initial review"
+      "score_note": "score is the current VERIFIED result, still pending; see baseline_assessment.total for the provisional initial review",
+      "current_verification": {
+        "audit": "assessments/evidence/completion-audit-2026-10-24.json",
+        "status": "partial",
+        "verified_score": null
+      }
     },
     {
       "id": "ssh-admin",
@@ -301,10 +329,12 @@
       ],
       "score": null,
       "dimension_scores": {},
-      "evidence": [],
+      "evidence": [
+        "assessments/evidence/completion-audit-2026-10-24.json"
+      ],
       "findings": [],
       "verification_gaps": [],
-      "status": "baseline-assessed; fixes-and-native-verification-pending",
+      "status": "current completion audit incomplete; verified core journeys pending",
       "baseline_assessment": {
         "id": "ssh-admin",
         "dimension_scores": {
@@ -329,7 +359,12 @@
         "reviewer": "e-effie-codex",
         "evidence_scope": "source-and-isolated-frontend-fixtures; native critical flows pending"
       },
-      "score_note": "score is the current VERIFIED result, still pending; see baseline_assessment.total for the provisional initial review"
+      "score_note": "score is the current VERIFIED result, still pending; see baseline_assessment.total for the provisional initial review",
+      "current_verification": {
+        "audit": "assessments/evidence/completion-audit-2026-10-24.json",
+        "status": "partial",
+        "verified_score": null
+      }
     },
     {
       "id": "mobile-user",
@@ -345,10 +380,12 @@
       ],
       "score": null,
       "dimension_scores": {},
-      "evidence": [],
+      "evidence": [
+        "assessments/evidence/completion-audit-2026-10-24.json"
+      ],
       "findings": [],
       "verification_gaps": [],
-      "status": "baseline-assessed; fixes-and-native-verification-pending",
+      "status": "current completion audit incomplete; verified core journeys pending",
       "baseline_assessment": {
         "id": "mobile-user",
         "status": "provisional (native pending)",
@@ -386,7 +423,12 @@
         "reviewer": "e-ed-claude",
         "evidence_scope": "source-and-isolated-frontend-fixtures; native critical flows pending"
       },
-      "score_note": "score is the current VERIFIED result, still pending; see baseline_assessment.total for the provisional initial review"
+      "score_note": "score is the current VERIFIED result, still pending; see baseline_assessment.total for the provisional initial review",
+      "current_verification": {
+        "audit": "assessments/evidence/completion-audit-2026-10-24.json",
+        "status": "partial",
+        "verified_score": null
+      }
     },
     {
       "id": "keyboard-low-vision",
@@ -402,10 +444,12 @@
       ],
       "score": null,
       "dimension_scores": {},
-      "evidence": [],
+      "evidence": [
+        "assessments/evidence/completion-audit-2026-10-24.json"
+      ],
       "findings": [],
       "verification_gaps": [],
-      "status": "baseline-assessed; fixes-and-native-verification-pending",
+      "status": "current completion audit incomplete; verified core journeys pending",
       "baseline_assessment": {
         "dimension_scores": {
           "task_completion": 2,
@@ -432,7 +476,12 @@
           "Remote viewer keyboard and focus during actual connection"
         ]
       },
-      "score_note": "score is the current VERIFIED result, still pending; see baseline_assessment.total for the provisional initial review"
+      "score_note": "score is the current VERIFIED result, still pending; see baseline_assessment.total for the provisional initial review",
+      "current_verification": {
+        "audit": "assessments/evidence/completion-audit-2026-10-24.json",
+        "status": "partial",
+        "verified_score": null
+      }
     }
   ],
   "iterations": [
@@ -623,6 +672,23 @@
       ],
       "acceptance_note": "Verified persona scores remain null. Source fixes, deterministic frontend regressions and a prepared native runner do not certify complete user journeys or production behavior. A production1.0.2 native Mac window navigation check passed; it does not verify these candidate fixes.",
       "native_mac_baseline_evidence": "assessments/evidence/native-mac-window-navigation.json"
+    },
+    {
+      "id": 6,
+      "status": "in-progress",
+      "completion_audit": "assessments/evidence/completion-audit-2026-10-24.json",
+      "changes": [
+        {
+          "pr": 108,
+          "head": "4caadade2a46fc65b25bf097788252349f0c6d80",
+          "merge_commit": "03d832b7b03bcf3df0a27bea6eb2ed928bb26cad",
+          "scope": "Contextual card/list action names, favorite pressed state, correct inner-button activation and retained device shortcuts; Escape focus return without outside/blur focus theft",
+          "status": "merged; native AT and production deployment pending",
+          "verification": "Independent exact-head approval12c/12d; CI40033504124 all checks passed, with the prior unexplained transfer-focus failure preserved in the completion audit. Root Chromium/WebKit device-action and editor checks passed; two keyboard mutant variants failed as expected."
+        }
+      ],
+      "acceptance_note": "This audit maps all28 journeys to narrow evidence and missing acceptance. No score increase or completed-goal/deployed-app claim.",
+      "site_evidence": "assessments/evidence/site-refresh-2026-10-24.json"
     }
   ]
 }

@@ -13,8 +13,8 @@
 [**다운로드**](https://github.com/jiunbae/itda/releases/latest) · [웹사이트](https://jiun.dev/itda/) · [시작하기](https://jiun.dev/itda/start.html) · [보안](SECURITY.md) · [English](README.md)
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/home-window-dark.png">
-  <img src="docs/img/home-window-light.png" width="960" alt="저장한 기기, 그룹과 파일 브라우저가 있는 Itda 주소록">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/home-window-dark.png?v=7">
+  <img src="docs/img/home-window-light.png?v=7" width="960" alt="저장한 기기, 그룹과 파일 브라우저가 있는 Itda 주소록">
 </picture>
 
 </div>
@@ -99,19 +99,19 @@ macOS 파일 창의 복사는 Finder용 파일 URL을 만듭니다. 원격 파�
 **macOS**
 
 <picture>
-  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/img/files-mobile-dark.png">
-  <source media="(max-width: 600px)" srcset="docs/img/files-mobile-light.png">
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-focus-dark.png">
-  <img src="docs/img/files-focus-light.png" width="960" alt="폴더 탭, 사이드바와 한 줄 경로·항목 표시가 있는 macOS 파일 브라우저">
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/img/files-mobile-dark.png?v=7">
+  <source media="(max-width: 600px)" srcset="docs/img/files-mobile-light.png?v=7">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-focus-dark.png?v=7">
+  <img src="docs/img/files-focus-light.png?v=7" width="960" alt="폴더 탭, 사이드바와 한 줄 경로·항목 표시가 있는 macOS 파일 브라우저">
 </picture>
 
 **Windows**
 
 <picture>
-  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/img/files-windows-mobile-dark.png">
-  <source media="(max-width: 600px)" srcset="docs/img/files-windows-mobile-light.png">
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-windows-dark.png">
-  <img src="docs/img/files-windows-light.png" width="960" alt="주소 표시줄, 명령 모음, 탐색 영역과 자세히 목록이 있는 Windows 파일 브라우저">
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/img/files-windows-mobile-dark.png?v=7">
+  <source media="(max-width: 600px)" srcset="docs/img/files-windows-mobile-light.png?v=7">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-windows-dark.png?v=7">
+  <img src="docs/img/files-windows-light.png?v=7" width="960" alt="주소 표시줄, 명령 모음, 탐색 영역과 자세히 목록이 있는 Windows 파일 브라우저">
 </picture>
 
 macOS 파일 창은 단일 도구 모음, 너비를 조절할 수 있는 사이드바, 하단 경로 막대와 이름·수정한 날짜·크기·종류 열을 제공합니다. 목록의 열 너비도 조절할 수 있습니다. ⌘1/⌘2/⌘3/⌘4는 아이콘/목록/열/갤러리 보기, ⌘[/⌘]는 뒤로/앞으로, ⌘⇧G는 폴더로 이동, ⌘⇧.은 숨김 파일 표시입니다. 폴더별 탭(⌘T/⌘W, Control+Tab)은 경로·이동 기록·선택·보기 방식을 각각 유지합니다. 미리보기 패널과 Space 훑어보기에서 텍스트·이미지·macOS에서 PDF 첫 페이지·브라우저가 지원하는 오디오/동영상을 표시합니다. 텍스트는 512KiB, 미디어는 16MiB로 제한하고, 지원하지 않는 형식은 정보와 명시적인 열기 동작을 제공합니다. HTML/SVG는 실행 가능한 콘텐츠로 표시하지 않습니다. 드래그 중 텍스트 선택을 막고, 폴더·즐겨찾기·다른 폴더 탭을 전송 대상으로 지원합니다. 동작 팝업에서 분할 보기·전송 내역·연결 설정에 접근합니다.
@@ -120,13 +120,13 @@ macOS 파일 창은 단일 도구 모음, 너비를 조절할 수 있는 사이�
 <summary>열 보기와 갤러리 보기</summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-columns-dark.png">
-  <img src="docs/img/files-columns-light.png" width="960" alt="상위 폴더를 유지하는 열 보기">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-columns-dark.png?v=7">
+  <img src="docs/img/files-columns-light.png?v=7" width="960" alt="상위 폴더를 유지하는 열 보기">
 </picture>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-gallery-dark.png">
-  <img src="docs/img/files-gallery-light.png" width="960" alt="텍스트 미리보기를 표시한 갤러리 보기">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-gallery-dark.png?v=7">
+  <img src="docs/img/files-gallery-light.png?v=7" width="960" alt="텍스트 미리보기를 표시한 갤러리 보기">
 </picture>
 
 </details>
@@ -160,26 +160,26 @@ macOS 앱 종료 시 모든 WebView와 창을 Objective-C thread-local 정리 �
 
 Bonjour와 Tailscale에서 찾은 기기를 같은 화면에서 추가합니다.
 
-<img src="docs/img/nearby-window.png" width="960" alt="Bonjour와 Tailscale에서 찾은 Mac과 PC가 표시된 주변 기기 화면">
+<img src="docs/img/nearby-window.png?v=7" width="960" alt="Bonjour와 Tailscale에서 찾은 Mac과 PC가 표시된 주변 기기 화면">
 
 ### 휴대폰에서는 브라우저로
 
 웹 뷰어를 켜고 QR 코드를 찍은 뒤 PIN을 입력합니다.
 
-<img src="docs/img/share.png" width="960" alt="웹 뷰어 주소, QR 코드와 PIN이 표시된 공유 설정">
+<img src="docs/img/share.png?v=7" width="960" alt="웹 뷰어 주소, QR 코드와 PIN이 표시된 공유 설정">
 
 <p align="center">
-<img src="docs/img/phone-list.png" width="360" alt="저장한 기기들이 표시된 휴대폰 웹 뷰어">
+<img src="docs/img/phone-list.png?v=7" width="360" alt="저장한 기기들이 표시된 휴대폰 웹 뷰어">
 </p>
 
 <details>
 <summary>연결 편집과 저장 계정</summary>
 
-<img src="docs/img/editor.png" width="960" alt="화면과 파일 연결을 설정하는 연결 편집">
+<img src="docs/img/editor.png?v=7" width="960" alt="화면과 파일 연결을 설정하는 연결 편집">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/accounts-dark.png">
-  <img src="docs/img/accounts-light.png" width="960" alt="여러 기기에서 함께 사용하는 저장 계정">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/accounts-dark.png?v=7">
+  <img src="docs/img/accounts-light.png?v=7" width="960" alt="여러 기기에서 함께 사용하는 저장 계정">
 </picture>
 
 </details>

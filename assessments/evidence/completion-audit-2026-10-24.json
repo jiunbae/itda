@@ -1,0 +1,502 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-10-23T22:40:25.027771+00:00",
+  "main_at_snapshot": "03d832b7b03bcf3df0a27bea6eb2ed928bb26cad",
+  "purpose": "Requirement-by-requirement completion audit; missing or indirect evidence is not completion.",
+  "goal_achieved": false,
+  "verified_persona_scores": "all null; no persona certified9/10",
+  "rubric_total": 10.0,
+  "source_only_score_cap": 8,
+  "global_requirements": [
+    {
+      "requirement": "At least six concrete personas",
+      "status": "met",
+      "proof": "Seven named personas with distinct goals and four core journeys each in assessments/quality.json."
+    },
+    {
+      "requirement": "Explicit ten-point rubric and baseline",
+      "status": "met with provisional baseline scope",
+      "proof": "Weights total10; seven initial assessments remain identified as source/fixture-limited, not current verified scores."
+    },
+    {
+      "requirement": "Independent review, implementation and meaningful regressions",
+      "status": "ongoing; multiple merged improvements",
+      "proof": "Exact-head reviews and CI/native evidence in iterations1-5; PR108 merged after two independently discriminating keyboard mutants and Chromium/WebKit checks."
+    },
+    {
+      "requirement": "Every persona core journey verified at least9/10",
+      "status": "not achieved",
+      "proof": "All verified scores remain null; every persona below has incomplete native/deployed acceptance."
+    },
+    {
+      "requirement": "No unresolved task-blocking P1/P2",
+      "status": "not achieved",
+      "proof": "Quit-during-active-transfer PR102 is source-approved8168276/greenCI but unmerged/native-pending. Deployed1.0.2 also lacks subsequent reviewed fixes. Initial transfer-focus CI failure remains unexplained, not declared a productP2 or a flake."
+    },
+    {
+      "requirement": "Commit/push/review/merge/deploy and verify deployed behavior",
+      "status": "partial",
+      "proof": "Many code/docs PRs merged, including108. App production remains1.0.2; candidate screenshots and fixtures do not prove a new installed build. Published site browser checks passed before the asset refresh; refreshed deployment requires its own check."
+    }
+  ],
+  "evidence_catalog": {
+    "baseline-novice-mobile": {
+      "paths": [
+        "assessments/evidence/baseline-e-ed-claude.json"
+      ],
+      "scope": "Initial independent provisional judgment and frontend probes; not a current native score."
+    },
+    "baseline-files": {
+      "paths": [
+        "assessments/evidence/baseline-e-ed-codex.json"
+      ],
+      "scope": "Initial independent file-workspace judgment; newer narrow native evidence is listed separately."
+    },
+    "baseline-retina-admin": {
+      "paths": [
+        "assessments/evidence/baseline-e-effie-codex.json"
+      ],
+      "scope": "Initial independent source/fixture evaluation; no current native journey certification."
+    },
+    "accessibility-reflow": {
+      "paths": [
+        "assessments/evidence/iteration-1-accessibility-reflow.json"
+      ],
+      "scope": "Browser contrast/zoom/semantics observations after the first fixes; no screen-reader operation."
+    },
+    "permissions-frontend": {
+      "paths": [
+        "scripts/permissions-e2e.mjs",
+        "web/permissions.js",
+        "web/help.js"
+      ],
+      "scope": "Permission UI/source and deterministic frontend regression. Real grant/denial/restart is unverified."
+    },
+    "editor-frontend": {
+      "paths": [
+        "scripts/editor-e2e.mjs"
+      ],
+      "scope": "Frontend editor/account/group behavior, including engine checks; not native credential authentication."
+    },
+    "viewer-frontend": {
+      "paths": [
+        "scripts/viewer-mode-e2e.mjs",
+        "assessments/evidence/iteration-5-viewer-retry.json"
+      ],
+      "scope": "Mode diagnostics and both stale-callback guards with positive/negative fixtures. No real native reconnect timing proof."
+    },
+    "monitor-frontend": {
+      "paths": [
+        "scripts/monitors-e2e.mjs",
+        "README.md"
+      ],
+      "scope": "Synthetic monitor/window/input checks and explicit physical Windows monitor limitations."
+    },
+    "windows-native-ui": {
+      "paths": [
+        "assessments/evidence/native-windows-ui.json"
+      ],
+      "scope": "Eight actual candidate Windows WebView2 checks at fe5e94a, including compact layout and preview. Historical candidate, not latest deployment."
+    },
+    "unicode-native-backend": {
+      "paths": [
+        "assessments/evidence/native-mac-to-windows-files.json"
+      ],
+      "scope": "Six generated-file backend checks from installed Mac1.0.2 to Windows OpenSSH: NFC/hash/conflict/move/early cancel. No GUI drag/clipboard or mid-stream cancellation proof."
+    },
+    "windows-native-recovery": {
+      "paths": [
+        "assessments/evidence/native-windows-copy-recovery.json"
+      ],
+      "scope": "Ten prior-candidate native checks including real copy/hash and missing-source failure, Home retry and re-confirmation. Not full latest-build recovery coverage."
+    },
+    "windows-native-background": {
+      "paths": [
+        "assessments/evidence/native-windows-background.json"
+      ],
+      "scope": "Exact f6b0eb0 artifact: actual file-window close, held SFTP cancel with empty staging, and close/complete SHA256 proof. No app quit or OLE."
+    },
+    "mac-native-windows": {
+      "paths": [
+        "assessments/evidence/native-mac-window-navigation.json"
+      ],
+      "scope": "Production1.0.2 Tacto: open separate Network file window with main retained, then close only it. No current-candidate, transfer, permission or assistive-technology proof."
+    },
+    "files-frontend-backend": {
+      "paths": [
+        "scripts/files-e2e.mjs",
+        "scripts/files-tabs-e2e.mjs",
+        "scripts/files-background-e2e.mjs"
+      ],
+      "scope": "Real frontend fixtures and private-SSH integration, including rsync/fallback. Not native Finder/Explorer handoff or physical device validation."
+    },
+    "remote-setup-frontend": {
+      "paths": [
+        "scripts/remote-setup-e2e.mjs",
+        "src/remote_setup.rs",
+        "SECURITY.md"
+      ],
+      "scope": "Installer/credential range, host trust and recovery source/fixtures. No clean target native install/import/preservation acceptance."
+    },
+    "phone-frontend": {
+      "paths": [
+        "scripts/viewer-phone-e2e.mjs",
+        "scripts/secure-context-check.mjs"
+      ],
+      "scope": "Deterministic gateway/auth/expiry/recovery and responsive controls, with secure-context API checks. No actual QR scan, phone OS keyboard, touch or clipboard proof."
+    },
+    "device-action-frontend": {
+      "paths": [
+        "scripts/device-actions-a11y-e2e.mjs",
+        "web/app.js"
+      ],
+      "scope": "PR108 merged03d832b7, exact4ca source approved and CI40033504124 all passed. Contextual action names, activation routing, F2/arrows, Escape/outside focus and non-element events tested. Chromium/WebKit fixtures; no current native AT proof."
+    },
+    "site-browser": {
+      "paths": [
+        "scripts/site-check.mjs",
+        "docs/SCREENSHOTS.md",
+        "assessments/evidence/site-refresh-2026-10-24.json"
+      ],
+      "scope": "Published https://jiun.dev/itda/ passed 40 browser layout combinations on2026-10-24 before the new asset refresh. Current local asset validation is recorded separately. No physical phone/native app inference."
+    },
+    "quit-native-prerequisite": {
+      "paths": [
+        "assessments/evidence/native-windows-quit-prerequisite.json",
+        "scripts/files-native-windows-quit-e2e.mjs"
+      ],
+      "scope": "Runner/provenance prepared; zero native quit results because Windows SSH was offline before launch."
+    }
+  },
+  "persona_journeys": [
+    {
+      "persona": "novice-family",
+      "journey": "공식 다운로드·설치",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "baseline-novice-mobile",
+        "site-browser"
+      ],
+      "observed_scope": "Download entry points and guidance are reviewed.",
+      "missing_acceptance": "Fresh-user download, Gatekeeper launch and install on the release candidate, without using prior machine approval as proof."
+    },
+    {
+      "persona": "novice-family",
+      "journey": "화면 공유와 원격 로그인 구분",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "baseline-novice-mobile",
+        "permissions-frontend"
+      ],
+      "observed_scope": "Screen Sharing versus SSH instructions and error wording have frontend coverage.",
+      "missing_acceptance": "A novice completes the real family-Mac setup and reaches the intended transport without technical assistance."
+    },
+    {
+      "persona": "novice-family",
+      "journey": "권한 도우미·재확인",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "permissions-frontend"
+      ],
+      "observed_scope": "Helper labels and mocked status/recovery are covered.",
+      "missing_acceptance": "Observe actual permission grant/denial and required restart on the signed candidate; no reset of user TCC to manufacture a test."
+    },
+    {
+      "persona": "novice-family",
+      "journey": "실패 이유 이해와 기본 화면 공유 복구",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "permissions-frontend",
+        "viewer-frontend"
+      ],
+      "observed_scope": "Auth/network recovery controls and diagnostic state have fixture coverage.",
+      "missing_acceptance": "Native auth/unreachable/locked-host fallback and recovery with understandable next steps."
+    },
+    {
+      "persona": "retina-worker",
+      "journey": "기기·계정 재사용",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "editor-frontend",
+        "baseline-retina-admin"
+      ],
+      "observed_scope": "Saved device/account selection is covered by frontend checks.",
+      "missing_acceptance": "Reuse real saved credentials on the current signed candidate and verify the intended remote account."
+    },
+    {
+      "persona": "retina-worker",
+      "journey": "고성능/기본 화면 공유 구분",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "viewer-frontend"
+      ],
+      "observed_scope": "Actual-mode unknown/retry/fallback labels and attempt identity are tested.",
+      "missing_acceptance": "Native HP and standard Screen Sharing outcomes, including locked or unavailable host recovery."
+    },
+    {
+      "persona": "retina-worker",
+      "journey": "빠르게/선명하게 상태 확인",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "viewer-frontend"
+      ],
+      "observed_scope": "Quality status is paired to the right attempt and stale answers are rejected.",
+      "missing_acceptance": "Functionally inspect current native text/motion and Retina capture switching; no new benchmark campaign."
+    },
+    {
+      "persona": "retina-worker",
+      "journey": "다중 모니터·재연결·창 종료",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "monitor-frontend",
+        "viewer-frontend"
+      ],
+      "observed_scope": "Synthetic monitors and stale reconnect regressions pass.",
+      "missing_acceptance": "Current native split-window topology, reconnect/close and input release on representative physical monitor arrangements."
+    },
+    {
+      "persona": "windows-office",
+      "journey": "작은 창의 탐색·제목 탭",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "windows-native-ui",
+        "files-frontend-backend"
+      ],
+      "observed_scope": "Prior exact Windows candidate passed compact window and preview checks.",
+      "missing_acceptance": "Repeat the changed core flow on the deployed candidate at representative Windows scaling; old artifact does not prove rollout."
+    },
+    {
+      "persona": "windows-office",
+      "journey": "한글 파일명·충돌 처리",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "unicode-native-backend"
+      ],
+      "observed_scope": "Generated decomposed Korean names arrived NFC with hash/conflict/move checks.",
+      "missing_acceptance": "Latest candidate GUI copy/move/conflict behavior and cancellation preserve source/target; backend proof does not certify clipboard/drag."
+    },
+    {
+      "persona": "windows-office",
+      "journey": "기기 간 드래그와 대상 선택",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "windows-native-recovery",
+        "files-frontend-backend"
+      ],
+      "observed_scope": "Renderer tab drag and destination confirmation exercised real copy/retry on a prior candidate.",
+      "missing_acceptance": "Physical native cross-window/device drag acceptance and destination choices on Windows."
+    },
+    {
+      "persona": "windows-office",
+      "journey": "탐색기로 끌어내기·취소·실패 안내",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "windows-native-background",
+        "quit-native-prerequisite"
+      ],
+      "observed_scope": "Native window-close cancel/completion is proven narrowly; native quit remains unrun.",
+      "missing_acceptance": "Explorer streamed-file acceptance/failure/cancel plus app quit cleanup, not SFTP or CDP substituted for OLE."
+    },
+    {
+      "persona": "cross-platform-files",
+      "journey": "기기·탭·창 탐색",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "files-frontend-backend",
+        "windows-native-ui",
+        "mac-native-windows"
+      ],
+      "observed_scope": "Tabs/views have fixtures; prior Windows UI and Mac1.0.2 separate-window behavior were checked.",
+      "missing_acceptance": "Latest Mac and Windows candidates navigate local/remote tabs and windows end to end."
+    },
+    {
+      "persona": "cross-platform-files",
+      "journey": "아이콘·목록·열·갤러리·미리보기",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "files-frontend-backend",
+        "windows-native-ui"
+      ],
+      "observed_scope": "All four views and preview have fixture coverage; prior Windows text preview was native.",
+      "missing_acceptance": "Current Mac columns/gallery/preview and Windows supported views with actual files and usable focus."
+    },
+    {
+      "persona": "cross-platform-files",
+      "journey": "복사·이동·충돌·취소·복구",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "unicode-native-backend",
+        "windows-native-recovery",
+        "windows-native-background"
+      ],
+      "observed_scope": "Narrow real hash/conflict/retry/background-cancel lifecycles passed.",
+      "missing_acceptance": "Latest cross-platform GUI copy/move and recovery, clipboard/Finder promises/OLE and guarded quit; not all transports or failures are proven."
+    },
+    {
+      "persona": "cross-platform-files",
+      "journey": "증분 전송의 조건과 한계",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "files-frontend-backend",
+        "baseline-files"
+      ],
+      "observed_scope": "Private SSH rsync delta/fallback fixture and documented eligibility/size-mtime limits exist.",
+      "missing_acceptance": "Representative native incremental workflow verifies eligible delta, fallback, mixed names and retained partial semantics. rclone/full metadata parity is not claimed."
+    },
+    {
+      "persona": "ssh-admin",
+      "journey": "계정·호스트 키 확인",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "remote-setup-frontend",
+        "baseline-retina-admin"
+      ],
+      "observed_scope": "Trust/account choices and wrong-host protection have source/fixture review.",
+      "missing_acceptance": "Current native changed/unknown host key, account selection and wrong-target rejection through the real UI."
+    },
+    {
+      "persona": "ssh-admin",
+      "journey": "설치 대상·전송 범위 확인",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "remote-setup-frontend"
+      ],
+      "observed_scope": "Target OS, paths, transfer range and opt-in choices have frontend coverage.",
+      "missing_acceptance": "Install on a clean isolated real target and verify actual target paths, permissions and user-facing outcome."
+    },
+    {
+      "persona": "ssh-admin",
+      "journey": "암호·키의 선택적 공유",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "remote-setup-frontend"
+      ],
+      "observed_scope": "Secrets/key transfer is opt-in and documented; fixtures cover the choice.",
+      "missing_acceptance": "Generated private profiles/secrets imported on actual isolated targets, with exclusions and destination stores verified; no user credential copying as test data."
+    },
+    {
+      "persona": "ssh-admin",
+      "journey": "실패·재시작·업데이트·기존 설정 보존",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "remote-setup-frontend",
+        "quit-native-prerequisite"
+      ],
+      "observed_scope": "Failure and update/installer-close logic has source/tests; native quit is pending.",
+      "missing_acceptance": "Real failure/restart/update while preserving pre-existing target settings and startup state, including the enabled-startup case."
+    },
+    {
+      "persona": "mobile-user",
+      "journey": "모바일 랜딩·설치 구분",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "site-browser",
+        "baseline-novice-mobile"
+      ],
+      "observed_scope": "Real public landing/guide layouts, imagery and controls passed in a browser across five widths.",
+      "missing_acceptance": "Validate actual phone rendering and app-versus-browser comprehension, and recheck the published refreshed assets after deployment."
+    },
+    {
+      "persona": "mobile-user",
+      "journey": "QR·PIN·네트워크 안내",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "phone-frontend",
+        "permissions-frontend"
+      ],
+      "observed_scope": "PIN lockout/expiry and network guidance have deterministic fixture coverage.",
+      "missing_acceptance": "Scan a real QR code on a phone and reach the current gateway on the intended LAN/overlay path."
+    },
+    {
+      "persona": "mobile-user",
+      "journey": "터치·키보드·클립보드",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "phone-frontend",
+        "monitor-frontend"
+      ],
+      "observed_scope": "Frontend touch/key/chord controls are tested; server input cleanup is source-reviewed.",
+      "missing_acceptance": "Actual iOS/Android touch, composition, modifier release, keyboard dismissal and clipboard in a real remote session."
+    },
+    {
+      "persona": "mobile-user",
+      "journey": "연결 실패·세션 종료·보안 상태",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "phone-frontend",
+        "viewer-frontend"
+      ],
+      "observed_scope": "Auth failure correction, late-response guards and expiry controls are covered.",
+      "missing_acceptance": "Real phone disconnect/sleep/resume/expiry and security states without stale input or unintended settings changes."
+    },
+    {
+      "persona": "keyboard-low-vision",
+      "journey": "명확한 이름·대비·확대",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "accessibility-reflow",
+        "device-action-frontend"
+      ],
+      "observed_scope": "Browser contrast/reflow and contextual device names are tested; labels were corrected after a native baseline observation.",
+      "missing_acceptance": "Current native VoiceOver/Narrator names, contrast/zoom and useful action context, not only axe or role locators."
+    },
+    {
+      "persona": "keyboard-low-vision",
+      "journey": "키보드 탐색·포커스·모달 복귀",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "device-action-frontend",
+        "files-frontend-backend"
+      ],
+      "observed_scope": "Chromium/WebKit activation, F2/arrows, popup Escape and modal/focus fixtures pass.",
+      "missing_acceptance": "Core current-candidate keyboard and screen-reader navigation with a real assistive technology session."
+    },
+    {
+      "persona": "keyboard-low-vision",
+      "journey": "선택·오류·진행 상태 전달",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "files-frontend-backend",
+        "windows-native-background"
+      ],
+      "observed_scope": "Selection/status semantics and narrow native transfer outcomes have coverage.",
+      "missing_acceptance": "Representative AT announces selection, error, progress and completion once and keeps the intended focus."
+    },
+    {
+      "persona": "keyboard-low-vision",
+      "journey": "파일·계정·연결 핵심 작업",
+      "status": "partial; final acceptance unproven",
+      "evidence": [
+        "editor-frontend",
+        "files-frontend-backend",
+        "device-action-frontend"
+      ],
+      "observed_scope": "Account/connection/file interactions have broad deterministic frontend coverage.",
+      "missing_acceptance": "A keyboard/AT user independently completes real file, account and connection tasks on the deployed build."
+    }
+  ],
+  "current_constraints": {
+    "windows": "Latest read-only Tailscale observation: jiun-home offline, LastSeen2026-10-23T20:50:00.1Z; no native quit attempt launched. Existing user availability question pending.",
+    "release": "No root version bump, app install or release. Primary owner coordination124 is pending; this is duplicate-release avoidance, not a new human approval requirement.",
+    "privacy": "Use isolated worktrees/generated files; no user-document edits or permission resets. Physical input guards and explicit UI/tool refusals remain in force.",
+    "benchmark": "No performance benchmark campaign; functional correctness tests only."
+  },
+  "next_acceptance_results": [
+    "Current signed candidate: Windows guarded quit wait/stop/cancel proves destination hashes or empty staging, with source preserved.",
+    "Current signed candidate: Mac queued Finder promises plus Cmd-Q/AppleEvent quit paths, without double counting or missed queued writes.",
+    "Representative actual native/phone/AT journeys above and independent weighted re-evaluation with evidence, then deployed-build verification."
+  ],
+  "unexplained_ci_observation": {
+    "run": 40032820604,
+    "head": "ddf97f86",
+    "job": 120684990651,
+    "step": "Tabs on different devices",
+    "failure": "Completed job moved focus onto another transfer",
+    "followup": "Local Chromium full fixture passed;4ca adds diagnostics without relaxing the assertion, and CI40033504124 all passed. No focus-path source change or explanation has been claimed."
+  },
+  "compatibility_investigation": {
+    "status": "independent analysis pending; not yet classified as a product defect",
+    "question": "Claimed macOS12.0 support versus strong ScreenCaptureKit load and SDK API_AVAILABLE12.3. No older-OS launch tested; do not infer all12.x behavior from the current host.",
+    "peer_request": "req_18e14a082a9f68e0_12e"
+  }
+}
