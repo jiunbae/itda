@@ -15,6 +15,7 @@
   const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
   const pageToken = randomId();
   let pendingFolder = null, tabSwitch = null, pendingDeviceDrop = null;
+  let localRsyncAvailable = false;
   let host,
     layer,
     setup,
@@ -1539,7 +1540,7 @@
       dest.path === destination
         ? names.filter((n) => dest.entries.some((e) => e.name === n))
         : [];
-    const deltaEligible = !move && from !== to && !cross;
+    const deltaEligible = localRsyncAvailable && !move && from !== to && !cross;
     const r = await prompt(
       move ? "파일 이동" : "파일 복사",
       `<p><b>${esc(names.length === 1 ? names[0] : `${names.length}개 항목`)}</b></p><p class="hint">${esc(where(from, source, cross ? origin.id : id))} → ${esc(where(to, destination, id))}</p>${collisions.length ? `<p>같은 이름의 항목 ${collisions.length}개가 있습니다.</p>` : ""}<div class="field"><label>같은 이름의 파일이 있으면</label><select class="input" name="policy"><option value="keep">둘 다 유지</option><option value="replace">변경된 파일 바꾸기 · 폴더는 합치기</option><option value="skip">기존 파일 건너뛰기</option></select></div><details><summary>전송 옵션 · 자동 선택</summary><div class="field"><label>전송 방식</label><select class="input" name="engine"><option value="auto">자동 · 가능한 경우 rsync 증분 전송</option><option value="sftp">일반 전송 · SFTP</option><option value="rsync" ${deltaEligible ? "" : "disabled"}>증분 전송 · 파일 바꾸기에서만 사용</option></select></div><p class="hint">증분 전송은 이 컴퓨터와 원격 기기 사이의 복사에서 ‘변경된 파일 바꾸기’를 선택하고 양쪽에 rsync가 있을 때 사용할 수 있습니다. Windows 한글 이름 변환이 필요한 항목은 자동 또는 일반 전송을 사용하세요. 자동은 가능한 방식을 선택합니다.</p></details>${move ? '<p class="hint">같은 파일시스템 안에서는 바로 이동하며, 장치 간 이동은 해시를 확인한 뒤 원본을 삭제합니다. 취소하거나 실패한 항목의 원본은 유지합니다.</p>' : ""}`,
@@ -2127,6 +2128,7 @@
       return true;
     }
     if (m.op === "connect") {
+      localRsyncAvailable = m.data.rsync === true;
       if (setup) (layer ? adopt : workspace)(m.data);
       return true;
     }

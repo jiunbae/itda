@@ -85,6 +85,11 @@ try{
    await dialog.getByRole('button',{name:'취소',exact:true}).click();
    assert(await layer.locator('[data-action="paste"]').evaluate(e=>document.activeElement===e),'Dialog lost initiating focus');
    await layer.locator('[data-network-sidebar] [data-bookmark="Documents"]').click();
+   await p.evaluate(()=>ItdaFiles.message({...testPackets.find(m=>m.op==='connect'),type:'files_result',ok:true,data:{rsync:false}}));
+   await layer.locator('[data-action="paste"]').click();await dialog.waitFor();await dialog.locator('summary').click();
+   await policy.selectOption('replace');assert(await engine.locator('[value="rsync"]').isDisabled(),'Missing local rsync offered forced delta');
+   await dialog.getByRole('button',{name:'취소',exact:true}).click();
+   await p.evaluate(()=>ItdaFiles.message({...testPackets.find(m=>m.op==='connect'),type:'files_result',ok:true,data:{rsync:true}}));
    await layer.locator('[data-action="paste"]').click();await dialog.waitFor();await dialog.locator('summary').click();
    await policy.selectOption('replace');assert(!await engine.locator('[value="rsync"]').isDisabled(),'Eligible overwrite copy cannot choose rsync');
    await engine.selectOption('rsync');await policy.selectOption('keep');assert(await engine.inputValue()==='auto','Invalid forced rsync remained selected');
