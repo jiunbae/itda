@@ -62,6 +62,7 @@ features = [
   "Win32_Foundation",
   "Win32_Globalization",
   "Win32_Graphics_Dwm",
+  "Win32_System_Shutdown",
   "Win32_Graphics_Gdi",
   "Win32_NetworkManagement_Dns",
   "Win32_Networking_WinSock",

@@ -24,19 +24,47 @@ pub struct Remote {
     open: Box<dyn Fn(&Control) -> io::Result<Sftp> + Send + Sync>,
     idle: Mutex<Option<Sftp>>,
     control: Arc<Control>,
+    /// The drag's own live entry, from its admission until the drop (or Explorer's copy of it)
+    /// is over: the files it goes on to read belong to an accepted drag. 0 when over.
+    batch: Mutex<u64>,
+    /// Explorer copies on its own thread after the drop (IDataObjectAsyncCapability).
+    operation: std::sync::atomic::AtomicBool,
 }
 
 impl Remote {
     /// The drag's source: the open file connection of `files[0].id`.
     pub fn of(files: &[export::File]) -> io::Result<Arc<Remote>> {
         let first = files.first().ok_or_else(|| error("파일을 선택하세요"))?;
-        if !super::accepting() { return Err(error(super::CLOSING)); }
         let cfg = connection(&first.id)?.cfg.clone();
-        Ok(Self::new(Box::new(move |c| Sftp::connect(&cfg, c))))
+        let remote = Self::new(Box::new(move |c| Sftp::connect(&cfg, c)));
+        // Admitted and registered in one step: a quit that closed admissions counts it, or
+        // it doesn't start.
+        *remote.batch.lock().unwrap() = super::admit_stream(&remote.control).ok_or_else(|| error(super::CLOSING))?;
+        Ok(remote)
     }
 
     pub(crate) fn new(open: Box<dyn Fn(&Control) -> io::Result<Sftp> + Send + Sync>) -> Arc<Remote> {
-        Arc::new(Remote { open, idle: Mutex::new(None), control: Arc::new(Control::default()) })
+        Arc::new(Remote { open, idle: Mutex::new(None), control: Arc::new(Control::default()), batch: Mutex::new(0), operation: Default::default() })
+    }
+
+    /// Explorer started copying in the background (it ends with `end_operation`).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn start_operation(&self) {
+        self.operation.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn end_operation(&self) {
+        self.operation.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.end_batch();
+    }
+    /// The drag-and-drop loop returned: the drag is over unless Explorer copies on.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn drop_done(&self) {
+        if !self.operation.load(std::sync::atomic::Ordering::SeqCst) { self.end_batch(); }
+    }
+    pub fn end_batch(&self) {
+        let id = std::mem::take(&mut *self.batch.lock().unwrap());
+        if id != 0 { unregister(id); }
     }
 
     fn session(&self) -> io::Result<Sftp> {
@@ -69,6 +97,11 @@ impl Remote {
 
     /// The bytes of `item`, downloading in the background while they're read.
     pub fn reader(self: &Arc<Self>, item: &Item) -> Reader {
+        // A file of an accepted drag may still be read while Itda waits to quit; anything else
+        // is a new stream and needs admission.
+        let batch_open = *self.batch.lock().unwrap() != 0;
+        let live = if batch_open { Some(register(&self.control)) } else { super::admit_stream(&self.control) };
+        let Some(live) = live else { return Reader::refused() };
         let (tx, rx) = sync_channel::<io::Result<Vec<u8>>>(16);
         let (me, path, size) = (self.clone(), item.path.clone(), item.size);
         std::thread::spawn(move || {
@@ -85,7 +118,7 @@ impl Remote {
                 Err(e) => drop(tx.try_send(Err(e))),
             }
         });
-        Reader::new(rx, size, self.control.clone())
+        Reader::new(rx, size, self.control.clone(), live)
     }
 
     /// Stop every download still running for this drag.
@@ -150,6 +183,15 @@ impl Write for Chan<'_> {
 /// while any runs, and stopping them all stops their downloads.
 static LIVE: Mutex<Vec<(u64, Arc<Control>)>> = Mutex::new(Vec::new());
 static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+/// A new live entry (files::admit_stream checks admission first, under the job registry's lock).
+pub(super) fn register(control: &Arc<Control>) -> u64 {
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    LIVE.lock().unwrap().push((id, control.clone()));
+    id
+}
+fn unregister(id: u64) {
+    LIVE.lock().unwrap().retain(|(l, _)| *l != id);
+}
 /// Streams still delivering (a stopped one has nothing of ours left to clean up).
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn active_streams() -> usize {
@@ -173,19 +215,23 @@ pub struct Reader {
     /// The live entry (0 once the stream ended: the whole size delivered, an error, or dropped).
     live: u64,
     control: Arc<Control>,
+    /// Not admitted (Itda is quitting): every read says so.
+    refused: bool,
 }
 impl Reader {
-    fn new(rx: Receiver<io::Result<Vec<u8>>>, size: u64, control: Arc<Control>) -> Reader {
-        let live = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        LIVE.lock().unwrap().push((live, control.clone()));
-        let mut r = Reader { rx, buf: Vec::new(), at: 0, size, delivered: 0, live, control };
+    fn new(rx: Receiver<io::Result<Vec<u8>>>, size: u64, control: Arc<Control>, live: u64) -> Reader {
+        let mut r = Reader { rx, buf: Vec::new(), at: 0, size, delivered: 0, live, control, refused: false };
         if size == 0 { r.end(); }
         r
     }
+    /// A stream that may not start (Itda is quitting): its first read fails.
+    fn refused() -> Reader {
+        let (_, rx) = sync_channel(0);
+        Reader { rx, buf: Vec::new(), at: 0, size: 1, delivered: 0, live: 0, control: Arc::new(Control::default()), refused: true }
+    }
     fn end(&mut self) {
         if self.live != 0 {
-            let id = std::mem::take(&mut self.live);
-            LIVE.lock().unwrap().retain(|(l, _)| *l != id);
+            unregister(std::mem::take(&mut self.live));
         }
     }
     fn fail(&mut self, e: io::Error) -> io::Result<usize> {
@@ -199,7 +245,9 @@ impl Reader {
         for c in bytes.chunks(chunk.max(1)) {
             tx.send(Ok(c.to_vec())).unwrap();
         }
-        Reader::new(rx, bytes.len() as u64, Arc::new(Control::default()))
+        let control = Arc::new(Control::default());
+        let live = register(&control);
+        Reader::new(rx, bytes.len() as u64, control, live)
     }
 }
 impl Drop for Reader {
@@ -220,7 +268,7 @@ impl Read for Reader {
                 return Ok(0);
             }
             if self.live == 0 {
-                return Err(io::Error::other("전송이 중단되었습니다"));
+                return Err(io::Error::other(if self.refused { super::CLOSING } else { "전송이 중단되었습니다" }));
             }
             match self.rx.recv() {
                 Ok(Ok(b)) => (self.buf, self.at) = (b, 0),
@@ -336,14 +384,16 @@ mod tests {
         let (tx, rx) = sync_channel(4);
         tx.send(Ok(b"abc".to_vec())).unwrap();
         drop(tx);
-        let mut r = Reader::new(rx, 10, Arc::new(Control::default()));
+        let c = Arc::new(Control::default());
+        let mut r = Reader::new(rx, 10, c.clone(), register(&c));
         let mut got = [0u8; 3];
         r.read_exact(&mut got).unwrap();
         assert!(r.read(&mut [0u8; 4]).is_err(), "a short download looked complete");
         assert!(!live(&r));
         let (tx, rx) = sync_channel(4);
         tx.send(Err(io::Error::other("network"))).unwrap();
-        let mut r = Reader::new(rx, 10, Arc::new(Control::default()));
+        let c = Arc::new(Control::default());
+        let mut r = Reader::new(rx, 10, c.clone(), register(&c));
         assert!(r.read(&mut [0u8; 4]).is_err() && !live(&r));
     }
 
@@ -353,7 +403,7 @@ mod tests {
     fn stopping_unblocks_a_paused_stream() {
         let (tx, rx) = sync_channel::<io::Result<Vec<u8>>>(1);
         let control = Arc::new(Control::default());
-        let mut r = Reader::new(rx, 1 << 20, control.clone());
+        let mut r = Reader::new(rx, 1 << 20, control.clone(), register(&control));
         let c = control.clone();
         let producer = std::thread::spawn(move || {
             let mut sink = Chan { tx: &tx, control: &c };
@@ -373,5 +423,25 @@ mod tests {
     }
     fn active_streams_of(c: &Arc<Control>) -> usize {
         LIVE.lock().unwrap().iter().filter(|(_, x)| Arc::ptr_eq(x, c) && x.check().is_ok()).count()
+    }
+
+    /// While Itda waits to quit, an accepted drag still gets its later files; once the drag is
+    /// over, a new stream is refused (it would start after the count).
+    #[test]
+    fn an_accepted_drag_reads_on_while_closing() {
+        let remote = Remote::new(Box::new(|_| Err(io::Error::other("no server in this test"))));
+        *remote.batch.lock().unwrap() = super::super::admit_stream(&remote.control).expect("admitted");
+        super::super::close_admissions();
+        let item = Item { rel: "a".into(), dir: false, size: 3, modified: 0, path: "/nowhere/a".into() };
+        let r = remote.reader(&item);
+        assert!(r.live != 0 && !r.refused, "a file of an accepted drag was refused");
+        drop(r);
+        remote.end_batch();
+        let mut r = remote.reader(&item);
+        assert!(r.refused);
+        let e = r.read(&mut [0u8; 4]).unwrap_err();
+        assert_eq!(e.to_string(), super::super::CLOSING);
+        assert!(super::super::admit_stream(&remote.control).is_none());
+        super::super::open_admissions();
     }
 }

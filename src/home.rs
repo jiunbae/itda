@@ -68,8 +68,12 @@ enum Event {
     #[cfg_attr(windows, allow(dead_code))]
     Page(Value),
     ConfigurationStop,
-    /// A waited-for (or stopped) set of transfers ended, or this many are still ending.
-    QuitDrained(QuitReason, usize),
+    /// A waited-for (or stopped) set of transfers ended, or this many are still ending; with
+    /// the ticket of the quit it belongs to.
+    QuitDrained(QuitReason, usize, u64),
+    /// A quit asked for from a window message that must not re-enter the page (Windows).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    QuitAsk(QuitReason),
 }
 
 static QUEUE: Mutex<Vec<Event>> = Mutex::new(Vec::new());
@@ -422,9 +426,23 @@ fn quit_step(reason: QuitReason, active: usize) -> QuitStep {
 /// A quit (or update) waiting for transfers to end, or for stopped ones to clean up.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum QuitPending { Waiting(QuitReason), Stopping(QuitReason) }
-static QUIT_PENDING: Mutex<Option<QuitPending>> = Mutex::new(None);
+/// The pending quit and its ticket: a wait or stop reports back with the ticket it was given,
+/// and a report for one cancelled or replaced since is ignored.
+static QUIT_PENDING: Mutex<Option<(u64, QuitPending)>> = Mutex::new(None);
+static QUIT_TICKETS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+fn pend(p: QuitPending) -> u64 {
+    let t = QUIT_TICKETS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    *QUIT_PENDING.lock().unwrap() = Some((t, p));
+    t
+}
 const QUIT_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
 const QUIT_INSTALLER_WAIT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// `request_quit` from the event queue (outside the window message being handled).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn request_quit_later(reason: QuitReason) {
+    post(Event::QuitAsk(reason));
+}
 
 /// Quit now if nothing runs; otherwise ask (or, for the installer, stop and wait). True
 /// when Itda is ending now (the Mac quit Apple Event is answered "cancelled" otherwise).
@@ -443,7 +461,7 @@ pub fn request_quit(reason: QuitReason) -> bool {
 fn ask_quit(reason: QuitReason, count: usize, stuck: bool) {
     plat::show_home();
     let pending = *QUIT_PENDING.lock().unwrap();
-    send(json!({"type": "quit_guard", "reason": reason_name(reason), "count": count, "stuck": stuck, "waiting": matches!(pending, Some(QuitPending::Waiting(_)))}));
+    send(json!({"type": "quit_guard", "reason": reason_name(reason), "count": count, "stuck": stuck, "waiting": matches!(pending, Some((_, QuitPending::Waiting(_))))}));
 }
 fn reason_name(r: QuitReason) -> &'static str {
     match r { QuitReason::User => "quit", QuitReason::Update => "update", QuitReason::Configuration => "configuration" }
@@ -465,11 +483,8 @@ fn go_now(reason: QuitReason) -> bool {
 fn quit_choice(choice: &str, reason: QuitReason) {
     match choice {
         "wait" => {
-            let mut p = QUIT_PENDING.lock().unwrap();
-            let watching = matches!(*p, Some(QuitPending::Waiting(_)));
-            *p = Some(QuitPending::Waiting(reason));
-            drop(p);
-            if !watching { std::thread::spawn(watch_quit); }
+            let ticket = pend(QuitPending::Waiting(reason));
+            std::thread::spawn(move || watch_quit(ticket));
             post(Event::Page(json!({"type": "quit_pending", "reason": reason_name(reason), "count": crate::files::active_jobs()})));
         }
         "stop" => stop_then(reason, QUIT_STOP_WAIT),
@@ -486,34 +501,43 @@ fn quit_choice(choice: &str, reason: QuitReason) {
         }
     }
 }
-/// Until nothing runs (transfers started meanwhile too), or the wait is cancelled.
-fn watch_quit() {
+/// Until nothing runs (transfers started meanwhile too), or this wait is cancelled/replaced.
+fn watch_quit(ticket: u64) {
     loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
-        let Some(QuitPending::Waiting(reason)) = *QUIT_PENDING.lock().unwrap() else { return };
+        let Some((t, QuitPending::Waiting(reason))) = *QUIT_PENDING.lock().unwrap() else { return };
+        if t != ticket { return }
         let n = crate::files::active_jobs();
-        if n == 0 { return post(Event::QuitDrained(reason, 0)); }
+        if n == 0 { return post(Event::QuitDrained(reason, 0, ticket)); }
         post(Event::Page(json!({"type": "quit_pending", "reason": reason_name(reason), "count": n})));
     }
 }
 /// Stop every transfer the normal way (nothing new starts meanwhile) and wait, bounded, for
 /// them to clean up. What comes next is decided when they did (or didn't).
 fn stop_then(reason: QuitReason, limit: std::time::Duration) {
-    *QUIT_PENDING.lock().unwrap() = Some(QuitPending::Stopping(reason));
+    let ticket = pend(QuitPending::Stopping(reason));
     crate::files::close_admissions();
     crate::files::stop_jobs();
     std::thread::spawn(move || {
         let left = drain_jobs(limit);
-        post(Event::QuitDrained(reason, left));
+        post(Event::QuitDrained(reason, left, ticket));
     });
 }
 /// After a wait or a stop: go if everything ended. Otherwise Itda stays open and says so:
 /// the person can wait again or (for a plain quit) force it; the installer is refused (its
 /// own bounded wait then fails, and a busy app is never replaced).
-fn quit_drained(reason: QuitReason, left: usize) {
-    let pending = QUIT_PENDING.lock().unwrap().is_some();
-    if !pending && reason != QuitReason::Configuration { return } // cancelled meanwhile
+fn quit_drained(reason: QuitReason, left: usize, ticket: u64) {
+    // Only the report of the quit still pending, for the same intent (not one cancelled or
+    // replaced since); and the count is checked again.
+    let current = matches!(*QUIT_PENDING.lock().unwrap(), Some((t, p)) if t == ticket && matches!(p, QuitPending::Waiting(r) | QuitPending::Stopping(r) if r == reason));
+    if !current { return }
+    let left = if left == 0 { crate::files::active_jobs() } else { left };
     if left == 0 { go_now(reason); return; }
+    // Waiting, and a transfer started right then: keep waiting.
+    if matches!(*QUIT_PENDING.lock().unwrap(), Some((_, QuitPending::Waiting(_)))) {
+        std::thread::spawn(move || watch_quit(ticket));
+        return;
+    }
     *QUIT_PENDING.lock().unwrap() = None;
     crate::files::open_admissions();
     crate::log!("quit: {left} transfer(s) did not end in time; Itda stays open");
@@ -1337,7 +1361,8 @@ fn drain() {
     for e in evs {
         match e {
             Event::ConfigurationStop=>{ request_quit(QuitReason::Configuration); }
-            Event::QuitDrained(reason, left) => quit_drained(reason, left),
+            Event::QuitDrained(reason, left, ticket) => quit_drained(reason, left, ticket),
+            Event::QuitAsk(reason) => { request_quit(reason); }
             Event::Session(id, v) if id == "__ipc" => on_ipc(v),
             Event::Session(id, v) => on_session(&id, v),
             Event::Exit(id) => on_exit(&id),
@@ -1805,8 +1830,9 @@ mod quit_tests {
     use super::*;
 
     fn drained(reason: QuitReason, left: usize) -> bool {
-        QUEUE.lock().unwrap().iter().any(|e| matches!(e, Event::QuitDrained(r, n) if *r == reason && *n == left))
+        QUEUE.lock().unwrap().iter().any(|e| matches!(e, Event::QuitDrained(r, n, _) if *r == reason && *n == left))
     }
+    fn ticket() -> u64 { QUIT_PENDING.lock().unwrap().map_or(0, |(t, _)| t) }
     /// Other tests may hold a transfer for a moment: positive outcomes are waited for.
     fn eventually(f: impl Fn() -> bool) -> bool {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -1837,7 +1863,7 @@ mod quit_tests {
         // ended; transfers may still start while waiting.
         let a = crate::files::test_job("quit-test", "page");
         quit_choice("wait", QuitReason::User);
-        assert_eq!(*QUIT_PENDING.lock().unwrap(), Some(QuitPending::Waiting(QuitReason::User)));
+        assert!(matches!(*QUIT_PENDING.lock().unwrap(), Some((_, QuitPending::Waiting(QuitReason::User)))));
         assert!(crate::files::accepting());
         std::thread::sleep(std::time::Duration::from_millis(700));
         let b = crate::files::test_job("quit-test", "page");
@@ -1850,10 +1876,18 @@ mod quit_tests {
         // Cancel: the reservation is gone and transfers may start; a late result is ignored.
         let c = crate::files::test_job("quit-test", "page");
         quit_choice("wait", QuitReason::Update);
+        let stale = ticket();
         quit_choice("cancel", QuitReason::Update);
         assert!(QUIT_PENDING.lock().unwrap().is_none() && crate::files::accepting());
-        quit_drained(QuitReason::Update, 0);
+        quit_drained(QuitReason::Update, 0, stale);
         assert!(!UPDATING.load(std::sync::atomic::Ordering::SeqCst), "a cancelled update started");
+        // A wait replaced by another intent: the old one's report is ignored.
+        quit_choice("wait", QuitReason::User);
+        let old = ticket();
+        quit_choice("wait", QuitReason::Update);
+        quit_drained(QuitReason::User, 0, old);
+        assert!(matches!(*QUIT_PENDING.lock().unwrap(), Some((_, QuitPending::Waiting(QuitReason::Update)))), "a replaced wait acted");
+        quit_choice("cancel", QuitReason::Update);
         // Stop: every transfer is told to stop, nothing new starts, and the quit waits for
         // them to clean up.
         quit_choice("stop", QuitReason::User);
@@ -1866,13 +1900,22 @@ mod quit_tests {
         // A stop that doesn't finish in time: Itda stays open (admissions back) and asks again.
         let d = crate::files::test_job("quit-test", "page");
         stop_then(QuitReason::User, std::time::Duration::from_millis(200));
-        assert!(eventually(|| QUEUE.lock().unwrap().iter().any(|e| matches!(e, Event::QuitDrained(QuitReason::User, n) if *n > 0))));
-        quit_drained(QuitReason::User, 1);
+        let t = ticket();
+        assert!(eventually(|| QUEUE.lock().unwrap().iter().any(|e| matches!(e, Event::QuitDrained(QuitReason::User, n, _) if *n > 0))));
+        quit_drained(QuitReason::User, 1, t);
         assert!(QUIT_PENDING.lock().unwrap().is_none() && crate::files::accepting(), "a stuck stop quit anyway or kept transfers out");
         // The installer's close likewise stays open when cleanup did not finish.
         stop_then(QuitReason::Configuration, std::time::Duration::from_millis(100));
-        quit_drained(QuitReason::Configuration, 1);
-        assert!(crate::files::accepting());
+        let t = ticket();
+        // A stale stop (cancelled, then a new request) can't act.
+        quit_choice("cancel", QuitReason::User);
+        quit_choice("wait", QuitReason::User);
+        quit_drained(QuitReason::Configuration, 0, t);
+        assert!(matches!(*QUIT_PENDING.lock().unwrap(), Some((_, QuitPending::Waiting(QuitReason::User)))), "a stale stop acted");
+        quit_choice("cancel", QuitReason::User);
+        stop_then(QuitReason::Configuration, std::time::Duration::from_millis(100));
+        quit_drained(QuitReason::Configuration, 1, ticket());
+        assert!(crate::files::accepting() && QUIT_PENDING.lock().unwrap().is_none());
         drop(d);
         clear();
         // A transfer that starts between the count and the quit is caught: asked instead.

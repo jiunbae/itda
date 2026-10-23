@@ -181,6 +181,13 @@ fn admit(job: &str, key: &str, control: &Arc<Control>) -> bool {
     all.insert(job.to_string(), (key.to_string(), control.clone()));
     true
 }
+/// Registers a drag stream (a whole drag, or one more file read) unless Itda is closing; one
+/// step, like `admit`, so a closing count can't miss it.
+#[cfg(any(windows, test))]
+pub(crate) fn admit_stream(control: &Arc<Control>) -> Option<u64> {
+    let _all = jobs().lock().unwrap();
+    accepting().then(|| vdrag::register(control))
+}
 /// Stop admitting new transfers; what is running then (the decision for quitting now).
 pub fn close_admissions() -> usize {
     let n = {
