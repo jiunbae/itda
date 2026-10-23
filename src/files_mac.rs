@@ -23,6 +23,26 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
+/// Each Finder drag's promise queue, while the drag can still be fulfilled: quitting asks
+/// while any has operations queued or running (an idle promise Finder never asked for has
+/// none). NSOperationQueue is thread-safe; the quit guard reads it off the UI thread.
+static PROMISE_QUEUES: std::sync::Mutex<Vec<(String, Retained<NSOperationQueue>)>> = std::sync::Mutex::new(Vec::new());
+// operationCount is deprecated in favour of progress, but it is the queue's own count of
+// queued and running operations (AppKit adds them; nothing else of ours sees them).
+#[allow(deprecated)]
+pub fn promise_busy() -> usize {
+    PROMISE_QUEUES.lock().unwrap().iter().map(|(_, q)| q.operationCount()).sum()
+}
+fn forget_queue(drag: &str) {
+    PROMISE_QUEUES.lock().unwrap().retain(|(d, _)| d != drag);
+}
+/// Queues no promise can use any more (UI thread: the promise registry lives there), kept
+/// while an operation still runs (a completion's tail).
+#[allow(deprecated)]
+fn prune_queues() {
+    let wanted: std::collections::HashSet<String> = PROMISES.with(|p| p.borrow().values().map(|d| d.ivars().drag.clone()).collect());
+    PROMISE_QUEUES.lock().unwrap().retain(|(d, q)| wanted.contains(d) || q.operationCount() > 0);
+}
 thread_local! { static DRAGS: RefCell<HashMap<String,Retained<Source>>> = RefCell::new(HashMap::new()); static PROMISES: RefCell<HashMap<String,Retained<Promise>>> = RefCell::new(HashMap::new()); static CLIP: Cell<(u64,isize)> = const {Cell::new((0,0))}; }
 fn emit(v: Value) {
     super::super::post(super::super::Event::Page(v));
@@ -119,6 +139,8 @@ pub fn paste(v: Value) {
 struct PromiseState {
     file: File,
     token: String,
+    /// The drag it belongs to (its queue's key).
+    drag: String,
     queue: Retained<NSOperationQueue>,
 }
 define_class!(
@@ -150,6 +172,7 @@ define_class!(
             // The provider's delegate is weak. Keep it alive even if quitting or a
             // queued completion removes its main-thread registry entry meanwhile.
             let _keep_alive = self.retain();
+            files::PROMISE_WRITE.with(|p| p.set(true));
             let result = if url.isFileURL() { url.path() } else { None }
                 .ok_or_else(|| std::io::Error::other("Finder 복사 위치를 확인할 수 없습니다"))
                 .and_then(|path| {
@@ -159,6 +182,7 @@ define_class!(
                         emitter(),
                     )
                 });
+            files::PROMISE_WRITE.with(|p| p.set(false));
             let err = result.err().map(|e| {
                 let message = NSString::from_str(&e.to_string());
                 let value: &AnyObject = &message;
@@ -277,6 +301,7 @@ fn promise_writer(
     let object = Promise::alloc().set_ivars(PromiseState {
         file,
         token: token.clone(),
+        drag: drag.into(),
         queue: queue.retain(),
     });
     let delegate: Retained<Promise> = unsafe { msg_send![super(object), init] };
@@ -295,6 +320,7 @@ struct PendingDrag {
 impl Drop for PendingDrag {
     fn drop(&mut self) {
         if !self.started {
+            forget_queue(&self.token);
             files::drag::release(&self.token);
             PROMISES.with(|p| {
                 let mut p = p.borrow_mut();
@@ -331,6 +357,7 @@ define_class!(
             let _keep_alive = self.retain();
             let internal = files::drag::finish(&self.ivars().drag);
             if operation == NSDragOperation::None || internal {
+                forget_queue(&self.ivars().drag);
                 let _ = PROMISES.try_with(|p| {
                     let mut p = p.borrow_mut();
                     for token in &self.ivars().tokens {
@@ -374,6 +401,8 @@ pub fn drag(nsview: &NSView, v: Value) -> Result<(), String> {
     let token = pending.token.clone();
     let queue = NSOperationQueue::new();
     queue.setMaxConcurrentOperationCount(2);
+    prune_queues();
+    PROMISE_QUEUES.lock().unwrap().push((token.clone(), queue.clone()));
     let mut items = Vec::new();
     for file in selection {
         let writer: Retained<ProtocolObject<dyn NSPasteboardWriting>> = if file.remote {
@@ -430,6 +459,7 @@ pub fn promise_done(v: &Value) {
             p.borrow_mut().remove(token);
         });
     }
+    prune_queues();
 }
 pub fn drag_done(v: &Value) {
     if let Some(token) = v["drag"].as_str() {
@@ -544,6 +574,62 @@ mod tests {
         );
         PROMISES.with(|p|p.borrow_mut().remove(&promise_token));
         board.clearContents();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Finder's queued and running promise writes keep a quit waiting; an idle queue (a
+    /// promise Finder never asked for) does not.
+    #[test]
+    #[allow(deprecated)]
+    fn queued_promise_writes_count_until_their_operations_end() {
+        let drag = format!("count-test-{}", crate::store::new_id());
+        let queue = NSOperationQueue::new();
+        queue.setMaxConcurrentOperationCount(1);
+        PROMISE_QUEUES.lock().unwrap().push((drag.clone(), queue.clone()));
+        let mine = || PROMISE_QUEUES.lock().unwrap().iter().filter(|(d, _)| *d == drag).map(|(_, q)| q.operationCount()).sum::<usize>();
+        assert_eq!(mine(), 0, "an idle promise queue counts");
+        let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        for _ in 0..2 {
+            let g = gate.clone();
+            let block = block2::RcBlock::new(move || {
+                let (open, cv) = &*g;
+                let mut o = open.lock().unwrap();
+                while !*o { o = cv.wait(o).unwrap(); }
+            });
+            let _: () = unsafe { msg_send![&*queue, addOperationWithBlock: &*block] };
+        }
+        // One running, one queued behind it: both count.
+        assert_eq!(mine(), 2);
+        assert!(promise_busy() >= 2);
+        { let (open, cv) = &*gate; *open.lock().unwrap() = true; cv.notify_all(); }
+        queue.waitUntilAllOperationsAreFinished();
+        assert_eq!(mine(), 0);
+        forget_queue(&drag);
+        assert!(!PROMISE_QUEUES.lock().unwrap().iter().any(|(d, _)| *d == drag));
+    }
+
+    /// While Itda stops for a quit, a promise write that starts gets an error at once (Finder
+    /// is told, nothing is written) instead of waiting or being dropped.
+    #[test]
+    fn a_promise_write_after_stopping_completes_with_an_error() {
+        let root = std::env::temp_dir().join(format!("itda-promise-closed-{}", crate::store::new_id()));
+        std::fs::create_dir_all(root.join("source")).unwrap();
+        std::fs::write(root.join("source/a.txt"), b"a").unwrap();
+        let file = File { id: "promise-closed".into(), remote: false, source: root.to_string_lossy().into_owned(), name: "source".into(), dir: true };
+        let queue = NSOperationQueue::new();
+        let (provider, token) = promise_writer(file, &queue, "promise-closed-drag");
+        let protocol = provider.delegate().unwrap();
+        let target = root.join("Finder copy");
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&target.to_string_lossy()));
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let recorded = errors.clone();
+        let done = block2::RcBlock::new(move |error: *mut NSError| { recorded.lock().unwrap().push(!error.is_null()); });
+        crate::files::close_admissions();
+        protocol.filePromiseProvider_writePromiseToURL_completionHandler(&provider, &url, &done);
+        crate::files::open_admissions();
+        assert_eq!(*errors.lock().unwrap(), [true], "the promise was not completed with an error");
+        assert!(!target.exists(), "a promise was written while Itda was stopping");
+        PROMISES.with(|p| p.borrow_mut().remove(&token));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

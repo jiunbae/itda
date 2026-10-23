@@ -115,6 +115,8 @@ jobs:
         run: node scripts/files-tabs-e2e.mjs
       - name: Background transfer UI (closed-window state, recovery and ordering)
         run: node scripts/files-background-e2e.mjs
+      - name: Quit and update guard while transfers run
+        run: node scripts/quit-guard-e2e.mjs
       - name: File window without a device (Windows places, This PC)
         run: node scripts/files-network-local-e2e.mjs
       - name: Self-update UI
