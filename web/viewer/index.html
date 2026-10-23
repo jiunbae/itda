@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#26255f">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -19,7 +19,8 @@
   <div class="login-card">
     <img src="icon.svg" alt="" class="login-logo">
     <h1>Itda</h1>
-    <p class="muted">Windows PC의 Itda 설정 → ‘다른 기기에서 보기’에 표시된 6자리 PIN을 입력하세요.</p>
+    <p id="loginNote" class="note" role="status" hidden></p>
+    <p class="muted">Itda가 켜진 컴퓨터(Mac 또는 Windows PC)에서 Itda 왼쪽의 <b>공유</b> 페이지를 열고, 거기 표시된 6자리 <b>접속 PIN</b>을 입력하세요.</p>
     <form id="loginForm" autocomplete="off">
       <input id="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="PIN 6자리" aria-label="PIN" required>
       <button class="primary" type="submit">들어가기</button>

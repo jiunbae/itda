@@ -146,6 +146,11 @@ h1.title {
 .lead { font-size: clamp(17px, 2vw, 20px); color: var(--text-2); max-width: 680px; margin: 0 auto; }
 .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 32px; }
 .also { margin: 14px 0 0; text-align: center; font-size: 14px; }
+.phone-need { margin: 14px auto 0; max-width: 620px; text-align: center; font-size: 14px; color: var(--text-2); }
+/* On a phone the phone path comes first: the downloads are for the computer it connects through. */
+@media (max-width: 560px) and (pointer: coarse) {
+  .cta .phone-cta { order: -1; }
+}
 .also a { color: var(--text-2); text-decoration: none; border-bottom: 1px solid currentColor; }
 .also a:hover { color: var(--text); }
 .meta { margin-top: 16px; font-size: 13.5px; color: var(--text-3); display: flex; gap: 8px 18px; justify-content: center; flex-wrap: wrap; }

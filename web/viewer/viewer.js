@@ -46,7 +46,7 @@ const osMark = (x) => {
 const XK = { cmd: 0xffeb, opt: 0xffe9, ctrl: 0xffe3, shift: 0xffe1, esc: 0xff1b, tab: 0xff09, enter: 0xff0d, back: 0xff08, del: 0xffff, space: 0x20,
   left: 0xff51, up: 0xff52, right: 0xff53, down: 0xff54, f3: 0xffc0, f4: 0xffc1, win: 0xffeb, alt: 0xffe9 };
 
-const S = { hosts: [], accounts: [], rfb: null, ws: null, host: null, fit: true, viewOnly: false, mods: new Set(), clip: '', ever: false, tries: 0 };
+const S = { hosts: [], accounts: [], rfb: null, ws: null, host: null, fit: true, viewOnly: false, mods: new Set(), clip: '', ever: false, tries: 0, gen: 0 };
 
 // App window (Itda for Mac): this page shows one connection, chosen by the app, and reports
 // to the app's home instead of offering the list.
@@ -177,7 +177,7 @@ async function api(path, body) {
 // ---------------------------------------------------------------- sign in & list
 
 // Where passwords end up, for the editor's reassurance line.
-const vault = () => (S.local ? '이 Mac의 키체인' : 'PC의 Windows 자격 증명 관리자');
+const vault = () => (S.local ? '이 Mac의 키체인' : 'Itda가 켜진 컴퓨터(Mac은 키체인, Windows는 자격 증명 관리자)');
 
 async function boot() {
   if (MIRROR !== null) { document.body.classList.add('mirror', ...(APP ? ['app'] : [])); return startMirror({S,app:APP,post},Number(MIRROR)); }
@@ -193,25 +193,69 @@ async function boot() {
   }
   if (APP && me.ok) return openFromApp();
   if (me.ok) return loadHosts();
+  signIn();
+}
+
+// The sign-in screen; `why` says why a session that was open needs the PIN again.
+function signIn(why = '') {
+  S.gen++; // a late answer for an earlier connection must not show over this screen
+  close();
+  closeEditor();
+  status(null);
+  $('#loginError').textContent = '';
+  $('#loginNote').textContent = why;
+  $('#loginNote').hidden = !why;
   show('login');
   setTimeout(() => $('#pin').focus(), 50);
+}
+// The gateway forgets a session after 12 hours, when the PIN is renewed and when its Itda
+// stops or restarts (the web viewer turned off, the computer restarted).
+const expired = () => signIn('로그인이 끝나 다시 PIN을 넣어야 합니다. 12시간이 지났거나, 새 PIN이 만들어졌거나, 그 컴퓨터의 Itda가 다시 시작되었을 때 이렇게 됩니다.');
+
+// Wrong PINs: 5 from one device lock it out for 1 minute (src/gateway.rs MAX_FAILS, LOCKOUT).
+// The lock started at the latest with the first refusal seen here, so 60 s is an upper bound.
+const LOCK_SECS = 60;
+let lockTimer;
+function lockedOut() {
+  const btn = $('#loginForm button');
+  if (lockTimer) return;
+  const until = Date.now() + LOCK_SECS * 1000;
+  btn.disabled = true;
+  const tick = () => {
+    const left = Math.ceil((until - Date.now()) / 1000);
+    if (left <= 0) {
+      clearInterval(lockTimer); lockTimer = null;
+      btn.disabled = false;
+      $('#loginError').textContent = '이제 다시 입력할 수 있습니다. 공유 페이지의 PIN을 확인하고 넣으세요.';
+      return;
+    }
+    $('#loginError').textContent = `PIN을 여러 번 틀려 잠시 막혔습니다. ${left}초 뒤에 다시 입력할 수 있습니다.`;
+  };
+  tick();
+  lockTimer = setInterval(tick, 1000);
 }
 
 $('#loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (lockTimer) return;
   const r = await api('/api/login', { pin: $('#pin').value });
   if (r.ok) {
     $('#loginError').textContent = '';
+    $('#loginNote').hidden = true;
     $('#pin').value = '';
     return loadHosts();
   }
-  $('#loginError').textContent = r.data.error || '들어갈 수 없습니다';
+  if (r.status === 429) { $('#pin').value = ''; return lockedOut(); }
+  $('#loginError').textContent = r.status === 401
+    ? 'PIN이 맞지 않습니다. 공유 페이지에 지금 표시된 PIN인지 확인하세요 (새 PIN을 만들면 예전 PIN은 쓸 수 없습니다). 5번 틀리면 1분 동안 막힙니다.'
+    : r.data.error || '들어갈 수 없습니다';
   $('#pin').select();
 });
 
 $('#logout').addEventListener('click', async () => {
   await api('/api/logout', {});
-  show('login');
+  S.signedIn = false;
+  signIn();
 });
 $('#refresh').innerHTML = icon('refresh');
 $('#refresh').addEventListener('click', loadHosts);
@@ -229,7 +273,8 @@ const KIND_TEXT = (h) => (h.this ? 'Windows · 이 PC 공유' : { mac: h.ssh ? '
 
 async function loadHosts() {
   const [r, a] = await Promise.all([api('/api/hosts'), api('/api/accounts')]);
-  if (r.status === 401) return show('login');
+  if (r.status === 401) return S.signedIn ? expired() : signIn();
+  S.signedIn = true;
   S.hosts = r.data || [];
   S.accounts = a.ok ? a.data || [] : [];
   renderHosts();
@@ -334,7 +379,7 @@ async function saveEdit(body, after) {
   if (btn) btn.disabled = true;
   const r = await api('/api/edit', body);
   if (btn) btn.disabled = false;
-  if (r.status === 401) { closeEditor(); return show('login'); }
+  if (r.status === 401) return expired();
   if (!r.ok) { $('#edErr').textContent = r.data.error || '저장하지 못했습니다'; return false; }
   S.hosts = r.data.hosts || S.hosts;
   S.accounts = r.data.accounts || S.accounts;
@@ -345,7 +390,7 @@ async function saveEdit(body, after) {
   return true;
 }
 
-function editHost(h, note = '') {
+function editHost(h, note = '', reopen = false) {
   const isNew = !h;
   h = h || { kind: 'vnc', os: 'mac', account: '', name: '', host: '', own_user: '', group: '', ssh: false };
   const acctOpts = `<option value="">이 기기만의 계정</option>` + S.accounts.map((a) => `<option value="${esc(a.id)}" ${a.id === h.account ? 'selected' : ''}>${esc(a.name || a.user)} (${esc(a.user)})</option>`).join('');
@@ -399,7 +444,7 @@ function editHost(h, note = '') {
       cmd: 'save_host', id: h.id || '', kind: d.kind, os: d.os, host: f.host.value, name: f.name.value, group: f.group.value,
       account: f.account.value, user: d.user ? f.user.value : '', password: f.account.value ? '' : f.password.value, ssh: !!d.ssh && f.ssh.checked,
     };
-    const wantOpen = !h.has_pw && (body.password || body.account);
+    const wantOpen = reopen || (!h.has_pw && (body.password || body.account));
     await saveEdit(body, (id) => {
       const saved = S.hosts.find((x) => x.id === id);
       if (saved && wantOpen && saved.has_pw) open(saved);
@@ -433,7 +478,7 @@ async function showNearby(f, sync) {
   };
 }
 
-function editAccount(a) {
+function editAccount(a, after) {
   const isNew = !a;
   a = a || { name: '', user: '', ssh_key: '', uses: 0 };
   editor(`
@@ -441,7 +486,7 @@ function editAccount(a) {
     ${field('사용자 이름', `<input name="user" required value="${esc(a.user)}" autocapitalize="off" spellcheck="false" placeholder="로그인 이름">`)}
     ${field('표시 이름 <i>(선택)</i>', `<input name="name" value="${esc(a.name)}" placeholder="예: 내 Mac 계정">`)}
     ${field('암호', `<input name="password" type="password" autocomplete="new-password" placeholder="${a.has_pw ? '저장됨 — 바꿀 때만 입력' : '암호'}">`, `암호는 ${vault()}에만 저장됩니다`)}
-    ${a.ssh_key ? `<p class="note">SSH 키: ${esc(a.ssh_key)}${S.local ? '' : ' (PC의 Itda에서 바꿀 수 있습니다)'}</p>` : ''}
+    ${a.ssh_key ? `<p class="note">SSH 키: ${esc(a.ssh_key)}${S.local ? '' : ' (Itda가 켜진 컴퓨터의 Itda 앱에서 바꿀 수 있습니다)'}</p>` : ''}
     ${isNew ? '' : `<p class="note">이 계정을 쓰는 기기: ${a.uses}대</p>`}
     <p id="edErr" class="error" role="alert"></p>
     <div class="ed-actions">
@@ -457,7 +502,7 @@ function editAccount(a) {
   });
   f.onsubmit = async (e) => {
     e.preventDefault();
-    await saveEdit({ cmd: 'save_account', id: a.id || '', user: f.user.value, name: f.name.value, password: f.password.value }, () => toast(isNew ? '계정을 추가했습니다' : '저장했습니다'));
+    await saveEdit({ cmd: 'save_account', id: a.id || '', user: f.user.value, name: f.name.value, password: f.password.value }, () => (after ? after() : toast(isNew ? '계정을 추가했습니다' : '저장했습니다')));
   };
 }
 
@@ -490,7 +535,7 @@ function installHint() {
   const tip = IOS
     ? '홈 화면에 추가하면 앱처럼 전체 화면으로 열립니다 — Safari의 공유 버튼 → ‘홈 화면에 추가’'
     : !window.isSecureContext
-      ? '앱으로 설치하려면 PC의 Itda 설정에서 Tailscale HTTPS 주소(https://…ts.net)를 켜고 그 주소로 여세요'
+      ? '앱으로 설치하려면 Itda가 켜진 컴퓨터의 공유 페이지에서 Tailscale HTTPS 주소(https://…ts.net)를 만들고 그 주소로 여세요'
       : '';
   if (!tip) return;
   $('#hint').innerHTML = `<span>${esc(tip)}</span><button class="ghost" aria-label="닫기">✕</button>`;
@@ -502,33 +547,50 @@ installHint();
 // ---------------------------------------------------------------- viewer
 
 // Close codes from the gateway → [title, advice]; functions see the host.
+const ga = () => ({ PC: 'PC가', 기기: '기기가' }[dev()] || 'Mac이');
+const MAC_LOGIN = 'Mac에 로그인할 때 쓰는 계정의 짧은 이름(Apple ID 아님)과 그 Mac의 로그인 암호를 넣으세요. 그 Mac의 시스템 설정 → 일반 → 공유 → 화면 공유 ⓘ → 접근 허용에 그 계정이 있어야 합니다.';
 const CLOSE_TEXT = {
   4004: () => ['연결을 찾을 수 없습니다', '목록에서 지워졌을 수 있습니다.'],
-  4001: () => ['저장된 암호가 없습니다', '목록에서 이 기기를 편집해 암호를 저장하세요.'],
-  4010: (h) => [`${dev()} 로그인에 실패했습니다`, h.this || (h.os === 'windows' && h.kind !== 'rdp') ? '그 PC의 Itda → 공유 페이지에 표시된 8글자 공유 암호를 넣으세요. Windows 로그인 암호나 Microsoft 계정 암호가 아닙니다.' : h.kind === 'rdp' ? 'Microsoft 계정이면 사용자 이름에 이메일 주소, 암호에 Microsoft 계정 암호를 넣으세요. 숫자 PIN은 쓸 수 없습니다.' : '이 기기(또는 계정)에 저장된 사용자 이름과 암호를 확인하세요.'],
+  4001: () => ['저장된 암호가 없습니다', '암호를 넣고 저장하면 바로 다시 연결합니다.'],
+  4010: (h) => [`${dev()} 로그인에 실패했습니다`, h.this || (h.os === 'windows' && h.kind !== 'rdp') ? '그 PC의 Itda → 공유 페이지에 표시된 8글자 공유 암호를 넣으세요. Windows 로그인 암호나 Microsoft 계정 암호가 아닙니다.' : h.kind === 'rdp' ? 'Microsoft 계정이면 사용자 이름에 이메일 주소, 암호에 Microsoft 계정 암호를 넣으세요. 숫자 PIN은 쓸 수 없습니다.' : kindOf(h) === 'linux' ? '그 기기의 VNC 암호(사용자 이름을 묻는 서버면 그 이름도)를 확인하세요.' : `${MAC_LOGIN} 여러 번 틀리면 Mac이 잠시 막으니, 고친 뒤에 다시 연결하세요.`],
   4011: () => ['사용자 이름이 필요합니다', '기기를 편집해 사용자 이름을 넣으세요.'],
-  4012: (h) => [`${dev()}이(가) 연결을 거부했습니다`, h.kind === 'rdp' ? 'Windows 설정 → 시스템 → 원격 데스크톱이 켜져 있는지 확인하세요. (Home 에디션은 원격 데스크톱 서버가 없습니다 — 대신 그 PC에서 Itda의 ‘이 PC 공유’를 켜세요.)' : h.this ? 'PC의 Itda에서 ‘이 PC 공유’가 켜져 있는지 확인하세요.' : { windows: '그 PC의 Itda에서 ‘공유 → 이 PC 공유’가 켜져 있는지 확인하세요.', linux: 'VNC 서버가 실행 중인지, 포트(보통 5900·5901)가 맞는지 확인하세요.' }[kindOf(h)] || 'Mac에서 화면 공유가 켜져 있는지 확인하세요.'],
-  4013: () => [`${dev()}이(가) 응답하지 않습니다`, '기기가 켜져 있고 Itda가 있는 PC와 같은 네트워크(또는 Tailscale)에 있는지 확인하세요.'],
+  4012: (h) => [`${ga()} 연결을 거부했습니다`, h.kind === 'rdp' ? 'Windows 설정 → 시스템 → 원격 데스크톱이 켜져 있는지 확인하세요. (Home 에디션은 원격 데스크톱 서버가 없습니다 — 대신 그 PC에서 Itda의 ‘이 PC 공유’를 켜세요.)' : h.this ? 'PC의 Itda에서 ‘이 PC 공유’가 켜져 있는지 확인하세요.' : { windows: '그 PC의 Itda에서 ‘공유 → 이 PC 공유’가 켜져 있는지 확인하세요.', linux: 'VNC 서버가 실행 중인지, 포트(보통 5900·5901)가 맞는지 확인하세요.' }[kindOf(h)] || 'Mac에서 화면 공유가 켜져 있는지 확인하세요.'],
+  4013: () => [`${ga()} 응답하지 않습니다`, '기기가 켜져 있고 Itda가 켜진 컴퓨터와 같은 네트워크(또는 Tailscale)에 있는지 확인하세요.'],
   4014: () => ['주소를 찾을 수 없습니다', '기기를 편집해 주소를 확인하세요.'],
-  4020: () => ['SSH 로그인에 실패했습니다', 'Mac 계정 암호를 확인하세요.'],
-  4021: () => ['Mac의 보안 키가 바뀌었습니다', 'PC의 Itda에서 한 번 연결해 새 키를 확인하세요.'],
+  4020: (h) => ['SSH 로그인에 실패했습니다', kindOf(h) === 'mac' ? `${MAC_LOGIN} 원격 로그인(SSH)도 같은 계정과 암호를 씁니다.` : '그 기기의 SSH 사용자 이름과 암호를 확인하세요.'],
+  4021: () => ['Mac의 보안 키가 바뀌었습니다', '그 Mac을 다시 설치했거나 다른 기기가 같은 주소를 쓰고 있을 수 있습니다. 웹 뷰어를 켠 컴퓨터의 Itda 앱에서 한 번 연결해 새 키를 확인하세요.'],
   4022: () => ['원격 로그인(SSH)이 꺼져 있습니다', 'Mac의 공유 설정에서 원격 로그인을 켜세요.'],
 };
+// Failures that the same saved login can't fix: offer to correct it instead of only retrying
+// (the editor never shows a saved password; it only replaces it).
+const FIX_LOGIN = new Set([4001, 4010, 4011, 4020]);
 
-function status(kind, title, text) {
+function status(kind, title, text, code = 0) {
   const st = $('#status');
   if (!kind) { st.hidden = true; return; }
   st.hidden = false;
+  const fix = !APP && FIX_LOGIN.has(code) && S.host && !S.host.this;
+  const acct = fix && S.host.account && S.accounts.find((a) => a.id === S.host.account);
   st.innerHTML = kind === 'busy'
-    ? `<div class="card"><div class="spin"></div><h2>${esc(title)}</h2><p>${esc(text || '')}</p></div>`
-    : `<div class="card"><h2>${esc(title)}</h2><p>${esc(text || '')}</p>
-        <div class="row"><button data-a="list">${APP ? '닫기' : '목록으로'}</button><button class="go" data-a="retry">다시 연결</button></div></div>`;
+    ? `<div class="card" role="status"><div class="spin"></div><h2>${esc(title)}</h2><p>${esc(text || '')}</p></div>`
+    : `<div class="card" role="alert"><h2>${esc(title)}</h2><p>${esc(text || '')}</p>
+        ${fix && acct ? `<p class="small">이 기기는 저장된 계정 ‘${esc(acct.name || acct.user)}’으로 로그인합니다. 그 계정을 고치면 이 계정을 쓰는 기기 ${acct.uses}대에 모두 적용됩니다.</p>` : ''}
+        <div class="row">${fix ? `<button class="go" data-a="fix">${acct ? '계정 고치기' : code === 4011 ? '사용자 이름 넣기' : code === 4001 ? '암호 넣기' : '암호·계정 고치기'}</button>` : ''}
+          <button data-a="list">${APP ? '닫기' : '목록으로'}</button>
+          <button ${fix ? '' : 'class="go" '}data-a="retry">${fix && code !== 4001 ? '같은 정보로 다시' : '다시 연결'}</button></div></div>`;
+  st.querySelector('button.go')?.focus();
 }
 
 $('#status').addEventListener('click', (e) => {
   const a = e.target.closest('[data-a]');
   if (!a) return;
-  if (a.dataset.a === 'retry') open(S.host);
+  const h = S.host;
+  if (a.dataset.a === 'retry') open(h);
+  else if (a.dataset.a === 'fix') {
+    const acct = h.account && S.accounts.find((x) => x.id === h.account);
+    if (acct) editAccount(acct, () => open(S.hosts.find((x) => x.id === h.id) || h));
+    else editHost(h, '저장된 암호는 보이지 않습니다. 새 암호를 넣고 저장하면 바로 다시 연결합니다.', true);
+  }
   else if (APP) post({ ev: 'close' });
   else leave();
 });
@@ -540,6 +602,7 @@ const RETRIES = 10;
 function open(h) {
   if (!h) return;
   close();
+  const gen = ++S.gen;
   S.host = h;
   show('view');
   renderTools();
@@ -588,10 +651,17 @@ function open(h) {
     S.rfb = null;
     S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; S.hpModeContext = null; S.hpMode = null; renderTools();
     if (APP) return setTimeout(() => appDropped(h, closeInfo), 50);
-    setTimeout(() => {
-      const known = closeInfo && CLOSE_TEXT[closeInfo.code];
+    setTimeout(async () => {
+      if (S.gen !== gen) return;
+      const code = closeInfo ? closeInfo.code : 0;
+      const known = CLOSE_TEXT[code];
       const [t, d] = known ? known(h) : ['연결이 끊겼습니다', closeInfo && closeInfo.reason ? closeInfo.reason : '네트워크 상태를 확인하고 다시 연결하세요.'];
-      status('error', t, d);
+      status('error', t, d, code);
+      if (known) return;
+      // The gateway refuses a WebSocket without a live session before it opens (no close code):
+      // ask, but don't wait long on a network that is gone.
+      const me = await Promise.race([api('/api/me').catch(() => ({})), new Promise((r) => setTimeout(() => r({}), 5000))]);
+      if (S.gen === gen && me.status === 401) expired();
     }, 50);
   });
   rfb.addEventListener('clipboard', (e) => {
@@ -694,6 +764,7 @@ function close(notifyNative=true) {
 }
 
 function leave() {
+  S.gen++;
   close();
   status(null);
   loadHosts();
@@ -842,6 +913,12 @@ function hpQualityLabel() {
 
 // ---------------------------------------------------------------- toolbar
 
+// Visible names under the toolbar icons (touch screens show no tooltips); the full
+// description stays the button's accessible name.
+const TOOL_NAME = { back: '목록', keyboard: '키보드', keys: '특수 키', 'mac-actions': '화면 동작', 'apple-screen-sharing': '화면 공유 앱',
+  'hp-quality': '화질', hp: '고성능', 'hp-disable': '고성능 끄기', clip: '클립보드', monitors: '모니터', scale: () => (S.fit ? '실제 크기' : '맞춤'), viewonly: '보기 전용', full: '전체 화면' };
+const toolName = (t) => (typeof TOOL_NAME[t] === 'function' ? TOOL_NAME[t]() : TOOL_NAME[t] || '');
+
 function renderTools() {
   const t = $('#tools');
   const focused = t.contains(document.activeElement) ? document.activeElement.dataset.t : null;
@@ -859,9 +936,12 @@ function renderTools() {
     ['scale', S.fit ? 'fit' : 'actual', S.fit ? '실제 크기로' : '화면에 맞춤'],
     ['viewonly', 'eye', '보기 전용', S.viewOnly],
     ['full', 'full', '전체 화면'],
-  ].map((b) => (b === 'sep' ? '<span class="sep"></span>' : `<button data-t="${b[0]}" title="${esc(b[2])}" aria-label="${esc(b[2])}" class="${b[3] ? 'on' : ''}">${icon(b[1])}</button>`)).join('');
+  ].map((b) => (b === 'sep' ? '<span class="sep"></span>' : `<button data-t="${b[0]}" title="${esc(b[2])}" aria-label="${esc(b[2])}"${b[0] === 'viewonly' ? ` aria-pressed="${!!b[3]}"` : ''} class="${b[3] ? 'on' : ''}">${icon(b[1])}<span class="tl" aria-hidden="true">${toolName(b[0])}</span></button>`)).join('');
   if (focused) t.querySelector(`[data-t="${focused}"]`)?.focus();
 }
+
+// Sheets open just below the toolbar, which wraps to two rows on a phone.
+new ResizeObserver(() => $('#view').style.setProperty('--tools-h', `${$('#tools').offsetHeight}px`)).observe($('#tools'));
 
 let dimTimer;
 function dimToolsSoon() {
