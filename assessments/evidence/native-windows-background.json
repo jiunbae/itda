@@ -18,6 +18,12 @@
       "status": "passed",
       "end_receipt_present": true,
       "startup_unchanged_end": true
+    },
+    "ci_checkout": {
+      "commit": "e8cf9f8c7f896d4c6800044982bf98a5e866f8c5",
+      "build_job": 120615332607,
+      "whole_tree_matches_pr_head": true,
+      "verification": "git diff --name-only between PR head 0cafc9f and checkout returned no files"
     }
   },
   "candidate": {
@@ -203,6 +209,17 @@
       "end_receipt_present": true,
       "startup_unchanged_end": true,
       "sftp_workspace_removed": true
+    },
+    "ci_checkout": {
+      "commit": "9e30d38a22b0558545ab2bbdf8f7eaa905eda66b",
+      "build_job": 120641630508,
+      "application_inputs_match_pr_head": true,
+      "differing_files": [
+        "assessments/evidence/native-windows-copy-recovery.json",
+        "assessments/quality.json",
+        "scripts/files-native-windows-ui-e2e.mjs"
+      ],
+      "verification": "Complete changed-file list inspected; git diff --exit-code for src, web, Cargo.toml, Cargo.lock, build.rs, assets, itda.manifest, Windows release script and CI workflow passed. The three differences are assessment/test files, not application inputs."
     }
   },
   "reproduction": {
@@ -227,6 +244,8 @@
     "Original native receipts remain private. Existing app PIDs are omitted; non-app event routing IDs are labelled owning-file-page. No screenshots or account paths are published.",
     "The first candidate probe reached app-scoped cancellation before release but failed a fixture read-audit assertion. Independent review found the fixture could drain buffered SFTP requests after transport closure; the fixture now rejects aborted/inactive reads and requires transport_closed rather than timeout/shutdown. The successful rerun used the identical CI executable; assertions were preserved and strengthened.",
     "Earlier harness development failures (pre-remote source-variable shadowing; first-batch barrier before any destination bytes and attempted hash of a locked staging file) were not product failures. The final fixture pauses after a full 64 x 32 KiB batch, sizes staging via a shared handle and hashes only the completed destination.",
-    "No persona score is certified by these narrow checks."
-  ]
+    "No persona score is certified by these narrow checks.",
+    "The prelaunch driver checks CI head/repository/workflow, artifact bytes and isolation ancestry. Effective checkout-vs-head equivalence was additionally checked manually for these two runs; the driver does not automate that additional check."
+  ],
+  "provenance_note": "source_commit identifies the CI pull-request head. GitHub checkout builds the test merge commit; the effective checkouts below were recovered from the build-job checkout logs after the run and verified with git diffs. The executable hash is bound to the CI artifact by the driver."
 }
