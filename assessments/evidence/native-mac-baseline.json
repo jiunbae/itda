@@ -1,0 +1,26 @@
+{
+  "release": "1.0.2",
+  "method": "signed Tacto helper, real installed /Applications/Itda.app dev.jiun.itda",
+  "checks": [
+    {
+      "journey": "home → Settings",
+      "result": "PASS",
+      "receiving_evidence": "Settings heading AXTitle=설정"
+    },
+    {
+      "journey": "Settings → all connections",
+      "result": "PASS",
+      "receiving_evidence": "Main heading AXTitle=모든 연결"
+    },
+    {
+      "journey": "Settings accessible switch names",
+      "result": "FAIL",
+      "receiving_evidence": "AX CheckBoxes expose Value only, without Title/Description; consistent with missing names in browser scan"
+    }
+  ],
+  "scope_limits": [
+    "Read-only navigation only; no settings changed, native permission grant, clipboard, file transfer or remote input performed",
+    "Does not verify new PR89 before installation",
+    "Full AX tree includes real device names and was not copied to repository"
+  ]
+}
