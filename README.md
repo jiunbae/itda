@@ -8,13 +8,13 @@
 
 Connect to your devices’ **screens and files** from **Windows and Mac**. Browse remote files in a separate window, or open saved devices from a browser on your phone or tablet.
 
-[![Release](https://img.shields.io/github/v/release/jiunbae/itda?style=flat-square&color=4744b0)](https://github.com/jiunbae/itda/releases/latest) [![CI](https://img.shields.io/github/actions/workflow/status/jiunbae/itda/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/jiunbae/itda/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-33d1c2?style=flat-square)](LICENSE) ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=flat-square&logo=windows) ![macOS 12+](https://img.shields.io/badge/macOS-12%2B-555?style=flat-square&logo=apple) ![Rust](https://img.shields.io/badge/Built_with-Rust-ff6a43?style=flat-square&logo=rust)
+[![Release](https://img.shields.io/github/v/release/jiunbae/itda?style=flat-square&color=4744b0)](https://github.com/jiunbae/itda/releases/latest) [![CI](https://img.shields.io/github/actions/workflow/status/jiunbae/itda/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/jiunbae/itda/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-33d1c2?style=flat-square)](LICENSE) ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=flat-square&logo=windows) ![macOS 12.3+](https://img.shields.io/badge/macOS-12.3%2B-555?style=flat-square&logo=apple) ![Rust](https://img.shields.io/badge/Built_with-Rust-ff6a43?style=flat-square&logo=rust)
 
 [**Download**](https://github.com/jiunbae/itda/releases/latest) · [Website](https://jiun.dev/itda/) · [Getting started](https://jiun.dev/itda/start.html) · [Security](SECURITY.md) · [한국어](README.ko.md)
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/home-window-dark.png">
-  <img src="docs/img/home-window-light.png" width="960" alt="Itda address book with saved devices, groups and file browser">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/home-window-dark.png?v=7">
+  <img src="docs/img/home-window-light.png?v=7" width="960" alt="Itda address book with saved devices, groups and file browser">
 </picture>
 
 </div>
@@ -37,7 +37,7 @@ Connect to your devices’ **screens and files** from **Windows and Mac**. Brows
 
 ## 🍏 Itda for Mac
 
-Download `Itda-macos-universal.zip` from [Releases](https://github.com/jiunbae/itda/releases/latest). It runs on macOS 12+, on Apple silicon and Intel.
+Download `Itda-macos-universal.zip` from [Releases](https://github.com/jiunbae/itda/releases/latest). For the current release, use macOS 12.3+ on Apple silicon or Intel. Compatibility with macOS 12.0–12.2 is being corrected.
 
 1. Unzip it and move **Itda.app** to Applications.
 2. Open **Itda.app**. Official Mac releases are Developer ID signed and notarized by Apple.
@@ -101,19 +101,19 @@ The macOS file window exports real file URLs for Finder's clipboard. Wait for **
 **macOS**
 
 <picture>
-  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/img/files-mobile-dark.png">
-  <source media="(max-width: 600px)" srcset="docs/img/files-mobile-light.png">
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-focus-dark.png">
-  <img src="docs/img/files-focus-light.png" width="960" alt="macOS file browser with folder tabs, sidebar and a combined path and item-count bar">
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/img/files-mobile-dark.png?v=7">
+  <source media="(max-width: 600px)" srcset="docs/img/files-mobile-light.png?v=7">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-focus-dark.png?v=7">
+  <img src="docs/img/files-focus-light.png?v=7" width="960" alt="macOS file browser with folder tabs, sidebar and a combined path and item-count bar">
 </picture>
 
 **Windows**
 
 <picture>
-  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/img/files-windows-mobile-dark.png">
-  <source media="(max-width: 600px)" srcset="docs/img/files-windows-mobile-light.png">
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-windows-dark.png">
-  <img src="docs/img/files-windows-light.png" width="960" alt="Windows file browser with an Explorer-style address bar, command bar, navigation and details list">
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/img/files-windows-mobile-dark.png?v=7">
+  <source media="(max-width: 600px)" srcset="docs/img/files-windows-mobile-light.png?v=7">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-windows-dark.png?v=7">
+  <img src="docs/img/files-windows-light.png?v=7" width="960" alt="Windows file browser with an Explorer-style address bar, command bar, navigation and details list">
 </picture>
 
 The macOS file window uses a single command bar, a resizable sidebar, a bottom path bar, and a compact list with resizable Name/Date/Size/Kind columns and file-type icons. Column view keeps the ancestor columns visible while folders load or are empty. Use Command+1/2/3/4 for icon/list/column/gallery views, Command+[/] for history, Command+Shift+G to go to a folder, and Command+Shift+. to show hidden files. Folder tabs support Command+T/W and Control+Tab; each tab keeps its path, history, selection and view. The preview panel and Space quick preview display bounded text, images, the first PDF page on macOS, and browser-supported audio/video without opening an external app (text up to 512 KiB, media up to 16 MiB). Unsupported formats show metadata and an explicit Open action. HTML/SVG are never rendered as active content. Pointer drag suppresses browser text selection and supports folders, favorites and folder tabs as destinations. The action popover keeps transfer history, split view and connection settings available without an extra command bar.
@@ -122,13 +122,13 @@ The macOS file window uses a single command bar, a resizable sidebar, a bottom p
 <summary>Column and gallery views</summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-columns-dark.png">
-  <img src="docs/img/files-columns-light.png" width="960" alt="Folder navigation in column view">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-columns-dark.png?v=7">
+  <img src="docs/img/files-columns-light.png?v=7" width="960" alt="Folder navigation in column view">
 </picture>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-gallery-dark.png">
-  <img src="docs/img/files-gallery-light.png" width="960" alt="Gallery view with a text preview">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/files-gallery-dark.png?v=7">
+  <img src="docs/img/files-gallery-light.png?v=7" width="960" alt="Gallery view with a text preview">
 </picture>
 
 </details>
@@ -161,26 +161,26 @@ The macOS quit path releases all WebViews and containing windows before Objectiv
 
 Bonjour and Tailscale devices can be added from the same page.
 
-<img src="docs/img/nearby-window.png" width="960" alt="Nearby Macs and PCs discovered through Bonjour and Tailscale">
+<img src="docs/img/nearby-window.png?v=7" width="960" alt="Nearby Macs and PCs discovered through Bonjour and Tailscale">
 
 ### Open from your phone
 
 Turn on the web viewer, scan its QR code and enter the PIN.
 
-<img src="docs/img/share.png" width="960" alt="Sharing settings with the web viewer address, QR code and PIN">
+<img src="docs/img/share.png?v=7" width="960" alt="Sharing settings with the web viewer address, QR code and PIN">
 
 <p align="center">
-<img src="docs/img/phone-list.png" width="360" alt="Saved devices in the phone web viewer">
+<img src="docs/img/phone-list.png?v=7" width="360" alt="Saved devices in the phone web viewer">
 </p>
 
 <details>
 <summary>Connection editor and saved accounts</summary>
 
-<img src="docs/img/editor.png" width="960" alt="Connection editor with screen and file settings">
+<img src="docs/img/editor.png?v=7" width="960" alt="Connection editor with screen and file settings">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/accounts-dark.png">
-  <img src="docs/img/accounts-light.png" width="960" alt="Saved accounts shared across devices">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/accounts-dark.png?v=7">
+  <img src="docs/img/accounts-light.png?v=7" width="960" alt="Saved accounts shared across devices">
 </picture>
 
 </details>

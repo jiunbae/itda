@@ -16,7 +16,7 @@ node scripts/site-capture.mjs --help-images
 
 `PLAYWRIGHT` can point to an existing Playwright `index.mjs`, `CHROMIUM` to a browser executable, and `CAPTURE_DIR` to an alternative output directory. The script checks that nearby devices are present, columns retain ancestors, gallery preview loads and the Windows toolbar icon is sized correctly. It generates light/dark images, whole-window overviews at 2× density, readable file details, mobile variants and the social preview. Keep overview images uncropped; use the existing responsive detail crops where the landing page needs readable controls on a small screen.
 
-The current capture set was refreshed on 2026-10-22 from the 0.9.24 product frontend. Screenshots omit the app version so a docs-only or release version bump does not make otherwise current UI images obsolete. Recreate them after changes to tabs, commands, navigation, device cards, account editing or sharing. Do not label fictional data as a live connection or use captures as proof of native transfer/permission behavior.
+The current capture set was refreshed on 2026-10-24 from the product frontend at `03d832b7` on `main`, including the accessibility contrast and file-navigation updates. The seven help-center images use the same capture set. This records source provenance, not an installed or released build. Screenshots omit the app version so a docs-only or release version bump does not make otherwise current UI images obsolete. Recreate them after changes to tabs, commands, navigation, device cards, account editing or sharing. Do not label fictional data as a live connection or use captures as proof of native transfer/permission behavior.
 
 ## Check the result
 

@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-10-23T22:46:27.295819+00:00",
+  "capture_source_commit": "03d832b7b03bcf3df0a27bea6eb2ed928bb26cad",
+  "capture_script_sha256": "4193725bd681ed9f71381362c6b075ddf2c22e1bc880c912406a6e612dc0d652",
+  "capture_command": "PLAYWRIGHT=<installed Playwright index.mjs> node scripts/site-capture.mjs --help-images",
+  "method": "Real product frontend with fictional in-memory devices/files; fixed clock; Chromium screenshots and cwebp quality92 for shared help assets. No native IPC, real saved accounts, user files, remote hosts or permission grants.",
+  "cache_revision": 7,
+  "changed_assets": {
+    "docs/img/accounts-dark.png": {
+      "sha256": "6c382d6a5479f2997053ceac31113ccd722a76fd382679c0aca2abc8b9d89fe0",
+      "bytes": 54135
+    },
+    "docs/img/accounts-light.png": {
+      "sha256": "474cd506e42ee9e79ee592611e2f90e0a614cdd7c1318d22b5e72b6b4c9a102d",
+      "bytes": 54309
+    },
+    "docs/img/editor.png": {
+      "sha256": "c7a0c22392170aebddf206724ac6af4e71b7a80f7b46e1bceb3d84174957d2d4",
+      "bytes": 139996
+    },
+    "docs/img/files-columns-dark.png": {
+      "sha256": "9e3c0ca3ac8dd45918111001489c53af7fcb513d95143c9d0304d6308d13b6d4",
+      "bytes": 56405
+    },
+    "docs/img/files-columns-light.png": {
+      "sha256": "8b3a0a7e688f8f1027bbd1a2b25687f2e13ef7a9109973496429059aab07dbcb",
+      "bytes": 56794
+    },
+    "docs/img/files-dark.png": {
+      "sha256": "7950149a391e51cf74cbd53c7498ad89060ebfd9a2df3eaeddccc3e6f16ea850",
+      "bytes": 67347
+    },
+    "docs/img/files-focus-dark.png": {
+      "sha256": "afd04930d2936c66d59a97506211a11b29e2536edc501b9240d8ac73d27ea3d7",
+      "bytes": 71794
+    },
+    "docs/img/files-focus-light.png": {
+      "sha256": "d05b37c6d17937f901d0dbddbd0870d051ad458d53bb7749eab573525258f238",
+      "bytes": 72038
+    },
+    "docs/img/files-gallery-dark.png": {
+      "sha256": "5203896fb5e534400bcd957e6a59242921e5ce57f73fcb25bd5ad72f3529d10e",
+      "bytes": 57005
+    },
+    "docs/img/files-gallery-light.png": {
+      "sha256": "e08235dd5b75b02807307be579c6372d4fd41113679cd60683060ceee2598d39",
+      "bytes": 57435
+    },
+    "docs/img/files-light.png": {
+      "sha256": "0aa6b6b5d42e0973308e4f75ab95fc69e566b9347b6f53a44c8bc88bd0ccf544",
+      "bytes": 67408
+    },
+    "docs/img/files-medium-dark.png": {
+      "sha256": "4bace55b2d07c0cc5911bb6b9acd1c9d4c4edb7dd36eeb9527a2f74e5956cbe5",
+      "bytes": 50416
+    },
+    "docs/img/files-medium-light.png": {
+      "sha256": "ce71c1fb0eda09ac096b225bffd64cb3491d887757f040076b2c7701a02cc00a",
+      "bytes": 50214
+    },
+    "docs/img/files-windows-dark.png": {
+      "sha256": "e78c9d7cd06a0e0bc8d4b1841f6198f5f07c2f45924a40dab92d02b8683a7684",
+      "bytes": 163723
+    },
+    "docs/img/files-windows-light.png": {
+      "sha256": "eea9f8e52da4bba264e25d7e0b695216c839e2bdbed197334ede032b94e6f913",
+      "bytes": 165077
+    },
+    "docs/img/home-dark.png": {
+      "sha256": "d3816dd7b12a206aefb6cb8312aedd165996c75b8ed632f18daf9535da8caa49",
+      "bytes": 273085
+    },
+    "docs/img/home-light.png": {
+      "sha256": "1fdc71786528cd937fa91995b334dc49c0b8c4bb5e5ba4c95e571980088906e7",
+      "bytes": 278947
+    },
+    "docs/img/home-window-dark.png": {
+      "sha256": "32812a55bd465e7fdfd8ae14c97f4aefd658afff0c082e3b04698d0fd6cb1795",
+      "bytes": 794501
+    },
+    "docs/img/home-window-light.png": {
+      "sha256": "95baa6c0bb02c01da7543b28d9f6c4807165e07ecdd4eeef2437cfaa1357aef5",
+      "bytes": 869073
+    },
+    "docs/img/nearby-window.png": {
+      "sha256": "ea28a199b53624aca33892b508ec860c6379f86c58f94ed9ca4ffc3e5418c0f1",
+      "bytes": 159745
+    },
+    "docs/img/nearby.png": {
+      "sha256": "dcf807f548fa0ba81bbe1a006c7dbeae455113d636a855880e4b52feb70dfaa4",
+      "bytes": 69574
+    },
+    "docs/img/og.png": {
+      "sha256": "9eb649f9b79f2b98489832dd62d6127c037216138bb606c89cd79267cadc3d29",
+      "bytes": 264147
+    },
+    "docs/img/phone-list.png": {
+      "sha256": "9aeabb0ed463aac36c671fe6715ed963807c457ed02fb5bfb1960b830c3a06ab",
+      "bytes": 273188
+    },
+    "docs/img/share-windows.png": {
+      "sha256": "8c1c4a25394ed2f0646013a8ff57bc679f9948e541681a15dd0a13bedccdb286",
+      "bytes": 340511
+    },
+    "docs/img/share.png": {
+      "sha256": "c531e626adca706ba18a04c1957184609387944f88ab56a097f55d7c4fda98c2",
+      "bytes": 82298
+    },
+    "web/help/itda-accounts.webp": {
+      "sha256": "0bd830a80283e29ee0152a4c1f851c5a6c0a499b02d7bd3cbcaf608ca4a6cfe4",
+      "bytes": 23784
+    },
+    "web/help/itda-edit.webp": {
+      "sha256": "6eeebd862a457266f2faaf4760cebe4c2a63d3046253d5af147bb2d321b4e264",
+      "bytes": 35528
+    },
+    "web/help/itda-home.webp": {
+      "sha256": "049c35c1f0eedce135f0f6e2baa6862e0697d9d9f7ce357d79e1b2744d6d0296",
+      "bytes": 89514
+    },
+    "web/help/itda-nearby.webp": {
+      "sha256": "6feaffeee7681c02659e95c9d99d657757f345bb0bd126e03e29ba4a36c19467",
+      "bytes": 71926
+    },
+    "web/help/itda-share.webp": {
+      "sha256": "2a653a6d80e90c0a985b9a0bd291dcd963a9da88bb0370ccf38af922504b9b5c",
+      "bytes": 167626
+    },
+    "web/help/itda-web.webp": {
+      "sha256": "2a653a6d80e90c0a985b9a0bd291dcd963a9da88bb0370ccf38af922504b9b5c",
+      "bytes": 167626
+    },
+    "web/help/phone-list.webp": {
+      "sha256": "ba45b86d7e6e866e5c67d48eb46ebd9492dad886c5313c1af1db4c136a47224d",
+      "bytes": 56220
+    }
+  },
+  "visual_review": [
+    "home-light",
+    "files-focus-light",
+    "files-columns-light",
+    "files-windows-light",
+    "files-windows-dark",
+    "nearby-window",
+    "phone-list"
+  ],
+  "validation": {
+    "published_before_refresh": {
+      "url": "https://jiun.dev/itda/",
+      "result": "PASS",
+      "layouts": 40,
+      "widths": [
+        360,
+        390,
+        768,
+        1024,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "languages": [
+        "ko",
+        "en"
+      ],
+      "pages": [
+        "landing",
+        "getting-started"
+      ],
+      "scope": "Existing published site, before these updated assets. Real browser check; web text tool could not access the URL, browser/curl succeeded."
+    },
+    "local_current_assets": {
+      "result": "PASS",
+      "layouts": 40,
+      "widths": [
+        360,
+        390,
+        768,
+        1024,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "languages": [
+        "ko",
+        "en"
+      ],
+      "checks": [
+        "image loading",
+        "overflow",
+        "readable detail sizes",
+        "whole-window 2x overviews",
+        "platform tabs",
+        "matching enlargement",
+        "device image aspect ratios",
+        "anchors",
+        "keyboard focus and language controls"
+      ],
+      "requirements_note": "Latest local40-layout pass also includes the current-release12.3 requirement wording. This does not certify native OS compatibility."
+    },
+    "readme_image_references": "All referenced local screenshot files exist; both languages use revision7."
+  },
+  "deployment": "Updated asset publication pending PR merge/Pages build and new published-site verification. App help assets require a new installed app build; production app was not updated.",
+  "limits": [
+    "No physical phone, native Finder/Explorer, permission, transfer or screen-reader acceptance.",
+    "Source screenshots are not proof of an installed or released binary.",
+    "Selected visual review and 40 browser combinations do not certify every persona9/10."
+  ],
+  "current_release_advice": {
+    "minimum_recommended": "macOS12.3+ for published1.0.2",
+    "reason": "Published release strong SCK dependency independently checked; original12.0-12.2 viewer/files compatibility remains a required source fix, not dropped scope.",
+    "evidence": "assessments/evidence/macos-capture-compatibility-2026-10-24.json"
+  }
+}
