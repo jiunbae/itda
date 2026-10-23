@@ -650,7 +650,9 @@ function open(h) {
     if (S.rfb !== rfb) return;
     S.rfb = null;
     S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; S.hpModeContext = null; S.hpMode = null; renderTools();
-    if (APP) return setTimeout(() => appDropped(h, closeInfo), 50);
+    // Only for the attempt still current: a replacement opened meanwhile (the HP toggle, a
+    // quality change) owns the window now.
+    if (APP) return setTimeout(() => { if (S.gen === gen) appDropped(h, closeInfo, gen); }, 50);
     setTimeout(async () => {
       if (S.gen !== gen) return;
       const code = closeInfo ? closeInfo.code : 0;
@@ -673,7 +675,7 @@ function open(h) {
 
 // App window: a first attempt that fails goes back to the home (which explains it); a drop
 // after that reconnects on its own, like the Windows viewer.
-function appDropped(h, info) {
+function appDropped(h, info, gen) {
   const code = info ? info.code : 0;
   const msg = (info && info.reason) || '원격 기기와의 연결이 끊겼습니다';
   if (!S.ever) return post({ ev: 'error', kind: KIND_OF[code] || 'other', msg });
@@ -681,7 +683,7 @@ function appDropped(h, info) {
     S.tries += 1;
     post({ ev: 'reconnecting', n: S.tries });
     status('busy', `${h.label} 연결이 끊겼습니다`, `${Math.min(S.tries * 2, 10)}초 뒤 다시 연결합니다… (${S.tries}/${RETRIES})`);
-    return setTimeout(() => { if (!S.rfb) open(h); }, Math.min(S.tries * 2000, 10000));
+    return setTimeout(() => { if (S.gen === gen && !S.rfb) open(h); }, Math.min(S.tries * 2000, 10000));
   }
   post({ ev: 'error', kind: 'lost', msg });
 }
