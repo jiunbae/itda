@@ -29,7 +29,12 @@ try {
   const mac = { id: "mac", name: "Mac", host: "mac.local", user: "a", os: "mac", group: "Home", groups: ["Home"], opts: {}, hp: { on: false, port: 0 }, ssh: { on: false, user: "", port: 0 } };
   const pc = { id: "pc", name: "PC", host: "pc.local", user: "a", os: "windows", group: "", groups: [], opts: {}, hp: { on: false, port: 0 }, ssh: { on: false, user: "", port: 0 } };
   const saved = () => page.evaluate(() => (window.sent || []).filter((x) => x.cmd === "save_host"));
-  await page.evaluate(([a, b]) => { itda.recv({ type: "state", hosts: [a, b], settings: { onboarded: true, theme: "light", defaults: {} } }); openEdit(a); }, [mac, pc]);
+  await page.evaluate(([a, b]) => { itda.recv({ type: "state", hosts: [a, b], settings: { onboarded: true, theme: "light", defaults: {} } }); }, [mac, pc]);
+  await page.setViewportSize({ width: 720, height: 450 });
+  assert(await page.getByRole('button', { name: '파일 브라우저', exact: true }).count() === 1, 'collapsed navigation lost its name');
+  assert(await page.getByRole('button', { name: '설정', exact: true }).count() === 1, 'collapsed settings lost its name');
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.evaluate(h => openEdit(h), mac);
   // Chips: Enter and comma add, existing spelling wins, × removes.
   // openModal focuses the first field 30 ms later; let that happen before typing elsewhere.
   // (The browser's own autofocus comes first, openModal's timer after it: wait out both.)

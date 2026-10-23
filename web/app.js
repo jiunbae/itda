@@ -328,7 +328,7 @@ function onMessage(m) {
 function navItem(page, icon, text, count) {
   const on = S.page === page ? ' active' : '';
   const c = count != null ? `<span class="count">${count}</span>` : '';
-  return `<button class="nav-item${on}" data-page="${esc(page)}">${I(icon)}<span class="label">${esc(text)}</span>${c}</button>`;
+  return `<button class="nav-item${on}" data-page="${esc(page)}" aria-label="${esc(text)}" title="${esc(text)}">${I(icon)}<span class="label">${esc(text)}</span>${c}</button>`;
 }
 
 function renderNav() {
