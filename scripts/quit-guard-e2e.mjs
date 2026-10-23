@@ -30,7 +30,7 @@ try{
   await recv({type:'quit_guard',reason:'quit',count:2,waiting:false});
   const dialog=p.getByRole('dialog',{name:'전송 2개가 진행 중입니다',exact:true});
   await dialog.waitFor();
-  assert((await dialog.textContent()).includes('원본은 그대로 남고'),'The dialog does not say what stopping does');
+  assert((await dialog.textContent()).includes('아직 옮기지 않은 원본은 그대로 남고')&&(await dialog.textContent()).includes('.itda-partial'),'The dialog does not say what stopping does');
   await p.waitForFunction(()=>document.activeElement?.dataset.x==='wait');
   assert(!await last(),'A choice was sent before the person answered');
   await p.mouse.click(5,5);
@@ -63,12 +63,17 @@ try{
   {const t=await last();assert(t.choice==='cancel'&&t.reason==='quit','Dialog cancel: '+JSON.stringify(t));}
   // A stop that didn't finish: Itda stays open; waiting again is the default, forcing says
   // what it leaves, and an update can't be forced.
-  await recv({type:'quit_guard',reason:'quit',count:1,stuck:true});
+  // Stopping: the banner says cleanup is running, and cancelling says nothing resumes.
+  await recv({type:'quit_pending',reason:'quit',count:2,stopping:true});
+  assert((await p.locator('#quit-pending [role=status]').textContent()).includes('정리하는 중 · 2개 남음'),'Stopping status');
+  await recv({type:'quit_pending',count:0,cancelled:true,stopped:true});
+  await p.locator('#toasts .toast').filter({hasText:'중단한 전송은 다시 시작되지 않습니다'}).waitFor();
+  await recv({type:'quit_guard',reason:'quit',count:1,stuck:true,force:42});
   const stuck=p.getByRole('dialog',{name:'전송 1개가 아직 멈추지 않았습니다',exact:true});
   assert((await stuck.textContent()).includes('임시 파일'),'Force does not say what it leaves');
   await p.waitForFunction(()=>document.activeElement?.dataset.x==='stop');
   await stuck.getByRole('button',{name:'강제로 종료',exact:true}).click();
-  {const t=await last();assert(t.choice==='force'&&t.reason==='quit','Force packet: '+JSON.stringify(t));}
+  {const t=await last();assert(t.choice==='force'&&t.reason==='quit'&&t.ticket===42,'Force packet: '+JSON.stringify(t));}
   await recv({type:'quit_guard',reason:'update',count:2,stuck:true});
   const stuckUpdate=p.getByRole('dialog',{name:'전송 2개가 아직 멈추지 않았습니다',exact:true});
   assert(!await stuckUpdate.getByRole('button',{name:'강제로 종료'}).count(),'An update can be forced');

@@ -74,6 +74,8 @@ pub type Emit = Arc<dyn Fn(Value) + Send + Sync>;
 pub struct Control {
     cancel: AtomicBool,
     child: Mutex<Vec<Arc<Mutex<Child>>>>,
+    /// A Finder promise's write: counted through its operation queue, not as a job.
+    promise: AtomicBool,
 }
 impl Control {
     pub fn check(&self) -> io::Result<()> {
@@ -149,8 +151,20 @@ pub fn test_adopt(window: &str, id: &str, job: &str) {
 /// Transfers and exports queued or running (also those whose file window was already
 /// closed), and files being handed to Explorer from a drag: what quitting would cut off.
 pub fn active_jobs() -> usize {
+    let n = jobs().lock().unwrap().values().filter(|(_, c)| !c.promise.load(Ordering::Relaxed)).count();
+    n + native_busy()
+}
+/// What the system file managers are still being given: Windows drag streams, and Finder
+/// promises queued or being written (their writes are jobs too, counted only here).
+fn native_busy() -> usize {
     let streams = { #[cfg(windows)] { vdrag::active_streams() } #[cfg(not(windows))] { 0 } };
-    jobs().lock().unwrap().len() + streams
+    streams + PROMISE_BUSY.get().map_or(0, |f| f())
+}
+/// Set by the Mac app: how many Finder promise operations are queued or running.
+pub static PROMISE_BUSY: OnceLock<fn() -> usize> = OnceLock::new();
+thread_local! {
+    /// This thread is writing a Finder promise (files_mac sets it around export::write).
+    pub static PROMISE_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 /// Stop every transfer, export and drag stream; each cleans up (staged files, sessions) and
 /// leaves `active_jobs` as it ends.
@@ -193,10 +207,9 @@ pub fn close_admissions() -> usize {
     let n = {
         let all = jobs().lock().unwrap();
         set_accepting(false);
-        all.len()
+        all.values().filter(|(_, c)| !c.promise.load(Ordering::Relaxed)).count()
     };
-    let streams = { #[cfg(windows)] { vdrag::active_streams() } #[cfg(not(windows))] { 0 } };
-    n + streams
+    n + native_busy()
 }
 pub fn open_admissions() {
     set_accepting(true);

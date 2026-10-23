@@ -792,7 +792,10 @@ pub fn run(quick: Option<String>) {
         let _ = &menu;
         match event {
             // Launched: AppKit has installed its own quit handler by now; ours replaces it.
-            TaoEvent::NewEvents(tao::event::StartCause::Init) => quit_event::install(),
+            TaoEvent::NewEvents(tao::event::StartCause::Init) => {
+                quit_event::install();
+                let _ = crate::files::PROMISE_BUSY.set(native_files::promise_busy);
+            }
             TaoEvent::LoopDestroyed => {
                 permission_guide::shutdown();
                 crate::files::shutdown();

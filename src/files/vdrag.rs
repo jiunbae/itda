@@ -63,7 +63,8 @@ impl Remote {
         if !self.operation.load(std::sync::atomic::Ordering::SeqCst) { self.end_batch(); }
     }
     pub fn end_batch(&self) {
-        let id = std::mem::take(&mut *self.batch.lock().unwrap());
+        let mut batch = self.batch.lock().unwrap();
+        let id = std::mem::take(&mut *batch);
         if id != 0 { unregister(id); }
     }
 
@@ -99,8 +100,10 @@ impl Remote {
     pub fn reader(self: &Arc<Self>, item: &Item) -> Reader {
         // A file of an accepted drag may still be read while Itda waits to quit; anything else
         // is a new stream and needs admission.
-        let batch_open = *self.batch.lock().unwrap() != 0;
-        let live = if batch_open { Some(register(&self.control)) } else { super::admit_stream(&self.control) };
+        // Decided and registered while the drag can't end meanwhile (end_batch takes this lock).
+        let batch = self.batch.lock().unwrap();
+        let live = if *batch != 0 { Some(register(&self.control)) } else { super::admit_stream(&self.control) };
+        drop(batch);
         let Some(live) = live else { return Reader::refused() };
         let (tx, rx) = sync_channel::<io::Result<Vec<u8>>>(16);
         let (me, path, size) = (self.clone(), item.path.clone(), item.size);
@@ -260,6 +263,10 @@ impl Read for Reader {
         // Nothing asked for: nothing changes.
         if out.is_empty() {
             return Ok(0);
+        }
+        // Stopped: nothing more is handed out, buffered or not (the file isn't complete).
+        if self.delivered < self.size && self.control.check().is_err() {
+            return self.fail(io::Error::other("전송을 중단했습니다"));
         }
         while self.at == self.buf.len() {
             // The whole advertised size is out: end of file, without waiting for the download.
@@ -443,5 +450,27 @@ mod tests {
         assert_eq!(e.to_string(), super::super::CLOSING);
         assert!(super::super::admit_stream(&remote.control).is_none());
         super::super::open_admissions();
+    }
+
+    /// A stopped stream hands out nothing more, even bytes already buffered.
+    #[test]
+    fn a_stopped_stream_delivers_no_buffered_bytes() {
+        let (tx, rx) = sync_channel(4);
+        tx.send(Ok(b"all of it".to_vec())).unwrap();
+        drop(tx);
+        let c = Arc::new(Control::default());
+        let mut r = Reader::new(rx, 9, c.clone(), register(&c));
+        assert_eq!(r.read(&mut []).unwrap(), 0);
+        c.stop();
+        let mut buf = [0u8; 16];
+        assert!(r.read(&mut buf).is_err(), "a stopped stream delivered its buffer");
+        assert_eq!(buf, [0u8; 16]);
+        assert!(!live(&r));
+        // A finished one keeps saying end of file.
+        let mut done = Reader::of(b"ok", 2);
+        let mut two = [0u8; 2];
+        done.read_exact(&mut two).unwrap();
+        done.control.stop();
+        assert_eq!(done.read(&mut two).unwrap(), 0);
     }
 }
