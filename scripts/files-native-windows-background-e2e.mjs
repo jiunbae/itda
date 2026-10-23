@@ -28,6 +28,7 @@ const ps=s=>execFileSync('ssh',['-o','BatchMode=yes','-o','ConnectTimeout=5',hos
 const q=s=>"'"+s.replaceAll("'","''")+"'";
 const assert=(v,m)=>{if(!v)throw Error(m);};
 let remote,tunnel,browser,taskStarted=false,cleanupReceipt,remoteTouched=false,finalizing=false,interrupted=null;const results=[];
+function readSftpAudit(){return serverRoot&&fs.existsSync(path.join(serverRoot,'audit.jsonl'))?fs.readFileSync(path.join(serverRoot,'audit.jsonl'),'utf8').trim().split('\n').filter(Boolean).map(x=>JSON.parse(x)):[];}
 const resultFile=process.env.ITDA_UI_RESULT || path.join(local,'result.json');
 console.log('Native UI receipt: '+resultFile);
 let cleaning=false;
@@ -119,7 +120,7 @@ try{
  const context=browser.contexts()[0],page=context.pages()[0];await page.waitForFunction(id=>typeof S!=='undefined'&&S.hosts.some(h=>h.id===id),fixtureId,{timeout:30000});
  results.push({check:'actual native Windows WebView2 with private UDF and unchanged startup entry',result:'PASS',startup_entry_existed:start.startup_entry_existed,existing_app_processes:start.existing_app_processes,existing_app_pids:start.existing_app_pids});
 
- const audit=()=>fs.existsSync(path.join(serverRoot,'audit.jsonl'))?fs.readFileSync(path.join(serverRoot,'audit.jsonl'),'utf8').trim().split('\n').filter(Boolean).map(x=>JSON.parse(x)):[];
+ const audit=readSftpAudit;
  const waitFor=async (test,message,ms=15000)=>{const end=Date.now()+ms;while(Date.now()<end){if(await test())return;await new Promise(r=>setTimeout(r,100));}throw Error(message);};
  await page.evaluate(()=>{window.bgObserved=[];const original=ItdaFiles.message;ItdaFiles.message=function(m){if(m.type==='files_job'||m.type==='files_background')bgObserved.push({type:m.type,count:m.count,window:m.window,orphan:m.orphan,state:m.state,job:m.job,error:m.error});return original.call(this,m);};});
  const openSource=async()=>{
@@ -158,10 +159,11 @@ try{
  await liveRow.getByRole('button',{name:'취소',exact:true}).click();await new Promise(r=>setTimeout(r,1000));
  assert(!inspectDestination().some(f=>f.name==='payload.bin'),'Cancelled transfer committed while source remained blocked');
  await dialog.locator('.transfer-row.cancelled').waitFor({timeout:10000});
- assert(await page.evaluate(job=>bgObserved.some(m=>m.job===job&&m.state==='cancelled'&&m.window==='app'&&m.orphan===true),firstJob),'Cancellation outcome was not app-scoped');
+ provenance.cancel_observation={job:firstJob,barrier_offset:barrier.offset,events:await page.evaluate(()=>bgObserved)};
+ assert(provenance.cancel_observation.events.some(m=>m.job===firstJob&&m.state==='cancelled'&&m.window==='app'&&m.orphan===true),'Cancellation outcome was not app-scoped');
  assert(!audit().slice(cancelStart).some(e=>e.event==='read-bytes'&&e.path==='/payload.bin'&&e.offset>=barrier.offset),'Source read advanced past held offset after cancellation');
  fs.writeFileSync(path.join(serverRoot,'release-read'),'resume');await new Promise(r=>setTimeout(r,1500));
- assert(audit().slice(cancelStart).some(e=>e.event==='read-aborted'&&e.path==='/payload.bin'&&e.offset===barrier.offset),'Source barrier was not aborted by cancellation');
+ assert(audit().slice(cancelStart).some(e=>e.event==='read-aborted'&&e.path==='/payload.bin'&&e.offset===barrier.offset&&e.reason==='transport_closed'),'Source barrier was not aborted by cancellation');
  assert(!audit().slice(cancelStart).some(e=>e.event==='read-bytes'&&e.path==='/payload.bin'&&e.offset>=barrier.offset),'Source read resumed after cancellation and barrier release');
  await waitFor(()=>inspectDestination().length===0,'Cancelled mid-stream transfer left destination or partial staging files');
  const payload=serverConfig.files.find(f=>f.path==='/payload.bin');assert(createHash('sha256').update(fs.readFileSync(path.join(serverRoot,'files','payload.bin'))).digest('hex')===payload.sha256,'Source fixture changed');
@@ -177,7 +179,7 @@ try{
 
  fs.writeFileSync(resultFile,JSON.stringify({...provenance,method:'actual Windows console app, existing WebView2 attached through private loopback CDP/SSH tunnel; no emulated Windows UA',results,status:results.some(r=>r.result==='FAIL')?'findings':'checks-passed-cleanup-pending',limits:['candidate build, not production rollout','loopback CDP is reachable by other local processes; use a trusted test account/machine','CDP renderer input does not prove physical keyboard/global Windows accelerators','no real Explorer OLE drop, physical input, screen reader, multi-monitor or phone verified','OS notifications disabled and untested; quit during transfer untested','main-window cancellation only; cancellation from a second file window is untested']},null,2));
  console.log(JSON.stringify(results));if(results.some(r=>r.result==='FAIL'))process.exitCode=1;
-}catch(e){fs.writeFileSync(resultFile,JSON.stringify({status:'failed',results,error:e.message,local,...provenance},null,2));throw e;}finally{
+}catch(e){fs.writeFileSync(resultFile,JSON.stringify({status:'failed',results,error:e.message,local,...provenance,sftp_audit:readSftpAudit()},null,2));throw e;}finally{
  finalizing=true;
  let cleanupError;
  try{cleanupRemote();}catch(e){cleanupError=e;}

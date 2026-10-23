@@ -36,13 +36,20 @@ class Auth(paramiko.ServerInterface):
         return paramiko.OPEN_SUCCEEDED if kind == 'session' else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 class Handle(paramiko.SFTPHandle):
     def read(self, offset, length):
+        # Requests already buffered by SFTP must not touch the fixture after abort.
+        if self.aborted or stop.is_set() or not self.transport.is_active():
+            audit('read-rejected', path=self.logical, offset=offset)
+            return paramiko.SFTP_FAILURE
         if self.logical == '/payload.bin' and offset >= (2 << 20) and not self.held and (workspace / 'hold-read').is_file():
             self.held = True
             audit('read-blocked', path=self.logical, offset=offset)
             deadline = time.monotonic() + 120
             while not (workspace / 'release-read').is_file():
-                if stop.wait(.05) or not self.transport.is_active() or time.monotonic() > deadline:
-                    audit('read-aborted', path=self.logical, offset=offset)
+                stopped = stop.wait(.05)
+                reason = 'shutdown' if stopped else 'transport_closed' if not self.transport.is_active() else 'timeout' if time.monotonic() > deadline else None
+                if reason:
+                    self.aborted = True
+                    audit('read-aborted', path=self.logical, offset=offset, reason=reason)
                     return paramiko.SFTP_FAILURE
         data = super().read(offset, length)
         if isinstance(data, bytes): audit('read-bytes', path=self.logical, offset=offset, length=len(data))
@@ -71,7 +78,7 @@ class Files(paramiko.SFTPServerInterface):
     def open(self, path, flags, attr):
         if flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND): return paramiko.SFTP_PERMISSION_DENIED
         try:
-            h=Handle(flags); h.logical=path; h.held=False; h.transport=self.transport; h.readfile=self.local(path).open('rb'); audit('read-open', path=path); return h
+            h=Handle(flags); h.logical=path; h.held=False; h.aborted=False; h.transport=self.transport; h.readfile=self.local(path).open('rb'); audit('read-open', path=path); return h
         except OSError as e: return paramiko.SFTPServer.convert_errno(e.errno)
 def connection(client):
     t=paramiko.Transport(client); transports.append(t)
