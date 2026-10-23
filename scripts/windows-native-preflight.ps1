@@ -35,17 +35,23 @@ public static class ItdaNativePrerequisites {
     public static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
     [DllImport("user32.dll", SetLastError=true)]
     public static extern bool CloseDesktop(IntPtr desktop);
-    [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    [DllImport("user32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
     public static extern bool GetUserObjectInformationW(IntPtr handle, int index, StringBuilder value, uint bytes, out uint needed);
     [DllImport("user32.dll", SetLastError=true)]
     public static extern IntPtr GetThreadDesktop(uint threadId);
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetProcessWindowStation();
     [DllImport("kernel32.dll")]
     public static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")]
     public static extern int GetSystemMetrics(int metric);
     [DllImport("user32.dll")]
     public static extern uint GetDpiForSystem();
-    [DllImport("wtsapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetThreadDpiAwarenessContext();
+    [DllImport("user32.dll")]
+    public static extern int GetAwarenessFromDpiAwarenessContext(IntPtr context);
+    [DllImport("wtsapi32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
     public static extern bool WTSQuerySessionInformationW(IntPtr server, uint session, int info, out IntPtr buffer, out uint bytes);
     [DllImport("wtsapi32.dll")]
     public static extern void WTSFreeMemory(IntPtr buffer);
@@ -82,18 +88,22 @@ public static class ItdaNativePrerequisites {
         if ($buffer -ne [IntPtr]::Zero) { [ItdaNativePrerequisites]::WTSFreeMemory($buffer) }
     }
     $desktop = [ItdaNativePrerequisites]::OpenInputDesktop(0, $false, 1) # DESKTOP_READOBJECTS only
+    $openError = if ($desktop -eq [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::GetLastWin32Error() } else { $null }
     try {
         $inputName = DesktopName $desktop
         $threadName = DesktopName ([ItdaNativePrerequisites]::GetThreadDesktop([ItdaNativePrerequisites]::GetCurrentThreadId()))
-        $report.checks.desktop = [ordered]@{ input = $inputName; thread = $threadName }
+        $stationName = DesktopName ([ItdaNativePrerequisites]::GetProcessWindowStation())
+        $report.checks.desktop = [ordered]@{ input = $inputName; thread = $threadName; window_station = $stationName; open_input_error = $openError }
         if ($inputName -ne 'Default' -or $threadName -ne 'Default') { $report.unmet += 'default-input-and-thread-desktop' }
+        if ($stationName -ne 'WinSta0') { $report.unmet += 'interactive-window-station' }
     } finally {
         # GetThreadDesktop returns a borrowed handle; only the opened input handle is closed.
         if ($desktop -ne [IntPtr]::Zero) { [void][ItdaNativePrerequisites]::CloseDesktop($desktop) }
     }
     $width = [ItdaNativePrerequisites]::GetSystemMetrics(0)
     $height = [ItdaNativePrerequisites]::GetSystemMetrics(1)
-    $report.checks.screen = [ordered]@{ width = $width; height = $height; system_dpi = [ItdaNativePrerequisites]::GetDpiForSystem() }
+    $awareness = [ItdaNativePrerequisites]::GetAwarenessFromDpiAwarenessContext([ItdaNativePrerequisites]::GetThreadDpiAwarenessContext())
+    $report.checks.screen = [ordered]@{ width = $width; height = $height; system_dpi = [ItdaNativePrerequisites]::GetDpiForSystem(); thread_awareness = $awareness; metric_space = 'Calling PowerShell DPI context; not certified physical pixels' }
     if ($width -lt 1024 -or $height -lt 768) { $report.unmet += 'screen-at-least-1024x768' }
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     try {
