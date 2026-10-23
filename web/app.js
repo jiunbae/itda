@@ -1992,7 +1992,7 @@ document.addEventListener('keydown', (e) => {
   if (typing) return;
   const c = e.target.closest && e.target.closest('.card, .list-row:not(.list-head)');
   // Enter/Space activate an inner button itself; other device shortcuts still work there.
-  const buttonActivation = e.target.closest('button') && (e.key === 'Enter' || e.key === ' ');
+  const buttonActivation = e.target.closest?.('button') && (e.key === 'Enter' || e.key === ' ');
   if (c && !buttonActivation) {
     if (e.key === 'Enter') { e.preventDefault(); connect(c.dataset.id); }
     else if (e.key === 'Delete' || (MAC && e.metaKey && e.key === 'Backspace')) askDelete(c.dataset.id);

@@ -104,6 +104,8 @@ try {
   await page.evaluate(() => closeModal());
   // Names are text, not markup.
   assert(await page.locator("#content [aria-label*='<\"A\">']").count() > 0 && !(await page.locator("#content a, #content script").count()), "special characters not kept as text");
+  // Non-element targets can occur for programmatically dispatched shortcut events.
+  await page.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
   assert(!errors.length, errors.join("\n"));
   console.log(`PASS (${engine}): device groups and per-device action names in cards and list, favorite toggle state, keyboard actions reach their own device`);
 } finally {
