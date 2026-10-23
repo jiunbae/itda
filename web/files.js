@@ -537,7 +537,8 @@
     ])
       layer.querySelector(`[data-action="${a}"]`)?.setAttribute("disabled", "");
     layer.querySelector('[data-action="back"]').disabled = host.id === NETWORK;
-    layer.querySelector(".files-jobs").hidden = true;
+    // Transfers that need attention (and the history) stay in view on Home/Network too.
+    renderJobs();
     layer.querySelector(".files-panes").ondblclick = (e) => {
       const card = e.target.closest("[data-device-card]");
       if (card && !e.target.closest("button"))

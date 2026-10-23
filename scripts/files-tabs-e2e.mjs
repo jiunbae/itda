@@ -213,6 +213,29 @@ try{
    assert(await toasts('Build Server · 파일 이동 취소됨')===1,'Background cancel not announced');
    assert(await layer.locator('[data-retry-job="job-R"]').count()===1,'Cancelled retry has no retry');
    await layer.locator('[data-dismiss-job="job-R"]').click();}
+  // Another device's failure stays in view, with its retry, on Home/Network and through a
+  // Network refresh; opening them doesn't jump to that device's tab.
+  await layer.locator('[data-tab]').nth(1).click();await row('Beta-B.txt').waitFor();
+  await p.evaluate(()=>itda.recv({type:'files_clipboard',clip:{cid:'home-clip',host:'studio',window:'other-window',side:'remote',path:'/Users/alex',names:['Alpha-A.txt'],move:false}}));
+  await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+v`);
+  await p.locator('.files-prompt [data-choice="ok"]').click();
+  {const t=(await packets()).filter(x=>x.op==='transfer').at(-1);
+   await job({id:'build',job:'job-H',req:t.req,state:'queued'});
+   await layer.locator('[data-tab]').nth(0).click();await row('Inside-A.txt').waitFor();
+   await job({id:'build',job:'job-H',req:t.req,state:'failed',error:'홈 확인용 실패',completed_names:[],partial:null,source_closed:false});}
+  const homeRow=layer.locator('.files-job').filter({hasText:'홈 확인용 실패'});
+  await homeRow.waitFor();
+  for(const page of platform==='mac'?['network']:['explorer-home','network']){
+    await layer.locator(`.files-sidebar [data-action="${page}"]`).first().click();
+    await p.waitForFunction(()=>document.querySelector('.files-network'));
+    for(const step of ['open','refresh']){
+      if(step==='refresh')await p.evaluate(()=>ItdaFiles.refreshNetwork());
+      assert(await homeRow.isVisible()&&await homeRow.getByRole('button',{name:'다시 시도…'}).isVisible(),`Failed job or its retry hidden on ${page} (${step})`);
+    }
+    assert(!(await activeTab()).startsWith('Build Server')&&await layer.locator('[data-tab]').nth(0).evaluate(e=>e.classList.contains('on')),'Home/Network jumped to the job\'s tab');
+  }
+  await layer.locator('[data-dismiss-job="job-H"]').click();
+  await layer.locator('.files-sidebar [data-device="studio"]').first().click();await row('Inside-A.txt').waitFor();
   // The source device's connection is gone (no tab here, its window closed): guidance to open
   // it, no transfer.
   await layer.locator('[data-tab]').nth(1).click();await row('Beta-B.txt').waitFor();
