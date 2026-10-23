@@ -1120,6 +1120,6 @@ body:has(.files-layer) #modals .scrim { z-index: 3800; }
 .files-layer.windows [data-action="locations-toggle"] { display:none; }
 @media(max-width:600px) {
  .files-layer.windows [data-action="locations-toggle"] { display:inline-flex; flex-shrink:0; }
- .files-layer.windows.locations-open .files-sidebar { display:block; grid-area:auto; position:absolute; left:0; top:144px; bottom:28px; width:220px; z-index:12; box-shadow:4px 0 12px #0003; }
- .files-layer.windows .files-preview:not(.quick-look):not([hidden]) { grid-area:auto; position:absolute; inset:144px 0 28px; width:auto; z-index:11; background:var(--surface); }
+ .files-layer.windows.locations-open .files-sidebar { display:block; grid-area:content; position:absolute; left:0; top:0; bottom:0; width:220px; z-index:12; box-shadow:4px 0 12px #0003; }
+ .files-layer.windows .files-preview:not(.quick-look):not([hidden]) { grid-area:content; position:absolute; inset:0; width:auto; z-index:11; background:var(--surface); }
 }

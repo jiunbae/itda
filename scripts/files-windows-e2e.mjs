@@ -67,6 +67,12 @@ try{
     assert(await p.evaluate(()=>testPackets.filter(m=>m.op==='open').length)===before,`${key} opened selected file from toolbar`);
     await p.keyboard.press('Escape');
    }
+   // File shortcuts and Quick Look recovery still work with a toolbar button focused.
+   await layer.locator('[data-action="new"]').focus();await p.keyboard.press('F2');
+   await p.getByRole('dialog',{name:'이름 변경',exact:true}).waitFor();await p.keyboard.press('Escape');
+   await layer.locator('.files-list').focus();await p.keyboard.press('Space');
+   await layer.locator('[data-action="close-preview"]').focus();await p.keyboard.press('Escape');
+   assert(await layer.locator('.files-preview').isHidden(),'Escape from preview close button did not close Quick Look');
    // Transfer fields are named; the safe keep-both default cannot force rsync.
    await layer.locator('[data-action="paste"]').focus();await p.keyboard.press('Enter');
    const dialog=p.getByRole('dialog',{name:'파일 복사',exact:true});await dialog.waitFor();
@@ -155,6 +161,7 @@ try{
   await layer.locator('[data-action="locations-toggle"]').click();
   await layer.locator('[data-network-sidebar] [data-side="local"]').click();
   assert(await layer.locator('[data-pane="local"]').count()===1,'Compact This PC navigation failed');
+  assert(await layer.locator('[data-action="locations-toggle"]').evaluate(e=>document.activeElement===e),'Compact navigation lost focus');
   await layer.locator('[data-action="locations-toggle"]').click();
   await layer.locator('.files-sidebar [data-device="test"]').first().click();
   await layer.locator('tbody tr').filter({hasText:'Notes.txt'}).click();

@@ -87,6 +87,15 @@ try{
 
   await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+t`);
   assert(await layer.locator('[data-tab]').count()===2,'New tab failed');
+  // The tab's label and close button are separate keyboard controls. Arrow navigation
+  // retains focus on the active tab; Space on close must close rather than preview a file.
+  await layer.getByRole('tab',{selected:true}).focus();await p.keyboard.press('ArrowLeft');
+  await p.waitForFunction(()=>document.activeElement.matches('.files-tab [role="tab"][aria-selected="true"]'));
+  await p.keyboard.press('ArrowRight');
+  await layer.locator('[data-tab]').nth(1).locator('[data-close-tab]').focus();await p.keyboard.press('Space');
+  assert(await layer.locator('[data-tab]').count()===1,'Keyboard close failed');
+  await p.keyboard.press(`${mod}+t`);assert(await layer.locator('[data-tab]').count()===2,'Tab could not reopen after keyboard close');
+
   // Open another device in the new tab.
   await layer.locator('[data-device="build"]').first().click();
   await row('Beta-B.txt').waitFor();

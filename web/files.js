@@ -84,6 +84,7 @@
   function tabBar() {
     if (!layer) return;
     const bar = layer.querySelector(".files-tabs");
+    const focused = bar.contains(document.activeElement) && document.activeElement.matches('[role="tab"]');
     bar.hidden = MAC && host.id === NETWORK;
     const mixed = fileTabs.some(t => t.host && t.host.id !== host.id);
     bar.innerHTML = `<div class="files-tab-owner" role="tablist" aria-label="폴더 탭" aria-owns="${fileTabs.map(t => `file-tab-${t.id}`).join(" ")}"></div>` + fileTabs.map(t => { const on = t.id === currentTab, h = on ? host : t.host || host, folder = (on ? panes[active].path : t.panes[t.active].path).split(/[\\/]/).filter(Boolean).pop() || (!MAC && (on ? panes[active].path : t.panes[t.active].path) === "" ? "내 PC" : "/"), name = mixed && h.id !== NETWORK ? `${label(h)} · ${folder}` : folder; return `<div class="files-tab ${on ? "on" : ""}" data-tab="${t.id}" title="${esc(h.id === NETWORK ? folder : `${label(h)} · ${folder}`)}"><span id="file-tab-${t.id}" role="tab" aria-selected="${on}" tabindex="${on ? 0 : -1}">${icon(true)}${esc(name)}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`; }).join("") + `<button class="files-tab-add" ${host.id === NETWORK ? "disabled" : ""} data-action="new-tab" aria-label="새 탭" title="새 탭 (${MAC ? "⌘T" : "Ctrl+T"})"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>`;
@@ -93,6 +94,7 @@
     const glyph = { minimize: '<path d="M1 5.5h9"/>', maximize: '<rect x="1" y="1" width="9" height="9"/>', restore: '<rect x="1" y="3" width="7" height="7"/><path d="M3 3V1h7v7H8"/>', close: '<path d="M1 1l9 9M10 1l-9 9"/>' };
     const svg = (k) => `<svg viewBox="0 0 11 11" aria-hidden="true">${glyph[k]}</svg>`;
     if (CHROME) bar.insertAdjacentHTML("beforeend", `<div class="files-caption"><button data-window="minimize" aria-label="최소화" title="최소화">${svg("minimize")}</button><button data-window="maximize" aria-label="${maximized ? "이전 크기로" : "최대화"}" title="${maximized ? "이전 크기로" : "최대화"}">${svg(maximized ? "restore" : "maximize")}</button><button data-window="close" class="close" aria-label="닫기" title="닫기">${svg("close")}</button></div>`);
+    if (focused) bar.querySelector('[role="tab"][aria-selected="true"]')?.focus({preventScroll:true});
   }
   function newTab(path, side) {
     if (host.id === NETWORK) return;
@@ -123,12 +125,14 @@
     for (const side of ["local", "remote"]) if (panes[side].busy || side === active) nav(side, panes[side].busy ? panes[side].history[panes[side].at] || panes[side].path : panes[side].path, false);
   }
   function closeTab(id) {
+    const focused = layer.querySelector(".files-tabs").contains(document.activeElement);
     if (fileTabs.length === 1) return act("close");
     const index = fileTabs.findIndex(t => t.id === id);
     if (id === currentTab) switchTab(fileTabs[index === 0 ? 1 : index - 1].id);
     const [closed] = fileTabs.splice(index, 1);
     releaseUnused(closed.host);
     tabBar();
+    if (focused) layer.querySelector('[role="tab"][aria-selected="true"]')?.focus();
   }
   // Point the window at the device of the current tab; the other tabs keep their connections.
   function useHost(h) {
@@ -860,6 +864,12 @@
     layer.querySelector(".files-title").addEventListener("pointerdown", (e) => {
       if (MAC && e.button === 0 && !e.target.closest("button,input")) send("files_drag");
     });
+    layer.addEventListener("pointerdown", e => {
+      if (!e.target.closest('.files-sidebar,[data-action="locations-toggle"]')) {
+        layer.classList.remove("locations-open");
+        layer.querySelector('[data-action="locations-toggle"]')?.setAttribute("aria-expanded", "false");
+      }
+    }, true);
     layer.addEventListener("pointerdown", resizeStart, true);
     layer.addEventListener("click", click);
     layer.addEventListener("dblclick", dblclick);
@@ -1175,7 +1185,8 @@
   function click(e) {
     if (e.target.closest(".files-sidebar button") && layer.classList.contains("locations-open")) {
       layer.classList.remove("locations-open");
-      layer.querySelector('[data-action="locations-toggle"]')?.setAttribute("aria-expanded", "false");
+      const toggle = layer.querySelector('[data-action="locations-toggle"]');
+      toggle?.setAttribute("aria-expanded", "false"); toggle?.focus();
     }
     if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopPropagation(); return; }
     const close = e.target.closest("[data-close-tab]");
@@ -1673,7 +1684,7 @@
       switchTab(fileTabs[next].id);
       layer.querySelector(`[data-tab="${currentTab}"] [role="tab"]`)?.focus(); return;
     }
-    if (!e.ctrlKey && !e.metaKey && !e.altKey && e.target.closest('button,select,summary,a[href]')) return;
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && ((['Enter', ' '].includes(e.key) && e.target.closest('button,select,summary,a[href]')) || (e.target.closest('select,summary') && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End'].includes(e.key)))) return;
     if (focusedTab && ["Enter", " "].includes(e.key)) { e.preventDefault(); switchTab(Number(focusedTab.dataset.tab)); return; }
     const modKey = MAC ? e.metaKey : e.ctrlKey;
     if (modKey && e.key.toLowerCase() === "t") { e.preventDefault(); newTab(); return; }
@@ -2189,6 +2200,12 @@
     if(e.target.closest?.("input,textarea") || document.activeElement?.closest("input,textarea") || (!selected?.isCollapsed && selected?.anchorNode?.parentElement?.closest(".files-preview pre")))return;
     e.preventDefault();e.stopPropagation();act(type);
   },true);
+  matchMedia('(max-width:600px)').addEventListener('change', e => {
+    if (!e.matches && layer) {
+      layer.classList.remove("locations-open");
+      layer.querySelector('[data-action="locations-toggle"]')?.setAttribute("aria-expanded", "false");
+    }
+  });
   document.addEventListener("keydown", key, true);
   document.addEventListener("click", browserClick);
   document.addEventListener("dblclick", (e) => {
