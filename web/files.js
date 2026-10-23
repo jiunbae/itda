@@ -1688,7 +1688,7 @@
     box.querySelectorAll("[data-goto-job]").forEach(b => b.onclick = () => { const t = tabOf(jobs.get(b.dataset.gotoJob)?.id); if (t) switchTab(t.id); });
     box.querySelectorAll("[data-dismiss-job]").forEach(b => b.onclick = () => { jobs.delete(b.dataset.dismissJob); announcedJobs.delete(b.dataset.dismissJob); renderJobs(); });
     if (!current.length && history) box.textContent = "최근 전송 내역이 없습니다";
-    if (focused) box.querySelector(`[${focused.name}="${CSS.escape(focused.value)}"]`)?.focus();
+    if (focused) (box.querySelector(`[${focused.name}="${CSS.escape(focused.value)}"]`) || box.querySelector("button") || layer.querySelector(`[data-pane="${active}"] .files-list`))?.focus();
   }
   function context(e) {
     if (!layer) return;
