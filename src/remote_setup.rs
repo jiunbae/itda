@@ -117,6 +117,26 @@ pub struct Package {
     keys: Vec<Key>,
 }
 
+// Confirmation metadata comes from the immutable package behind the plan token.
+// Never serialize the package itself: it contains passwords and private-key bytes.
+fn package_identities(package: &Package) -> Value {
+    let account_name = |id: &str| package.accounts.iter().find(|a| a.id == id)
+        .map(|a| if a.name.is_empty() { a.user.as_str() } else { a.name.as_str() }).unwrap_or("");
+    json!({
+        "hosts": package.hosts.iter().map(|h| json!({
+            "id": h.id, "name": if h.name.is_empty() { &h.host } else { &h.name },
+            "address": h.host, "user": h.user, "account": account_name(&h.account),
+            "filesAddress": h.files.host, "filesUser": h.files.user,
+            "filesAccount": account_name(&h.files.account)
+        })).collect::<Vec<_>>(),
+        "accounts": package.accounts.iter().map(|a| json!({
+            "id": a.id, "name": if a.name.is_empty() { &a.user } else { &a.name }, "user": a.user,
+            "key": package.keys.iter().any(|k| k.account == a.id),
+            "password": package.secrets.iter().any(|secret| matches!(secret.kind, SecretKind::Account) && secret.owner == a.id)
+        })).collect::<Vec<_>>()
+    })
+}
+
 fn error(s: &str) -> io::Error {
     io::Error::other(s)
 }
@@ -1139,7 +1159,7 @@ pub fn prepare(
         check_remote_vault(&cfg)?;
     }
     let token = random_id()?;
-    let summary = json!({"type":"remote_setup","prepared":true,"token":token,"platform":remote.platform,"version":remote.version,"running":remote.running,"address":cfg.host,"user":cfg.user,"port":cfg.port,"hosts":package.hosts.len(),"accounts":package.accounts.len(),"passwords":choice.passwords,"private_keys":choice.private_keys,"key_count":package.keys.len(),"settings":choice.settings,"launch":choice.launch,"close_running":choice.close_running,"fingerprints":fingerprints,"new_host_key":false});
+    let summary = json!({"type":"remote_setup","prepared":true,"token":token,"platform":remote.platform,"version":remote.version,"running":remote.running,"address":cfg.host,"user":cfg.user,"port":cfg.port,"hosts":package.hosts.len(),"accounts":package.accounts.len(),"identities":package_identities(&package),"passwords":choice.passwords,"private_keys":choice.private_keys,"key_count":package.keys.len(),"settings":choice.settings,"launch":choice.launch,"close_running":choice.close_running,"fingerprints":fingerprints,"new_host_key":false});
     *PLAN.lock().unwrap() = Some(Plan {
         token: token.clone(),
         cfg,
@@ -1450,6 +1470,28 @@ mod tests {
             preferences: Some(Preferences::from(&preferences)),
             secrets: vec![],
             keys: vec![],
+        }
+    }
+    #[test]
+    fn confirmation_identities_follow_packaged_accounts_without_secrets() {
+        let mut p = package();
+        p.accounts[0].id = "replacement-account".into();
+        p.accounts[0].name = "Actual account".into();
+        p.accounts[0].user = "actual-user".into();
+        p.hosts[0].account = p.accounts[0].id.clone();
+        // The source key path does not prove a key was packaged.
+        assert_eq!(package_identities(&p)["accounts"][0]["key"], false);
+        p.keys.push(Key { account: p.accounts[0].id.clone(), bytes: b"PRIVATE-KEY-CONTENT".to_vec() });
+        p.secrets.push(Secret { kind: SecretKind::Account, owner: p.accounts[0].id.clone(), value: "PASSWORD-CONTENT".into() });
+        let identities = package_identities(&p);
+        assert_eq!(identities["hosts"][0]["account"], "Actual account");
+        assert_eq!(identities["accounts"][0]["id"], "replacement-account");
+        assert_eq!(identities["accounts"][0]["user"], "actual-user");
+        assert_eq!(identities["accounts"][0]["key"], true);
+        assert_eq!(identities["accounts"][0]["password"], true);
+        let rendered = identities.to_string();
+        for secret in ["PRIVATE-KEY-CONTENT", "PASSWORD-CONTENT", "/never/import/source/path"] {
+            assert!(!rendered.contains(secret));
         }
     }
     #[test]

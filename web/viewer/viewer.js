@@ -763,6 +763,13 @@ function hpModeLabel() {
   if (S.host.hp?.on && S.hpActual) return '고성능 모드 켜짐 — 누르면 끕니다';
   return S.hpBusy ? '고성능 모드 준비 중…' : '고성능 모드 — 이 Mac에 Itda 고성능 공유를 켜고 전환합니다 (SSH)';
 }
+function hpDisable() {
+  if (!hpCapable() || S.hpBusy || !S.host.hp?.on) return;
+  S.host.hp = { ...S.host.hp, on: false };
+  post({ ev: 'hp-off' });
+  toast('고성능 모드를 껐습니다 — 기본 화면 공유로 다시 연결합니다');
+  return open(S.host);
+}
 function hpToggle() {
   if (!hpCapable() || S.hpBusy) return;
   if (S.host.hp?.on && S.hpModeContext?.rfb === S.rfb && S.hpModeContext && (S.hpMode === 'unknown' || S.hpMode === 'checking')) {
@@ -778,10 +785,7 @@ function hpToggle() {
     return open(S.host);
   }
   if (S.host.hp?.on && !S.hpFallback) {
-    S.host.hp = { ...S.host.hp, on: false };
-    post({ ev: 'hp-off' });
-    toast('고성능 모드를 껐습니다 — 기본 화면 공유로 다시 연결합니다');
-    return open(S.host);
+    return hpDisable();
   }
   S.hpBusy = true; renderTools();
   const id=S.host.id;
@@ -848,6 +852,7 @@ function renderTools() {
     ...(APP && /Mac/.test(navigator.platform) && !IOS && ['mac', 'macos'].includes(S.host?.os) && S.host?.kind !== 'rdp' ? [['apple-screen-sharing', 'monitor', 'Apple 화면 공유 앱에서 열기 · 별도 앱으로 직접 연결']] : []),
     ...(hpCapable() && S.hpActual ? [['hp-quality', 'sparkle', hpQualityLabel(), hpQualityShown()]] : []),
     ...(hpCapable() ? [['hp', 'bolt', hpModeLabel(), !!S.hpActual]] : []),
+    ...(hpCapable() && S.host.hp?.on && ['unknown', 'checking'].includes(S.hpMode) ? [['hp-disable', 'bolt', '고성능 모드 끄기 — 기본 화면 공유로 다시 연결']] : []),
     ...(APP ? [] : [['clip', 'clip', '클립보드']]),
     'sep',
     ['monitors', 'monitor', '모니터 선택 및 창 배치'],
@@ -882,6 +887,7 @@ $('#tools').addEventListener('click', (e) => {
       }
       return;
     case 'hp': return hpToggle();
+    case 'hp-disable': return hpDisable();
     case 'hp-quality':
       if (S.hpQualityBusy) return;
       if (!S.hpQuality) return requestHpQuality();

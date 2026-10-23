@@ -42,6 +42,7 @@ try{
  await p.waitForFunction(()=>document.querySelector('[data-t=hp]')?.title.includes('확인하지 못함'));
  assert(!await hp.evaluate(b=>b.classList.contains('on')),'HTTP500 claimed active mode');
  const session=await p.evaluate(()=>fixtureSessions),attempt=requests[0];
+ assert(await p.locator('[data-t=hp-disable]').count()===1,'unknown mode lacks explicit disable action');
  httpStatus=200;mode=null;await hp.click();
  await p.waitForFunction(()=>document.querySelector('[data-t=hp]')?.title.includes('확인하지 못함'));
  mode={hp:true};await hp.click();await quality.waitFor();
@@ -76,6 +77,11 @@ try{
  await sendStatus(retry,{quality:'native'});
  assert(await quality.count()===0,'old connection status restored Retina control');
  const before=p.url();
+ mode=null;await p.goto(before);
+ await p.waitForFunction(()=>document.querySelector('[data-t=hp]')?.title.includes('확인하지 못함'));
+ await p.locator('[data-t=hp-disable]').click();
+ assert(await p.evaluate(()=>ipcEvents.some(m=>m.ev==='hp-off')),'unknown mode cannot be disabled');
+ mode={hp:true};
  await p.goto(before+'&hold=1');
  await hp.waitFor();
  assert((await hp.getAttribute('title')).includes('사용 설정됨'),'preconnect label claims unknown/active transport');

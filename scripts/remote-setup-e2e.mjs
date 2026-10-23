@@ -24,6 +24,15 @@ try {
    S.hosts=[{id:'studio',name:'Studio <Mac>',host:'studio.local:5900',user:'alex',ssh:{port:2222},os:'mac',kind:'vnc',account:'work',files:{account:'other'}},{id:'private',name:'Private profile',host:'private.local',os:'mac'}];
    S.accounts=[{id:'work',name:'Work',user:'alex'},{id:'other',name:'Other',user:'sam'}];
    S.settings={...S.settings,onboarded:true};render();
+   // Simulate native prepare metadata from the snapshot actually packaged, which may
+   // differ from the arrays captured when the dialog opened.
+   window.sendPrepared=m=>{
+    const choice=packets.find(p=>p.cmd==='remote_setup_probe'&&p.request===m.request).selection;
+    const picked=S.hosts.filter(h=>choice.host_ids.includes(h.id)),refs=new Set(picked.flatMap(h=>[h.account,h.files?.account]));
+    const accountName=id=>{const a=S.accounts.find(a=>a.id===id);return a?.name||a?.user||'';};
+    const identities={hosts:picked.map(h=>({id:h.id,name:h.name||h.host,address:h.host,user:h.user||'',account:accountName(h.account),filesAddress:h.files?.host||'',filesUser:h.files?.user||'',filesAccount:accountName(h.files?.account)})),accounts:S.accounts.filter(a=>refs.has(a.id)).map(a=>({id:a.id,name:a.name||a.user,user:a.user,key:!!choice.private_keys&&!!a.ssh_key,password:!!choice.passwords}))};
+    ItdaRemoteSetup.message({...m,identities});
+   };
    window.openSetup=(id='studio')=>ItdaRemoteSetup.open({id,hosts:S.hosts,accounts:S.accounts,send:(cmd,data)=>ipc.postMessage(JSON.stringify({cmd,...data})),modal:openModal,close:closeModal,toast,esc});
    openSetup();
   });
@@ -49,7 +58,7 @@ try {
   assert(probe.password==='fixture-only-password'&&probe.login_account==='other','probe authentication options lost');
   assert(!probe.selection.passwords&&!probe.selection.private_keys,'secrets sent by default');
   assert(!(await p.evaluate(()=>packets)).some(m=>m.cmd==='remote_setup_apply'),'probe must not install');
-  await p.evaluate(({request,platform})=>ItdaRemoteSetup.message({type:'remote_setup',request,prepared:true,token:'opaque-test-token',platform,version:'0.9.99',running:false,address:'studio.local',user:'sam',port:2222,hosts:1,accounts:2,settings:true,passwords:false,private_keys:false,launch:true}),{request:probe.request,platform});
+  await p.evaluate(({request,platform})=>sendPrepared({type:'remote_setup',request,prepared:true,token:'opaque-test-token',platform,version:'0.9.99',running:false,address:'studio.local',user:'sam',port:2222,hosts:1,accounts:2,settings:true,passwords:false,private_keys:false,launch:true}),{request:probe.request,platform});
   const scope=await q('[data-review]').innerText();
   assert(scope.includes('Studio <Mac>')&&scope.includes('studio.local:5900')&&scope.includes('Work · alex')&&scope.includes('Other · sam')&&!scope.includes('Private profile'),'confirmation must show selected connections and their referenced accounts only');
   assert(await q('[data-review] img').count()===0,'identity HTML was not escaped');
@@ -64,23 +73,29 @@ try {
   assert((await q('[data-review]').innerText()).includes('설치와 설정 공유를 마쳤어요')&&await q('[data-probe]').isHidden(),'completion outcome was not retained');
   await q('[data-new]').click();await q('[data-probe]').click();
   const next=await p.evaluate(()=>packets.filter(m=>m.cmd==='remote_setup_probe').at(-1));
-  await p.evaluate(request=>ItdaRemoteSetup.message({type:'remote_setup',request,prepared:true,token:'discard-me',platform:'mac',address:'host',port:22,hosts:1,accounts:1}),next.request);
+  await p.evaluate(request=>sendPrepared({type:'remote_setup',request,prepared:true,token:'discard-me',platform:'mac',address:'host',port:22,hosts:1,accounts:1}),next.request);
   assert(await q('[data-apply]').isDisabled()&&(await q('[data-error]').innerText()).includes('목록이 변경'),'native/client identity mismatch must block ambiguous confirmation');
   await q('[data-close]').click();assert((await p.evaluate(()=>packets)).some(m=>m.cmd==='remote_setup_discard'&&m.token==='discard-me'),'closing preview did not discard credentials');
   await p.evaluate(()=>openSetup());await q('[data-probe]').click();
   const failed=await p.evaluate(()=>packets.filter(m=>m.cmd==='remote_setup_probe').at(-1));
-  await p.evaluate(request=>ItdaRemoteSetup.message({type:'remote_setup',request,prepared:true,token:'background-failure',platform:'mac',address:'studio.local',port:2222,hosts:2,accounts:2}),failed.request);
+  await p.evaluate(request=>sendPrepared({type:'remote_setup',request,prepared:true,token:'background-failure',platform:'mac',address:'studio.local',port:2222,hosts:2,accounts:2}),failed.request);
   await q('[data-apply]').click();await q('[data-close]').click();
   const failure='앱 설치는 완료됐지만 설정 공유에 실패했습니다: fixture vault failure';
   await p.evaluate(({request,error})=>ItdaRemoteSetup.message({type:'remote_setup',request,error}),{request:failed.request,error:failure});
   await p.evaluate(()=>openSetup());
   assert(await q('[data-error]').isVisible()&&await q('[data-error]').innerText()===failure,'background partial-success failure was erased on reopen');
+  assert((await q('[data-review]').innerText()).includes('studio.local'),'retained failure hides original target');
   assert(await q('[data-apply]').isHidden(),'failed plan can be applied again');
   await q('[data-back]').click();
   assert(await q('[data-address]').inputValue()==='studio.local','recovery lost target');
   await q('[data-probe]').click();
+  const probeFailure=await p.evaluate(()=>packets.filter(m=>m.cmd==='remote_setup_probe').at(-1));
+  await p.evaluate(request=>ItdaRemoteSetup.message({type:'remote_setup',request,error:'fixture connection unavailable'}),probeFailure.request);
+  await q('[data-close]').click();await p.evaluate(()=>openSetup());
+  assert(await q('[data-error]').isHidden(),'a new probe inherited the old applied outcome');
+  await q('[data-probe]').click();
   const completed=await p.evaluate(()=>packets.filter(m=>m.cmd==='remote_setup_probe').at(-1));
-  await p.evaluate(request=>ItdaRemoteSetup.message({type:'remote_setup',request,prepared:true,token:'launch-failure',platform:'windows',address:'studio.local',port:2222,hosts:2,accounts:2}),completed.request);
+  await p.evaluate(request=>sendPrepared({type:'remote_setup',request,prepared:true,token:'launch-failure',platform:'windows',address:'studio.local',port:2222,hosts:2,accounts:2}),completed.request);
   await q('[data-apply]').click();await q('[data-close]').click();
   await p.evaluate(request=>ItdaRemoteSetup.message({type:'remote_setup',request,complete:true,version:'1.0.2',hosts:1,accounts:2,launch_error:'설치는 완료됐지만 원격 앱을 직접 열어 주세요'}),completed.request);
   await p.evaluate(()=>openSetup());
@@ -93,6 +108,18 @@ try {
   assert(await q('[data-host]').count()===3,'new installation reused stale profile snapshot');
   assert(await q('[data-target]').inputValue()==='private','new installation reused old target instead of latest open request');
   assert(await q('[data-error]').isHidden()&&await q('[data-form]').isVisible(),'new installation did not reset outcome');
+  await q('[data-passwords]').check();await q('[data-keys]').check();await q('[data-probe]').click();
+  const changed=await p.evaluate(()=>packets.filter(m=>m.cmd==='remote_setup_probe').at(-1));
+  await p.evaluate(()=>{
+   S.hosts=S.hosts.map(h=>h.id==='studio'?{...h,account:'replacement'}:h);
+   S.accounts=S.accounts.map(a=>a.id==='work'?{id:'replacement',name:'Actual <admin>',user:'new-admin',ssh_key:'/fixture/private-key'}:a);
+  });
+  await p.evaluate(request=>sendPrepared({type:'remote_setup',request,prepared:true,token:'actual-package',platform:'mac',address:'private.local',port:22,hosts:3,accounts:2,passwords:true,private_keys:true,key_count:1}),changed.request);
+  const actual=await q('[data-review]').innerText();
+  assert(actual.includes('Actual <admin> · new-admin')&&!actual.includes('Work · alex'),'same-count account replacement rendered stale client identity');
+  assert(actual.includes('SSH 개인키 공유 (저장된 키 암호 포함)')&&!await q('[data-apply]').isDisabled(),'actual packaged key scope was lost');
+  assert(await q('[data-review] admin').count()===0,'native identity HTML was not escaped');
+
   assert(errors.length===0,errors.join('\n'));console.log(`${platform}: remote setup exact scope, opt-in secrets, trust handoff, retained background outcomes, retry and discard PASS`);
   await c.close();
  }
