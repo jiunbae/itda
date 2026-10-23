@@ -76,6 +76,18 @@ try {
     await page.locator("#ctx:not([hidden])").waitFor();
     assert((await sent()).filter((x) => x.cmd === "connect").length === before, `${view}: Enter on More connected the device`);
     await page.keyboard.press("Escape");
+    // Inner buttons retain device editing/navigation shortcuts; only their activation
+    // keys belong to the button. The editor must be for this device, without connecting.
+    await btn("거실 PC 더보기").focus(); await page.keyboard.press("F2");
+    await page.locator("#f-host").waitFor({ timeout: 6000 });
+    assert(await page.locator("#f-host").inputValue() === "pc.local", `${view}: F2 edited another device`);
+    assert((await sent()).filter((x) => x.cmd === "connect").length === before, `${view}: F2 connected instead of editing`);
+    await page.keyboard.press("Escape");
+    const groups = page.locator(view === "grid" ? "#content .card" : "#content .list-row:not(.list-head)");
+    const nextId = await groups.nth(1).getAttribute("data-id");
+    await groups.first().locator("button[data-act=more]").focus();
+    await page.keyboard.press("ArrowRight");
+    assert(await page.evaluate(id => document.activeElement?.getAttribute("role") === "group" && document.activeElement.dataset.id === id, nextId), `${view}: ArrowRight on a device button lost device navigation`);
   }
   // The group itself keeps its shortcut: Enter connects its device.
   const connects = (await sent()).filter((x) => x.cmd === "connect").length;

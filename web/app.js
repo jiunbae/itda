@@ -411,7 +411,7 @@ function thumb(h) {
 }
 
 // Every card and row has the same buttons: their names say which device they act on (the
-// visible words come first in the name, so voice control still finds them).
+// visible words remain part of the name, so voice control still finds them).
 const named = (h, what) => `aria-label="${esc(`${label(h)} ${what}`)}"`;
 function primaryAction(h) {
   const s = S.sessions[h.id];
@@ -433,7 +433,7 @@ function card(h) {
     </div>
     <div class="meta">
       <div class="row1">${dot(h)}<span class="name" title="${esc(label(h))}">${esc(label(h))}</span>
-        <button class="more i" data-act="more" data-id="${esc(h.id)}" title="더보기" ${named(h, '더보기')} aria-haspopup="menu">&#xE712;</button></div>
+        <button class="more i" data-act="more" data-id="${esc(h.id)}" title="더보기" ${named(h, '더보기')}>&#xE712;</button></div>
       <div class="sub">${who}</div>
       <div class="sub2">${extra}</div>
     </div>
@@ -460,7 +460,7 @@ function row(h) {
     <span class="col c-last">${esc(ago(h.last_used))}</span>
     <span class="col">${state}</span>
     <div class="actions">${primaryAction(h).replace('class="btn', 'class="btn sm')}
-      <button class="btn subtle icon" data-act="more" data-id="${esc(h.id)}" title="더보기" ${named(h, '더보기')} aria-haspopup="menu">${I('E712')}</button></div>
+      <button class="btn subtle icon" data-act="more" data-id="${esc(h.id)}" title="더보기" ${named(h, '더보기')}>${I('E712')}</button></div>
   </div>`;
 }
 
@@ -1986,8 +1986,9 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'F5') { e.preventDefault(); return scan(); }
   if (typing) return;
   const c = e.target.closest && e.target.closest('.card, .list-row:not(.list-head)');
-  // A button inside the card (favorite, more, the primary action) does what it says itself.
-  if (c && !e.target.closest('button')) {
+  // Enter/Space activate an inner button itself; other device shortcuts still work there.
+  const buttonActivation = e.target.closest('button') && (e.key === 'Enter' || e.key === ' ');
+  if (c && !buttonActivation) {
     if (e.key === 'Enter') { e.preventDefault(); connect(c.dataset.id); }
     else if (e.key === 'Delete' || (MAC && e.metaKey && e.key === 'Backspace')) askDelete(c.dataset.id);
     else if (e.key === 'F2') openEdit({ id: c.dataset.id });
