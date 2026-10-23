@@ -299,6 +299,7 @@
   // devices, folders, names and options, never a drag or clipboard token.
   const transferRequests = new Map();
   const announcedJobs = new Set();
+  let jobsHomeView = false;
   const extension = (name = "") => name.includes(".") ? name.split(".").pop().toLowerCase() : "";
   const kind = (e) => e.link ? "심볼릭 링크" : e.dir && !MAC && /^[A-Za-z]:$/.test(e.name) ? "로컬 디스크" : e.dir ? "폴더" : ({ txt: "텍스트 문서", md: "Markdown 문서", pdf: "PDF 문서", png: "PNG 이미지", jpg: "JPEG 이미지", jpeg: "JPEG 이미지", heic: "HEIF 이미지", zip: "ZIP 아카이브", mp4: "MPEG-4 동영상", mp3: "MP3 오디오" }[extension(e.name)] || (extension(e.name) ? `${extension(e.name).toUpperCase()} 문서` : "문서"));
   const icon = (dir, name = "") => {
@@ -537,7 +538,8 @@
     ])
       layer.querySelector(`[data-action="${a}"]`)?.setAttribute("disabled", "");
     layer.querySelector('[data-action="back"]').disabled = host.id === NETWORK;
-    // Transfers that need attention (and the history) stay in view on Home/Network too.
+    // Transfers that need attention stay in view on Home/Network too.
+    jobsHomeView = true;
     renderJobs();
     layer.querySelector(".files-panes").ondblclick = (e) => {
       const card = e.target.closest("[data-device-card]");
@@ -1053,6 +1055,9 @@
     refreshNetwork();
     tabBar();
     if (networkMode) return;
+    // Back from Home/Network: the history (if on) shows again. Only then, so a folder
+    // listing doesn't rebuild the list under a focused job button.
+    if (jobsHomeView) { jobsHomeView = false; renderJobs(); }
     layer.querySelector(".files-panes").ondblclick = null;
     layer
       .querySelectorAll("[data-action]")
@@ -1645,11 +1650,15 @@
     if (!layer) return;
     // This device's transfers, and any other tab's that failed or were cancelled (they need
     // the person's attention wherever they are); the history shows every one.
+    // Home/Network has no history toggle (it sits in the hidden tool row): attention only.
+    const history = showTransferHistory && !networkMode;
     const current = [...jobs.values()]
-      .filter((j) => showTransferHistory || (j.id === host.id ? ["queued", "running", "failed", "cancelled"].includes(j.state) : ["failed", "cancelled"].includes(j.state)))
+      .filter((j) => history || (j.id === host.id ? ["queued", "running", "failed", "cancelled"].includes(j.state) : ["failed", "cancelled"].includes(j.state)))
       .slice(-12);
     const box = layer.querySelector(".files-jobs");
-    box.hidden = current.length === 0 && !showTransferHistory;
+    // A rebuild keeps keyboard focus on the same job button.
+    const focused = box.contains(document.activeElement) && [...document.activeElement.attributes].find(a => /^data-(retry|goto|dismiss|cancel)-job$/.test(a.name));
+    box.hidden = current.length === 0 && !history;
     layer.querySelectorAll('[data-action="transfers"]').forEach(b => b.setAttribute("aria-pressed", String(showTransferHistory)));
     box.innerHTML = current
       .map((j) => {
@@ -1678,7 +1687,8 @@
     box.querySelectorAll("[data-retry-job]").forEach(b => b.onclick = () => retryJob(b.dataset.retryJob));
     box.querySelectorAll("[data-goto-job]").forEach(b => b.onclick = () => { const t = tabOf(jobs.get(b.dataset.gotoJob)?.id); if (t) switchTab(t.id); });
     box.querySelectorAll("[data-dismiss-job]").forEach(b => b.onclick = () => { jobs.delete(b.dataset.dismissJob); announcedJobs.delete(b.dataset.dismissJob); renderJobs(); });
-    if (!current.length && showTransferHistory) box.textContent = "최근 전송 내역이 없습니다";
+    if (!current.length && history) box.textContent = "최근 전송 내역이 없습니다";
+    if (focused) box.querySelector(`[${focused.name}="${CSS.escape(focused.value)}"]`)?.focus();
   }
   function context(e) {
     if (!layer) return;
