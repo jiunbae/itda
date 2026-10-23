@@ -539,6 +539,16 @@
             "windows-office",
             "cross-platform-files"
           ]
+        },
+        {
+          "id": "local-only-cancel-router",
+          "severity": "P2",
+          "status": "source finding; implementation assigned; native cancellation pending",
+          "evidence": "home.rs files routing requires a saved host or local_only operation. The cancel request from files.js sends NETWORK id without side, which is not admitted by local_only; routing returns before the existing owner-scoped cancellation check. Successful native copy/retry does not prove cancel.",
+          "affected_personas": [
+            "windows-office",
+            "cross-platform-files"
+          ]
         }
       ],
       "acceptance_note": "Native candidate: ten checks passed, including real local-copy hash and missing-source failure → Home retry → re-confirmed copy hash. All verified persona scores remain null. Actual Explorer OLE, assistive technology, other platform journeys, mid-stream failures and deployed-build checks remain pending."
