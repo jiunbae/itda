@@ -1,0 +1,159 @@
+{
+  "reviewer": "e-ed-claude (claude_code, ux-reviewer)",
+  "request": "req_18e124f8c54fc9f0_14",
+  "round": "baseline-1 (read-only)",
+  "baseline_commit": "521202025e7c5a984f089c1d1df77e846f63fd33 (audit worktree HEAD 3e9a3ba adds only assessments/quality.json)",
+  "method": {
+    "evidence_categories": {
+      "fixture-browser": "Real web/ and web/viewer/ frontend in headless Chromium with mocked IPC / fixture gateway API / fake WebSocket close codes. Probe scripts: /tmp/itda-quality-e-ed-claude-evidence/{home,phone,site}.mjs",
+      "existing-test": "scripts/permissions-e2e.mjs PASS; scripts/secure-context-check.mjs PASS; scripts/site-check.mjs PASS on rerun (first run timed out on [data-preview] click, flaky once of 2)",
+      "source": "Reading of web/app.js, web/help.js, web/viewer/viewer.js, web/viewer/index.html, web/viewer/viewer.css, docs/index.html, docs/start.html, src/gateway.rs"
+    },
+    "not_done": "No native app run, no real VNC/Apple Screen Sharing connection, no real iPhone/Android Safari/Chrome, no TCC/Gatekeeper/Local Network prompt, no install. Per evidence policy all totals are provisional and capped at 8; native-critical journeys stay pending.",
+    "screenshots": "/tmp/itda-quality-e-ed-claude-evidence/*.png (01-08 Mac home, p01-p07 phone viewer, s-* landing/start)"
+  },
+  "personas": [
+    {
+      "id": "novice-family",
+      "status": "provisional (native pending)",
+      "dimension_scores": {
+        "task_completion": 1.75,
+        "reliability_safety": 1.25,
+        "comprehension": 1.0,
+        "feedback_recovery": 0.75,
+        "efficiency": 0.75,
+        "accessibility": 0.5,
+        "consistency": 0.25
+      },
+      "total": 6.25,
+      "observed": [
+        "fixture-browser: fresh state opens onboarding; Mac step shows System Settings mock with Screen Sharing highlighted; '주변 Mac 찾기' → Nearby lists fixture '엄마의 iMac' → 추가 opens editor prefilled with name+address, Mac kind, short-name hint 'Apple ID 아님' (04-add-mac.png).",
+        "fixture-browser: error dialogs for auth/refused/timeout/reset are specific, name the device, give System Settings paths and offer 암호 다시 입력 / 다시 시도 / 연결 편집 / 해결 방법 보기 (05-error-*.png). 'other' is generic but points to 설정 → 로그.",
+        "fixture-browser: at 800×600 with zoom 175% no horizontal scroll (08-small.png).",
+        "fixture-browser: onboarding modal has no role=dialog/aria-modal/aria-labelledby; initial focus stays on <body>; first Tab lands on sidebar '모든 연결' behind the modal.",
+        "fixture-browser: editor inputs f-name, f-host, f-account, f-user, f-pass have no programmatic label (label elements lack for=); password reveal buttons are tabindex=-1."
+      ],
+      "judgment": "Within one LAN, a novice can probably finish with the guided path if the family Mac was set up by someone in person and they know its short account name (the only in-product way to learn it is `whoami` in Terminal, or Itda installed on that Mac). Reaching a family Mac in another home needs Tailscale on both machines plus account sign-in, which this persona is unlikely to manage alone. Error copy is a strength.",
+      "verification_gaps": [
+        "Download → unzip → move to Applications → first launch (Gatekeeper/notarization) on a clean Mac",
+        "macOS Local Network prompt: what happens after Allow and after Don't Allow (Nearby empty? connect = unreachable?)",
+        "Real Apple Screen Sharing connection: auth, Remote Management variant, lockout after repeated failures",
+        "Permission helper with real TCC (screen recording/accessibility restart flow); only the mocked e2e passed",
+        "Remote family case over Tailscale end to end",
+        "VoiceOver reading of onboarding/editor/error dialogs"
+      ]
+    },
+    {
+      "id": "mobile-user",
+      "status": "provisional (native pending)",
+      "dimension_scores": {
+        "task_completion": 2.0,
+        "reliability_safety": 1.25,
+        "comprehension": 0.75,
+        "feedback_recovery": 0.5,
+        "efficiency": 0.75,
+        "accessibility": 0.5,
+        "consistency": 0.25
+      },
+      "total": 6.0,
+      "observed": [
+        "fixture-browser (390×844 iPhone UA, touch): login → wrong PIN 'PIN이 맞지 않습니다' → after 5 wrong '잠시 후 다시 시도하세요 (PIN을 여러 번 틀렸습니다)' with no duration → correct PIN → list with iOS add-to-home hint (p01-p03).",
+        "fixture-browser: login copy says 'Windows PC의 Itda 설정 → ‘다른 기기에서 보기’에 표시된 6자리 PIN', but the PIN is on the 공유 page and the gateway can also be a Mac (web/viewer/index.html:22).",
+        "fixture-browser: host without password: card text '암호를 저장해야 열 수 있습니다 — 눌러서 입력' is cut to '암호를 저장해야 열 수 있습니ㄴ' at 390px; tapping opens the editor with a note and kind-specific hint (p03, p04).",
+        "fixture-browser: close codes 4012/4010/4013/1006 show title + advice + 목록으로/다시 연결 only; for Mac 4010 the advice is generic ('저장된 사용자 이름과 암호를 확인하세요'); title grammar 'Mac이(가)' (p05-*).",
+        "fixture-browser: viewing toolbar has 9 icon-only 42×40 buttons; toolbar scrollWidth 420 > clientWidth 372, so '전체 화면' sits at x 383–425 past the 390px screen with a hidden scrollbar (p06-tools.png).",
+        "fixture-browser: touch targets under 44px on list: refresh 36×36, edit pencils 34×34, tabs 60×35, hint close 26×36.",
+        "fixture-browser: after the session is gone, '목록으로' drops to the login screen with an empty message (p07-expired.png).",
+        "source: viewport meta has user-scalable=no (web/viewer/index.html:5).",
+        "source: gateway cookie HttpOnly; SameSite=Strict; 12h TTL; same-origin check on POST/WS; per-source 5-fail/1-min lockout plus a global 50-fail lock (src/gateway.rs:33,412-479). Transport is plain HTTP on the LAN unless Tailscale HTTPS is used (documented in-app)."
+      ],
+      "judgment": "With fixtures the browser flow is short and the PIN/session handling is sound. Comprehension and recovery are the weak spots: the first screen points to the wrong place, auth failures have no 'fix password' route, and controls are icon-only with tooltips that touch devices never show. Phone access also needs a computer running Itda on the same network and kept awake. The landing page shows phone visitors only Windows/Mac download buttons.",
+      "verification_gaps": [
+        "Real iOS Safari and Android Chrome: QR camera hand-off, PIN keypad, add-to-home/PWA standalone",
+        "noVNC touch gestures on device (tap, two-finger tap right-click, two-finger scroll, pinch toggling fit)",
+        "Korean IME on iOS/Android through the hidden textarea, esp. to a Mac on Apple Screen Sharing (Unicode keysyms 0x0100xxxx; Itda's own servers handle them in src/host_mac.rs:827 and src/keys.rs:89, Apple's server unverified) — docs promise '한글 가능'",
+        "Clipboard sheet copy on iOS (navigator.clipboard over plain HTTP falls back to select)",
+        "Behavior when PIN is reset or web viewer stopped while a phone is mid-session",
+        "Tailscale HTTPS address end to end"
+      ]
+    }
+  ],
+  "top_issues": [
+    {
+      "rank": 1,
+      "severity": "P2",
+      "personas": ["mobile-user"],
+      "category": "comprehension/consistency",
+      "title": "Phone login screen points to a Windows-only, nonexistent location for the PIN",
+      "evidence": "web/viewer/index.html:22 'Windows PC의 Itda 설정 → ‘다른 기기에서 보기’'; actual UI is sidebar 공유 page on both Mac and Windows (web/app.js:357, 740, 763); same pattern web/viewer/viewer.js:493 ('PC의 Itda 설정에서 Tailscale HTTPS…') and :514 ('PC의 Itda에서…' for a Mac key change). Screenshot p01-login.png.",
+      "fix": "Neutral copy: '컴퓨터(Mac·PC)의 Itda → 왼쪽 공유 페이지에 표시된 6자리 PIN을 입력하세요'. Optionally let /api/me report the host platform and name ('김영희의 MacBook') so the copy can say exactly where. Apply the same wording to the install hint and 4021."
+    },
+    {
+      "rank": 2,
+      "severity": "P2",
+      "personas": ["mobile-user"],
+      "category": "feedback_recovery",
+      "title": "Phone connection failures have no route to fix credentials; lockout gives no duration",
+      "evidence": "web/viewer/viewer.js:518-526 status card only offers 목록으로/다시 연결; retry re-sends the same saved bad password. 4010 advice for Mac is generic (viewer.js:508) while the desktop says 'Apple ID 아님' (web/app.js:1466-1470). Lockout message 'PIN을 여러 번 틀렸습니다' has no time (src/gateway.rs:440) though help says 1분. Session expiry/PIN reset drops to login silently (viewer.js:232). Screens p02, p05-4010, p07.",
+      "fix": "For 4010/4011/4020/4001 add a primary '암호·계정 고치기' that opens editHost(h) (account editor when h.account). Use the desktop Mac tips (짧은 이름, Apple ID 아님). Lockout: '1분 뒤 다시 시도하세요'. On 401 after an earlier sign-in, show '다시 로그인해 주세요 (PIN이 바뀌었거나 12시간이 지났습니다)'."
+    },
+    {
+      "rank": 3,
+      "severity": "P2",
+      "personas": ["novice-family"],
+      "category": "feedback_recovery",
+      "title": "No in-app recovery when macOS Local Network access is denied",
+      "evidence": "Only the bundle string (scripts/macos-bundle.sh:69) and docs/start.html mention the prompt; no in-app string mentions 로컬 네트워크 settings. Nearby empty state (web/app.js:627) and ERRORS.unreachable/timeout (web/app.js:1490-1500) suggest Wi-Fi/VPN/IP instead. A novice who taps 허용 안 함 is stuck. The OS behaviour is not natively verified; the copy gap is verified in source.",
+      "fix": "On Mac, add to the Nearby empty state and to unreachable/timeout tips: 'Itda가 로컬 네트워크를 쓰지 못하면 기기가 보이지 않습니다 → 시스템 설정 → 개인정보 보호 및 보안 → 로컬 네트워크에서 Itda 켜기', with a button opening x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork. If the app can detect the denial (e.g. EHOSTUNREACH to a private address), surface it directly."
+    },
+    {
+      "rank": 4,
+      "severity": "UX (P3)",
+      "personas": ["mobile-user"],
+      "category": "accessibility/efficiency",
+      "title": "Phone toolbar overflows 390px, icon-only, small targets; pinch zoom disabled",
+      "evidence": "web/viewer/viewer.css:145-159,209; measured toolbar scrollWidth 420/clientWidth 372, '전체 화면' at x 383–425; buttons 42×40; list refresh 36, edit 34, tabs 35 px; nopw card instruction truncated (viewer.css:55-58); web/viewer/index.html:5 user-scalable=no. Screens p03, p06.",
+      "fix": "44×44 minimum; fold the less common controls (monitors, scale, viewonly, full) into a '더 보기' sheet with text labels, or wrap to two rows under 420px; show a one-time labelled legend on first connect; let .host .warn wrap (white-space: normal); drop user-scalable=no on login/list (keep touch-action on the canvas instead)."
+    },
+    {
+      "rank": 5,
+      "severity": "UX (P3)",
+      "personas": ["novice-family", "keyboard-low-vision (shared)"],
+      "category": "accessibility",
+      "title": "Home modals lack dialog semantics, focus management and labelled fields",
+      "evidence": "web/app.js:953-966 openModal: no role=dialog/aria-modal/aria-labelledby, no focus trap, no focus return; onboarding welcome has no input/.btn.primary so focus stays on <body> and Tab reaches the sidebar behind the scrim (fixture). Labels without for= at web/app.js:1136,1147,1148 (also 1043,1447); reveal buttons tabindex=-1.",
+      "fix": "In openModal set role=dialog, aria-modal=true, aria-labelledby to the first h2; focus the first focusable control (or the dialog itself); trap Tab; restore focus on close. Add for=/id pairs; make the reveal button focusable with aria-label '암호 보기' and aria-pressed."
+    },
+    {
+      "rank": 6,
+      "severity": "UX (P3)",
+      "personas": ["novice-family"],
+      "category": "comprehension/consistency",
+      "title": "'밖에서도 쓸 거라면 원격 로그인도 켜 두세요' implies Remote Login alone enables away-from-home use",
+      "evidence": "web/app.js:537 and docs/start.html:122; the same guide and help (web/help.js:450-456) say away-from-home needs Tailscale, or SSH port forwarding without it. Turning on Remote Login also exposes SSH.",
+      "fix": "Replace with: '집 밖에서 쓰려면 두 Mac에 Tailscale을 설치하세요 (자세히)'. Mention Remote Login only as an optional extra for encryption/high-performance mode, inside the Tailscale step."
+    },
+    {
+      "rank": 7,
+      "severity": "UX (P3)",
+      "personas": ["mobile-user"],
+      "category": "comprehension",
+      "title": "Landing page on a phone offers only Windows/Mac downloads",
+      "evidence": "docs/index.html hero at 390px: two full-width download CTAs; the phone path is only one sentence (s-phone-index.html.png).",
+      "fix": "When the UA is mobile, swap or add a CTA '휴대폰에서 쓰기 — 설치 없이' → start.html#phone, explaining that a Mac/PC running Itda on the same Wi-Fi is needed."
+    },
+    {
+      "rank": 8,
+      "severity": "UX (P3)",
+      "personas": ["novice-family"],
+      "category": "comprehension",
+      "title": "The Mac short account name is a dead end for non-technical users",
+      "evidence": "Editor placeholder '예: alex' + hint '짧은 이름 (Apple ID 아님)'; the only lookup offered is `whoami` in Terminal (docs/start.html Mac section). The remote Mac's Itda share page shows it (web/app.js:776) only if Itda is installed there.",
+      "fix": "Add a helper link next to the field: '계정 이름 찾기' → picture of System Settings → 사용자 및 그룹 → (i) showing 계정 이름; mention that the family member can read it there."
+    }
+  ],
+  "notes": [
+    "Strengths, each backed by evidence above: specific, device-aware error dialogs with direct actions on desktop; onboarding goes straight to Nearby/editor; PIN lockout and cookie flags are sound; permission helper e2e passes.",
+    "Score movement after fixes needs re-observation; per policy, natively unverified journeys stay pending."
+  ]
+}

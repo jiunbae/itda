@@ -1,0 +1,47 @@
+{
+  "release": "1.0.2",
+  "method": "installed native Mac binary isolated test bridge; real SFTP to Windows OpenSSH; disposable temp dirs only",
+  "results": [
+    {
+      "check": "installed native SFTP to physical Windows fixture directory",
+      "result": "PASS"
+    },
+    {
+      "check": "Mac NFD Korean filename → Windows NFC + SHA256 bytes + original preservation",
+      "result": "PASS"
+    },
+    {
+      "check": "existing NFC destination: keep-both creates second correct file",
+      "result": "PASS"
+    },
+    {
+      "check": "skip preserves both existing names/hashes while source contains different bytes",
+      "result": "PASS"
+    },
+    {
+      "check": "after move: Windows NFC and SHA256 correct; temporary source removed",
+      "result": "PASS"
+    },
+    {
+      "check": "early move cancellation (phase not controlled) preserves source and existing destination, with no leftover files",
+      "result": "PASS",
+      "observed_events": [
+        {
+          "state": "queued"
+        },
+        {
+          "state": "cancelled"
+        }
+      ]
+    }
+  ],
+  "scope_limits": [
+    "No actual Windows WebView2, Explorer drag/drop, UI selection, VoiceOver or large-file performance verified",
+    "UI and installed-binary version may differ; record the bundle version and commit separately"
+  ],
+  "date": "2026-10-24",
+  "binary_sha256": "0e4f66ac1b0b61ea44856fbfa7d80b643d9cb304e8d026acdd680004db6c3867",
+  "command": "ITDA_WINDOWS_SSH=<existing-trusted-Windows-alias> node scripts/files-native-windows-e2e.mjs",
+  "isolation": "Unique temporary source/config/runtime directories on Mac, unique TEMP child directory on Windows; runtime TMPDIR isolated; all fixture directories removed in finally.",
+  "fixture_note": "Synthetic PDF bytes test filename/byte preservation, not rendering. Source bytes are changed before skip to distinguish preservation from replacement. Cancellation requested very early; exact worker phase not controlled. Observed job events are recorded; midstream and strictly queued cancellation are not claimed."
+}
