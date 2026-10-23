@@ -29,7 +29,12 @@ try {
   const mac = { id: "mac", name: "Mac", host: "mac.local", user: "a", os: "mac", group: "Home", groups: ["Home"], opts: {}, hp: { on: false, port: 0 }, ssh: { on: false, user: "", port: 0 } };
   const pc = { id: "pc", name: "PC", host: "pc.local", user: "a", os: "windows", group: "", groups: [], opts: {}, hp: { on: false, port: 0 }, ssh: { on: false, user: "", port: 0 } };
   const saved = () => page.evaluate(() => (window.sent || []).filter((x) => x.cmd === "save_host"));
-  await page.evaluate(([a, b]) => { itda.recv({ type: "state", hosts: [a, b], settings: { onboarded: true, theme: "light", defaults: {} } }); openEdit(a); }, [mac, pc]);
+  await page.evaluate(([a, b]) => { itda.recv({ type: "state", hosts: [a, b], settings: { onboarded: true, theme: "light", defaults: {} } }); }, [mac, pc]);
+  await page.setViewportSize({ width: 720, height: 450 });
+  assert(await page.getByRole('button', { name: '파일 브라우저', exact: true }).count() === 1, 'collapsed navigation lost its name');
+  assert(await page.getByRole('button', { name: '설정', exact: true }).count() === 1, 'collapsed settings lost its name');
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.evaluate(h => openEdit(h), mac);
   // Chips: Enter and comma add, existing spelling wins, × removes.
   // openModal focuses the first field 30 ms later; let that happen before typing elsewhere.
   // (The browser's own autofocus comes first, openModal's timer after it: wait out both.)
@@ -37,6 +42,33 @@ try {
     await page.waitForFunction(() => document.activeElement && document.activeElement.closest(".dialog"));
     await page.waitForTimeout(150);
   };
+  await settled();
+  // A keyboard-only user must stay in the modal, including reverse traversal and
+  // nested confirmations; closing restores the actual trigger rather than <body>.
+  assert(await page.getByRole('dialog', { name: '연결 편집' }).count() === 1, 'editor has no named dialog');
+  assert(await page.locator('#user-label').getAttribute('for') === 'f-user', 'login label is not associated');
+  for (let i = 0; i < 50; i++) {
+    await page.keyboard.press(i < 25 ? 'Tab' : 'Shift+Tab');
+    assert(await page.evaluate(() => !!document.activeElement.closest('#modals [data-key="edit"]')), 'Tab escaped the editor');
+  }
+  await page.locator('[data-tab=general]').focus();
+  await page.keyboard.press('ArrowRight');
+  assert(await page.locator('[data-tab=display]').getAttribute('aria-selected') === 'true', 'arrow key did not select display tab');
+  await page.keyboard.press('Home');
+  assert(await page.locator('[data-tab=general]').getAttribute('aria-selected') === 'true', 'Home did not select first tab');
+  await page.locator('#f-host').focus();
+  await page.evaluate(() => confirmDialog('검토 확인', '테스트', '확인', false, () => {}));
+  await settled();
+  assert(await page.locator('[data-key=edit]').evaluate(e => e.inert), 'underlying modal is not inert');
+  await page.keyboard.press('Escape');
+  assert(await page.locator('#f-host').evaluate(e => document.activeElement === e), 'nested modal did not return focus');
+  await page.evaluate(() => closeModal());
+  await page.locator('#newBtn').focus();
+  await page.keyboard.press('Enter');
+  await settled();
+  await page.keyboard.press('Escape');
+  assert(await page.locator('#newBtn').evaluate(e => document.activeElement === e), 'editor did not restore trigger focus');
+  await page.evaluate(h => openEdit(h), mac);
   await settled();
   const chips = () => page.locator("#group-chips [data-chip]").evaluateAll((e) => e.map((x) => x.dataset.chip));
   await page.locator("#f-group").fill("회사");
@@ -53,6 +85,11 @@ try {
   await page.locator("[data-tab=conn]").click();
   await page.locator("#hp-enable").click();
   assert((await page.evaluate(() => sent.at(-1))).cmd === "hp_upgrade", "켜기 did not ask for the upgrade");
+  assert(await page.locator('[data-key=edit] .hp-setup').count() === 1, 'HP guide is outside editor keyboard scope');
+  await page.locator('[data-hp-action=later]').focus();
+  await page.keyboard.press('Tab');
+  assert(await page.evaluate(() => !!document.activeElement.closest('[data-key=edit]')), 'Tab escaped via HP guide');
+
   await page.evaluate((h) => { itda.recv({ type: "hosts", hosts: [{ ...h, hp: { on: true, port: 5910 } }] }); itda.recv({ type: "hp", id: h.id, ready: true, screen: true, access: true }); }, mac);
   await page.locator("#f-lan").fill(" 192.168.32.32 ");
   await page.locator("[data-x=save]").click();
