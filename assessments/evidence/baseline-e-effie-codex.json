@@ -1,0 +1,141 @@
+{
+  "baseline": {
+    "product_commit": "521202025e7c5a984f089c1d1df77e846f63fd33",
+    "release": "1.0.2",
+    "audit_checkout": "3e9a3ba",
+    "scope": "read_only source and isolated frontend; no remotes/native input/install/TCC/benchmarks"
+  },
+  "reviewer": "e-effie-codex",
+  "status": "baseline-complete-native-verification-pending",
+  "personas": [
+    {
+      "id": "retina-worker",
+      "dimension_scores": {
+        "task_completion": 2.2,
+        "reliability_safety": 1.2,
+        "comprehension": 1.1,
+        "feedback_recovery": 0.5,
+        "efficiency": 0.8,
+        "accessibility": 0.5,
+        "consistency": 0.4
+      },
+      "total": 6.7,
+      "judgment": "Provisional evidence-limited baseline, not native journey completion. Monitor operations work in synthetic RFB; fallback diagnostic uncertainty can misstate current mode.",
+      "verification_gaps": [
+        "Current release native H.264/Retina capture, actual text quality and resolution",
+        "Native multiple physical monitors, close-window lifecycle and reconnect after network changes",
+        "Fresh permission grant/restart and fallback on locked or unavailable remote",
+        "Keyboard/zoom/screen reader checks owned by root; source semantics only here"
+      ]
+    },
+    {
+      "id": "ssh-admin",
+      "dimension_scores": {
+        "task_completion": 2.1,
+        "reliability_safety": 1.3,
+        "comprehension": 1.1,
+        "feedback_recovery": 0.4,
+        "efficiency": 0.7,
+        "accessibility": 0.5,
+        "consistency": 0.4
+      },
+      "total": 6.5,
+      "judgment": "Provisional evidence-limited baseline. Confirmation tokens and secret opt-ins are good; background failure recovery loses the diagnosis.",
+      "verification_gaps": [
+        "Real Mac and Windows SSH provisioning with account/password/key authentication",
+        "Host-key mismatch/first-use trust against actual OpenSSH configuration",
+        "Native vault import and rollback, config merge preservation, startup/update and interrupted installation",
+        "Windows session-zero launch limitation and Mac graphical login behavior",
+        "Keyboard/zoom/screen reader checks owned by root; source semantics only here"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "category": "isolated-frontend-existing-test",
+      "command": "PLAYWRIGHT=/tmp/itda-hp-browser/node_modules/playwright/index.mjs node scripts/remote-setup-e2e.mjs",
+      "result": "PASS mac and windows: saved target/account reuse, opt-in secrets, confirmation token, background reattach and discard"
+    },
+    {
+      "category": "isolated-frontend-existing-test",
+      "command": "PLAYWRIGHT=/tmp/itda-hp-browser/node_modules/playwright/index.mjs node scripts/permissions-e2e.mjs",
+      "result": "PASS explicit permission actions, bounded polling, remote routing/retry/recovery, stale-server guard and existing connection retained"
+    },
+    {
+      "category": "isolated-frontend-adapted-fixture",
+      "command": "PLAYWRIGHT=/tmp/itda-hp-browser/node_modules/playwright/index.mjs MAC_FIXTURE=1 node /tmp/itda-quality-monitor-audit.mjs",
+      "result": "PASS synthetic monitor selection/crop offsets, Mac action chords, split window sharing one RFB, mirror keyboard/pointer/wheel. Removed original CPU throttle/burst timing section to avoid benchmark campaign. Added hp-mode/unknown-capture repro. Fixture returns harmless asset 404s and intentional mode HTTP500; no JS errors in final run. First exploratory run used unsupported hp setup fixture route and failed; corrected rerun passed."
+    },
+    {
+      "category": "isolated-frontend-adapted-fixture",
+      "command": "PLAYWRIGHT=/tmp/itda-hp-browser/node_modules/playwright/index.mjs node /tmp/itda-quality-ssh-audit.mjs",
+      "result": "PASS mac/windows; captured count-only preview and background-error loss on reopen"
+    }
+  ],
+  "findings": [
+    {
+      "id": "EFF-1",
+      "severity": "P2",
+      "persona": "retina-worker",
+      "title": "Mode-status failure claims high-performance is on",
+      "location": "web/viewer/viewer.js:579-592,795",
+      "evidence_category": "isolated-frontend-repro + source",
+      "repro": "Connect saved Mac hp.on=true; return HTTP500/non-JSON from /api/mode/:id. After connect toolbar title is 고성능 모드 켜짐 — 누르면 끕니다; hp-quality control count is 0. catch is empty, hpFallback null, hpActual false.",
+      "impact": "Cannot distinguish the saved preference from verified active transport; diagnostics and fallback recovery are misleading when status lookup fails.",
+      "fix": "Represent mode as checking/active/fallback/unknown. On fetch/parse failure display 확인하지 못함 with retry; only claim active after hp===true.",
+      "screenshot": "/tmp/itda-quality-retina-mode-failed.png"
+    },
+    {
+      "id": "EFF-2",
+      "severity": "P2",
+      "persona": "ssh-admin",
+      "title": "Background failure tells user to reopen but erases the failure",
+      "location": "web/remote-setup.js:5-8,55",
+      "evidence_category": "isolated-frontend-repro + source",
+      "repro": "Prepare and apply; choose 백그라운드에서 계속; inject error 앱 설치는 완료됐지만 설정 공유에 실패했습니다: fixture vault failure. Toast says reopen to inspect. Reopen: data-error text empty/hidden and data-form visible. current=null discards exact failure and partial-success state.",
+      "impact": "Admin cannot know whether app was installed, settings were imported or recovery is needed; repeating install may be unnecessary.",
+      "fix": "Retain completed/failed operation and exact stage/error/result for reattach; provide dismiss/retry action and clear distinction between app install and settings import.",
+      "screenshot": "/tmp/itda-quality-ssh-lost-failure-mac.png"
+    },
+    {
+      "id": "EFF-3",
+      "severity": "UX",
+      "persona": "ssh-admin",
+      "title": "Confirmation hides exact connection/account scope behind counts",
+      "location": "web/remote-setup.js:16,57; src/remote_setup.rs:1142",
+      "evidence_category": "isolated-frontend-observation + source",
+      "repro": "All profiles start selected; advance to confirmation. Review only says N개 연결 · M개 계정, not the selected names, addresses or identities. Original form is hidden.",
+      "impact": "For family/work address books, admin must backtrack to verify whose profiles and credentials they are about to share. Counts are inadequate for deliberate secret sharing.",
+      "fix": "Include selected connection names/addresses and referenced account names in the confirmed plan; show which accounts have passwords/keys included, never secret values; add select-all/none for long lists.",
+      "screenshot": "/tmp/itda-quality-ssh-preview-mac.png"
+    },
+    {
+      "id": "EFF-4",
+      "severity": "UX",
+      "persona": "retina-worker",
+      "title": "Unknown capture status looks like ordinary fast-mode quality action",
+      "location": "web/viewer/viewer.js:754-760,777-782",
+      "evidence_category": "isolated-frontend-repro + source",
+      "repro": "With hpActual true and saved native=false, inject matching status quality=points, quality_active=false, capture dimensions zero. Label is generic 선명하게 (Retina) — 글자가 또렷해지고 프레임은 조금 줄어듭니다; no unknown/checking indication. After bounded retries an unknown state has no explicit recovery.",
+      "impact": "Worker cannot tell if current fast mode was verified or status is unavailable. Does not reintroduce the old saved-preference-as-active native bug: real valid active reports are handled correctly.",
+      "fix": "Show checking then 확인하지 못함 with retry when capture inactive/zero or responses exhausted, regardless of saved native choice.",
+      "screenshot": "/tmp/itda-quality-retina-unknown.png"
+    },
+    {
+      "id": "EFF-5",
+      "severity": "UX",
+      "persona": "ssh-admin",
+      "title": "First-time SSH install recovery sends user to another journey without direct action",
+      "location": "web/remote-setup.js:15,55; src/remote_setup.rs:923,944",
+      "evidence_category": "source + isolated rendered form",
+      "repro": "New host has no trusted key; prepare refuses with instruction to use file-open or SSH screen connection. Setup has only generic error/back controls, no verify-host navigation preserving target/account/selection.",
+      "impact": "Admin provisioning a new device must leave setup, find another feature and reconstruct context; strict trust behavior is correct but recovery adds avoidable setup friction.",
+      "fix": "Offer Verify SSH host action using existing trust-confirmation flow then return to setup with target/account and selection preserved; keep strict no-auto-accept policy."
+    }
+  ],
+  "positive_source_evidence": [
+    "src/remote_setup.rs:1129-1155 uses strict known-host validation, checks remote version, snapshots selected data, prepares opaque five-minute token; src/remote_setup.rs:1226-1247 consumes token and checks version again.",
+    "src/remote_setup.rs:31-76 copies explicit preference allowlist, preserving remote startup/web exposure by exclusion; web/remote-setup.js:22 explains nonshared permission/web/trust settings.",
+    "web/viewer/viewer.js:553-584 uses per-attempt mode/status tokens; 749-760 rejects stale status and requires active capture dimensions. These release-baseline guards should be preserved, not reported as old known bugs."
+  ]
+}

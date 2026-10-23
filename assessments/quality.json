@@ -123,7 +123,30 @@
       "evidence": [],
       "findings": [],
       "verification_gaps": [],
-      "status": "pending"
+      "status": "pending",
+      "baseline_assessment": {
+        "id": "retina-worker",
+        "dimension_scores": {
+          "task_completion": 2.2,
+          "reliability_safety": 1.2,
+          "comprehension": 1.1,
+          "feedback_recovery": 0.5,
+          "efficiency": 0.8,
+          "accessibility": 0.5,
+          "consistency": 0.4
+        },
+        "total": 6.7,
+        "judgment": "Provisional evidence-limited baseline, not native journey completion. Monitor operations work in synthetic RFB; fallback diagnostic uncertainty can misstate current mode.",
+        "verification_gaps": [
+          "Current release native H.264/Retina capture, actual text quality and resolution",
+          "Native multiple physical monitors, close-window lifecycle and reconnect after network changes",
+          "Fresh permission grant/restart and fallback on locked or unavailable remote",
+          "Keyboard/zoom/screen reader checks owned by root; source semantics only here"
+        ],
+        "report": "assessments/evidence/baseline-e-effie-codex.json",
+        "reviewer": "e-effie-codex",
+        "evidence_scope": "source-and-isolated-frontend-fixtures; native critical flows pending"
+      }
     },
     {
       "id": "windows-office",
@@ -142,7 +165,39 @@
       "evidence": [],
       "findings": [],
       "verification_gaps": [],
-      "status": "pending"
+      "status": "pending",
+      "baseline_assessment": {
+        "id": "windows-office",
+        "dimension_scores": {
+          "task_completion": 2.0,
+          "reliability_safety": 1.3,
+          "comprehension": 1.0,
+          "feedback_recovery": 0.65,
+          "efficiency": 0.6,
+          "accessibility": 0.5,
+          "consistency": 0.35
+        },
+        "total": 6.4,
+        "status": "provisional_native_critical_flows_pending",
+        "evidence": [
+          "Explorer fixture PASS",
+          "Cross-device tabs fixture PASS",
+          "ED-1",
+          "ED-2",
+          "ED-3",
+          "ED-4",
+          "ED-5"
+        ],
+        "verification_gaps": [
+          "Physical Windows laptop/WebView2 and display scaling",
+          "Mac decomposed Korean filenames saved through real SFTP into Windows; conflict outcomes and file hashes",
+          "Explorer drag-out virtual files and native host drop, completion/cancel/failure",
+          "Real cancellation preserves source and existing target; actual copy/move recovery"
+        ],
+        "report": "assessments/evidence/baseline-e-ed-codex.json",
+        "reviewer": "e-ed-codex",
+        "evidence_scope": "source-and-isolated-frontend-fixtures; native critical flows pending"
+      }
     },
     {
       "id": "cross-platform-files",
@@ -161,7 +216,39 @@
       "evidence": [],
       "findings": [],
       "verification_gaps": [],
-      "status": "pending"
+      "status": "pending",
+      "baseline_assessment": {
+        "id": "cross-platform-files",
+        "dimension_scores": {
+          "task_completion": 2.3,
+          "reliability_safety": 1.3,
+          "comprehension": 1.05,
+          "feedback_recovery": 0.7,
+          "efficiency": 0.75,
+          "accessibility": 0.5,
+          "consistency": 0.4
+        },
+        "total": 7.0,
+        "status": "provisional_native_critical_flows_pending",
+        "evidence": [
+          "Mac all-four-view sorting and cached columns in files-tabs fixture PASS",
+          "Different-device tab routing/cancel/close PASS",
+          "Windows preview fixture PASS",
+          "ED-1",
+          "ED-2",
+          "ED-4",
+          "ED-5"
+        ],
+        "verification_gaps": [
+          "Real SFTP copy/move, overwrite/skip/keep, folder merges, cross-device hash-verified move and cancellation",
+          "Actual rsync availability/fallback/eligible delta and mixed Korean filenames",
+          "Native preview/open, OS clipboard and inter-window native drops on both platforms",
+          "Screen-reader naming/announcements and representative zoom on both OSs"
+        ],
+        "report": "assessments/evidence/baseline-e-ed-codex.json",
+        "reviewer": "e-ed-codex",
+        "evidence_scope": "source-and-isolated-frontend-fixtures; native critical flows pending"
+      }
     },
     {
       "id": "ssh-admin",
@@ -180,7 +267,31 @@
       "evidence": [],
       "findings": [],
       "verification_gaps": [],
-      "status": "pending"
+      "status": "pending",
+      "baseline_assessment": {
+        "id": "ssh-admin",
+        "dimension_scores": {
+          "task_completion": 2.1,
+          "reliability_safety": 1.3,
+          "comprehension": 1.1,
+          "feedback_recovery": 0.4,
+          "efficiency": 0.7,
+          "accessibility": 0.5,
+          "consistency": 0.4
+        },
+        "total": 6.5,
+        "judgment": "Provisional evidence-limited baseline. Confirmation tokens and secret opt-ins are good; background failure recovery loses the diagnosis.",
+        "verification_gaps": [
+          "Real Mac and Windows SSH provisioning with account/password/key authentication",
+          "Host-key mismatch/first-use trust against actual OpenSSH configuration",
+          "Native vault import and rollback, config merge preservation, startup/update and interrupted installation",
+          "Windows session-zero launch limitation and Mac graphical login behavior",
+          "Keyboard/zoom/screen reader checks owned by root; source semantics only here"
+        ],
+        "report": "assessments/evidence/baseline-e-effie-codex.json",
+        "reviewer": "e-effie-codex",
+        "evidence_scope": "source-and-isolated-frontend-fixtures; native critical flows pending"
+      }
     },
     {
       "id": "mobile-user",
@@ -218,7 +329,33 @@
       "evidence": [],
       "findings": [],
       "verification_gaps": [],
-      "status": "pending"
+      "status": "pending",
+      "baseline_assessment": {
+        "dimension_scores": {
+          "task_completion": 2,
+          "reliability_safety": 1.2,
+          "comprehension": 1.1,
+          "feedback_recovery": 0.6,
+          "efficiency": 0.65,
+          "accessibility": 0.2,
+          "consistency": 0.25
+        },
+        "total": 6.0,
+        "status": "provisional-native-assistive-technology-pending",
+        "report": "assessments/evidence/baseline-accessibility.json",
+        "reviewer": "root",
+        "findings": [
+          "Tab escaped connection editor in Chromium and WebKit",
+          "Editor/account dialogs unnamed, labels not associated with all controls; 7 settings switches unnamed",
+          "Muted text failed WCAG AA contrast",
+          "File tabs nest interactive close buttons; tablist/grid ownership invalid"
+        ],
+        "verification_gaps": [
+          "VoiceOver and Windows screen reader real tasks",
+          "Native platform keyboard integration, zoom and scaling",
+          "Remote viewer keyboard and focus during actual connection"
+        ]
+      }
     }
   ],
   "iterations": []

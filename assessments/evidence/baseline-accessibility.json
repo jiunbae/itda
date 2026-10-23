@@ -1,0 +1,826 @@
+[
+  {
+    "name": "home",
+    "violations": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "description": "Ensure the contrast between foreground and background colors meets WCAG 2 AA minimum contrast ratio thresholds",
+        "nodes": [
+          {
+            "target": [
+              "small"
+            ],
+            "html": "<small>내 기기를 잇다</small>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 2.85 (foreground color: #8b8b8b, background color: #ebebeb, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".nav-section"
+            ],
+            "html": "<div class=\"nav-section\">그룹</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 2.85 (foreground color: #8b8b8b, background color: #ebebeb, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              "kbd"
+            ],
+            "html": "<kbd>⌘F</kbd>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.26 (foreground color: #8b8b8b, background color: #fafafa, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"d4\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 2560×1664 · 개인</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"b2\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 작업 공간</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"a1\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 2560×1600 · 작업 공간</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"f6\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 개발</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"c3\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 개발</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"e5\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 개인</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "connection-editor",
+    "violations": [
+      {
+        "id": "aria-required-children",
+        "impact": "critical",
+        "description": "Ensure elements with an ARIA role that require child roles contain them",
+        "nodes": [
+          {
+            "target": [
+              ".tabs"
+            ],
+            "html": "<div class=\"tabs\" role=\"tablist\">\n      <button class=\"on\" data-tab=\"general\">일반</button><button data-tab=\"display\">화면</button><button data-tab=\"conn\">연결</button></div>",
+            "summary": "Fix any of the following:\n  Element has children which are not allowed: button"
+          }
+        ]
+      },
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "description": "Ensure the contrast between foreground and background colors meets WCAG 2 AA minimum contrast ratio thresholds",
+        "nodes": [
+          {
+            "target": [
+              "small"
+            ],
+            "html": "<small>내 기기를 잇다</small>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 2.85 (foreground color: #8b8b8b, background color: #ebebeb, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".nav-section"
+            ],
+            "html": "<div class=\"nav-section\">그룹</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 2.85 (foreground color: #8b8b8b, background color: #ebebeb, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              "kbd"
+            ],
+            "html": "<kbd>⌘F</kbd>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.26 (foreground color: #8b8b8b, background color: #fafafa, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"d4\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 2560×1664 · 개인</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"b2\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 작업 공간</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"a1\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 2560×1600 · 작업 공간</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"f6\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 개발</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"c3\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 개발</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"e5\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 개인</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              "#kind-hint"
+            ],
+            "html": "<span class=\"hint\" id=\"kind-hint\">Mac의 화면 공유 (시스템 설정 → 일반 → 공유 → 화면 공유)</span>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              "div[data-pane=\"general\"] > .field:nth-child(4) > .hint"
+            ],
+            "html": "<span class=\"hint\">입력하면 기존 그룹을 제안합니다(↑↓로 고르고 Enter). 새 그룹은 Enter나 쉼표로 추가합니다.</span>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              "#acct-hint"
+            ],
+            "html": "<span class=\"hint\" id=\"acct-hint\">여러 기기에 같은 계정을 쓴다면 계정을 만들어 두면 암호를 한 번만 입력합니다.</span>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              "#user-hint"
+            ],
+            "html": "<span class=\"hint\" id=\"user-hint\">Mac 로그인에 쓰는 짧은 이름 (Apple ID 아님)</span>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".check > span"
+            ],
+            "html": "<span style=\"color:var(--text-3);font-size:12px\">— Mac 키체인에 저장됩니다</span>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ]
+      },
+      {
+        "id": "select-name",
+        "impact": "critical",
+        "description": "Ensure select element has an accessible name",
+        "nodes": [
+          {
+            "target": [
+              "#f-account"
+            ],
+            "html": "<select class=\"input\" id=\"f-account\">\n          <option value=\"\">이 연결에만 입력</option>\n          <option value=\"sample\">계정: 작업 계정 (alex)</option>\n          <option value=\"__new\">+ 새 계정 만들기…</option>\n        </select>",
+            "summary": "Fix any of the following:\n  Element does not have an implicit (wrapped) <label>\n  Element does not have an explicit <label>\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element's default semantics were not overridden with role=\"none\" or role=\"presentation\""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "editor-tab-cycle",
+    "focus": [
+      {
+        "id": "f-group",
+        "tag": "INPUT",
+        "inDialog": true,
+        "text": ""
+      },
+      {
+        "id": "f-account",
+        "tag": "SELECT",
+        "inDialog": true,
+        "text": "이 연결에만 입력\n          계정: 작업 계정 (alex)\n   "
+      },
+      {
+        "id": "f-user",
+        "tag": "INPUT",
+        "inDialog": true,
+        "text": ""
+      },
+      {
+        "id": "f-pass",
+        "tag": "INPUT",
+        "inDialog": true,
+        "text": ""
+      },
+      {
+        "id": "f-save",
+        "tag": "INPUT",
+        "inDialog": true,
+        "text": ""
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": true,
+        "text": "취소"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": true,
+        "text": "저장"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": true,
+        "text": "저장 후 연결"
+      },
+      {
+        "id": "",
+        "tag": "BODY",
+        "inDialog": false,
+        "text": "Itda내 기기를 잇다\n    \n    모든 연결6즐겨찾기3최근 사용파일"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "모든 연결6"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "즐겨찾기3"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "최근 사용"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "파일 브라우저"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "계정1"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "주변 기기"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "공유"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "개발2"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "개인2"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "작업 공간2"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "도움말"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "설정"
+      },
+      {
+        "id": "search",
+        "tag": "INPUT",
+        "inDialog": false,
+        "text": ""
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": ""
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": ""
+      },
+      {
+        "id": "newBtn",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "새 연결"
+      },
+      {
+        "id": "",
+        "tag": "DIV",
+        "inDialog": false,
+        "text": "M\n      \n      \n      화면 연결\n    \n    \n  "
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": ""
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "화면 연결"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": ""
+      },
+      {
+        "id": "",
+        "tag": "DIV",
+        "inDialog": false,
+        "text": "O\n      \n      \n      화면 연결\n    \n    \n  "
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": ""
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "화면 연결"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": ""
+      },
+      {
+        "id": "",
+        "tag": "DIV",
+        "inDialog": false,
+        "text": "S\n      \n      \n      화면 연결\n    \n    \n  "
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": ""
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "화면 연결"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": ""
+      },
+      {
+        "id": "",
+        "tag": "DIV",
+        "inDialog": false,
+        "text": "B\n      \n      \n      화면 연결\n    \n    \n  "
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": ""
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "화면 연결"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": ""
+      },
+      {
+        "id": "",
+        "tag": "DIV",
+        "inDialog": false,
+        "text": "D\n      \n      \n      화면 연결\n    \n    \n  "
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": ""
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "화면 연결"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": ""
+      },
+      {
+        "id": "",
+        "tag": "DIV",
+        "inDialog": false,
+        "text": "H\n      \n      \n      화면 연결\n    \n    \n  "
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": ""
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "화면 연결"
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": ""
+      },
+      {
+        "id": "",
+        "tag": "BUTTON",
+        "inDialog": false,
+        "text": "새 연결"
+      }
+    ]
+  },
+  {
+    "name": "editor-focus-return",
+    "focus": "BUTTON"
+  },
+  {
+    "name": "account-editor",
+    "violations": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "description": "Ensure the contrast between foreground and background colors meets WCAG 2 AA minimum contrast ratio thresholds",
+        "nodes": [
+          {
+            "target": [
+              "small"
+            ],
+            "html": "<small>내 기기를 잇다</small>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 2.85 (foreground color: #8b8b8b, background color: #ebebeb, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".nav-section"
+            ],
+            "html": "<div class=\"nav-section\">그룹</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 2.85 (foreground color: #8b8b8b, background color: #ebebeb, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              "kbd"
+            ],
+            "html": "<kbd>⌘F</kbd>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.26 (foreground color: #8b8b8b, background color: #fafafa, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"d4\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 2560×1664 · 개인</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"b2\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 작업 공간</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"a1\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 2560×1600 · 작업 공간</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"f6\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 개발</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"c3\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 개발</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"e5\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 개인</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".hint"
+            ],
+            "html": "<span class=\"hint\">화면 공유와 원격 로그인(SSH)에 같이 씁니다.</span>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "settings",
+    "violations": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "description": "Ensure the contrast between foreground and background colors meets WCAG 2 AA minimum contrast ratio thresholds",
+        "nodes": [
+          {
+            "target": [
+              "small"
+            ],
+            "html": "<small>내 기기를 잇다</small>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 2.85 (foreground color: #8b8b8b, background color: #ebebeb, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".nav-section"
+            ],
+            "html": "<div class=\"nav-section\">그룹</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 2.85 (foreground color: #8b8b8b, background color: #ebebeb, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ]
+      },
+      {
+        "id": "label",
+        "impact": "critical",
+        "description": "Ensure every form element has a label",
+        "nodes": [
+          {
+            "target": [
+              "input[data-set=\"clipboard\"]"
+            ],
+            "html": "<input type=\"checkbox\" data-set=\"clipboard\" data-path=\"defaults\">",
+            "summary": "Fix any of the following:\n  Element does not have an implicit (wrapped) <label>\n  Element does not have an explicit <label>\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element has no placeholder attribute\n  Element's default semantics were not overridden with role=\"none\" or role=\"presentation\""
+          },
+          {
+            "target": [
+              "input[data-set=\"reconnect\"]"
+            ],
+            "html": "<input type=\"checkbox\" data-set=\"reconnect\" data-path=\"defaults\">",
+            "summary": "Fix any of the following:\n  Element does not have an implicit (wrapped) <label>\n  Element does not have an explicit <label>\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element has no placeholder attribute\n  Element's default semantics were not overridden with role=\"none\" or role=\"presentation\""
+          },
+          {
+            "target": [
+              "input[data-set=\"announce\"]"
+            ],
+            "html": "<input type=\"checkbox\" data-set=\"announce\" data-path=\"settings\" checked=\"\">",
+            "summary": "Fix any of the following:\n  Element does not have an implicit (wrapped) <label>\n  Element does not have an explicit <label>\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element has no placeholder attribute\n  Element's default semantics were not overridden with role=\"none\" or role=\"presentation\""
+          },
+          {
+            "target": [
+              "input[data-set=\"login_start\"]"
+            ],
+            "html": "<input type=\"checkbox\" data-set=\"login_start\" data-path=\"settings\">",
+            "summary": "Fix any of the following:\n  Element does not have an implicit (wrapped) <label>\n  Element does not have an explicit <label>\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element has no placeholder attribute\n  Element's default semantics were not overridden with role=\"none\" or role=\"presentation\""
+          },
+          {
+            "target": [
+              "input[data-set=\"notify\"]"
+            ],
+            "html": "<input type=\"checkbox\" data-set=\"notify\" data-path=\"settings\" checked=\"\">",
+            "summary": "Fix any of the following:\n  Element does not have an implicit (wrapped) <label>\n  Element does not have an explicit <label>\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element has no placeholder attribute\n  Element's default semantics were not overridden with role=\"none\" or role=\"presentation\""
+          },
+          {
+            "target": [
+              "input[data-set=\"thumbnails\"]"
+            ],
+            "html": "<input type=\"checkbox\" data-set=\"thumbnails\" data-path=\"settings\" checked=\"\">",
+            "summary": "Fix any of the following:\n  Element does not have an implicit (wrapped) <label>\n  Element does not have an explicit <label>\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element has no placeholder attribute\n  Element's default semantics were not overridden with role=\"none\" or role=\"presentation\""
+          },
+          {
+            "target": [
+              "input[data-set=\"auto_update\"]"
+            ],
+            "html": "<input type=\"checkbox\" data-set=\"auto_update\" data-path=\"settings\" checked=\"\">",
+            "summary": "Fix any of the following:\n  Element does not have an implicit (wrapped) <label>\n  Element does not have an explicit <label>\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element has no placeholder attribute\n  Element's default semantics were not overridden with role=\"none\" or role=\"presentation\""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "files",
+    "violations": [
+      {
+        "id": "aria-required-children",
+        "impact": "critical",
+        "description": "Ensure elements with an ARIA role that require child roles contain them",
+        "nodes": [
+          {
+            "target": [
+              ".files-tabs"
+            ],
+            "html": "<nav class=\"files-tabs\" role=\"tablist\" aria-label=\"폴더 탭\">",
+            "summary": "Fix any of the following:\n  Element has children which are not allowed: button[aria-label]"
+          },
+          {
+            "target": [
+              ".files-list"
+            ],
+            "html": "<div class=\"files-list\" tabindex=\"0\" role=\"grid\" aria-label=\"원격 기기 파일\">",
+            "summary": "Fix any of the following:\n  Element has children which are not allowed: table"
+          }
+        ]
+      },
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "description": "Ensure the contrast between foreground and background colors meets WCAG 2 AA minimum contrast ratio thresholds",
+        "nodes": [
+          {
+            "target": [
+              "small"
+            ],
+            "html": "<small>내 기기를 잇다</small>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 2.85 (foreground color: #8b8b8b, background color: #ebebeb, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".nav-section"
+            ],
+            "html": "<div class=\"nav-section\">그룹</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 2.85 (foreground color: #8b8b8b, background color: #ebebeb, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              "kbd"
+            ],
+            "html": "<kbd>⌘F</kbd>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.26 (foreground color: #8b8b8b, background color: #fafafa, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"d4\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 2560×1664 · 개인</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"b2\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 작업 공간</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"a1\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 2560×1600 · 작업 공간</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"f6\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 개발</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"c3\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 개발</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".card[data-id=\"e5\"] > .meta > .sub2"
+            ],
+            "html": "<div class=\"sub2\">2분 전 · 1920×1080 · 개인</div>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.4 (foreground color: #8b8b8b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              "div[data-network-sidebar=\"\"] > h4"
+            ],
+            "html": "<h4>위치</h4>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.01 (foreground color: #8b8b8b, background color: #f1f1f1, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              ".files-current-places > h4:nth-child(1)"
+            ],
+            "html": "<h4>즐겨찾기</h4>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.01 (foreground color: #8b8b8b, background color: #f1f1f1, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              "h4:nth-child(6)"
+            ],
+            "html": "<h4>위치</h4>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.01 (foreground color: #8b8b8b, background color: #f1f1f1, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+          },
+          {
+            "target": [
+              "h4:nth-child(8)"
+            ],
+            "html": "<h4>파일 관리</h4>",
+            "summary": "Fix any of the following:\n  Element has insufficient color contrast of 3.01 (foreground color: #8b8b8b, background color: #f1f1f1, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ]
+      },
+      {
+        "id": "nested-interactive",
+        "impact": "serious",
+        "description": "Ensure interactive controls are not nested as they are not always announced by screen readers or can cause focus problems for assistive technologies",
+        "nodes": [
+          {
+            "target": [
+              ".files-tab"
+            ],
+            "html": "<div role=\"tab\" aria-selected=\"true\" class=\"files-tab on\" data-tab=\"1\" tabindex=\"0\" title=\"Studio Mac · Documents\">",
+            "summary": "Fix any of the following:\n  Element has focusable descendants. Move them outside of the element, or remove them."
+          }
+        ]
+      }
+    ]
+  }
+]
