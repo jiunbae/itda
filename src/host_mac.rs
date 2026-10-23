@@ -364,12 +364,8 @@ impl Capture {
     fn new() -> Result<Capture, String> {
         let native_pixels = native_pixels_requested();
         let (w, h) = display_dimensions(native_pixels);
-        let latest: Latest = Arc::new(Mutex::new(None));
-        let mut c = Capture { x: 0, y: 0, w, h, native_pixels, buf: Arc::new(vec![0; w * h]), native: None, latest: latest.clone(), generation: 0, stream: None, _output: None };
         let (stream, output, latest) = start_stream(w, h)?;
-        c.latest = latest;
-        c.stream = Some(stream);
-        c._output = Some(output);
+        let mut c = Capture { x: 0, y: 0, w, h, native_pixels, buf: Arc::new(vec![0; w * h]), native: None, latest, generation: 0, stream: Some(stream), _output: Some(output) };
         // Success means a usable image exists, not only that startCapture returned.
         // Drop stops the stream on failure; no empty capture is published to viewers.
         let until = Instant::now() + FIRST_FRAME_WAIT;
@@ -594,6 +590,9 @@ fn start_stream_once(w: usize, h: usize, latest: Latest) -> Result<(Retained<SCS
         match start_result(rx.recv_timeout(START_WAIT)) {
             Ok(()) => {}
             Err(e) => {
+                // Close before requesting stop: callbacks after this point must take
+                // their own cleanup path, even if start completes after stop was queued.
+                drop(rx);
                 stream.stopCaptureWithCompletionHandler(None);
                 return Err(e);
             }
