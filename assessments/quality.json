@@ -688,7 +688,16 @@
         }
       ],
       "acceptance_note": "This audit maps all28 journeys to narrow evidence and missing acceptance. No score increase or completed-goal/deployed-app claim.",
-      "site_evidence": "assessments/evidence/site-refresh-2026-10-24.json"
+      "site_evidence": "assessments/evidence/site-refresh-2026-10-24.json",
+      "open_findings": [
+        {
+          "id": "macos-12-launch-dependency",
+          "severity": "P2",
+          "status": "statically identified, not older-OS runtime-reproduced; source fix pending",
+          "evidence": "assessments/evidence/macos-capture-compatibility-2026-10-24.json",
+          "scope": "Published1.0.2 strong SCK load versus advertised12.0. Docs now recommend12.3+ while original12.0+ viewer/files compatibility is being corrected."
+        }
+      ]
     }
   ]
 }

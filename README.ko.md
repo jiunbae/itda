@@ -8,7 +8,7 @@
 
 **Windows와 Mac에서 다른 기기의 화면과 파일에 연결하세요.** 파일은 별도 창에서 탐색하고, 휴대폰과 태블릿에서는 브라우저로 저장한 기기를 열 수 있습니다.
 
-[![Release](https://img.shields.io/github/v/release/jiunbae/itda?style=flat-square&color=4744b0)](https://github.com/jiunbae/itda/releases/latest) [![CI](https://img.shields.io/github/actions/workflow/status/jiunbae/itda/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/jiunbae/itda/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-33d1c2?style=flat-square)](LICENSE) ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=flat-square&logo=windows) ![macOS 12+](https://img.shields.io/badge/macOS-12%2B-555?style=flat-square&logo=apple) ![Rust](https://img.shields.io/badge/Built_with-Rust-ff6a43?style=flat-square&logo=rust)
+[![Release](https://img.shields.io/github/v/release/jiunbae/itda?style=flat-square&color=4744b0)](https://github.com/jiunbae/itda/releases/latest) [![CI](https://img.shields.io/github/actions/workflow/status/jiunbae/itda/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/jiunbae/itda/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-33d1c2?style=flat-square)](LICENSE) ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=flat-square&logo=windows) ![macOS 12.3+](https://img.shields.io/badge/macOS-12.3%2B-555?style=flat-square&logo=apple) ![Rust](https://img.shields.io/badge/Built_with-Rust-ff6a43?style=flat-square&logo=rust)
 
 [**다운로드**](https://github.com/jiunbae/itda/releases/latest) · [웹사이트](https://jiun.dev/itda/) · [시작하기](https://jiun.dev/itda/start.html) · [보안](SECURITY.md) · [English](README.md)
 
@@ -37,7 +37,7 @@
 
 ## 🍏 Mac용 Itda
 
-[릴리스](https://github.com/jiunbae/itda/releases/latest)에서 `Itda-macos-universal.zip`을 받으세요. macOS 12 이상, Apple 실리콘과 Intel 모두에서 실행됩니다.
+[릴리스](https://github.com/jiunbae/itda/releases/latest)에서 `Itda-macos-universal.zip`을 받으세요. 현재 배포본은 macOS 12.3 이상에서 사용하세요. Apple 실리콘과 Intel을 지원하며, macOS 12.0–12.2 호환성은 보완 중입니다.
 
 1. 압축을 풀고 **Itda.app**을 응용 프로그램 폴더로 옮깁니다.
 2. **Itda.app**을 엽니다. 공식 Mac 릴리스는 Developer ID 서명과 Apple 공증을 거칩니다.

@@ -1,0 +1,51 @@
+{
+  "status": "P2 by static analysis; not runtime-reproduced on older OS",
+  "public_binary": {
+    "recorded_at": "2026-10-23T22:54:58.851332+00:00",
+    "tag": "v1.0.2",
+    "asset": "https://github.com/jiunbae/itda/releases/download/v1.0.2/Itda-macos-universal.zip",
+    "zip_sha256": "c939132a4f68b90c0d6d23555740df931de297a8285b15fae68481cb3dbe822e",
+    "release_checksum_matches": true,
+    "binary_sha256": "0e4f66ac1b0b61ea44856fbfa7d80b643d9cb304e8d026acdd680004db6c3867",
+    "bundle_version": "1.0.2",
+    "declared_minimum": "12.0",
+    "sck_load_commands": {
+      "x86_64": "LC_LOAD_DYLIB",
+      "arm64": "LC_LOAD_DYLIB"
+    },
+    "codesign_strict": "PASS",
+    "runtime": "Not launched; no execution on macOS12.0-12.2.",
+    "interpretation": "Published binary strongly loads SCK on both slices. SDK API floor12.3 and missing-framework dyld semantics imply a pre-main failure on12.0-12.2 if the framework is absent there. That older-system premise is not runtime-tested."
+  },
+  "sdk_evidence": {
+    "header": "ScreenCaptureKit.framework/Headers/SCShareableContent.h",
+    "class": "SCShareableContent",
+    "availability": "macOS12.3",
+    "primary_documentation": "https://developer.apple.com/documentation/screencapturekit/scshareablecontent"
+  },
+  "independent_review": "muxa req_18e14a082a9f68e0_12e: strong SCK link on both installed slices, unconditional objc2 framework link, used SCK APIs12.3, dynamic SMAppService safe when absent. The missing-framework premise on12.0-12.2 has not been exercised.",
+  "linker_probe": {
+    "method": "Native rustc linker probe with an unconditional framework link and a referenced SCK symbol. Compiled and inspected only; no screen capture or old-OS execution.",
+    "results": [
+      {
+        "variant": "strong",
+        "load_commands": [
+          "cmd LC_LOAD_DYLIB\n      cmdsize 112\n         name /System/Library/Frameworks/ScreenCaptureKit.framework/Versions/A/ScreenCaptureKit (offset 24)\n   time stamp 2 Thu Jan  1 09:00:02 1970\n      current version 1.0.0\ncompatibility version 1.0.0"
+        ]
+      },
+      {
+        "variant": "weak",
+        "load_commands": [
+          "cmd LC_LOAD_WEAK_DYLIB\n      cmdsize 112\n         name /System/Library/Frameworks/ScreenCaptureKit.framework/Versions/A/ScreenCaptureKit (offset 24)\n   time stamp 2 Thu Jan  1 09:00:02 1970\n      current version 1.0.0\ncompatibility version 1.0.0"
+        ]
+      }
+    ]
+  },
+  "implementation": "Not implemented yet. Preserve intended12.0+ standard viewer/files support by weak-linking SCK, gating SCK-only entry points and permissions/setup with an explicit12.3 requirement, and verifying every bundled slice is weak-linked. Do not declare support fixed merely by raising the documented floor.",
+  "documentation": "Recommend12.3+ for current public1.0.2 while12.0-12.2 compatibility is corrected. This is not a runtime certification of every12.3+ system.",
+  "acceptance_remaining": [
+    "Guarded weak-linked candidate binary on both architectures",
+    "No SCK calls or permission requests on unsupported OS",
+    "Actual12.0-12.2 launch and ordinary viewer/files workflow before accepting the original lower-floor journey"
+  ]
+}

@@ -31,7 +31,7 @@
     {
       "requirement": "No unresolved task-blocking P1/P2",
       "status": "not achieved",
-      "proof": "Quit-during-active-transfer PR102 is source-approved8168276/greenCI but unmerged/native-pending. Deployed1.0.2 also lacks subsequent reviewed fixes. Initial transfer-focus CI failure remains unexplained, not declared a productP2 or a flake."
+      "proof": "Quit-during-active-transfer PR102 is source-approved8168276/greenCI but unmerged/native-pending. Deployed1.0.2 also lacks subsequent reviewed fixes. Initial transfer-focus CI failure remains unexplained, not declared a productP2 or a flake. Published1.0.2 also strongly loads12.3-era ScreenCaptureKit despite the declared12.0 floor; this static P2 needs a compatibility fix and older-OS acceptance."
     },
     {
       "requirement": "Commit/push/review/merge/deploy and verify deployed behavior",
@@ -482,6 +482,7 @@
     "benchmark": "No performance benchmark campaign; functional correctness tests only."
   },
   "next_acceptance_results": [
+    "Weak-linked signed candidate starts onmacOS12.0-12.2 and supports ordinary viewer/files; optional HP reports12.3 requirement without a permission prompt.",
     "Current signed candidate: Windows guarded quit wait/stop/cancel proves destination hashes or empty staging, with source preserved.",
     "Current signed candidate: Mac queued Finder promises plus Cmd-Q/AppleEvent quit paths, without double counting or missed queued writes.",
     "Representative actual native/phone/AT journeys above and independent weighted re-evaluation with evidence, then deployed-build verification."
@@ -495,8 +496,9 @@
     "followup": "Local Chromium full fixture passed;4ca adds diagnostics without relaxing the assertion, and CI40033504124 all passed. No focus-path source change or explanation has been claimed."
   },
   "compatibility_investigation": {
-    "status": "independent analysis pending; not yet classified as a product defect",
-    "question": "Claimed macOS12.0 support versus strong ScreenCaptureKit load and SDK API_AVAILABLE12.3. No older-OS launch tested; do not infer all12.x behavior from the current host.",
-    "peer_request": "req_18e14a082a9f68e0_12e"
+    "status": "P2 by static analysis; older-OS launch not runtime-reproduced",
+    "evidence": "assessments/evidence/macos-capture-compatibility-2026-10-24.json",
+    "peer_request": "req_18e14a082a9f68e0_12e",
+    "required_outcome": "Keep intended12.0+ viewer/files support with a weak SCK link and gated optional capture; current-release docs recommend12.3+ while the compatibility fix is pending."
   }
 }

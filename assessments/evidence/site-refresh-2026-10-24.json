@@ -4,7 +4,7 @@
   "capture_source_commit": "03d832b7b03bcf3df0a27bea6eb2ed928bb26cad",
   "capture_script_sha256": "4193725bd681ed9f71381362c6b075ddf2c22e1bc880c912406a6e612dc0d652",
   "capture_command": "PLAYWRIGHT=<installed Playwright index.mjs> node scripts/site-capture.mjs --help-images",
-  "method": "Real product frontend with fictional in-memory devices/files; fixed clock; Chromium screenshots and cwebp quality92 for shared help assets. No native IPC, accounts, user files, remote hosts or permission grants.",
+  "method": "Real product frontend with fictional in-memory devices/files; fixed clock; Chromium screenshots and cwebp quality92 for shared help assets. No native IPC, real saved accounts, user files, remote hosts or permission grants.",
   "cache_revision": 7,
   "changed_assets": {
     "docs/img/accounts-dark.png": {
@@ -199,7 +199,8 @@
         "device image aspect ratios",
         "anchors",
         "keyboard focus and language controls"
-      ]
+      ],
+      "requirements_note": "Latest local40-layout pass also includes the current-release12.3 requirement wording. This does not certify native OS compatibility."
     },
     "readme_image_references": "All referenced local screenshot files exist; both languages use revision7."
   },
@@ -208,5 +209,10 @@
     "No physical phone, native Finder/Explorer, permission, transfer or screen-reader acceptance.",
     "Source screenshots are not proof of an installed or released binary.",
     "Selected visual review and 40 browser combinations do not certify every persona9/10."
-  ]
+  ],
+  "current_release_advice": {
+    "minimum_recommended": "macOS12.3+ for published1.0.2",
+    "reason": "Published release strong SCK dependency independently checked; original12.0-12.2 viewer/files compatibility remains a required source fix, not dropped scope.",
+    "evidence": "assessments/evidence/macos-capture-compatibility-2026-10-24.json"
+  }
 }

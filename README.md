@@ -8,7 +8,7 @@
 
 Connect to your devices’ **screens and files** from **Windows and Mac**. Browse remote files in a separate window, or open saved devices from a browser on your phone or tablet.
 
-[![Release](https://img.shields.io/github/v/release/jiunbae/itda?style=flat-square&color=4744b0)](https://github.com/jiunbae/itda/releases/latest) [![CI](https://img.shields.io/github/actions/workflow/status/jiunbae/itda/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/jiunbae/itda/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-33d1c2?style=flat-square)](LICENSE) ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=flat-square&logo=windows) ![macOS 12+](https://img.shields.io/badge/macOS-12%2B-555?style=flat-square&logo=apple) ![Rust](https://img.shields.io/badge/Built_with-Rust-ff6a43?style=flat-square&logo=rust)
+[![Release](https://img.shields.io/github/v/release/jiunbae/itda?style=flat-square&color=4744b0)](https://github.com/jiunbae/itda/releases/latest) [![CI](https://img.shields.io/github/actions/workflow/status/jiunbae/itda/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/jiunbae/itda/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-33d1c2?style=flat-square)](LICENSE) ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=flat-square&logo=windows) ![macOS 12.3+](https://img.shields.io/badge/macOS-12.3%2B-555?style=flat-square&logo=apple) ![Rust](https://img.shields.io/badge/Built_with-Rust-ff6a43?style=flat-square&logo=rust)
 
 [**Download**](https://github.com/jiunbae/itda/releases/latest) · [Website](https://jiun.dev/itda/) · [Getting started](https://jiun.dev/itda/start.html) · [Security](SECURITY.md) · [한국어](README.ko.md)
 
@@ -37,7 +37,7 @@ Connect to your devices’ **screens and files** from **Windows and Mac**. Brows
 
 ## 🍏 Itda for Mac
 
-Download `Itda-macos-universal.zip` from [Releases](https://github.com/jiunbae/itda/releases/latest). It runs on macOS 12+, on Apple silicon and Intel.
+Download `Itda-macos-universal.zip` from [Releases](https://github.com/jiunbae/itda/releases/latest). For the current release, use macOS 12.3+ on Apple silicon or Intel. Compatibility with macOS 12.0–12.2 is being corrected.
 
 1. Unzip it and move **Itda.app** to Applications.
 2. Open **Itda.app**. Official Mac releases are Developer ID signed and notarized by Apple.
