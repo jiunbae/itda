@@ -593,6 +593,14 @@
           "scope": "Prepared isolated PID-bound Windows quit wait/stop probe, CI artifact provenance and explicit unavailable prerequisite record",
           "status": "merged; no native quit results",
           "verification": "Independent exact-head APPROVE and CI40029382162 all checks passed. First SSH connection timed out; no native app launched. Syntax and design checks are not runtime proof."
+        },
+        {
+          "pr": 105,
+          "head": "e0e37369da3c758363ec5200c2129a649a270b76",
+          "merge_commit": "adef4c80a80c82cebc870990c6007ac97fabae3a",
+          "scope": "Ignore superseded APP viewer disconnect and retry timers; preserve normal current-attempt retry",
+          "status": "merged; production deployment and real native reconnect timing verification pending",
+          "verification": "Exact-head independent APPROVE; CI40030876828 all checks passed. WebKit and Chromium positive regressions passed; original-source first-callback negative and second-guard-only mutant negative separately failed as expected."
         }
       ],
       "open_findings": [
@@ -602,9 +610,10 @@
           "affected_personas": [
             "retina-worker"
           ],
-          "status": "reproduced; PR105 fix under review, not merged or deployed",
+          "status": "fixed in merged PR105; production deployment and real native reconnect verification pending",
           "scope": "An APP viewer drop followed immediately by HP disable opens and connects a replacement, then the prior attempt’s delayed callback posts reconnecting and places a busy overlay over the healthy replacement.",
-          "evidence": "assessments/evidence/iteration-5-viewer-retry.json"
+          "evidence": "assessments/evidence/iteration-5-viewer-retry.json",
+          "fixing_pr": 105
         }
       ],
       "verification_gaps": [
@@ -612,7 +621,8 @@
         "Native Mac Finder queued promise writes, Cmd-Q and AppleEvent quit replies.",
         "Existing seven-persona native, assistive technology, physical phone/OLE, multi-monitor and deployment gaps remain; this round does not close them."
       ],
-      "acceptance_note": "Verified persona scores remain null. Source fixes, deterministic frontend regressions and a prepared native runner do not certify complete user journeys or production behavior."
+      "acceptance_note": "Verified persona scores remain null. Source fixes, deterministic frontend regressions and a prepared native runner do not certify complete user journeys or production behavior. A production1.0.2 native Mac window navigation check passed; it does not verify these candidate fixes.",
+      "native_mac_baseline_evidence": "assessments/evidence/native-mac-window-navigation.json"
     }
   ]
 }
