@@ -131,6 +131,10 @@ try{
   await p.setViewportSize({width:480,height:700});
   {const box=await layer.locator('.files-explorer-address').boundingBox(),last=await layer.locator('.files-explorer-address .files-breadcrumbs button').last().boundingBox();
    assert((await layer.locator('.files-explorer-address .files-breadcrumbs button').last().textContent()).includes('Downloads')&&last.x>=box.x&&last.x+last.width<=box.x+box.width+1,'Current folder hidden in the address bar: '+JSON.stringify({box,last}));}
+  // A click on a crumb of that long path opens that folder (the crumbs must not shift under the pointer).
+  await layer.locator('.files-explorer-address .files-breadcrumbs button').filter({hasText:'alex'}).click();
+  await row('Downloads').waitFor();
+  {const l=(await p.evaluate(()=>testPackets)).filter(x=>x.op==='list').at(-1);assert(l.path==='C:\\Users\\alex','Crumb click opened '+JSON.stringify(l));}
   await p.setViewportSize({width:1200,height:800});
   assert(!errors.length,errors.join('\n'));
   // A slow home answer must not pull an already opened This PC back to the home folder.

@@ -1022,8 +1022,9 @@ body:has(.files-layer) #modals .scrim { z-index: 3800; }
    only the room they need and, when that runs out, the leading ones are cut instead. */
 .files-layer.windows .files-explorer-address .files-breadcrumbs { min-width:0; overflow:hidden; flex:0 1 auto; justify-content:flex-end; }
 .files-layer.windows .files-breadcrumbs button { flex:none; }
-/* Tabbing through the crumbs shows each one (the clipped start can't otherwise be reached). */
-.files-layer.windows .files-explorer-address .files-breadcrumbs:focus-within { justify-content:flex-start; overflow-x:auto; scrollbar-width:none; }
+/* Tabbing through the crumbs shows each one (the clipped start can't otherwise be reached);
+   keyboard focus only, so a click doesn't shift the crumbs under the pointer. */
+.files-layer.windows .files-explorer-address .files-breadcrumbs:has(:focus-visible) { justify-content:flex-start; overflow-x:auto; scrollbar-width:none; }
 .files-layer.windows .files-breadcrumbs button { font-size:12px; padding:3px 4px; border-radius:3px; }
 .files-layer.windows .files-explorer-address input { display:none; width:100%; min-width:0; height:30px; padding:0; background:transparent; border:0; outline:0; border-radius:0; font-size:13px; }
 .files-layer.windows .files-explorer-address.editing { border-color:var(--accent); }
