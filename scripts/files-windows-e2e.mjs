@@ -56,7 +56,9 @@ try{
    await layer.locator('tbody tr').filter({hasText:'Notes.txt'}).click();assert(!await layer.locator('[data-action="copy"]').isDisabled(),'Copy did not enable');
    await layer.locator('[data-action="copy"]').click();assert(!await layer.locator('[data-action="paste"]').isDisabled(),'Paste did not enable');
    await layer.locator('[data-action="details"]').click();assert((await layer.locator('.files-details').textContent()).includes('Notes.txt'),'Details missing selected file');
-   await layer.locator('[data-action="close-preview"]').click();
+   await layer.locator('[data-action="close-preview"]').focus();await p.keyboard.press('Enter');
+   assert(await layer.locator('.files-list').evaluate(e=>document.activeElement===e),'Closing details stranded focus');
+   assert((await layer.locator('.files-selection-status').textContent()).includes('Notes.txt'),'Selected file not announced');
    await layer.locator('.files-list').focus();await p.keyboard.press('Alt+p');await layer.locator('.files-preview-content pre').waitFor();assert(await layer.locator('.files-preview-content pre').textContent()==='Preview fixture','Preview failed');
    await layer.locator('[data-action="close-preview"]').click();
    // Native toolbar activation must reach its button, never open the selected file.
@@ -123,6 +125,9 @@ try{
    await layer.locator('[data-mode="columns"]').click();assert(await layer.locator('.files-columns').count()===1,'Mac columns regressed');
    await layer.locator('[data-mode="list"]').click();await layer.locator('tbody tr').filter({hasText:'Notes.txt'}).click();await p.keyboard.press('Meta+c');assert(!await layer.locator('[data-action="paste"]').isDisabled(),'Mac copy regressed');
    for(const mode of ['grid','list','columns','gallery']) {await layer.locator(`[data-mode="${mode}"]`).click();await auditFiles(p);}
+   await layer.locator('.files-list').focus();await p.keyboard.press('Space');await p.keyboard.press('Escape');
+   assert(await layer.locator('.files-gallery-strip').count()===1,'Quick Look Escape changed gallery view');
+   assert(!await layer.locator('.files-preview').isHidden(),'Quick Look Escape closed gallery preview');
    await p.screenshot({path:path.join(out,'finder.png')});
   }
   assert(!errors.length,errors.join('\n'));await c.close();
@@ -163,6 +168,9 @@ try{
    if(w<=600)assert(await layer.locator('.files-sidebar').isHidden(),`${w}px: navigation pane still squeezing the list`);
   }
   // At small widths, navigation targets and details content must remain usable.
+  await layer.locator('[data-action="locations-toggle"]').focus();await p.keyboard.press('Enter');
+  assert(await layer.locator('.files-sidebar').evaluate(e=>e.contains(document.activeElement)),'Drawer did not focus locations');
+  await layer.locator('.files-list').focus();assert(!await layer.evaluate(e=>e.classList.contains('locations-open')),'Drawer covered list after focus left');
   await layer.locator('[data-action="locations-toggle"]').click();
   await layer.locator('[data-network-sidebar] [data-side="local"]').click();
   assert(await layer.locator('[data-pane="local"]').count()===1,'Compact This PC navigation failed');
@@ -170,6 +178,13 @@ try{
   await layer.locator('[data-action="locations-toggle"]').click();
   await layer.locator('.files-sidebar [data-device="test"]').first().click();
   await layer.locator('tbody tr').filter({hasText:'Notes.txt'}).click();
+  await layer.locator('.files-list').focus();await p.keyboard.press('Alt+Shift+p');
+  assert(await layer.locator('[data-action="close-preview"]').evaluate(e=>document.activeElement===e),'Narrow details left focus under overlay');
+  await p.keyboard.press('Control+l');await p.keyboard.press('Escape');
+  assert(!await layer.locator('.files-preview').isHidden(),'Address Escape closed narrow details');
+  assert(await layer.locator('[data-action="close-preview"]').evaluate(e=>document.activeElement===e),'Address Escape put focus under details');
+  await p.keyboard.press('Escape');assert(await layer.locator('.files-preview').isHidden(),'Narrow details did not close with Escape');
+  assert(await layer.locator('.files-list').evaluate(e=>document.activeElement===e),'Narrow Escape did not return list focus');
   await layer.locator('[data-action="details"]').click();
   const rect=await layer.locator('.files-preview').boundingBox();assert(rect.width>200&&rect.x>=0&&rect.x+rect.width<=440,'Narrow details invisible: '+JSON.stringify(rect));
   assert(await layer.locator('.files-details').innerText().then(t=>t.includes('Notes.txt')),'Narrow details content missing');

@@ -1123,3 +1123,5 @@ body:has(.files-layer) #modals .scrim { z-index: 3800; }
  .files-layer.windows.locations-open .files-sidebar { display:block; grid-area:content; position:absolute; left:0; top:0; bottom:0; width:220px; z-index:12; box-shadow:4px 0 12px #0003; }
  .files-layer.windows .files-preview:not(.quick-look):not([hidden]) { grid-area:content; position:absolute; inset:0; width:auto; z-index:11; background:var(--surface); }
 }
+
+.files-selection-status { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }

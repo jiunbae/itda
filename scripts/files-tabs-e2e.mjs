@@ -49,6 +49,15 @@ try{
   await p.locator('.files-prompt [data-choice="ok"]').click();
   {const t=(await packets()).filter(x=>x.op==='transfer').at(-1);assert(t?.from_id==='build'&&t.from_window==='prior-page'&&t.names[0]==='Beta-B.txt','New window lost the earlier copy: '+JSON.stringify(t));}
 
+  // Another device's clipboard can use delta when the target is this computer.
+  await layer.locator(platform==='mac' ? '.files-current-places [data-side="local"]' : '[data-network-sidebar] [data-bookmark="Documents"]').click();
+  await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+v`);
+  const deltaDialog=p.getByRole('dialog',{name:'파일 복사',exact:true});await deltaDialog.locator('summary').click();
+  await deltaDialog.getByLabel('같은 이름의 파일이 있으면',{exact:true}).selectOption('replace');
+  assert(!await deltaDialog.getByLabel('전송 방식',{exact:true}).locator('[value="rsync"]').isDisabled(),'Other-device to local copy unnecessarily blocked delta');
+  await deltaDialog.getByRole('button',{name:'취소',exact:true}).click();
+  await layer.locator('.files-sidebar [data-device="studio"]').first().click();await row('Alpha-A.txt').waitFor();
+
   // One sorting preference drives every layout, including cached ancestor columns.
   const sort=async name=>{await layer.locator('[data-action="sort"]').click();await p.getByRole('menuitemradio',{name,exact:true}).click();};
   const names=()=>layer.locator('[data-pane="remote"] [data-index]').evaluateAll(es=>es.map(e=>e.querySelector('td .files-name > span, :scope > span').textContent.trim()));

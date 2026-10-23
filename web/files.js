@@ -176,6 +176,8 @@
   function updatePreview() {
     if (!layer) return;
     const el = layer.querySelector(".files-preview"), entry = previewTarget();
+    const wasHidden = el.hidden, hadFocus = el.contains(document.activeElement);
+    const focusOverlay = () => { if (hadFocus || (wasHidden && !MAC && matchMedia("(max-width:600px)").matches)) el.querySelector('[data-action="close-preview"]')?.focus(); };
     const show = previewOn || view === "gallery" || previewModal;
     el.hidden = !show;
     el.classList.toggle("quick-look", previewModal);
@@ -189,9 +191,11 @@
     zoom = null;
     if (details) {
       el.innerHTML = `<header><strong>자세히</strong><span class="spacer"></span><button class="btn sm" data-action="close-preview" aria-label="자세히 창 닫기">×</button></header><div class="files-details">${entry ? `${icon(entry.dir, entry.name)}<h3>${esc(entry.name)}</h3><dl><dt>종류</dt><dd>${esc(kind(entry))}</dd><dt>위치</dt><dd>${esc(panes[active].path)}</dd>${entry.dir ? "" : `<dt>크기</dt><dd>${bytes(entry.size)}</dd>`}<dt>수정한 날짜</dt><dd>${entry.modified ? esc(new Date(entry.modified * 1000).toLocaleString()) : "—"}</dd></dl>` : '<p>파일을 선택하면 자세한 정보가 표시됩니다.</p>'}</div>`;
+      focusOverlay();
       return;
     }
     el.innerHTML = `<header><strong>미리보기</strong><span class="spacer"></span><button class="btn sm subtle files-zoom" data-action="zoom-fit" title="확대/축소: 핀치·${MAC ? "⌘" : "Ctrl+"}+/−, 두 번 클릭 또는 ${MAC ? "⌘" : "Ctrl+"}0으로 맞춤" hidden></button><button class="btn sm" data-action="close-preview" aria-label="미리보기 닫기">×</button></header><div class="files-preview-content">${entry ? icon(entry.dir,entry.name) : ""}<p>${entry ? esc(entry.name) : "미리볼 파일을 선택하세요"}</p></div>${entry ? `<footer>${esc(kind(entry))} · ${entry.dir ? "폴더" : bytes(entry.size)}</footer>` : ""}`;
+    focusOverlay();
     if (!entry || entry.dir || entry.link) return;
     const seq = previewSeq, side = active, path = child(panes[active].path, entry.name);
     el.querySelector(".files-preview-content").insertAdjacentHTML("beforeend", '<small>미리보기 불러오는 중…</small>');
@@ -835,7 +839,7 @@
       `<button class="btn sm" data-action="${action}" title="${text}" aria-label="${text}">${I(glyph)}</button>`;
     layer.innerHTML = `<div class="files-title"><div class="files-nav">${tool("back", "E72B", "뒤로")}${tool("forward", "E76C", "앞으로")}</div>${icon(true)}<b>${esc(label(host))}</b><span class="files-folder-title"></span><span class="spacer"></span>${tool("view", "E80A", "보기")}${tool("mkdir", "E8F4", "새 폴더")}${tool("refresh", "E72C", "새로 고침")}<button class="btn sm" data-action="more" title="동작" aria-label="동작">${I("E712")}</button>${tool("settings", "E713", "연결 설정")}${tool("native", "E8A7", `${nativeName}에서 열기`)}<input class="input files-search" placeholder="검색" aria-label="파일 검색" data-search></div>
       <nav class="files-tabs" aria-label="폴더 탭"></nav><aside class="files-preview" hidden></aside><nav class="files-locations" aria-label="기기 위치"></nav><div class="files-tools">${tool("up", "E80F", "상위 폴더")}${tool("copy", "E8C8", "복사")}<button class="btn sm" data-action="cut">잘라내기</button><button class="btn sm" data-action="paste">붙여넣기</button>${tool("rename", "E70F", "이름 변경")}${tool("trash", "E74D", "보관함으로")}${tool("undo", "E81C", "되돌리기")}<span class="spacer"></span><button class="btn sm" data-action="split">분할 보기</button><button class="btn sm" data-action="hidden">숨김 파일</button><button class="btn sm" data-action="transfers">전송 내역</button></div>
-      <div class="files-error" hidden role="alert"></div><div class="files-body"><aside class="files-sidebar"><div data-network-sidebar></div><div class="files-current-places"><h4>즐겨찾기</h4><button class="btn subtle" data-bookmark="home">${I("E80F")}홈 폴더</button><button class="btn subtle" data-bookmark="Downloads">${I("E8B7")}다운로드</button><button class="btn subtle" data-bookmark="Documents">${I("E8A5")}문서</button><button class="btn subtle" data-bookmark="Desktop">${I("E7F4")}${MAC ? "데스크탑" : "바탕 화면"}</button><h4>위치</h4><button class="btn subtle" data-side="remote">${I("E7F4")}${esc(label(host))}</button><button class="btn subtle" data-side="local">${I("E7F8")}${HERE}</button><h4>파일 관리</h4><button class="btn subtle" data-bookmark=".itda-trash">${I("E74D")}보관함</button></div></aside><div class="files-panes"></div></div><div class="files-jobs" hidden></div><div class="files-status"><div data-footer-path></div><span data-status></span><span data-location></span></div>`;
+      <div class="files-error" hidden role="alert"></div><div class="files-body"><aside class="files-sidebar"><div data-network-sidebar></div><div class="files-current-places"><h4>즐겨찾기</h4><button class="btn subtle" data-bookmark="home">${I("E80F")}홈 폴더</button><button class="btn subtle" data-bookmark="Downloads">${I("E8B7")}다운로드</button><button class="btn subtle" data-bookmark="Documents">${I("E8A5")}문서</button><button class="btn subtle" data-bookmark="Desktop">${I("E7F4")}${MAC ? "데스크탑" : "바탕 화면"}</button><h4>위치</h4><button class="btn subtle" data-side="remote">${I("E7F4")}${esc(label(host))}</button><button class="btn subtle" data-side="local">${I("E7F8")}${HERE}</button><h4>파일 관리</h4><button class="btn subtle" data-bookmark=".itda-trash">${I("E74D")}보관함</button></div></aside><div class="files-panes"></div></div><div class="files-jobs" hidden></div><div class="files-status"><div data-footer-path></div><span data-status></span><span class="files-selection-status" role="status" aria-atomic="true"></span><span data-location></span></div>`;
     document.body.append(layer);
     {
       const title = layer.querySelector(".files-title");
@@ -871,6 +875,12 @@
         layer.querySelector('[data-action="locations-toggle"]')?.setAttribute("aria-expanded", "false");
       }
     }, true);
+    layer.addEventListener("focusin", e => {
+      if (layer.classList.contains("locations-open") && !e.target.closest('.files-sidebar,[data-action="locations-toggle"]')) {
+        layer.classList.remove("locations-open");
+        layer.querySelector('[data-action="locations-toggle"]')?.setAttribute("aria-expanded", "false");
+      }
+    });
     layer.addEventListener("pointerdown", resizeStart, true);
     layer.addEventListener("click", click);
     layer.addEventListener("dblclick", dblclick);
@@ -1089,6 +1099,10 @@
     }
     layer.querySelector("[data-status]").textContent =
       `${visible(active).length}개 항목${p.selected.size ? ` · ${p.selected.size}개 선택됨` : ""}`;
+    const selectionStatus = layer.querySelector(".files-selection-status");
+    const focusedName = visible(active)[p.focus]?.name;
+    const announcement = p.selected.size ? `${p.selected.has(focusedName) ? focusedName : [...p.selected][0]} · ${p.selected.size}개 선택됨` : "";
+    if (selectionStatus.textContent !== announcement) selectionStatus.textContent = announcement;
     layer.querySelector("[data-location]").textContent = p.path;
     layer.querySelector(".files-folder-title").textContent =
       p.path.split(/[\\/]/).filter(Boolean).pop() || p.path;
@@ -1314,13 +1328,14 @@
     if (action === "locations-toggle") {
       const open = layer.classList.toggle("locations-open");
       layer.querySelector('[data-action="locations-toggle"]').setAttribute("aria-expanded", String(open));
+      if (open) layer.querySelector(".files-sidebar button:not([disabled])")?.focus();
       return;
     }
     if (action === "new-window") return launch(host, true);
     if (action === "new-tab") return newTab();
     if (action === "zoom-fit") { if (zoom === null) zoomBy(1, undefined, undefined, 1); else { zoom = null; applyZoom(); } return; }
     if (action === "preview" || action === "details") { previewOn = !(previewOn && previewKind === action); previewKind = action; previewKey = ""; renderPanes(); return; }
-    if (action === "close-preview") { previewOn = false; previewModal = false; if (view === "gallery") view = "list"; previewKey = ""; renderPanes(); return; }
+    if (action === "close-preview") { const restore = layer.querySelector(".files-preview").contains(document.activeElement) || (!MAC && matchMedia("(max-width:600px)").matches); previewOn = false; previewModal = false; if (view === "gallery") view = "list"; previewKey = ""; renderPanes(); if (restore) layer.querySelector(`[data-pane="${active}"] .files-list`)?.focus(); return; }
     if (action === "network") return network();
     if (action === "explorer-home") return network("home");
     if (action === "scan") {
@@ -1540,7 +1555,7 @@
       dest.path === destination
         ? names.filter((n) => dest.entries.some((e) => e.name === n))
         : [];
-    const deltaEligible = localRsyncAvailable && !move && from !== to && !cross;
+    const deltaEligible = localRsyncAvailable && !move && from !== to;
     const r = await prompt(
       move ? "파일 이동" : "파일 복사",
       `<p><b>${esc(names.length === 1 ? names[0] : `${names.length}개 항목`)}</b></p><p class="hint">${esc(where(from, source, cross ? origin.id : id))} → ${esc(where(to, destination, id))}</p>${collisions.length ? `<p>같은 이름의 항목 ${collisions.length}개가 있습니다.</p>` : ""}<div class="field"><label>같은 이름의 파일이 있으면</label><select class="input" name="policy"><option value="keep">둘 다 유지</option><option value="replace">변경된 파일 바꾸기 · 폴더는 합치기</option><option value="skip">기존 파일 건너뛰기</option></select></div><details><summary>전송 옵션 · 자동 선택</summary><div class="field"><label>전송 방식</label><select class="input" name="engine"><option value="auto">자동 · 가능한 경우 rsync 증분 전송</option><option value="sftp">일반 전송 · SFTP</option><option value="rsync" ${deltaEligible ? "" : "disabled"}>증분 전송 · 파일 바꾸기에서만 사용</option></select></div><p class="hint">증분 전송은 이 컴퓨터와 원격 기기 사이의 복사에서 ‘변경된 파일 바꾸기’를 선택하고 양쪽에 rsync가 있을 때 사용할 수 있습니다. Windows 한글 이름 변환이 필요한 항목은 자동 또는 일반 전송을 사용하세요. 자동은 가능한 방식을 선택합니다.</p></details>${move ? '<p class="hint">같은 파일시스템 안에서는 바로 이동하며, 장치 간 이동은 해시를 확인한 뒤 원본을 삭제합니다. 취소하거나 실패한 항목의 원본은 유지합니다.</p>' : ""}`,
@@ -1703,10 +1718,21 @@
       }
       return;
     }
-    if (e.key === "Escape" && previewModal) { e.preventDefault(); previewModal = false; previewKey = ""; updatePreview(); return; }
+    if (e.key === "Escape" && previewModal) {
+      e.preventDefault();
+      const restore = layer.querySelector(".files-preview").contains(document.activeElement);
+      previewModal = false; previewKey = ""; updatePreview();
+      if (restore) {
+        const pane = layer.querySelector(".files-preview");
+        if (!MAC && matchMedia("(max-width:600px)").matches && !pane.hidden) pane.querySelector('[data-action="close-preview"]')?.focus();
+        else layer.querySelector(`[data-pane="${active}"] .files-list`)?.focus();
+      }
+      return;
+    }
+    if (e.key === "Escape" && !e.target.closest("input,textarea") && !MAC && matchMedia("(max-width:600px)").matches && !layer.querySelector(".files-preview").hidden) { e.preventDefault(); act("close-preview"); return; }
     const input = e.target.closest("input,textarea");
     if (input) {
-      if (!MAC && e.key === "Escape" && input.dataset.path) { e.preventDefault(); layer.querySelector(".files-explorer-address").classList.remove("editing"); layer.querySelector(".files-list")?.focus(); return; }
+      if (!MAC && e.key === "Escape" && input.dataset.path) { e.preventDefault(); layer.querySelector(".files-explorer-address").classList.remove("editing"); const preview = layer.querySelector(".files-preview"); if (matchMedia("(max-width:600px)").matches && !preview.hidden) preview.querySelector('[data-action="close-preview"]')?.focus(); else layer.querySelector(`[data-pane="${active}"] .files-list`)?.focus(); return; }
       if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229 && input.dataset.path) {
         e.preventDefault();
         nav(input.dataset.path, input.value);
@@ -2203,6 +2229,7 @@
     e.preventDefault();e.stopPropagation();act(type);
   },true);
   matchMedia('(max-width:600px)').addEventListener('change', e => {
+    if (e.matches && layer && !MAC && !layer.querySelector('.files-preview').hidden && document.activeElement?.closest('.files-list')) layer.querySelector('[data-action="close-preview"]')?.focus();
     if (!e.matches && layer) {
       layer.classList.remove("locations-open");
       layer.querySelector('[data-action="locations-toggle"]')?.setAttribute("aria-expanded", "false");
