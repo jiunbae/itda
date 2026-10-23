@@ -1637,7 +1637,40 @@
     }
     const sent = await transfer(r.from, r.source, left, r.to, r.destination, r.move, r.id, origin,
       { state: j.state, done: r.names.length - left.length, partial: j.partial, policy: r.policy, engine: r.engine });
-    if (sent) { jobs.delete(key); announcedJobs.delete(key); renderJobs(); }
+    if (sent) dismissTransfer(key);
+  }
+  // A page's own transfer is cancelled as its own; one whose window closed is the app's.
+  function cancelTransfer(key) {
+    const j = jobs.get(key);
+    if (!j) return;
+    send("files", { id: j.id || host?.id, window: pageToken, op: j.orphan ? "cancel_background" : "cancel", job: key });
+  }
+  function dismissTransfer(key) {
+    const j = jobs.get(key);
+    if (j?.orphan) send("files", { id: j.id, window: pageToken, op: "dismiss_background", job: key });
+    jobs.delete(key); announcedJobs.delete(key);
+    renderJobs(); transfersChanged();
+  }
+  // The main window lists the app's transfers (app.js); it is told when they change.
+  function transfersChanged() { window.dispatchEvent(new Event("itda-transfers")); }
+  // A transfer whose file window closed (an event with window "app", or the state snapshot
+  // a page gets when it opens): shown and cancellable here like this page's own.
+  function backgroundJob(m, live) {
+    const previous = jobs.get(m.job) || {};
+    if (m.dismissed) { jobs.delete(m.job); announcedJobs.delete(m.job); renderJobs(); transfersChanged(); return; }
+    const r = m.request || {};
+    const request = previous.request || (Array.isArray(r.names) ? { id: r.id || m.id, from: r.from, source: r.source, names: r.names, to: r.to, destination: r.destination,
+      move: !!r.move, policy: r.policy, engine: r.engine, fromId: r.from_id || null, fromWindow: null, retry: false } : null);
+    jobs.set(m.job, { ...previous, ...m, orphan: true, request, count: r.count || request?.names.length || 0 });
+    // Said once, in the main window (file windows show the row); not for a snapshot.
+    const ended = ["completed", "failed", "cancelled"].includes(m.state);
+    if (live && ended && !window.ITDA_FILE_HOST && !announcedJobs.has(m.job) && !["completed", "failed", "cancelled"].includes(previous.state)) {
+      announcedJobs.add(m.job);
+      const device = hostById(m.id);
+      const what = m.moving || request?.move ? "파일 이동" : "파일 복사";
+      toast(`${device ? `${label(device)} · ` : ""}${what} ${m.state === "completed" ? "완료" : m.state === "failed" ? `실패${m.error ? ` — ${m.error}` : ""}` : "취소됨"}`, m.state === "completed" ? "E8B7" : "E783", m.state === "failed");
+    }
+    renderJobs(); transfersChanged();
   }
   // "Device: path" for the transfer dialog ("이 컴퓨터" for this computer's side).
   function where(side, path, id) {
@@ -1649,6 +1682,10 @@
     previewInFlight = false;
     if (queuedPreview) { const request = queuedPreview; queuedPreview = null; if (request.seq === previewSeq) { previewInFlight = true; call("preview", request); } }
   }
+  function transferName(j) {
+    const n = j.request?.names.length || j.count || 0;
+    return j.file || (n === 1 && j.request ? j.request.names[0] : n ? `${n}개 항목` : "파일 전송");
+  }
   function renderJobs() {
     if (!layer) return;
     // This device's transfers, and any other tab's that failed or were cancelled (they need
@@ -1656,7 +1693,7 @@
     // Home/Network has no history toggle (it sits in the hidden tool row): attention only.
     const history = showTransferHistory && !networkMode;
     const current = [...jobs.values()]
-      .filter((j) => history || (j.id === host.id ? ["queued", "running", "failed", "cancelled"].includes(j.state) : ["failed", "cancelled"].includes(j.state)))
+      .filter((j) => history || (j.id === host.id ? ["queued", "running", "failed", "cancelled"].includes(j.state) || j.orphan : ["failed", "cancelled"].includes(j.state)))
       .slice(-12);
     const box = layer.querySelector(".files-jobs");
     // Preserve live controls across progress updates, including a Space press
@@ -1677,7 +1714,7 @@
           cancelled: "취소됨",
         }[j.state];
         const device = j.id !== host.id && hostById(j.id);
-        const what = j.file || (j.request ? (j.request.names.length === 1 ? j.request.names[0] : `${j.request.names.length}개 항목`) : "파일 전송");
+        const what = transferName(j);
         const progress = ended && j.request && j.completed_names?.length ? ` · ${j.request.names.length}개 중 ${j.completed_names.length}개 끝남` : "";
         const hint = ended && j.kind === "export" ? " · 원본 폴더에서 다시 복사하거나 끌어 놓으세요" : "";
         const actions = live
@@ -1687,11 +1724,11 @@
       })
       .join(""));
     box.querySelectorAll("[data-cancel-job]").forEach(
-      (b) => (b.onclick = () => send("files", { id: jobs.get(b.dataset.cancelJob)?.id || host.id, window: pageToken, op: "cancel", job: b.dataset.cancelJob })),
+      (b) => (b.onclick = () => cancelTransfer(b.dataset.cancelJob)),
     );
     box.querySelectorAll("[data-retry-job]").forEach(b => b.onclick = () => retryJob(b.dataset.retryJob));
     box.querySelectorAll("[data-goto-job]").forEach(b => b.onclick = () => { const t = tabOf(jobs.get(b.dataset.gotoJob)?.id); if (t) switchTab(t.id); });
-    box.querySelectorAll("[data-dismiss-job]").forEach(b => b.onclick = () => { jobs.delete(b.dataset.dismissJob); announcedJobs.delete(b.dataset.dismissJob); renderJobs(); });
+    box.querySelectorAll("[data-dismiss-job]").forEach(b => b.onclick = () => dismissTransfer(b.dataset.dismissJob));
     if (!current.length && history) box.textContent = "최근 전송 내역이 없습니다";
     if (focused) {
       const row = box.querySelector(`[data-id="file-job-${CSS.escape(focused.value)}"]`);
@@ -2095,6 +2132,12 @@
     // The source may have copied before this window existed. Initial state carries the
     // same private in-app clipboard; opening a device must not discard it.
     if (m.type === "state" && m.files_clipboard) message({ type: "files_clipboard", clip: m.files_clipboard });
+    if (m.type === "state" && Array.isArray(m.files_jobs)) for (const j of m.files_jobs) backgroundJob(j, false);
+    if (m.type === "files_job" && m.window === "app") { backgroundJob(m, true); return true; }
+    if (m.type === "files_background") {
+      if (!window.ITDA_FILE_HOST && m.count) toast(`전송 ${m.count}개는 백그라운드에서 계속됩니다 — 사이드바의 ‘전송’에서 확인하세요`, "E8B7");
+      return true;
+    }
     if (["files_result", "files_job", "files_native_paste", "files_native_drag_end"].includes(m.type) && m.window !== pageToken) return true;
     if (m.type === "files_sort") {
       const s = m.sort || {};
@@ -2326,6 +2369,10 @@
     message,
     network,
     refreshNetwork,
+    // The app's transfers (their file window closed), for the main window's list.
+    transfers: () => [...jobs.values()].filter(j => j.orphan).map(j => ({ ...j, name: transferName(j), device: hostById(j.id) ? label(hostById(j.id)) : "이 컴퓨터" })),
+    cancelTransfer,
+    dismissTransfer,
   };
   for(const type of ["copy","cut","paste"])document.addEventListener(type,e=>{
     if(!layer || networkMode || document.querySelector(".files-prompt,.files-menu") || topModal())return;

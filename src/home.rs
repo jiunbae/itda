@@ -364,6 +364,7 @@ fn send_state() {
             "sessions": sessions_json(m),
             "file_windows": plat::file_windows(),
             "files_clipboard": m.file_clipboard,
+            "files_jobs": crate::files::background_jobs(),
             "online": m.online,
             "found": m.found,
             "dark": plat::system_dark(),
@@ -459,11 +460,15 @@ fn on_ipc(v: Value) {
             // Transfers from it land on this computer (their source may be another window's
             // device, named by from_id); they never write to a device through this window.
             let local_only = id == crate::files::locations::NETWORK
-                && (v["op"] == "local_home"
+                && (v["op"] == "local_home" || v["op"] == "cancel_background" || v["op"] == "dismiss_background"
                     || (v["side"] == "local" && v["op"] != "transfer")
                     || (v["op"] == "transfer" && v["to"] == "local" && (v["from"] == "local" || v["from_id"].as_str().is_some_and(|f| !f.is_empty() && f != id))));
             let found = home(|m| m.hosts.iter().find(|h| h.id == id).cloned());
             let Some(mut host) = found.or_else(|| local_only.then(|| Host { id: id.clone(), ..Default::default() })) else { return };
+            // The app's transfers (their window closed) need no login to stop or dismiss.
+            if v["op"] == "cancel_background" || v["op"] == "dismiss_background" {
+                return crate::files::dispatch(v, host, store::Login::default(), std::sync::Arc::new(|v| post(Event::Page(v))));
+            }
             if v["op"] == "finder" {
                 std::thread::spawn(move || {
                     let result = crate::files::native_target(&host).and_then(|target| crate::files::open_native(&target));
@@ -1270,6 +1275,18 @@ fn drain() {
                     if let Some(id) = v["id"].as_str() {
                         plat::session_eval(id, &format!("window.itdaHp&&itdaHp({v})"));
                     }
+                }
+                // A transfer whose file window closed: say how it ended, since no window shows it.
+                if v["type"] == "files_job" && v["window"] == "app" && v["dismissed"] != true
+                    && ["completed", "failed", "cancelled"].contains(&v["state"].as_str().unwrap_or("")) {
+                    let what = if v["moving"] == true || v["request"]["move"] == true { "파일 이동" } else { "파일 복사" };
+                    let device = Some(host_label(v["id"].as_str().unwrap_or(""))).filter(|d| !d.is_empty()).unwrap_or_else(|| "이 컴퓨터".into());
+                    let text = match v["state"].as_str() {
+                        Some("completed") => format!("{device}: 끝났습니다"),
+                        Some("cancelled") => format!("{device}: 취소했습니다"),
+                        _ => format!("{device}: {} — Itda의 전송 목록에서 다시 시도할 수 있습니다", v["error"].as_str().unwrap_or("실패했습니다")),
+                    };
+                    notify(&format!("{what} {}", match v["state"].as_str() { Some("completed") => "완료", Some("cancelled") => "취소됨", _ => "실패" }), &text);
                 }
                 #[cfg(target_os = "macos")]
                 let mut v=v;
