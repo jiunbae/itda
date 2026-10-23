@@ -1,0 +1,225 @@
+{
+  "schema_version": 1,
+  "assessment_id": "itda-quality-2026-10-23",
+  "status": "baseline-in-progress",
+  "goal": "Every persona scores at least 9/10 on verified core journeys, with no unresolved P1/P2 task blockers.",
+  "baseline": {
+    "commit": "521202025e7c5a984f089c1d1df77e846f63fd33",
+    "release": "1.0.2",
+    "date": "2026-10-23"
+  },
+  "rubric": [
+    {
+      "id": "task_completion",
+      "maximum": 3,
+      "anchors": {
+        "0": "Core goal impossible",
+        "1.5": "Completes with substantial assistance or workaround",
+        "3": "Completes independently in representative conditions"
+      }
+    },
+    {
+      "id": "reliability_safety",
+      "maximum": 2,
+      "anchors": {
+        "0": "Loss, leakage or persistent failure",
+        "1": "Recovery needs technical help",
+        "2": "Predictable behavior and safe recovery are verified"
+      }
+    },
+    {
+      "id": "comprehension",
+      "maximum": 1.5,
+      "anchors": {
+        "0": "Labels and concepts obscure the next step",
+        "0.75": "Some technical knowledge needed",
+        "1.5": "Prerequisites, choices and next step are understandable"
+      }
+    },
+    {
+      "id": "feedback_recovery",
+      "maximum": 1,
+      "anchors": {
+        "0": "Missing or misleading status",
+        "0.5": "Status exists but recovery unclear",
+        "1": "Progress, failure and recovery are timely and actionable"
+      }
+    },
+    {
+      "id": "efficiency",
+      "maximum": 1,
+      "anchors": {
+        "0": "Repeated setup or navigation blocks normal work",
+        "0.5": "Unnecessary steps or hidden controls",
+        "1": "Core recurring tasks are direct and state is retained appropriately"
+      }
+    },
+    {
+      "id": "accessibility",
+      "maximum": 1,
+      "anchors": {
+        "0": "Core task inaccessible for this persona",
+        "0.5": "Partial keyboard/zoom/semantics support",
+        "1": "Representative keyboard, zoom, naming and focus checks pass"
+      }
+    },
+    {
+      "id": "consistency",
+      "maximum": 0.5,
+      "anchors": {
+        "0": "Platform or documentation contradicts behavior",
+        "0.25": "Minor inconsistencies",
+        "0.5": "Platform conventions and product guidance agree"
+      }
+    }
+  ],
+  "evidence_policy": {
+    "no_score_without_evidence": true,
+    "source_only_maximum_total": 8,
+    "critical_native_behavior_requires": "Current native verification or clearly identified applicable user verification; a mock does not prove OS integration.",
+    "scoring": "Record measured/observed behavior separately from reviewer judgment. Missing evidence remains pending. Do not raise scores merely because fixes landed.",
+    "release_gate": "Fixes must be independently reviewed, relevant checks pass, and deployed behavior verified before declaring the goal achieved.",
+    "restrictions": [
+      "No performance benchmark campaigns",
+      "No user-file changes or permission resets",
+      "Use isolated worktrees and fixtures",
+      "Coordinate release/version ownership with the existing release peer"
+    ]
+  },
+  "personas": [
+    {
+      "id": "novice-family",
+      "name": "김영희",
+      "age": 62,
+      "context": "컴퓨터 설정에 익숙하지 않은 Mac 사용자",
+      "goal": "처음 설치하고 가족의 Mac 화면에 연결하기",
+      "journeys": [
+        "공식 다운로드·설치",
+        "화면 공유와 원격 로그인 구분",
+        "권한 도우미·재확인",
+        "실패 이유 이해와 기본 화면 공유 복구"
+      ],
+      "score": null,
+      "dimension_scores": {},
+      "evidence": [],
+      "findings": [],
+      "verification_gaps": [],
+      "status": "pending"
+    },
+    {
+      "id": "retina-worker",
+      "name": "이민준",
+      "age": 35,
+      "context": "Retina Mac으로 집과 사무실 기기를 사용하는 재택 근무자",
+      "goal": "화질을 이해하며 여러 원격 화면을 안정적으로 사용하기",
+      "journeys": [
+        "기기·계정 재사용",
+        "고성능/기본 화면 공유 구분",
+        "빠르게/선명하게 상태 확인",
+        "다중 모니터·재연결·창 종료"
+      ],
+      "score": null,
+      "dimension_scores": {},
+      "evidence": [],
+      "findings": [],
+      "verification_gaps": [],
+      "status": "pending"
+    },
+    {
+      "id": "windows-office",
+      "name": "박서연",
+      "age": 29,
+      "context": "Windows 노트북의 작은 화면에서 한글 문서를 다루는 사무직",
+      "goal": "익숙한 탐색과 안전한 Mac→Windows 파일 전송",
+      "journeys": [
+        "작은 창의 탐색·제목 탭",
+        "한글 파일명·충돌 처리",
+        "기기 간 드래그와 대상 선택",
+        "탐색기로 끌어내기·취소·실패 안내"
+      ],
+      "score": null,
+      "dimension_scores": {},
+      "evidence": [],
+      "findings": [],
+      "verification_gaps": [],
+      "status": "pending"
+    },
+    {
+      "id": "cross-platform-files",
+      "name": "한지우",
+      "age": 32,
+      "context": "Mac과 Windows에서 디자인 파일을 정리하는 사용자",
+      "goal": "여러 탭·보기·미리보기로 파일을 찾아 복사·이동하기",
+      "journeys": [
+        "기기·탭·창 탐색",
+        "아이콘·목록·열·갤러리·미리보기",
+        "복사·이동·충돌·취소·복구",
+        "증분 전송의 조건과 한계"
+      ],
+      "score": null,
+      "dimension_scores": {},
+      "evidence": [],
+      "findings": [],
+      "verification_gaps": [],
+      "status": "pending"
+    },
+    {
+      "id": "ssh-admin",
+      "name": "최현수",
+      "age": 41,
+      "context": "가족·동료의 기기 설정을 관리하는 관리자",
+      "goal": "SSH로 설치·설정을 공유하고 연결 보안을 이해하기",
+      "journeys": [
+        "계정·호스트 키 확인",
+        "설치 대상·전송 범위 확인",
+        "암호·키의 선택적 공유",
+        "실패·재시작·업데이트·기존 설정 보존"
+      ],
+      "score": null,
+      "dimension_scores": {},
+      "evidence": [],
+      "findings": [],
+      "verification_gaps": [],
+      "status": "pending"
+    },
+    {
+      "id": "mobile-user",
+      "name": "김하늘",
+      "age": 24,
+      "context": "앱 설치 없이 휴대폰으로 기기에 접근하는 사용자",
+      "goal": "QR·PIN으로 접속하고 터치·키보드로 조작하기",
+      "journeys": [
+        "모바일 랜딩·설치 구분",
+        "QR·PIN·네트워크 안내",
+        "터치·키보드·클립보드",
+        "연결 실패·세션 종료·보안 상태"
+      ],
+      "score": null,
+      "dimension_scores": {},
+      "evidence": [],
+      "findings": [],
+      "verification_gaps": [],
+      "status": "pending"
+    },
+    {
+      "id": "keyboard-low-vision",
+      "name": "정다은",
+      "age": 47,
+      "context": "화면 확대와 키보드·스크린리더를 사용하는 사용자",
+      "goal": "마우스 없이 핵심 작업을 이해하고 수행하기",
+      "journeys": [
+        "명확한 이름·대비·확대",
+        "키보드 탐색·포커스·모달 복귀",
+        "선택·오류·진행 상태 전달",
+        "파일·계정·연결 핵심 작업"
+      ],
+      "score": null,
+      "dimension_scores": {},
+      "evidence": [],
+      "findings": [],
+      "verification_gaps": [],
+      "status": "pending"
+    }
+  ],
+  "iterations": []
+}
