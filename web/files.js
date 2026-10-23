@@ -302,6 +302,7 @@
   // devices, folders, names and options, never a drag or clipboard token.
   const transferRequests = new Map();
   const announcedJobs = new Set();
+  const droppedJobs = new Set();
   let jobsHomeView = false;
   const extension = (name = "") => name.includes(".") ? name.split(".").pop().toLowerCase() : "";
   const kind = (e) => e.link ? "심볼릭 링크" : e.dir && !MAC && /^[A-Za-z]:$/.test(e.name) ? "로컬 디스크" : e.dir ? "폴더" : ({ txt: "텍스트 문서", md: "Markdown 문서", pdf: "PDF 문서", png: "PNG 이미지", jpg: "JPEG 이미지", jpeg: "JPEG 이미지", heic: "HEIF 이미지", zip: "ZIP 아카이브", mp4: "MPEG-4 동영상", mp3: "MP3 오디오" }[extension(e.name)] || (extension(e.name) ? `${extension(e.name).toUpperCase()} 문서` : "문서"));
@@ -1647,7 +1648,7 @@
   }
   function dismissTransfer(key) {
     const j = jobs.get(key);
-    if (j?.orphan) send("files", { id: j.id, window: pageToken, op: "dismiss_background", job: key });
+    if (j?.orphan) { send("files", { id: j.id, window: pageToken, op: "dismiss_background", job: key }); droppedJobs.add(key); }
     jobs.delete(key); announcedJobs.delete(key);
     renderJobs(); transfersChanged();
   }
@@ -1657,14 +1658,21 @@
   // a page gets when it opens): shown and cancellable here like this page's own.
   function backgroundJob(m, live) {
     const previous = jobs.get(m.job) || {};
-    if (m.dismissed) { jobs.delete(m.job); announcedJobs.delete(m.job); renderJobs(); transfersChanged(); return; }
+    // Events can cross (a snapshot, another thread's end): only a newer one counts, and
+    // nothing brings back a dismissed one.
+    if (droppedJobs.has(m.job) || (m.seq && previous.seq && m.seq <= previous.seq)) return;
+    if (m.dismissed) {
+      droppedJobs.add(m.job); if (droppedJobs.size > 500) droppedJobs.delete(droppedJobs.values().next().value);
+      jobs.delete(m.job); announcedJobs.delete(m.job); renderJobs(); transfersChanged(); return;
+    }
     const r = m.request || {};
     const request = previous.request || (Array.isArray(r.names) ? { id: r.id || m.id, from: r.from, source: r.source, names: r.names, to: r.to, destination: r.destination,
       move: !!r.move, policy: r.policy, engine: r.engine, fromId: r.from_id || null, fromWindow: null, retry: false } : null);
     jobs.set(m.job, { ...previous, ...m, orphan: true, request, count: r.count || request?.names.length || 0 });
-    // Said once, in the main window (file windows show the row); not for a snapshot.
+    // Said once, by the main window when it is in front (otherwise the system notification
+    // says it); file windows show the row; never for a snapshot.
     const ended = ["completed", "failed", "cancelled"].includes(m.state);
-    if (live && ended && !window.ITDA_FILE_HOST && !announcedJobs.has(m.job) && !["completed", "failed", "cancelled"].includes(previous.state)) {
+    if (live && ended && !window.ITDA_FILE_HOST && document.hasFocus() && !announcedJobs.has(m.job) && !["completed", "failed", "cancelled"].includes(previous.state)) {
       announcedJobs.add(m.job);
       const device = hostById(m.id);
       const what = m.moving || request?.move ? "파일 이동" : "파일 복사";

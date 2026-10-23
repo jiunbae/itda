@@ -319,10 +319,16 @@ pub fn file_windows() -> Vec<String> {
 
 pub fn files_window(id: &str, close: bool) { file_window(id, close, false, None); }
 pub fn files_new_window_at(id: &str, path: Option<&str>) { file_window(id, false, true, path); }
+/// The main window is the one in front (a message there is seen without a notification).
+pub fn home_focused() -> bool {
+    unsafe { GetForegroundWindow() == hwnd() && IsWindowVisible(hwnd()) != 0 }
+}
+
 pub fn files_window_context(window: &str, id: &str, page: &str) {
     let h = FILE_PANES.with(|p| p.borrow().get(window).map(|(h,_)| *h));
     if let Some(h) = h {
-        FILE_PAGES.with(|p| {p.borrow_mut().insert(window.into(), page.into());});
+        // A reloaded page has a new token: the old page is gone, so its transfers become the app's.
+        if let Some(old) = FILE_PAGES.with(|p| p.borrow_mut().insert(window.into(), page.into())).filter(|old| old != page) { crate::files::release_page(&old); }
         let title = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| format!("{} — 파일", h.label())).unwrap_or_else(|| "네트워크 — Itda".into()));
         unsafe { SetWindowTextW(h as HWND, wide(&title).as_ptr()); }
         FILE_HOSTS.with(|p| {p.borrow_mut().insert(window.into(), id.into());}); super::send_hosts();

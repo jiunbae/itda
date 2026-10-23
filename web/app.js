@@ -977,7 +977,7 @@ function transfersNav() {
   const live = all.filter(j => ['queued', 'running'].includes(j.state)).length;
   const failed = all.some(j => ['failed', 'cancelled'].includes(j.state));
   const text = `전송${live ? ` · ${live}개 진행 중` : failed ? ' · 확인 필요' : ''}`;
-  return `<button class="nav-item nav-transfers" data-transfers aria-haspopup="dialog" aria-label="${esc(text)}" title="${esc(text)}">${I('E896')}<span class="label">전송</span><span class="count">${live || (failed ? '!' : all.length)}</span></button>`;
+  return `<button class="nav-item nav-transfers" data-id="nav-transfers" data-transfers aria-haspopup="dialog" aria-label="${esc(text)}" title="${esc(text)}">${I('E896')}<span class="label">전송</span><span class="count">${live || (failed ? '!' : all.length)}</span></button>`;
 }
 function transferRows() {
   const all = transfers().slice().reverse();
@@ -989,14 +989,21 @@ function transferRows() {
     return `<li class="transfer-row ${esc(j.state || '')}" data-id="transfer-${esc(j.job)}"><div class="transfer-what"><b>${esc(j.name)}</b>
       <span>${esc(j.device)} · ${j.moving || j.request?.move ? '이동' : '복사'} · ${esc(live && j.detail ? j.detail : TRANSFER_STATE[j.state] || '')}${done}${j.error && j.state === 'failed' ? ` — ${esc(j.error)}` : ''}</span>${progress}</div>
       <div class="transfer-actions">${live ? `<button class="btn sm" data-id="transfer-cancel-${esc(j.job)}" data-transfer-cancel="${esc(j.job)}">취소</button>` : ''}
-      <button class="btn sm" data-id="transfer-open-${esc(j.job)}" data-transfer-open="${esc(j.id)}">${['failed', 'cancelled'].includes(j.state) ? '파일 창에서 다시 시도' : '파일 창 열기'}</button>
+      <button class="btn sm" data-id="transfer-open-${esc(j.job)}" data-transfer-open="${esc(j.id)}">${['failed', 'cancelled'].includes(j.state) && j.request ? '파일 창에서 다시 시도' : '파일 창 열기'}</button>
       ${live ? '' : `<button class="btn sm" data-id="transfer-dismiss-${esc(j.job)}" data-transfer-dismiss="${esc(j.job)}" aria-label="${esc(j.name)} 목록에서 지우기">지우기</button>`}</div></li>`;
   }).join('')}</ul>`;
+}
+// What the dialog's live line says: changes only when a transfer starts or ends.
+function transferStatus() {
+  const all = transfers(), live = all.filter(j => ['queued', 'running'].includes(j.state)).length;
+  const failed = all.filter(j => j.state === 'failed').length;
+  return [live ? `${live}개 진행 중` : '진행 중인 전송 없음', failed ? `${failed}개 실패` : ''].filter(Boolean).join(' · ');
 }
 function showTransfers() {
   const m = openModal('transfers', `<div class="dialog"><div class="body"><h2>전송</h2>
     <p class="lead">파일 창을 닫아도 계속되는 복사·이동입니다. 끝나면 결과가 여기 남고, 실패한 전송은 그 기기의 파일 창에서 남은 항목만 다시 보낼 수 있습니다.</p>
-    <div class="transfer-box" role="region" aria-label="전송 목록" aria-live="polite">${transferRows()}</div></div>
+    <p class="transfer-status" role="status">${transferStatus()}</p>
+    <div class="transfer-box" role="region" aria-label="전송 목록">${transferRows()}</div></div>
     <div class="foot"><button class="btn primary" data-x="close">닫기</button></div></div>`);
   m.addEventListener('click', (e) => {
     const b = e.target.closest('button');
@@ -1014,6 +1021,8 @@ window.addEventListener('itda-transfers', () => {
   if (!box) return;
   const focused = box.contains(document.activeElement) ? document.activeElement.dataset.id : null;
   morph(box, transferRows());
+  const line = $('#modals .scrim[data-key="transfers"] .transfer-status');
+  if (line && line.textContent !== transferStatus()) line.textContent = transferStatus();
   if (focused) (box.querySelector(`[data-id="${CSS.escape(focused)}"]`) || box.querySelector('button') || $('#modals .scrim[data-key="transfers"] [data-x="close"]'))?.focus();
 });
 

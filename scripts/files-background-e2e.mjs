@@ -22,7 +22,8 @@ const assert=(value,msg)=>{if(!value)throw Error(msg);};
 const hosts=[{id:'studio',name:'Studio Mac',host:'studio.local',os:'mac',kind:'vnc',login_user:'alex',has_pw:true,files:{method:'sftp',user:'alex'}}];
 // What the backend sends for a transfer whose window closed (src/files/background.rs).
 const request={id:'__network',from:'local',to:'local',source:'C:\\Users\\alex',destination:'D:\\Backup',names:['Photos','report.txt'],count:2,move:true,policy:'keep',engine:'auto',from_id:null};
-const app=(m)=>({type:'files_job',window:'app',orphan:true,request,...m});
+let seq=10;
+const app=(m)=>({type:'files_job',window:'app',orphan:true,request,seq:++seq,...m});
 try{
   const c=await browser.newContext({viewport:{width:1200,height:800},reducedMotion:'reduce',userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
   await c.addInitScript(()=>{
@@ -73,11 +74,21 @@ try{
   // The same end again (another event or a snapshot) says nothing more.
   await recv(main,app({id:'__network',job:'bg-1',state:'cancelled',completed_names:['Photos'],moving:true}));
   assert(await main.locator('#toasts .toast').filter({hasText:'파일 이동 취소됨'}).count()===1,'Outcome announced twice');
+  // An older event arriving late (a racing snapshot) doesn't bring a finished one back.
+  await recv(main,app({id:'__network',job:'bg-1',state:'running',seq:1,moving:true}));
+  assert(!(await row.getByRole('button',{name:'취소',exact:true}).count()),'A stale event revived an ended transfer');
   // Dismiss: told to the app, gone from the list and the sidebar.
   await row.getByRole('button',{name:/목록에서 지우기/}).click();
   {const t=(await packets()).filter(x=>x.op?.endsWith('_background')).at(-1);assert(t?.op==='dismiss_background'&&t.job==='bg-1','Dismiss packet: '+JSON.stringify(t));}
   await row.waitFor({state:'detached'});
   assert(!await nav.count(),'Sidebar entry stayed after the last transfer was dismissed');
+  await recv(main,app({id:'__network',job:'bg-1',state:'failed',seq:99}));
+  assert(!await nav.count()&&!await dialog.locator('[data-id="transfer-bg-1"]').count(),'An event after dismissal brought the transfer back');
+  // A batch too big to retry from here says only what it can do.
+  await recv(main,app({id:'__network',job:'bg-big',state:'failed',seq:5,error:'x',request:{...request,names:null,count:5000}}));
+  assert(await dialog.locator('[data-id="transfer-bg-big"]').getByRole('button',{name:'파일 창 열기',exact:true}).count()===1,'Big batch offers a retry it can not do');
+  assert((await dialog.locator('.transfer-status').textContent()).includes('1개 실패'),'Status line: '+await dialog.locator('.transfer-status').textContent());
+  await dialog.locator('[data-id="transfer-bg-big"]').getByRole('button',{name:/목록에서 지우기/}).click();
   // A failure elsewhere: the entry asks for attention; its retry lives in the file window.
   await recv(main,app({id:'studio',job:'bg-2',state:'failed',error:'SFTP 연결이 끊겼습니다',completed_names:[],request:{...request,id:'studio',move:false}}));
   await main.locator('#toasts .toast').filter({hasText:'Studio Mac · 파일 복사 실패 — SFTP 연결이 끊겼습니다'}).waitFor();

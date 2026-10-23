@@ -13,6 +13,9 @@ const RETRY_NAMES: usize = 1000;
 
 struct Record {
     job: String,
+    /// Counts this record's events: a page keeps the newest (a snapshot and live events may
+    /// arrive out of order across threads).
+    seq: u64,
     page: String,
     orphan: bool,
     ended: bool,
@@ -44,8 +47,10 @@ fn summary(v: &Value) -> Value {
     })
 }
 
-fn shown(r: &Record) -> Value {
+fn shown(r: &mut Record) -> Value {
+    r.seq += 1;
     let mut e = r.event.clone();
+    e["seq"] = json!(r.seq);
     e["window"] = json!("app");
     e["orphan"] = json!(true);
     e["request"] = r.request.clone();
@@ -61,10 +66,11 @@ pub(super) fn track(v: &Value, page: Value, emit: Emit) -> Emit {
     Arc::new(move |mut m: Value| {
         let job = m["job"].as_str().unwrap_or("").to_string();
         let mut out = None;
+        let mut pruned = Vec::new();
         if !job.is_empty() && m["type"] == "files_job" {
             let mut all = records().lock().unwrap();
             if !all.iter().any(|r| r.job == job) {
-                all.push(Record { job: job.clone(), page: page_id.clone(), orphan: false, ended: false, event: json!({}), request: request.clone(), emit: raw.clone() });
+                all.push(Record { job: job.clone(), seq: 0, page: page_id.clone(), orphan: false, ended: false, event: json!({}), request: request.clone(), emit: raw.clone() });
             }
             let i = all.iter().position(|r| r.job == job).unwrap();
             let r = &mut all[i];
@@ -80,8 +86,9 @@ pub(super) fn track(v: &Value, page: Value, emit: Emit) -> Emit {
                 // Its page has it: nothing to keep here.
                 all.remove(i);
             }
-            if out.is_some() { prune(&mut all); }
+            if out.is_some() { pruned = prune(&mut all); }
         }
+        for (emit, e) in pruned { emit(e); }
         match out {
             Some(e) => raw(e),
             None => { m["window"] = page.clone(); raw(m) }
@@ -89,12 +96,19 @@ pub(super) fn track(v: &Value, page: Value, emit: Emit) -> Emit {
     })
 }
 
-/// Keeps at most ENDED ended records (the oldest go first); live ones always stay.
-fn prune(all: &mut Vec<Record>) {
+/// Keeps at most ENDED ended records (the oldest go first); live ones always stay. Pages are
+/// told what was dropped, so their lists match what a page opening now would get.
+fn prune(all: &mut Vec<Record>) -> Vec<(Emit, Value)> {
+    let mut gone = Vec::new();
     while all.iter().filter(|r| r.ended).count() > ENDED {
         let i = all.iter().position(|r| r.ended).unwrap();
-        all.remove(i);
+        let r = all.remove(i);
+        gone.push((r.emit.clone(), dismissed(&r)));
     }
+    gone
+}
+fn dismissed(r: &Record) -> Value {
+    json!({"type": "files_job", "window": "app", "orphan": true, "job": r.job, "id": r.event["id"], "dismissed": true, "seq": u64::MAX})
 }
 
 /// The page's window closed: its live transfers continue as the app's. Returns how many.
@@ -105,9 +119,10 @@ pub(super) fn adopt(page: &str) -> usize {
     let mut events = Vec::new();
     for r in all.iter_mut().filter(|r| r.page == page && !r.orphan && !r.ended) {
         r.orphan = true;
+        let e = shown(r);
         n += 1;
         notice.get_or_insert_with(|| r.emit.clone());
-        events.push((r.emit.clone(), shown(r)));
+        events.push((r.emit.clone(), e));
     }
     drop(all);
     for (emit, e) in events { emit(e); }
@@ -128,13 +143,13 @@ pub(super) fn dismiss(job: &str) {
     if let Some(i) = all.iter().position(|r| r.job == job && r.orphan && r.ended) {
         let r = all.remove(i);
         drop(all);
-        (r.emit)(json!({"type": "files_job", "window": "app", "orphan": true, "job": job, "id": r.event["id"], "dismissed": true}));
+        (r.emit)(dismissed(&r));
     }
 }
 
 /// The app's transfers for a page that opens (or reloads): what is running and what ended.
 pub fn snapshot() -> Value {
-    Value::Array(records().lock().unwrap().iter().filter(|r| r.orphan).map(shown).collect())
+    Value::Array(records().lock().unwrap().iter_mut().filter(|r| r.orphan).map(shown).collect())
 }
 
 
@@ -182,6 +197,9 @@ mod tests {
         tracked(json!({"type":"files_job","id":host.id,"job":job,"state":"running","file":"x","bytes":5,"total":10}));
         let running = seen.lock().unwrap().last().unwrap().clone();
         assert_eq!((running["window"].as_str(), running["bytes"].as_u64()), (Some("app"), Some(5)));
+        // Each event is newer than the adoption's (a page keeps the newest).
+        let adopted_seq = seen.lock().unwrap().iter().find(|e| e["job"] == json!(job) && e["window"] == "app").unwrap()["seq"].as_u64().unwrap();
+        assert!(running["seq"].as_u64().unwrap() > adopted_seq);
         // A page that opens now sees it, with what was asked and nothing secret.
         let snap = mine(&job).expect("not in the snapshot");
         assert!(snap["state"] == "running" && snap["moving"] == true && snap["request"]["names"] == json!(["x","y"]) && snap["request"]["from_id"] == "src");
@@ -209,7 +227,8 @@ mod tests {
         // Ended background transfers are bounded; running ones are always kept.
         let crowd = crate::store::new_id();
         let live = crate::store::new_id();
-        let t = track(&request, json!(crowd), Arc::new(|_| {}));
+        let (emit, told) = collector();
+        let t = track(&request, json!(crowd), emit);
         t(json!({"type":"files_job","id":host.id,"job":live,"state":"running"}));
         let ids: Vec<String> = (0..ENDED + 5).map(|_| crate::store::new_id()).collect();
         for j in &ids { t(json!({"type":"files_job","id":host.id,"job":j,"state":"queued"})); }
@@ -217,6 +236,7 @@ mod tests {
         for j in &ids { t(json!({"type":"files_job","id":host.id,"job":j,"state":"failed","error":"x"})); }
         let all = records().lock().unwrap();
         assert!(all.iter().filter(|r| r.ended).count() <= ENDED);
+        assert!(told.lock().unwrap().iter().any(|e| e["dismissed"] == true && e["job"] == json!(ids[0])), "pages were not told about a dropped outcome");
         assert!(all.iter().any(|r| r.job == live && !r.ended), "a running transfer was dropped");
         assert!(!all.iter().any(|r| r.job == ids[0]), "the oldest outcome was kept over newer ones");
     }

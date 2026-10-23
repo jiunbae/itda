@@ -1276,15 +1276,16 @@ fn drain() {
                         plat::session_eval(id, &format!("window.itdaHp&&itdaHp({v})"));
                     }
                 }
-                // A transfer whose file window closed: say how it ended, since no window shows it.
-                if v["type"] == "files_job" && v["window"] == "app" && v["dismissed"] != true
+                // A transfer whose file window closed: say how it ended, since no window shows it
+                // (the main window says it itself when it is in front).
+                if v["type"] == "files_job" && v["window"] == "app" && v["dismissed"] != true && !plat::home_focused()
                     && ["completed", "failed", "cancelled"].contains(&v["state"].as_str().unwrap_or("")) {
                     let what = if v["moving"] == true || v["request"]["move"] == true { "파일 이동" } else { "파일 복사" };
                     let device = Some(host_label(v["id"].as_str().unwrap_or(""))).filter(|d| !d.is_empty()).unwrap_or_else(|| "이 컴퓨터".into());
                     let text = match v["state"].as_str() {
                         Some("completed") => format!("{device}: 끝났습니다"),
                         Some("cancelled") => format!("{device}: 취소했습니다"),
-                        _ => format!("{device}: {} — Itda의 전송 목록에서 다시 시도할 수 있습니다", v["error"].as_str().unwrap_or("실패했습니다")),
+                        _ => format!("{device}: {}{}", v["error"].as_str().unwrap_or("실패했습니다"), if v["request"]["names"].is_array() { " — 그 기기의 파일 창에서 남은 항목을 다시 보낼 수 있습니다" } else { "" }),
                     };
                     notify(&format!("{what} {}", match v["state"].as_str() { Some("completed") => "완료", Some("cancelled") => "취소됨", _ => "실패" }), &text);
                 }
