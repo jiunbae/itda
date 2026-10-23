@@ -613,6 +613,17 @@ fn keycode(sym: u32) -> Option<(u16, Option<CGEventFlags>)> {
     }
 }
 
+/// The flags a real keyboard puts on these keys: arrows are keypad + Fn keys, function and
+/// navigation keys Fn keys. macOS's own shortcuts match them with these flags (Mission
+/// Control is ⌃↑ *with* the arrow's flags), so without them ⌃↑, ⌃←, F11… do nothing.
+fn key_flags(code: u16) -> CGEventFlags {
+    match code {
+        123..=126 => CGEventFlags(CGEventFlags::MaskNumericPad.0 | CGEventFlags::MaskSecondaryFn.0),
+        96..=101 | 103 | 105..=107 | 109 | 111 | 113 | 115..=122 => CGEventFlags::MaskSecondaryFn,
+        _ => CGEventFlags(0),
+    }
+}
+
 fn post(e: Option<CFRetained<CGEvent>>) {
     CGEvent::post(CGEventTapLocation::HIDEventTap, e.as_deref());
 }
@@ -668,7 +679,7 @@ impl Input {
             self.flags = CGEventFlags(self.down.keys().filter_map(|s| keycode(*s).and_then(|k| k.1)).fold(0, |a, f| a | f.0));
         }
         let e = CGEvent::new_keyboard_event(None, code, down);
-        CGEvent::set_flags(e.as_deref(), self.flags);
+        CGEvent::set_flags(e.as_deref(), CGEventFlags(self.flags.0 | key_flags(code).0));
         post(e);
     }
 

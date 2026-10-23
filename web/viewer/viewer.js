@@ -573,6 +573,7 @@ function open(h) {
   rfb.addEventListener('connect', () => {
     status(null);
     rfb.focus();
+    flushPaste();
     dimToolsSoon();
     // High-performance mode is the saved choice; say so when this connection didn't get it.
     if (APP && S.host?.hp?.on) fetch(`/api/mode/${encodeURIComponent(h.id)}?attempt=${attempt}`).then(r => r.json()).then(m => {
@@ -653,7 +654,17 @@ function thumbSoon(ms) {
 }
 
 // Text copied on the Mac, handed over by the app when this window comes forward.
-window.itdaPaste = (t) => { if (S.rfb && !S.viewOnly && opt('clipboard', true) && t) S.rfb.clipboardPasteFrom(t); };
+// Text copied on this device (the app offers it when the window comes forward). Kept until the
+// connection is up, and held a moment after for the server's Extended Clipboard offer: without
+// it noVNC sends Latin-1 only, and Korean would arrive as '?'.
+window.itdaPaste = (t) => { if (t) { S.paste = t; flushPaste(); } };
+function flushPaste(waited = 0) {
+  const r = S.rfb;
+  if (!S.paste || !r || r._rfbConnectionState !== 'connected') return;
+  if (S.viewOnly || !opt('clipboard', true)) { S.paste = null; return; }
+  if (!r._clipboardServerCapabilitiesFormats?.[1] && waited < 1500) { clearTimeout(S.pasteTimer); S.pasteTimer = setTimeout(() => S.rfb === r && flushPaste(waited + 100), 100); return; }
+  r.clipboardPasteFrom(S.paste); S.paste = null;
+}
 
 // One WebSocket packet per wheel event; fractional motion is shared with mirrors.
 const wheel = new WheelInput();
