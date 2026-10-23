@@ -205,11 +205,13 @@ fn clip_provide(text: &str) -> Vec<u8> {
 
 /// The text in the viewer's Provide (zlib: length, UTF-8 text with a trailing NUL).
 fn clip_text(data: &[u8]) -> Option<String> {
+    // noVNC ends its stream with a full flush, not a finished zlib stream: read what decodes
+    // (bounded: a small compressed message must not expand without end), then require all of
+    // the declared text.
     let mut inner = Vec::new();
-    // (Bounded: a small compressed message must not expand without end.)
-    flate2::read::ZlibDecoder::new(data).take(CLIP_MAX as u64 + 4).read_to_end(&mut inner).ok()?;
+    let _ = flate2::read::ZlibDecoder::new(data).take(CLIP_MAX as u64 + 4).read_to_end(&mut inner);
     let n = u32::from_be_bytes(inner.get(..4)?.try_into().ok()?) as usize;
-    let body = &inner[4..(4 + n).min(inner.len())];
+    let body = inner.get(4..4 + n)?;
     let body = body.strip_suffix(&[0]).unwrap_or(body);
     Some(String::from_utf8_lossy(body).replace("\r\n", "\n"))
 }
@@ -794,6 +796,12 @@ mod tests {
         assert_eq!(on_clip(&notify, false), Some(clip_msg(CLIP_REQUEST | CLIP_TEXT, &[])));
         assert_eq!(on_clip(&notify, true), None);
         assert_eq!(on_clip(&(CLIP_CAPS | CLIP_TEXT).to_be_bytes(), false), None);
+        // What the bundled noVNC actually sends (full flush, no zlib trailer), with emoji.
+        let novnc = include_bytes!("../tests/fixtures/novnc-clipboard-provide.bin");
+        assert_eq!(u32::from_be_bytes(novnc[8..12].try_into().unwrap()), CLIP_PROVIDE | CLIP_TEXT);
+        assert_eq!(clip_text(&novnc[12..]).as_deref(), Some("클라이언트 🌍\n두 번째"));
+        // Cut short: not all of the declared text.
+        assert_eq!(clip_text(&novnc[12..novnc.len() - 12]), None);
     }
 
     /// Real VideoToolbox -> production pump -> TCP -> independent ZRLE solid-tile reader.
