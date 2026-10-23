@@ -1039,10 +1039,18 @@ window.addEventListener('itda-transfers', () => {
 function quitGuard(m) {
   const update = m.reason === 'update';
   const verb = update ? '업데이트' : '종료';
-  const dlg = openModal('quit-guard', `<div class="dialog small"><div class="body"><h2>전송 ${m.count}개가 진행 중입니다</h2>
-    <p class="lead">${update ? '업데이트하려면 Itda를 다시 시작합니다. ' : ''}지금 ${verb}하면 진행 중인 복사·이동이 멈춥니다. 멈춘 전송의 원본은 그대로 남고, 대상에 만들던 임시 파일은 정리됩니다.</p>
-    ${m.waiting ? `<p class="hint">이미 전송이 끝나면 ${verb}하도록 기다리고 있습니다.</p>` : ''}</div>
-    <div class="foot"><button class="btn" data-x="cancel">취소</button><button class="btn danger" data-x="stop">중단하고 ${verb}</button><button class="btn primary" data-x="wait" autofocus>전송이 끝나면 ${verb}</button></div></div>`, { sticky: true });
+  // A stop that didn't finish: Itda stayed open. Waiting again is the safe choice; only a
+  // plain quit may be forced, saying what that leaves behind.
+  const body = m.stuck
+    ? `<h2>전송 ${m.count}개가 아직 멈추지 않았습니다</h2><p class="lead">중단한 전송이 정리를 마치지 못해 Itda를 ${update ? '업데이트하지' : '종료하지'} 않았습니다. 조금 더 기다리면 대부분 끝납니다.</p>
+      ${update ? '<p class="hint">전송이 남아 있는 동안에는 업데이트를 설치하지 않습니다.</p>' : '<p class="hint">강제로 종료하면 대상 폴더에 임시 파일(.itda-….partial)이 남거나, 탐색기로 끌어 놓던 복사가 오류로 끝날 수 있습니다. 원본은 지워지지 않습니다.</p>'}`
+    : `<h2>전송 ${m.count}개가 진행 중입니다</h2>
+      <p class="lead">${update ? '업데이트하려면 Itda를 다시 시작합니다. ' : ''}지금 ${verb}하면 진행 중인 복사·이동이 멈춥니다. 멈춘 전송의 원본은 그대로 남고, 대상에 만들던 임시 파일은 정리됩니다.</p>
+      ${m.waiting ? `<p class="hint">이미 전송이 끝나면 ${verb}하도록 기다리고 있습니다.</p>` : ''}`;
+  const buttons = m.stuck
+    ? `<button class="btn" data-x="cancel">취소</button>${update ? '' : '<button class="btn danger" data-x="force">강제로 종료</button>'}<button class="btn primary" data-x="stop" autofocus>다시 기다리기</button>`
+    : `<button class="btn" data-x="cancel">취소</button><button class="btn danger" data-x="stop">중단하고 ${verb}</button><button class="btn primary" data-x="wait" autofocus>전송이 끝나면 ${verb}</button>`;
+  const dlg = openModal('quit-guard', `<div class="dialog small"><div class="body">${body}</div><div class="foot">${buttons}</div></div>`, { sticky: true });
   dlg.addEventListener('click', (e) => {
     const b = e.target.closest('[data-x]');
     if (!b) return;

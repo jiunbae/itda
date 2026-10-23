@@ -650,7 +650,7 @@ unsafe fn tray_menu(h: HWND) {
             send(json!({"type": "go", "page": "share"}));
         }
         // Asks first while files are being copied (home.rs); ends the app otherwise.
-        TRAY_QUIT => super::request_quit(super::QuitReason::User),
+        TRAY_QUIT => { super::request_quit(super::QuitReason::User); }
         c if c >= TRAY_HOST0 && c < TRAY_HOST0 + recent.len() => {
             let id = recent[c - TRAY_HOST0].id.clone();
             if store::get_password(&id).is_none() && !home(|m| m.sessions.contains_key(&id)) {

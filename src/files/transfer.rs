@@ -445,7 +445,7 @@ pub(super) fn export_batch(files: &[super::export::File], targets: &[PathBuf], e
     if files.len()!=targets.len() || files.iter().any(|f|f.id!=file.id||f.remote!=file.remote){return Err(error("복사할 파일 위치를 확인하세요"));}
     let control=Arc::new(Control::default());
     let job=crate::store::new_id();
-    jobs().lock().unwrap().insert(job.clone(),(file.id.clone(),control.clone()));
+    if !super::admit(&job, &file.id, &control) { return Err(error(super::CLOSING)); }
     emit(json!({"type":"files_job","id":file.id,"job":job,"state":"queued","kind":"export","file":file.name}));
     let result: io::Result<()>=(|| {
         let _slot=slot(&control)?;
@@ -484,10 +484,10 @@ pub fn start(v: Value, host: Host, emit: Emit) {
     let source_closed = held_source.is_err();
     let job = crate::store::new_id();
     let control = Arc::new(Control::default());
-    jobs()
-        .lock()
-        .unwrap()
-        .insert(job.clone(), (key.clone(), control.clone()));
+    if !super::admit(&job, &key, &control) {
+        emit(json!({"type":"files_job","id":id,"job":job,"req":req,"state":"failed","error":super::CLOSING,"completed_names":[]}));
+        return;
+    }
     {
         let mut q = jobs().lock().unwrap();
         if q.len() > 32 {

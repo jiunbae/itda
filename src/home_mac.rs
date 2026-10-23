@@ -623,7 +623,7 @@ fn menu() -> Menu {
 }
 
 fn on_menu(id: &muda::MenuId) {
-    if id.as_ref() == MENU_QUIT { return super::request_quit(super::QuitReason::User); }
+    if id.as_ref() == MENU_QUIT { super::request_quit(super::QuitReason::User); return; }
     if let Some(action)=match id.as_ref(){"file-copy"=>Some("copy"),"file-cut"=>Some("cut"),"file-paste"=>Some("paste"),_=>None}{
         let script=format!("window.ItdaFiles?.nativeEdit({})",json!(action));
         let handled=FILE_PANES.with(|p|{let p=p.borrow();if let Some(p)=p.values().find(|p|p.window.is_focused()){let _=p.view.evaluate_script(&script);true}else{false}})
@@ -890,13 +890,25 @@ mod quit_event {
         struct Handler;
         impl Handler {
             #[unsafe(method(handleQuit:withReplyEvent:))]
-            fn handle_quit(&self, _event: &AnyObject, _reply: &AnyObject) {
-                super::super::request_quit(super::super::QuitReason::User);
+            fn handle_quit(&self, _event: &AnyObject, reply: &AnyObject) {
+                // Not ending now (asked, or transfers being stopped): the sender (logout,
+                // AppleScript) is told the quit was cancelled, userCanceledErr. A quit the
+                // person then confirms is their own.
+                if !super::super::request_quit(super::super::QuitReason::User) {
+                    unsafe {
+                        let code: *mut AnyObject = msg_send![objc2::class!(NSAppleEventDescriptor), descriptorWithInt32: USER_CANCELED];
+                        if let Some(code) = code.as_ref() {
+                            let _: () = msg_send![reply, setParamDescriptor: code, forKeyword: KEY_ERROR_NUMBER];
+                        }
+                    }
+                }
             }
         }
     );
 
     const AEVT: u32 = u32::from_be_bytes(*b"aevt");
+    const KEY_ERROR_NUMBER: u32 = u32::from_be_bytes(*b"errn");
+    const USER_CANCELED: i32 = -128;
     const QUIT: u32 = u32::from_be_bytes(*b"quit");
 
     pub fn install() {

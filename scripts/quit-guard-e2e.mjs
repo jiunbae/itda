@@ -61,6 +61,20 @@ try{
   assert((await p.getByRole('dialog',{name:'전송 3개가 진행 중입니다'}).textContent()).includes('이미 전송이 끝나면'),'Pending wait not mentioned');
   await p.getByRole('button',{name:'취소',exact:true}).click();
   {const t=await last();assert(t.choice==='cancel'&&t.reason==='quit','Dialog cancel: '+JSON.stringify(t));}
+  // A stop that didn't finish: Itda stays open; waiting again is the default, forcing says
+  // what it leaves, and an update can't be forced.
+  await recv({type:'quit_guard',reason:'quit',count:1,stuck:true});
+  const stuck=p.getByRole('dialog',{name:'전송 1개가 아직 멈추지 않았습니다',exact:true});
+  assert((await stuck.textContent()).includes('임시 파일'),'Force does not say what it leaves');
+  await p.waitForFunction(()=>document.activeElement?.dataset.x==='stop');
+  await stuck.getByRole('button',{name:'강제로 종료',exact:true}).click();
+  {const t=await last();assert(t.choice==='force'&&t.reason==='quit','Force packet: '+JSON.stringify(t));}
+  await recv({type:'quit_guard',reason:'update',count:2,stuck:true});
+  const stuckUpdate=p.getByRole('dialog',{name:'전송 2개가 아직 멈추지 않았습니다',exact:true});
+  assert(!await stuckUpdate.getByRole('button',{name:'강제로 종료'}).count(),'An update can be forced');
+  assert((await stuckUpdate.textContent()).includes('업데이트를 설치하지 않습니다'),'Update stuck wording');
+  await stuckUpdate.getByRole('button',{name:'다시 기다리기',exact:true}).click();
+  {const t=await last();assert(t.choice==='stop'&&t.reason==='update','Retry packet: '+JSON.stringify(t));}
   assert(!errors.length,errors.join('\n'));
   console.log('PASS: quit guard dialog (wait/stop/cancel, update wording), waiting banner and cancellation');
 }finally{await browser.close();server.closeAllConnections();await new Promise(r=>server.close(r));}
