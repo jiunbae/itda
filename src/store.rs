@@ -10,7 +10,10 @@ pub fn dir() -> PathBuf {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
         #[cfg(windows)]
-        let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let base = std::env::var_os("ITDA_DATA_DIR")
+            .or_else(|| std::env::var_os("APPDATA"))
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
         #[cfg(not(windows))]
         let base = std::env::var_os("ITDA_DATA_DIR")
             .map(PathBuf::from)
