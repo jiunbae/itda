@@ -1,4 +1,4 @@
-import { WheelInput, macHost, macActions, macMenu, sendChord } from './interaction.js';
+import { WheelInput, macHost, macActions, macMenu, sendChord, sendMacAction } from './interaction.js';
 // A sibling window is a view of the owner's canvas. It never authenticates or opens RFB.
 const esc = s => String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export function screenLayout(width, height, reported = [], layout = 0) {
@@ -47,7 +47,7 @@ export class MonitorController {
     state() {
         const r=this.e.S.rfb;
         return {host:this.e.S.host,canvas:r?._display?._backbuffer,frame:r?._display?.itdaFrame || 0,
-            screens:this.screens,connected:r?._rfbConnectionState==='connected',viewOnly:this.e.S.viewOnly,
+            screens:this.screens,connected:r?._rfbConnectionState==='connected',viewOnly:this.e.S.viewOnly,hp:!!this.e.S.hpActual,
             cursor:(r?._canvas?.style.cursor && r._canvas.style.cursor!=='none') ? r._canvas.style.cursor : 'default',scroll:this.e.S.macScroll};
     }
     pointer(x,y,mask,id) {
@@ -173,7 +173,7 @@ export function startMirror(env,id) {
     tools.innerHTML='<button data-mirror="fit" title="맞춤 / 실제 크기">맞춤 / 1:1</button><button data-mirror="full">전체 화면</button><button data-mirror="single" title="한 창으로 돌아가기">한 창으로</button><button data-mirror="close" title="이 창 닫기">닫기</button>';
     if(macHost(env.S.host))tools.insertAdjacentHTML('afterbegin','<button data-mirror=mac-actions title="Mission Control · Exposé">Mac 화면 동작</button>');
     const sheet=document.querySelector('#sheet');
-    sheet.onclick=e=>{const action=macActions.find(a=>a[0]===e.target.closest('[data-mac-action]')?.dataset.macAction);if(!action)return;if(!owner.state().viewOnly)sendChord(env.S.rfb,action[3]);sheet.hidden=true;canvas.focus();};
+    sheet.onclick=e=>{const action=macActions.find(a=>a[0]===e.target.closest('[data-mac-action]')?.dataset.macAction);if(!action)return;if(!owner.state().viewOnly)sendMacAction(action,owner.state().hp,(k,down)=>owner.key(k,null,down,id));sheet.hidden=true;canvas.focus();};
     tools.onclick=e=>{const a=e.target.closest('[data-mirror]')?.dataset.mirror;if(a==='mac-actions'){sheet.innerHTML=macMenu();sheet.hidden=!sheet.hidden;}if(a==='fit'){env.S.fit=!env.S.fit;last=-1;}if(a==='full'){if(env.app)owner.windowAction('full',id);else if(document.fullscreenElement)document.exitFullscreen();else document.documentElement.requestFullscreen?.();}if(a==='single')owner.mode(0);if(a==='close'){if(env.app)owner.windowAction('close',id);else window.close();}};
     function coords(e) {const r=canvas.getBoundingClientRect();return{x:bounds.x+Math.max(0,Math.min(bounds.w-1,(e.clientX-r.left)*bounds.w/r.width)),y:bounds.y+Math.max(0,Math.min(bounds.h-1,(e.clientY-r.top)*bounds.h/r.height))};}
     for(const type of ['pointerdown','pointermove','pointerup','pointercancel']) canvas.addEventListener(type,e=>{

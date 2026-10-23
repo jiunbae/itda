@@ -4,7 +4,7 @@
 'use strict';
 import './novnc.min.js';
 import { MonitorController, startMirror } from './monitors.js';
-import { WheelInput, macHost, macActions, macMenu, sendChord } from './interaction.js';
+import { WheelInput, macHost, macActions, macMenu, sendChord, sendMacAction } from './interaction.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -911,7 +911,7 @@ function toggleSheet(kind) {
 $('#sheet').addEventListener('click', async (e) => {
   if (MIRROR !== null) return; // The mirror routes its menu through the owner's bridge.
   const action = e.target.closest('[data-mac-action]');
-  if(action) { const a=macActions.find(a=>a[0]===action.dataset.macAction); if(a&&macHost(S.host))sendCombo(a[3]); $('#sheet').hidden=true; S.rfb?.focus(); return; }
+  if(action) { const a=macActions.find(a=>a[0]===action.dataset.macAction); if(a&&macHost(S.host)&&S.rfb&&!S.viewOnly){const r=S.rfb;sendMacAction(a,!!S.hpActual,(k,down)=>r.sendKey(k,null,down));} $('#sheet').hidden=true; S.rfb?.focus(); return; }
   const m = e.target.closest('[data-mod]');
   if (m) {
     const k = m.dataset.mod;
