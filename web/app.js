@@ -410,11 +410,14 @@ function thumb(h) {
     <span class="ph">${osIcon(h)}</span><span class="ph-initial">${initial}</span>${img}${mark}`;
 }
 
+// Every card and row has the same buttons: their names say which device they act on (the
+// visible words remain part of the name, so voice control still finds them).
+const named = (h, what) => `aria-label="${esc(`${label(h)} ${what}`)}"`;
 function primaryAction(h) {
   const s = S.sessions[h.id];
-  if (!s) return `<button class="btn primary" data-act="connect" data-id="${esc(h.id)}">${I('E768')}화면 연결</button>`;
-  if (s.state === 'connecting') return `<button class="btn" data-act="cancel" data-id="${esc(h.id)}">${I('E711')}취소</button>`;
-  return `<button class="btn primary" data-act="focus" data-id="${esc(h.id)}">${I('E8A7')}창으로 이동</button>`;
+  if (!s) return `<button class="btn primary" data-act="connect" data-id="${esc(h.id)}" ${named(h, '화면 연결')}>${I('E768')}화면 연결</button>`;
+  if (s.state === 'connecting') return `<button class="btn" data-act="cancel" data-id="${esc(h.id)}" ${named(h, '연결 취소')}>${I('E711')}취소</button>`;
+  return `<button class="btn primary" data-act="focus" data-id="${esc(h.id)}" ${named(h, '창으로 이동')}>${I('E8A7')}창으로 이동</button>`;
 }
 
 function card(h) {
@@ -422,15 +425,15 @@ function card(h) {
   const lu = h.login_user || h.user;
   const who = (h.ssh && h.ssh.on ? `<span class="i lock" title="SSH로 암호화">&#xE72E;</span>` : '') + (lu ? `${esc(lu)}@${esc(h.host)}` : esc(h.host));
   const extra = [h.kind === 'rdp' ? '원격 데스크톱' : '', ago(h.last_used), h.remote_size, hostGroups(h).join(', ')].filter(Boolean).map(esc).join(' · ');
-  return `<div class="card${live}" tabindex="0" data-id="${esc(h.id)}">
+  return `<div class="card${live}" tabindex="0" data-id="${esc(h.id)}" role="group" aria-label="${esc(label(h))}">
     ${thumb(h)}
       ${badge(h)}
-      <button class="star i${h.favorite ? ' on' : ''}" data-act="fav" data-id="${esc(h.id)}" title="${h.favorite ? '즐겨찾기 해제' : '즐겨찾기'}">${h.favorite ? '&#xE735;' : '&#xE734;'}</button>
+      <button class="star i${h.favorite ? ' on' : ''}" data-act="fav" data-id="${esc(h.id)}" title="${h.favorite ? '즐겨찾기 해제' : '즐겨찾기'}" ${named(h, '즐겨찾기')} aria-pressed="${!!h.favorite}">${h.favorite ? '&#xE735;' : '&#xE734;'}</button>
       <div class="connect-overlay">${primaryAction(h)}</div>
     </div>
     <div class="meta">
       <div class="row1">${dot(h)}<span class="name" title="${esc(label(h))}">${esc(label(h))}</span>
-        <button class="more i" data-act="more" data-id="${esc(h.id)}" title="더보기">&#xE712;</button></div>
+        <button class="more i" data-act="more" data-id="${esc(h.id)}" title="더보기" ${named(h, '더보기')}>&#xE712;</button></div>
       <div class="sub">${who}</div>
       <div class="sub2">${extra}</div>
     </div>
@@ -450,14 +453,14 @@ function row(h) {
       : S.online[h.id] === false
         ? `<span class="pill mute">응답 없음</span>`
         : '';
-  return `<div class="list-row" tabindex="0" data-id="${esc(h.id)}">
+  return `<div class="list-row" tabindex="0" data-id="${esc(h.id)}" role="group" aria-label="${esc(label(h))}">
     ${thumb(h)}</div>
     <div class="nm"><b>${dot(h)}${esc(label(h))}${h.favorite ? ` <span class="i" style="color:#ffc83d;font-size:12px">&#xE735;</span>` : ''}</b><small>${h.ssh && h.ssh.on ? `<span class="i lock" title="SSH로 암호화">&#xE72E;</span>` : ''}${esc(h.host)}</small></div>
     <span class="col c-user">${h.user ? esc(h.user) : '<span style="color:var(--text-3)">VNC 암호</span>'}</span>
     <span class="col c-last">${esc(ago(h.last_used))}</span>
     <span class="col">${state}</span>
     <div class="actions">${primaryAction(h).replace('class="btn', 'class="btn sm')}
-      <button class="btn subtle icon" data-act="more" data-id="${esc(h.id)}" title="더보기">${I('E712')}</button></div>
+      <button class="btn subtle icon" data-act="more" data-id="${esc(h.id)}" title="더보기" ${named(h, '더보기')}>${I('E712')}</button></div>
   </div>`;
 }
 
@@ -1703,7 +1706,8 @@ function showError(id, kind, msg) {
 
 // ---------------------------------------------------------------- context menu
 
-function showCtx(id, x, y) {
+let ctxReturn = null;
+function showCtx(id, x, y, trigger = null) {
   const h = hostById(id);
   if (!h) return;
   const s = S.sessions[id];
@@ -1721,6 +1725,7 @@ function showCtx(id, x, y) {
   if (h.rdp_key) items.push(['forget-rdp-key', 'E72C', '원격 데스크톱 서버 키 다시 받기']);
   items.push('-', ['del', 'E74D', '삭제', 'danger']);
   const el = $('#ctx');
+  ctxReturn = trigger || document.activeElement;
   el.innerHTML = items.map((it) => (it === '-' ? '<hr>' : `<button data-act="${it[0]}" data-id="${esc(id)}" class="${it[3] || ''}">${I(it[1])}${it[2]}</button>`)).join('');
   el.hidden = false;
   const r = el.getBoundingClientRect();
@@ -1730,8 +1735,11 @@ function showCtx(id, x, y) {
   if (first) first.focus();
 }
 
-function hideCtx() {
+function hideCtx(restoreFocus = false) {
   $('#ctx').hidden = true;
+  const trigger = ctxReturn;
+  ctxReturn = null;
+  if (restoreFocus && trigger?.isConnected) trigger.focus();
 }
 
 // ---------------------------------------------------------------- toasts
@@ -1779,7 +1787,7 @@ function act(a, el) {
     case 'del': return askDelete(id);
     case 'more': {
       const r = el.getBoundingClientRect();
-      return showCtx(id, r.left, r.bottom + 4);
+      return showCtx(id, r.left, r.bottom + 4, el);
     }
     case 'new': return openEdit();
     case 'quick': return quickConnect(S.query);
@@ -1935,7 +1943,7 @@ $('#content').addEventListener('dblclick', (e) => {
 $('#content').addEventListener('contextmenu', (e) => {
   const c = e.target.closest('.card, .list-row:not(.list-head)');
   e.preventDefault();
-  if (c) showCtx(c.dataset.id, e.clientX, e.clientY);
+  if (c) showCtx(c.dataset.id, e.clientX, e.clientY, c);
 });
 document.addEventListener('contextmenu', (e) => { if (!e.target.closest('input, textarea')) e.preventDefault(); });
 
@@ -1968,7 +1976,7 @@ search.addEventListener('keydown', (e) => {
 document.addEventListener('keydown', (e) => {
   const typing = e.target.closest && e.target.closest('input, textarea, select');
   if (e.key === 'Escape') {
-    if (!$('#ctx').hidden) return hideCtx();
+    if (!$('#ctx').hidden) { e.preventDefault(); return hideCtx(true); }
     const m = topModal();
     if (m) return closeModal(m.dataset.key);
   }
@@ -1983,11 +1991,13 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'F5') { e.preventDefault(); return scan(); }
   if (typing) return;
   const c = e.target.closest && e.target.closest('.card, .list-row:not(.list-head)');
-  if (c) {
+  // Enter/Space activate an inner button itself; other device shortcuts still work there.
+  const buttonActivation = e.target.closest?.('button') && (e.key === 'Enter' || e.key === ' ');
+  if (c && !buttonActivation) {
     if (e.key === 'Enter') { e.preventDefault(); connect(c.dataset.id); }
     else if (e.key === 'Delete' || (MAC && e.metaKey && e.key === 'Backspace')) askDelete(c.dataset.id);
     else if (e.key === 'F2') openEdit({ id: c.dataset.id });
-    else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) { const r = c.getBoundingClientRect(); showCtx(c.dataset.id, r.left + 20, r.top + 20); }
+    else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) { const r = c.getBoundingClientRect(); showCtx(c.dataset.id, r.left + 20, r.top + 20, c); }
     else if (['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp'].includes(e.key)) {
       const all = $$('#content .card, #content .list-row:not(.list-head)');
       const i = all.indexOf(c);
@@ -1999,6 +2009,6 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-window.addEventListener('blur', hideCtx);
+window.addEventListener('blur', () => hideCtx());
 render();
 send('ready');

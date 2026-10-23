@@ -190,7 +190,11 @@ try{
   await p.evaluate(()=>{for(const job of ['keyboard-A','keyboard-B'])itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job,state:'running',file:job});});
   await layer.locator('[data-cancel-job="keyboard-A"]').focus();await p.keyboard.down('Space');
   await p.evaluate(()=>itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job:'keyboard-A',state:'completed'}));
-  assert(await layer.locator('[data-pane="remote"] .files-list').evaluate(e=>e===document.activeElement),'Completed job moved focus onto another transfer');
+  const completionFocus=await layer.locator('[data-pane="remote"] .files-list').evaluate(e=>{
+   const a=document.activeElement;
+   return {expected:e===a,focused:{tag:a?.tagName,id:a?.id,role:a?.getAttribute('role'),classes:a?.className,pane:a?.closest('[data-pane]')?.dataset.pane,cancelJob:a?.getAttribute('data-cancel-job'),dismissJob:a?.getAttribute('data-dismiss-job')},listVisible:!!(e.offsetWidth||e.offsetHeight),documentFocused:document.hasFocus()};
+  });
+  assert(completionFocus.expected,'Completed job moved focus onto another transfer: '+JSON.stringify(completionFocus));
   await p.keyboard.up('Space');
   assert(!(await packets()).some(x=>x.op==='cancel'&&x.job==='keyboard-B'),'A disappearing row redirected Space to another transfer');
   await p.evaluate(()=>itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job:'keyboard-B',state:'completed'}));
