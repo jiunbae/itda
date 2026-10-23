@@ -1,0 +1,38 @@
+{
+  "status": "fixed-in-merged-candidate; production-verification-pending",
+  "baseline_commit": "085f96f5e51838eb1d2f29cdf6e9a593b9411dea",
+  "candidate_source_commit": "61bf9a3337300496402ef1870e105ee61b4f2e1f",
+  "fixing_pr": 105,
+  "method": "Actual viewer frontend with deterministic IPC/RFB fixtures and controlled clock in installed WebKit; private git-archive scratch. No remote device input or performance measurement.",
+  "results": [
+    {
+      "case": "old 50ms callback after HP-disable replacement connects",
+      "original_source": "FAIL as expected: sessions=2, reconnecting=1, busy reconnect overlay after replacement connected",
+      "candidate": "PASS in root independent WebKit run (viewer-mode-e2e at61bf9a3)"
+    },
+    {
+      "case": "old retry deadline precedes current retry deadline after replacement drops",
+      "test": "Root prepared deadline regression, patch SHA256 1392c84bf86268134d789ec186da07a6ae3e104fcf72cc087bc0b17f9bfa8c4f",
+      "candidate": "PASS",
+      "mutant": "FAIL as expected when only retry-timer generation guard is removed; first 50ms guard remains. A stale timer opens before the current retry deadline (sessions=5).",
+      "status": "Approved root deadline patch applied byte-identically in final head e0e37369; independent reviewer verified exact committed test. Chromium positive/mutant results agree with WebKit."
+    }
+  ],
+  "review": "Independent exact-head APPROVE req_18e147b1572fd8a8_120. Final test patch separately reviewed req_18e1477d92be7ae8_11d; byte identity to committed test confirmed. No P1/P2 source findings remained in that review; native reconnect timing and production rollout remain unverified.",
+  "related_source_audit": {
+    "head": "085f96f",
+    "reply": "req_18e146e85bdb5590_111",
+    "scope": "Reader EOF input release, modifier quiet/hold timeout, mirror close/blur release, bounded APP retries and web expiry generation guards",
+    "result": "Read-only review found no other reproducible P1/P2. Silent held mouse button, input release at process quit and reconnect input overlap are unproven risks, not asserted product defects."
+  },
+  "limits": [
+    "Fixture results do not prove native WebView timing, physical input, remote capture or network reconnection.",
+    "No persona score increase, deployment or whole-goal completion is claimed."
+  ],
+  "final_candidate_head": "e0e37369da3c758363ec5200c2129a649a270b76",
+  "merge_commit": "adef4c80a80c82cebc870990c6007ac97fabae3a",
+  "ci": {
+    "run": 40030876828,
+    "conclusion": "success"
+  }
+}

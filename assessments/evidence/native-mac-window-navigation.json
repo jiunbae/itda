@@ -1,0 +1,38 @@
+{
+  "recorded_at": "2026-10-23T22:06:22.259305+00:00",
+  "app_version": "1.0.2",
+  "bundle": "dev.jiun.itda",
+  "method": "Installed signed Tacto helper, native AX observation and menu actions",
+  "activation": {
+    "foreground_verified": true,
+    "window_present": true
+  },
+  "checks": [
+    {
+      "name": "main File browser action opens separate file window and preserves main",
+      "result": "PASS",
+      "window_titles": [
+        "네트워크 — Itda",
+        "Itda"
+      ],
+      "window_count": 2
+    },
+    {
+      "name": "close only newly opened network file window via File / Close Window; main remains",
+      "result": "PASS",
+      "window_titles": [
+        "Itda"
+      ],
+      "window_count": 1
+    }
+  ],
+  "limits": [
+    "Existing production1.0.2 only, not the new candidate/quit guard.",
+    "No remote connection, clipboard, drag, permissions, screen reader or transfer proof.",
+    "Raw AX host/account names omitted from retained receipt."
+  ],
+  "harness_corrections": [
+    "Initial opening flow had invalid resource scope window; refused before action. Corrected documented scope item, same ephemeral window action.",
+    "Initial close flow had unsupported resource identity field; parser refused before action. Removed unsupported field; same menu close then independently verified remaining window."
+  ]
+}
