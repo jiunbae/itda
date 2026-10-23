@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: 22
       - name: Install CDP client (no browser installation)
-        run: npm install --no-save --package-lock=false playwright
+        run: npm install --no-save --package-lock=false --ignore-scripts playwright@1.64.1
       - name: Build this job's candidate
         shell: pwsh
         run: ./scripts/windows-release.ps1
@@ -55,7 +55,7 @@ jobs:
           $p = 'test-artifacts/native-idle/result.json'
           if (-not (Test-Path -LiteralPath $p)) { throw 'Native pilot produced no result receipt' }
           $r = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json
-          @('### Windows native idle pilot', "Status: $($r.status)", 'Own native HWND messages and isolated WebView2 only. No transfer, physical-input, real shutdown, user-machine or persona-score acceptance.') | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          @('### Windows native idle pilot', "Status: $($r.status)", 'Baseline main without PR102: CI harness verification, not quit-guard verification.', 'Own native HWND messages and isolated WebView2 only. No transfer, physical-input, real shutdown, user-machine or persona-score acceptance.', 'The uploaded in-job executable is a non-release candidate.') | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -10,12 +10,12 @@ import {chromium} from 'playwright';
 const repo=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const output=path.join(repo,'test-artifacts/native-idle/result.json');
 fs.mkdirSync(path.dirname(output),{recursive:true});
-const report={status:'failed',scope:'Native Windows CI idle window only; no transfers, physical input, shutdown/logout or persona score',checks:[],cleanup:{status:'not-started'}};
-let root,child,identity,browser,ended,interrupted,originalStartup;
+const report={status:'failed',scope:'Baseline main without PR102 quit guard: validates the native CI harness only. No transfer/guard, physical-input, shutdown/logout or persona-score acceptance',checks:[],cleanup:{status:'not-started'}};
+let root,child,identity,browser,ended,interrupted,originalStartup,exited=false;
 for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{interrupted=signal;});
 const assert=(ok,message)=>{if(!ok)throw Error(message);};
 const hash=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-const control=(operation,pin=identity)=>JSON.parse(execFileSync('pwsh',['-NoProfile','-NonInteractive','-File',path.join(repo,'scripts/windows-native-idle-control.ps1'),'-Operation',operation,'-Root',root,'-AppPid',String(child?.pid||0),'-CreationTicks',pin?.creation_ticks||'', '-Hwnd',pin?.hwnd||'0','-DebugPort',String(report.debug_port||0)],{encoding:'utf8',timeout:30000}).replace(/^\uFEFF/,''));
+const control=(operation,pin=identity)=>JSON.parse(execFileSync('pwsh',['-NoProfile','-NonInteractive','-File',path.join(repo,'scripts/windows-native-idle-control.ps1'),'-Operation',operation,'-Root',root,'-AppPid',String(operation==='cleanup'&&exited?0:child?.pid||0),'-CreationTicks',pin?.creation_ticks||'', '-Hwnd',pin?.hwnd||'0','-DebugPort',String(report.debug_port||0)],{encoding:'utf8',timeout:30000}).replace(/^\uFEFF/,''));
 const wait=async(test,message,ms=60000)=>{const end=Date.now()+ms;while(Date.now()<end){assert(!interrupted,'Interrupted: '+interrupted);if(await test())return;await new Promise(r=>setTimeout(r,200));}throw Error(message);};
 try{
  assert(process.platform==='win32'&&process.env.GITHUB_ACTIONS==='true','This pilot runs only in ephemeral Windows GitHub Actions');
@@ -36,7 +36,7 @@ try{
  originalStartup=control('startup');
  const listener=net.createServer();await new Promise((resolve,reject)=>{listener.once('error',reject);listener.listen(0,'127.0.0.1',resolve);});report.debug_port=listener.address().port;await new Promise(r=>listener.close(r));
  child=spawn(candidate,[],{env:{...process.env,ITDA_DATA_DIR:path.join(root,'data'),ITDA_DEBUG_PORT:String(report.debug_port)},stdio:['ignore','pipe','pipe']});
- ended=new Promise(resolve=>{child.once('error',error=>resolve({error:error.message}));child.once('exit',(code,signal)=>resolve({code,signal}));});
+ ended=new Promise(resolve=>{child.once('error',error=>resolve({error:error.message}));child.once('exit',(code,signal)=>{exited=true;resolve({code,signal});});});
  let stderr='';child.stderr.on('data',b=>{stderr=(stderr+b).slice(-4000);});child.stdout.on('data',()=>{});
  await wait(()=>{
   assert(child.pid&&child.exitCode===null&&child.signalCode===null,'Candidate exited before readiness');
@@ -45,11 +45,12 @@ try{
   identity=state;
   if(state.hwnd==='0'||!state.visible||!state.private_udf||!state.webview_pids.length||!state.listeners.length)return false;
   assert(state.session_id===preflight.checks.session.id,'Candidate launched in another session');
+  assert(state.window_class==='itda_home'&&/^Itda \(profile [0-9a-f]{16}\)$/.test(state.window_title),'Pinned HWND is not the isolated home window');
   assert(state.listeners.every(l=>['127.0.0.1','::1'].includes(l.LocalAddress)&&[child.pid,...state.webview_pids].includes(l.OwningProcess)),'CDP listener is not loopback/owned by this private candidate');
   identity=state;return true;
  },'Owned visible native window/private WebView2/CDP did not become ready');
  report.checks.push({check:'native window and private WebView2 profile, same active session, owned loopback CDP listener',result:'PASS'});
- report.native_identity={pid:identity.pid,hwnd:identity.hwnd,creation_ticks:identity.creation_ticks,session_id:identity.session_id,private_webview_count:identity.webview_pids.length};
+ report.native_identity={pid:identity.pid,hwnd:identity.hwnd,creation_ticks:identity.creation_ticks,session_id:identity.session_id,window_class:identity.window_class,window_title:identity.window_title,private_webview_count:identity.webview_pids.length};
  browser=await chromium.connectOverCDP(`http://127.0.0.1:${report.debug_port}`,{timeout:20000});
  const page=browser.contexts()[0]?.pages()[0];assert(page,'Native page missing');
  await page.waitForFunction(()=>typeof S!=='undefined'&&S.settings.onboarded===true,{},{timeout:20000});

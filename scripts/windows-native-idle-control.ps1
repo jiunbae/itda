@@ -23,16 +23,23 @@ if ($Operation -eq 'startup') {
 }
 Add-Type -TypeDefinition @'
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
 public static class ItdaIdleWindow {
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
     [DllImport("user32.dll", SetLastError=true)] static extern IntPtr SendMessageTimeoutW(IntPtr h, uint m, UIntPtr w, IntPtr l, uint f, uint ms, out UIntPtr value);
     [DllImport("user32.dll", SetLastError=true)] static extern bool PostMessageW(IntPtr h, uint m, IntPtr w, IntPtr l);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode, ExactSpelling=true)] static extern int GetClassNameW(IntPtr h, StringBuilder value, int count);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode, ExactSpelling=true)] static extern int GetWindowTextW(IntPtr h, StringBuilder value, int count);
+    public static string ClassName(long value) { var s=new StringBuilder(256); GetClassNameW(new IntPtr(value),s,s.Capacity); return s.ToString(); }
+    public static string Title(long value) { var s=new StringBuilder(512); GetWindowTextW(new IntPtr(value),s,s.Capacity); return s.ToString(); }
     static IntPtr Own(uint pid, long value) {
         var h = new IntPtr(value); uint actual;
         if (pid == 0 || h == IntPtr.Zero || GetWindowThreadProcessId(h, out actual) == 0 || actual != pid)
             throw new InvalidOperationException("Pilot HWND does not belong to candidate PID");
+        if (ClassName(value)!="itda_home" || !System.Text.RegularExpressions.Regex.IsMatch(Title(value),@"^Itda \(profile [0-9a-f]{16}\)$"))
+            throw new InvalidOperationException("Pilot HWND is not the isolated home window");
         return h;
     }
     public static long QueryEnd(uint pid, long h) {
@@ -87,6 +94,7 @@ if ($Operation -eq 'inspect') {
     [ordered]@{
         alive = $true; pid = $app.Id; creation_ticks = $actualTicks; session_id = $app.SessionId
         hwnd = $handle.ToInt64().ToString(); visible = ($handle -ne [IntPtr]::Zero -and [ItdaIdleWindow]::IsWindowVisible($handle))
+        window_class = [ItdaIdleWindow]::ClassName($handle.ToInt64()); window_title = [ItdaIdleWindow]::Title($handle.ToInt64())
         private_udf = (Test-Path -LiteralPath (Join-Path $ownedRoot 'data\Itda\WebView2'))
         webview_pids = @($views | ForEach-Object { [int]$_.ProcessId }); listeners = @($listeners)
     } | ConvertTo-Json -Depth 5 -Compress
