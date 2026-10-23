@@ -314,10 +314,15 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
         crate::log!("share {peer}: not ready: {why}");
         return deny(&mut c, &why);
     }
+    // Keep the capture alive before reporting authentication success. A failed Mac
+    // capture must be a reason-bearing refusal, so the gateway can use Screen Sharing.
+    #[cfg(target_os = "macos")]
+    let Some(cap) = capture_before_auth(&mut c, minor, platform::capture)? else { return Ok(()) };
     c.write_all(&0u32.to_be_bytes())?;
     let _shared: [u8; 1] = rd(&mut c)?;
     c.set_read_timeout(None)?;
 
+    #[cfg(not(target_os = "macos"))]
     let cap = platform::capture();
     let size = {
         let mut c = cap.lock().unwrap();
@@ -367,6 +372,23 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
     changed();
     crate::log!("share {peer}: viewer left");
     r
+}
+
+/// Prepare an image before SecurityResult=success. Kept independent of native capture
+/// so the failure handshake can be tested without permissions, a desktop or input events.
+#[cfg(any(target_os = "macos", test))]
+fn capture_before_auth<T>(out: &mut impl Write, minor: u32, create: impl FnOnce() -> Result<T, String>) -> io::Result<Option<T>> {
+    match create() {
+        Ok(c) => Ok(Some(c)),
+        Err(why) => {
+            out.write_all(&1u32.to_be_bytes())?;
+            if minor >= 8 {
+                out.write_all(&(why.len() as u32).to_be_bytes())?;
+                out.write_all(why.as_bytes())?;
+            }
+            Ok(None)
+        }
+    }
 }
 
 /// Client → server messages. Input is applied right here; the rest goes to the pump.
@@ -782,6 +804,48 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn capture_failure_refuses_before_success() {
+        let reason = "이 Mac의 화면 캡처를 시작하지 못했습니다";
+        let mut wire = Vec::new();
+        let result = super::capture_before_auth::<()>(&mut wire, 8, || Err(reason.into())).unwrap();
+        assert!(result.is_none());
+        assert_eq!(u32::from_be_bytes(wire[..4].try_into().unwrap()), 1);
+        let n = u32::from_be_bytes(wire[4..8].try_into().unwrap()) as usize;
+        assert_eq!(&wire[8..], reason.as_bytes());
+        assert_eq!(wire.len(), 8 + n);
+        wire.clear();
+        assert!(super::capture_before_auth::<()>(&mut wire, 3, || Err(reason.into())).unwrap().is_none());
+        assert_eq!(wire, 1u32.to_be_bytes());
+        wire.clear();
+        assert_eq!(super::capture_before_auth(&mut wire, 8, || Ok(42)).unwrap(), Some(42));
+        assert!(wire.is_empty(), "success is sent only after preparation returns");
+    }
+
+    #[test]
+    fn capture_refusal_reaches_rfb_client_as_a_reason() {
+        use super::*;
+        let reason = "화면 캡처를 시작하지 못했습니다";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let worker = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            socket.write_all(b"RFB 003.008\n").unwrap();
+            assert_eq!(rd::<12>(&mut socket).unwrap(), *b"RFB 003.008\n");
+            socket.write_all(&[1, 2]).unwrap();
+            assert_eq!(rd::<1>(&mut socket).unwrap(), [2]);
+            let challenge = [7; 16];
+            socket.write_all(&challenge).unwrap();
+            assert_eq!(rd::<16>(&mut socket).unwrap(), vnc_response(&challenge, "fixture"));
+            assert!(capture_before_auth::<()>(&mut socket, 8, || Err(reason.into())).unwrap().is_none());
+        });
+        let error = crate::rfb::open(&addr, &crate::rfb::Creds { user: String::new(), pass: "fixture".into() }).err().expect("capture must refuse");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(error.to_string(), reason);
+        worker.join().unwrap();
+    }
+
     /// Korean text survives the Extended Clipboard both ways (Provide is what noVNC parses),
     /// and the viewer's Notify is answered with a Request.
     #[test]

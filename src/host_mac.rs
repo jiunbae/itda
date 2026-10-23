@@ -173,6 +173,12 @@ pub(crate) fn video(w: usize, h: usize) -> Option<Video> {
 /// Capture geometry is frozen for all viewers until the last one leaves. This keeps
 /// pointer input and monitor metadata in the same units as the shared framebuffer.
 static SHARED_CAPTURE: Mutex<std::sync::Weak<Mutex<Capture>>> = Mutex::new(std::sync::Weak::new());
+// Concurrent connections share a failed attempt too: they must not each queue another
+// full startup timeout while holding the capture lock.
+static CAPTURE_FAILURE: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+const CAPTURE_COOLDOWN: Duration = Duration::from_secs(2);
+const START_WAIT: Duration = Duration::from_secs(3);
+const FIRST_FRAME_WAIT: Duration = Duration::from_secs(2);
 
 fn native_pixels_requested() -> bool {
     std::env::args().any(|a| a == "--native-pixels") ||
@@ -291,13 +297,28 @@ impl Output {
 
 /// The one capture all viewers share (each diffs it against its own last frame); stopped
 /// when the last viewer leaves.
-pub(crate) fn capture() -> Arc<Mutex<Capture>> {
+pub(crate) fn capture() -> Result<Arc<Mutex<Capture>>, String> {
     let mut g = SHARED_CAPTURE.lock().unwrap();
-    g.upgrade().unwrap_or_else(|| {
-        let c = Arc::new(Mutex::new(Capture::new()));
-        *g = Arc::downgrade(&c);
-        c
-    })
+    if let Some(c) = g.upgrade() { return Ok(c); }
+    if let Some((at, why)) = CAPTURE_FAILURE.lock().unwrap().as_ref() {
+        if at.elapsed() < CAPTURE_COOLDOWN { return Err(why.clone()); }
+    }
+    match Capture::new() {
+        Ok(c) => {
+            let c = Arc::new(Mutex::new(c));
+            *g = Arc::downgrade(&c);
+            *CAPTURE_FAILURE.lock().unwrap() = None;
+            Ok(c)
+        }
+        Err(why) => {
+            crate::log!("hp: screen capture unavailable: {why}");
+            // Keep framework diagnostics out of the auth reason (including words
+            // like "password" which RFB clients classify as bad credentials).
+            let why = "이 Mac의 화면 캡처를 시작하지 못했습니다. 잠시 후 다시 시도해 주세요.".to_string();
+            *CAPTURE_FAILURE.lock().unwrap() = Some((Instant::now(), why.clone()));
+            Err(why)
+        }
+    }
 }
 
 /// A fixed offscreen framebuffer for the opt-in real encoder/pump refinement probe.
@@ -340,21 +361,20 @@ pub(crate) struct Snapshot {
 unsafe impl Send for Capture {}
 
 impl Capture {
-    fn new() -> Capture {
+    fn new() -> Result<Capture, String> {
         let native_pixels = native_pixels_requested();
         let (w, h) = display_dimensions(native_pixels);
-        let latest: Latest = Arc::new(Mutex::new(None));
-        let mut c = Capture { x: 0, y: 0, w, h, native_pixels, buf: Arc::new(vec![0; w * h]), native: None, latest: latest.clone(), generation: 0, stream: None, _output: None };
-        match start_stream(w, h, latest) {
-            Ok((stream, output)) => (c.stream, c._output) = (Some(stream), Some(output)),
-            Err(e) => crate::log!("hp: screen capture unavailable ({e}); viewers see a black screen"),
-        }
-        // Give the first frame a moment, so the viewer's first picture isn't black.
-        let until = Instant::now() + Duration::from_millis(800);
-        while c.latest.lock().unwrap().is_none() && c.stream.is_some() && Instant::now() < until {
+        let (stream, output, latest) = start_stream(w, h)?;
+        let mut c = Capture { x: 0, y: 0, w, h, native_pixels, buf: Arc::new(vec![0; w * h]), native: None, latest, generation: 0, stream: Some(stream), _output: Some(output) };
+        // Success means a usable image exists, not only that startCapture returned.
+        // Drop stops the stream on failure; no empty capture is published to viewers.
+        let until = Instant::now() + FIRST_FRAME_WAIT;
+        loop {
+            c.update();
+            if c.generation != 0 { return Ok(c); }
+            if Instant::now() >= until { return Err("ScreenCaptureKit이 첫 화면을 보내지 않았습니다".into()); }
             std::thread::sleep(Duration::from_millis(10));
         }
-        c
     }
 
     /// The capture's size and quality are fixed for its life (one display).
@@ -381,7 +401,7 @@ impl Capture {
             if unsafe { CVPixelBufferLockBaseAddress(&pb, CVPixelBufferLockFlags::ReadOnly) } == 0 {
                 let base = CVPixelBufferGetBaseAddress(&pb) as *const u8;
                 let (bw, bh, bpr) = (CVPixelBufferGetWidth(&pb), CVPixelBufferGetHeight(&pb), CVPixelBufferGetBytesPerRow(&pb));
-                if !base.is_null() {
+                if !base.is_null() && bw > 0 && bh > 0 {
                     let (cw, ch) = (bw.min(self.w), bh.min(self.h));
                     // A viewer may still be encoding the previous image. Reuse its storage
                     // only when unshared; never overwrite a snapshot another viewer holds.
@@ -506,10 +526,29 @@ mod snapshot_tests {
 }
 
 /// Start a ScreenCaptureKit stream of the main display at w×h, BGRA, ≤60 fps.
-fn start_stream(w: usize, h: usize, latest: Latest) -> Result<(Retained<SCStream>, Retained<Output>), String> {
+fn start_stream(w: usize, h: usize) -> Result<(Retained<SCStream>, Retained<Output>, Latest), String> {
     if !CGPreflightScreenCaptureAccess() {
         return Err("Screen Recording permission not granted".into());
     }
+    retry_start(|| {
+        // A timed-out attempt can still deliver a late frame. Its private slot must
+        // never satisfy the next attempt's first-frame check.
+        let latest: Latest = Arc::new(Mutex::new(None));
+        start_stream_once(w, h, latest.clone()).map(|(stream, output)| (stream, output, latest))
+    })
+}
+
+// Two attempts, at most 3 s for content + 3 s for start each, then 2 s for a frame:
+// stay below the RFB client's 20 s read timeout so it receives the fallback reason.
+fn retry_start<T>(mut create: impl FnMut() -> Result<T, String>) -> Result<T, String> {
+    let mut last = String::new();
+    for _ in 0..2 {
+        match create() { Ok(v) => return Ok(v), Err(e) => last = e }
+    }
+    Err(last)
+}
+
+fn start_stream_once(w: usize, h: usize, latest: Latest) -> Result<(Retained<SCStream>, Retained<Output>), String> {
     let (tx, rx) = std::sync::mpsc::channel::<Result<Retained<SCShareableContent>, String>>();
     let handler = RcBlock::new(move |content: *mut SCShareableContent, error: *mut NSError| {
         let r = match unsafe { content.as_ref() } {
@@ -519,7 +558,7 @@ fn start_stream(w: usize, h: usize, latest: Latest) -> Result<(Retained<SCStream
         let _ = tx.send(r);
     });
     unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&handler) };
-    let content = rx.recv_timeout(Duration::from_secs(5)).map_err(|_| "ScreenCaptureKit didn't answer".to_string())??;
+    let content = rx.recv_timeout(START_WAIT).map_err(|_| "ScreenCaptureKit didn't answer".to_string())??;
     let main = CGMainDisplayID();
     let displays = unsafe { content.displays() };
     let display = displays.iter().find(|d| unsafe { d.displayID() } == main).or_else(|| displays.iter().next()).ok_or("no display")?;
@@ -539,14 +578,59 @@ fn start_stream(w: usize, h: usize, latest: Latest) -> Result<(Retained<SCStream
             .addStreamOutput_type_sampleHandlerQueue_error(ProtocolObject::from_ref(&*output), SCStreamOutputType::Screen, Some(&queue))
             .map_err(|e| e.localizedDescription().to_string())?;
         let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+        let late = objc2::rc::Weak::new(&*stream);
         let done = RcBlock::new(move |error: *mut NSError| {
-            let _ = tx.send(error.as_ref().map(|e| e.localizedDescription().to_string()));
+            if tx.send(error.as_ref().map(|e| e.localizedDescription().to_string())).is_err() {
+                // No waiter means startup was abandoned. Do not leave a stream
+                // running when a delayed start callback finally arrives.
+                if let Some(stream) = late.load() { stream.stopCaptureWithCompletionHandler(None); }
+            }
         });
         stream.startCaptureWithCompletionHandler(Some(&done));
-        if let Ok(Some(e)) = rx.recv_timeout(Duration::from_secs(5)) {
-            return Err(e);
+        match start_result(rx.recv_timeout(START_WAIT)) {
+            Ok(()) => {}
+            Err(e) => {
+                // Close before requesting stop: callbacks after this point must take
+                // their own cleanup path, even if start completes after stop was queued.
+                drop(rx);
+                stream.stopCaptureWithCompletionHandler(None);
+                return Err(e);
+            }
         }
         Ok((stream, output))
+    }
+}
+
+fn start_result(result: Result<Option<String>, std::sync::mpsc::RecvTimeoutError>) -> Result<(), String> {
+    match result {
+        Ok(None) => Ok(()),
+        Ok(Some(e)) => Err(e),
+        Err(_) => Err("ScreenCaptureKit이 화면 캡처 시작에 응답하지 않았습니다".into()),
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    #[test]
+    fn startup_retries_once_and_stops_on_success() {
+        let mut tries = 0;
+        assert_eq!(super::retry_start(|| { tries += 1; if tries == 1 { Err("timeout".into()) } else { Ok(7) } }), Ok(7));
+        assert_eq!(tries, 2);
+        tries = 0;
+        assert_eq!(super::retry_start::<()>(|| { tries += 1; Err(format!("failure {tries}")) }), Err("failure 2".into()));
+        assert_eq!(tries, 2);
+        tries = 0;
+        assert_eq!(super::retry_start(|| { tries += 1; Ok(9) }), Ok(9));
+        assert_eq!(tries, 1);
+    }
+
+    #[test]
+    fn only_a_successful_start_callback_is_ready() {
+        use std::sync::mpsc::RecvTimeoutError::{Timeout, Disconnected};
+        assert!(super::start_result(Ok(None)).is_ok());
+        assert_eq!(super::start_result(Ok(Some("capture failed".into()))), Err("capture failed".into()));
+        assert!(super::start_result(Err(Timeout)).is_err());
+        assert!(super::start_result(Err(Disconnected)).is_err());
     }
 }
 
