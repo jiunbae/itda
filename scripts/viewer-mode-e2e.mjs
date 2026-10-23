@@ -106,17 +106,23 @@ try{
  {const now=await app();assert(now.reconnecting===base.reconnecting+1&&now.status.includes('다시 연결합니다'),'a drop did not start reconnecting: '+JSON.stringify(now));}
  await p.clock.runFor(2100);
  {const now=await app();assert(now.sessions===base.sessions+1&&!now.status,'the reconnect did not happen: '+JSON.stringify(now));}
- // A drop whose reconnect is pending, then another attempt replaces it (a quality change
- // reconnects): the pending reconnect doesn't open a second one.
+ // The first drop has a retry scheduled, then a quality-change replacement connects.
+ // Drop that replacement later: its own retry is due after the first timer. Counting
+ // total sessions alone cannot distinguish which timer reopened the connection.
  await p.evaluate(()=>fixtureRfb.dispatchEvent(new Event('disconnect')));
  await p.clock.runFor(100);
  const pending=await app();
  await p.evaluate(()=>itdaHp({id:'studio',quality:false,ok:true}));
  await p.clock.runFor(100);
  const replaced=await app();
- assert(replaced.sessions===pending.sessions+1,'the replacement did not open');
- await p.clock.runFor(12000);
- {const now=await app();assert(now.sessions===replaced.sessions&&!now.status,'a superseded reconnect opened again: '+JSON.stringify(now));}
+ assert(replaced.sessions===pending.sessions+1&&!replaced.status,'the replacement did not connect');
+ await p.clock.runFor(700);
+ await p.evaluate(()=>fixtureRfb.dispatchEvent(new Event('disconnect')));
+ await p.clock.runFor(100);
+ await p.clock.runFor(1200); // original retry due at +2050 ms; current retry at +2950 ms
+ {const now=await app();assert(now.sessions===replaced.sessions,'a superseded retry opened before the current retry deadline: '+JSON.stringify(now));}
+ await p.clock.runFor(900);
+ {const now=await app();assert(now.sessions===replaced.sessions+1&&!now.status,'the current retry did not open once at its own deadline: '+JSON.stringify(now));}
  assert(errors.length===0,errors.join('\n'));
  console.log('PASS: HTTP500 and null mode unknown/retry; active capture and stale status guards; diagnostic retries preserve session, settings and per-attempt token');
 }finally{await browser.close();await new Promise(r=>server.close(r));}
