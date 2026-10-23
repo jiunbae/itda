@@ -1706,7 +1706,8 @@ function showError(id, kind, msg) {
 
 // ---------------------------------------------------------------- context menu
 
-function showCtx(id, x, y) {
+let ctxReturn = null;
+function showCtx(id, x, y, trigger = null) {
   const h = hostById(id);
   if (!h) return;
   const s = S.sessions[id];
@@ -1724,6 +1725,7 @@ function showCtx(id, x, y) {
   if (h.rdp_key) items.push(['forget-rdp-key', 'E72C', '원격 데스크톱 서버 키 다시 받기']);
   items.push('-', ['del', 'E74D', '삭제', 'danger']);
   const el = $('#ctx');
+  ctxReturn = trigger || document.activeElement;
   el.innerHTML = items.map((it) => (it === '-' ? '<hr>' : `<button data-act="${it[0]}" data-id="${esc(id)}" class="${it[3] || ''}">${I(it[1])}${it[2]}</button>`)).join('');
   el.hidden = false;
   const r = el.getBoundingClientRect();
@@ -1733,8 +1735,11 @@ function showCtx(id, x, y) {
   if (first) first.focus();
 }
 
-function hideCtx() {
+function hideCtx(restoreFocus = false) {
   $('#ctx').hidden = true;
+  const trigger = ctxReturn;
+  ctxReturn = null;
+  if (restoreFocus && trigger?.isConnected) trigger.focus();
 }
 
 // ---------------------------------------------------------------- toasts
@@ -1782,7 +1787,7 @@ function act(a, el) {
     case 'del': return askDelete(id);
     case 'more': {
       const r = el.getBoundingClientRect();
-      return showCtx(id, r.left, r.bottom + 4);
+      return showCtx(id, r.left, r.bottom + 4, el);
     }
     case 'new': return openEdit();
     case 'quick': return quickConnect(S.query);
@@ -1938,7 +1943,7 @@ $('#content').addEventListener('dblclick', (e) => {
 $('#content').addEventListener('contextmenu', (e) => {
   const c = e.target.closest('.card, .list-row:not(.list-head)');
   e.preventDefault();
-  if (c) showCtx(c.dataset.id, e.clientX, e.clientY);
+  if (c) showCtx(c.dataset.id, e.clientX, e.clientY, c);
 });
 document.addEventListener('contextmenu', (e) => { if (!e.target.closest('input, textarea')) e.preventDefault(); });
 
@@ -1971,7 +1976,7 @@ search.addEventListener('keydown', (e) => {
 document.addEventListener('keydown', (e) => {
   const typing = e.target.closest && e.target.closest('input, textarea, select');
   if (e.key === 'Escape') {
-    if (!$('#ctx').hidden) return hideCtx();
+    if (!$('#ctx').hidden) { e.preventDefault(); return hideCtx(true); }
     const m = topModal();
     if (m) return closeModal(m.dataset.key);
   }
@@ -1992,7 +1997,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); connect(c.dataset.id); }
     else if (e.key === 'Delete' || (MAC && e.metaKey && e.key === 'Backspace')) askDelete(c.dataset.id);
     else if (e.key === 'F2') openEdit({ id: c.dataset.id });
-    else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) { const r = c.getBoundingClientRect(); showCtx(c.dataset.id, r.left + 20, r.top + 20); }
+    else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) { const r = c.getBoundingClientRect(); showCtx(c.dataset.id, r.left + 20, r.top + 20, c); }
     else if (['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp'].includes(e.key)) {
       const all = $$('#content .card, #content .list-row:not(.list-head)');
       const i = all.indexOf(c);
@@ -2004,6 +2009,6 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-window.addEventListener('blur', hideCtx);
+window.addEventListener('blur', () => hideCtx());
 render();
 send('ready');

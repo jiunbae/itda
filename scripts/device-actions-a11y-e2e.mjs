@@ -76,6 +76,11 @@ try {
     await page.locator("#ctx:not([hidden])").waitFor();
     assert((await sent()).filter((x) => x.cmd === "connect").length === before, `${view}: Enter on More connected the device`);
     await page.keyboard.press("Escape");
+    assert(await btn("거실 PC 더보기").evaluate(b => b === document.activeElement), `${view}: Escape did not return focus to More`);
+    await page.keyboard.press("Enter");
+    await page.locator("#ctx:not([hidden])").waitFor();
+    await page.locator("#search").click();
+    assert(await page.locator("#search").evaluate(b => b === document.activeElement), `${view}: closing More by an outside click stole focus`);
     // Inner buttons retain device editing/navigation shortcuts; only their activation
     // keys belong to the button. The editor must be for this device, without connecting.
     await btn("거실 PC 더보기").focus(); await page.keyboard.press("F2");
