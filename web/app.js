@@ -273,6 +273,12 @@ function onMessage(m) {
       if (!topModal()) openEdit();
       break;
     case 'remote_setup': return window.ItdaRemoteSetup?.message(m);
+    case 'quit_guard':
+      if (!window.ITDA_FILE_HOST) quitGuard(m);
+      break;
+    case 'quit_pending':
+      if (!window.ITDA_FILE_HOST) quitPending(m);
+      break;
     case 'update':
       // A newer release: offered in the sidebar and Settings; installing always asks first.
       if (m.stage) { S.updateStage = m.stage; toast(`업데이트: ${m.stage}`, 'E896'); }
@@ -1025,6 +1031,41 @@ window.addEventListener('itda-transfers', () => {
   if (line && line.textContent !== transferStatus()) line.textContent = transferStatus();
   if (focused) (box.querySelector(`[data-id="${CSS.escape(focused)}"]`) || box.querySelector('button') || $('#modals .scrim[data-key="transfers"] [data-x="close"]'))?.focus();
 });
+
+// ---------------------------------------------------------------- quitting with transfers running
+
+// Quitting (or an update's restart) while files are being copied: wait for them, stop them
+// (they clean up and keep their sources), or stay. The answer goes to Rust (home.rs).
+function quitGuard(m) {
+  const update = m.reason === 'update';
+  const verb = update ? '업데이트' : '종료';
+  const dlg = openModal('quit-guard', `<div class="dialog small"><div class="body"><h2>전송 ${m.count}개가 진행 중입니다</h2>
+    <p class="lead">${update ? '업데이트하려면 Itda를 다시 시작합니다. ' : ''}지금 ${verb}하면 진행 중인 복사·이동이 멈춥니다. 멈춘 전송의 원본은 그대로 남고, 대상에 만들던 임시 파일은 정리됩니다.</p>
+    ${m.waiting ? `<p class="hint">이미 전송이 끝나면 ${verb}하도록 기다리고 있습니다.</p>` : ''}</div>
+    <div class="foot"><button class="btn" data-x="cancel">취소</button><button class="btn danger" data-x="stop">중단하고 ${verb}</button><button class="btn primary" data-x="wait" autofocus>전송이 끝나면 ${verb}</button></div></div>`, { sticky: true });
+  dlg.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-x]');
+    if (!b) return;
+    closeModal('quit-guard');
+    send('quit_choice', { choice: b.dataset.x, reason: update ? 'update' : 'quit' });
+  });
+}
+function quitPending(m) {
+  let bar = $('#quit-pending');
+  if (m.cancelled || !m.count) { bar?.remove(); if (m.cancelled) toast('종료를 취소했습니다', 'E8B7'); return; }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'quit-pending';
+    bar.className = 'quit-pending';
+    bar.innerHTML = '<span role="status"></span><button class="btn sm" data-x="cancel">종료 취소</button>';
+    bar.querySelector('button').onclick = () => send('quit_choice', { choice: 'cancel', reason: bar.dataset.reason });
+    document.body.appendChild(bar);
+  }
+  bar.dataset.reason = m.reason;
+  const text = `전송이 끝나면 ${m.reason === 'update' ? '업데이트합니다' : 'Itda를 종료합니다'} · ${m.count}개 남음`;
+  const line = bar.querySelector('[role=status]');
+  if (line.textContent !== text) line.textContent = text;
+}
 
 // ---------------------------------------------------------------- modals
 

@@ -120,15 +120,24 @@ fn connecting() -> &'static Mutex<HashMap<String, Arc<Control>>> {
 }
 type Jobs = HashMap<String, (String, Arc<Control>)>;
 static JOBS: OnceLock<Mutex<Jobs>> = OnceLock::new();
-/// Transfers queued or running, also those whose file window was already closed.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-/// A registered running transfer of `id` owned by page `window`, and whether it was stopped.
+/// A running transfer of `id` owned by page `window`, registered for a test; dropping it
+/// removes it again (the registry is the whole process's).
 #[cfg(test)]
-pub fn test_job(id: &str, window: &str) -> (String, impl Fn() -> bool) {
+pub struct TestJob { pub job: String, control: Arc<Control> }
+#[cfg(test)]
+impl TestJob {
+    pub fn stopped(&self) -> bool { self.control.check().is_err() }
+    /// The job's thread ended (after a cancel, its cleanup).
+    pub fn finish(&self) { jobs().lock().unwrap().remove(&self.job); }
+}
+#[cfg(test)]
+impl Drop for TestJob { fn drop(&mut self) { self.finish(); } }
+#[cfg(test)]
+pub fn test_job(id: &str, window: &str) -> TestJob {
     let job = crate::store::new_id();
     let control = Arc::new(Control::default());
     jobs().lock().unwrap().insert(job.clone(), (scoped_id(id, &json!(window)), control.clone()));
-    (job, move || control.check().is_err())
+    TestJob { job, control }
 }
 /// That transfer seen once by its page, which then closed.
 #[cfg(test)]
@@ -137,8 +146,18 @@ pub fn test_adopt(window: &str, id: &str, job: &str) {
     t(json!({"type":"files_job","id":id,"job":job,"state":"running"}));
     release_page(window);
 }
+/// Transfers and exports queued or running (also those whose file window was already
+/// closed), and files being handed to Explorer from a drag: what quitting would cut off.
 pub fn active_jobs() -> usize {
-    jobs().lock().unwrap().len()
+    let streams = { #[cfg(windows)] { vdrag::active_streams() } #[cfg(not(windows))] { 0 } };
+    jobs().lock().unwrap().len() + streams
+}
+/// Stop every transfer and export; each cleans up (staged files, sessions) and leaves
+/// `active_jobs` as it ends.
+pub fn stop_jobs() {
+    for (_, c) in jobs().lock().unwrap().values() {
+        c.stop();
+    }
 }
 fn jobs() -> &'static Mutex<Jobs> {
     JOBS.get_or_init(Default::default)

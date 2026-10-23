@@ -649,9 +649,8 @@ unsafe fn tray_menu(h: HWND) {
             show_home();
             send(json!({"type": "go", "page": "share"}));
         }
-        TRAY_QUIT => {
-            DestroyWindow(h);
-        }
+        // Asks first while files are being copied (home.rs); ends the app otherwise.
+        TRAY_QUIT => super::request_quit(super::QuitReason::User),
         c if c >= TRAY_HOST0 && c < TRAY_HOST0 + recent.len() => {
             let id = recent[c - TRAY_HOST0].id.clone();
             if store::get_password(&id).is_none() && !home(|m| m.sessions.contains_key(&id)) {
@@ -764,7 +763,8 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
                     super::notify("Itda는 계속 실행 중입니다", "알림 영역 아이콘에서 다시 열거나 종료할 수 있습니다.");
                 }
             } else {
-                DestroyWindow(h);
+                // Closing the home ends the app: asked first while files are being copied.
+                super::request_quit(super::QuitReason::User);
             }
         }
         WM_DESTROY => {

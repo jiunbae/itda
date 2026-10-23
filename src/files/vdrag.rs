@@ -82,7 +82,7 @@ impl Remote {
                 Err(e) => drop(tx.send(Err(e))),
             }
         });
-        Reader { rx, buf: Vec::new(), at: 0, done: false }
+        { STREAMS.fetch_add(1, std::sync::atomic::Ordering::Relaxed); Reader { rx, buf: Vec::new(), at: 0, done: false } }
     }
 
     /// Stop every download still running for this drag.
@@ -127,6 +127,13 @@ impl Write for Chan<'_> {
     }
 }
 
+/// Files being read by a drop target right now (quitting would cut them off).
+static STREAMS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn active_streams() -> usize {
+    STREAMS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub struct Reader {
     rx: Receiver<io::Result<Vec<u8>>>,
     buf: Vec<u8>,
@@ -141,7 +148,12 @@ impl Reader {
         for c in bytes.chunks(chunk.max(1)) {
             tx.send(Ok(c.to_vec())).unwrap();
         }
-        Reader { rx, buf: Vec::new(), at: 0, done: false }
+        { STREAMS.fetch_add(1, std::sync::atomic::Ordering::Relaxed); Reader { rx, buf: Vec::new(), at: 0, done: false } }
+    }
+}
+impl Drop for Reader {
+    fn drop(&mut self) {
+        STREAMS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 impl Read for Reader {
