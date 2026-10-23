@@ -82,6 +82,8 @@ jobs:
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
         run: scripts/macos-bundle.sh universal
+      - name: macOS launch compatibility (both architectures)
+        run: python3 scripts/check-macos-compat.py dist/Itda.app/Contents/MacOS/itda --universal
       - name: Remove signing material
         if: always()
         run: |
