@@ -500,5 +500,11 @@
     "evidence": "assessments/evidence/macos-capture-compatibility-2026-10-24.json",
     "peer_request": "req_18e14a082a9f68e0_12e",
     "required_outcome": "Keep intended12.0+ viewer/files support with a weak SCK link and gated optional capture; current-release docs recommend12.3+ while the compatibility fix is pending."
+  },
+  "subsequent_published_site_checkpoint": {
+    "pr": 109,
+    "merge": "590d9926ba8891e1b7e376d6bee3c9048d84fc01",
+    "evidence": "assessments/evidence/site-refresh-deployed-2026-10-24.json",
+    "result": "40 published layouts and25/25 PNG hashes PASS; app deployment/native persona acceptance still incomplete"
   }
 }

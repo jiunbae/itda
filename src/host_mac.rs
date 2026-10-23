@@ -17,14 +17,14 @@ use crate::server::{VideoEncode, Video};
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
-use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
+use objc2::runtime::{AnyClass, NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass, Message};
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
 use objc2_core_foundation::{CFRetained, CGPoint};
 use objc2_core_graphics::{CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGEvent, CGEventField, CGEventFlags, CGEventTapLocation, CGEventType, CGMainDisplayID, CGMouseButton, CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, CGScrollEventUnit};
 use objc2_core_media::CMSampleBuffer;
 use objc2_core_video::{CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight, CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress};
-use objc2_foundation::{NSArray, NSError, NSString};
+use objc2_foundation::{NSArray, NSError, NSProcessInfo, NSString};
 use objc2_screen_capture_kit::{SCContentFilter, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamOutput, SCStreamOutputType};
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -53,6 +53,20 @@ pub(crate) fn name() -> String {
 
 // ---------------------------------------------------------------- permissions
 
+/// Do not resolve a typed SCK class on an OS where the weak-linked framework is absent.
+/// The rest of Itda (including remote viewing and files) does not require this feature.
+pub fn capture_support() -> Result<(), &'static str> {
+    let v = NSProcessInfo::processInfo().operatingSystemVersion();
+    if !crate::capture_support::macos_supported(v.majorVersion, v.minorVersion) {
+        return Err(crate::capture_support::MACOS_CAPTURE_REQUIREMENT);
+    }
+    if [c"SCShareableContent", c"SCStream", c"SCContentFilter", c"SCStreamConfiguration"]
+        .into_iter().any(|name| AnyClass::get(name).is_none()) {
+        return Err(crate::capture_support::CAPTURE_UNAVAILABLE);
+    }
+    Ok(())
+}
+
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
@@ -66,6 +80,7 @@ pub fn permissions() -> (bool, bool) {
 
 /// Ask for whatever is missing: macOS shows its own prompts (and System Settings).
 pub fn request_permission(kind: &str) {
+    if capture_support().is_err() { return; }
     let (screen, access) = permissions();
     if kind == "screen" && !screen { CGRequestScreenCaptureAccess(); }
     if kind == "access" && !access {
@@ -86,6 +101,7 @@ pub fn request_permissions() -> (bool, bool) {
 /// only the desktop picture; the viewer's Itda then uses Screen Sharing, which shows the lock
 /// screen.)
 pub(crate) fn ready() -> Result<(), String> {
+    capture_support().map_err(str::to_owned)?;
     if !CGPreflightScreenCaptureAccess() {
         return Err("이 Mac에서 화면 기록 권한이 아직 허용되지 않았습니다".into());
     }
@@ -527,6 +543,7 @@ mod snapshot_tests {
 
 /// Start a ScreenCaptureKit stream of the main display at w×h, BGRA, ≤60 fps.
 fn start_stream(w: usize, h: usize) -> Result<(Retained<SCStream>, Retained<Output>, Latest), String> {
+    capture_support().map_err(str::to_owned)?;
     if !CGPreflightScreenCaptureAccess() {
         return Err("Screen Recording permission not granted".into());
     }
@@ -945,7 +962,7 @@ pub fn password() -> String {
 /// here or by another Itda over SSH), so the app serves it whenever it runs, including
 /// after macOS relaunches it for a newly granted Screen Recording permission.
 pub fn enabled() -> bool {
-    crate::store::dir().join("hp-sharing").exists()
+    capture_support().is_ok() && crate::store::dir().join("hp-sharing").exists()
 }
 
 pub fn set_enabled(on: bool) {
@@ -965,6 +982,7 @@ fn write_status(screen: bool, access: bool) {
 
 /// Start serving in the background of the running app (when `enabled`).
 pub fn start_background() {
+    if let Err(reason) = capture_support() { crate::log!("hp sharing: {reason}"); return; }
     std::thread::spawn(|| {
         let (screen, access) = permissions();
         crate::log!("hp sharing: screen recording {screen}, accessibility {access}");
@@ -990,6 +1008,7 @@ pub fn start_background() {
 
 /// `itda --hp-server [port]`: serve this Mac until killed (asks for missing permissions).
 pub fn serve_forever(port: u16) -> ! {
+    if let Err(reason) = capture_support() { eprintln!("{reason}"); std::process::exit(1); }
     // Tests: no permission prompts and no "allow?" dialog (and loopback only, by trust).
     let quiet = std::env::var_os("ITDA_HP_TEST").is_some();
     let (screen, access) = if quiet { permissions() } else { request_permissions() };

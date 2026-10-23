@@ -43,6 +43,21 @@ try{
  await p.clock.fastForward(181000);const count=await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_status').length);await p.clock.fastForward(10000);assert(await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_status').length)===count,'Guide polling did not stop');
  await p.locator('[data-request="access"]').click();await p.evaluate(()=>permissionState.access=true);await p.clock.fastForward(1600);await p.getByText('✓ 연결할 준비가 됐어요').waitFor();assert(await p.locator('[data-action="close"]').textContent()==='완료','Guide completion missing');
  await p.setViewportSize({width:360,height:640});const footer=await p.locator('footer').boundingBox();assert(footer.y>=0&&footer.y+footer.height<=640,'Helper actions fall below window');assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Helper overflows narrow window');
+ // OS/library support is independent of TCC: both grants must not falsely complete an
+ // unavailable capture feature, nor ask the person to grant irrelevant permissions.
+ const permissionRequests=await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_request').length);
+ await p.evaluate(()=>itda.recv({type:'permissions',screen:true,access:true,supported:false,support_error:'고성능 공유에는 macOS 12.3 이상이 필요합니다.',app_path:'/Applications/Itda.app'}));
+ assert((await p.locator('.intro').textContent()).includes('macOS 12.3'),'Unsupported OS reason is missing');
+ assert(!await p.locator('body').evaluate(e=>e.classList.contains('complete')),'Unsupported capture was reported ready');
+ assert(await p.locator('section.permission:visible').count()===0&&await p.locator('.recovery').isHidden()&&await p.locator('.instructions').isHidden(),'Unsupported capture still asks for permissions/restart');
+ assert(await p.locator('.reminder').isHidden()&&await p.locator('footer p').isHidden()&&await p.locator('[data-action="status"]').isHidden(),'Unsupported capture still shows permission recovery advice');
+ await p.evaluate(()=>document.querySelector('[data-request="screen"]').click());
+ assert(await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_request').length)===permissionRequests,'Unsupported capture requested a permission');
+ await p.screenshot({path:path.join(out,'helper-unsupported.png')});
+ // Older status senders omit the new field; ordinary granted-state behavior remains.
+ await p.evaluate(()=>itda.recv({type:'permissions',screen:true,access:true,app_path:'/Applications/Itda.app'}));
+ assert(await p.locator('section.permission:visible').count()===2&&await p.locator('body').evaluate(e=>e.classList.contains('complete')),'Legacy status did not restore the normal helper');
+ assert(await p.locator('.reminder').isVisible()&&await p.locator('footer p').isVisible()&&await p.locator('[data-action="status"]').isVisible(),'Legacy status did not restore helper advice');
  // A guide opened without a deep link still polls, recovering a lost initial IPC reply.
  const recovery=await browser.newPage();await recovery.clock.install();
  await recovery.addInitScript(()=>{window.reads=0;window.ipc={postMessage:raw=>{if(JSON.parse(raw).cmd==='permission_status'&&++reads>1)queueMicrotask(()=>itda.recv({type:'permissions',screen:false,access:false,requested:null,requested_seq:0,app_path:'/Applications/Itda.app'}));}};});

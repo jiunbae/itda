@@ -74,6 +74,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# A new SDK or binding crate must not make an optional capture framework a launch-time
+# requirement. Check every architecture, including the executable's own deployment floor.
+if [ "$MODE" = universal ]; then
+  python3 scripts/check-macos-compat.py "$APP/Contents/MacOS/itda" --universal
+else
+  python3 scripts/check-macos-compat.py "$APP/Contents/MacOS/itda"
+fi
+
 ZIP="$OUT/Itda-macos-$ARCH.zip"
 rm -f "$ZIP"
 if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then

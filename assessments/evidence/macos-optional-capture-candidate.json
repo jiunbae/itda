@@ -1,0 +1,58 @@
+{
+  "recorded_at": "2026-10-23T23:16:56.997892+00:00",
+  "source_commit": "5fa12295eda0590c060d4631e1c48135c3995c51",
+  "pr": 110,
+  "source_review": "muxa131 no P1/P2,132 approved8de5f12; rebase onto590d992 changes base docs/assets only",
+  "candidate": {
+    "version": "1.0.2",
+    "minimum_macos": "12.0",
+    "binary_sha256": "17702b93a90b9eb7948ef2898f66e3d6ae55be06f9d2b89622790dd503bca40c",
+    "zip_sha256": "5dc4a55fe8508f6dbd562e0587b18a25ffc95d4af66e091fb62fabce2c2c494f",
+    "bundle_signature": "Ad hoc, strict structural verification PASS; not Developer ID/notarized; not installed",
+    "load_commands": {
+      "status": "passed",
+      "slices": [
+        {
+          "architecture": "x86_64",
+          "minimum_macos": "10.12",
+          "screen_capture_kit": "weak"
+        },
+        {
+          "architecture": "arm64",
+          "minimum_macos": "11.0",
+          "screen_capture_kit": "weak"
+        }
+      ]
+    }
+  },
+  "validation": {
+    "rust": "11 relevant version/capture pure-readonly/permission-helper stub/SSH field tests PASS; boundary rerun after final code PASS",
+    "mocked_permission_helper": {
+      "chromium": "PASS",
+      "webkit": "PASS",
+      "unsupported_capture": "Both TCC booleans true must not report completion; permission rows, requests, restart and irrelevant advice hidden/disabled; legacy supported-field omission restores normal UI",
+      "visual_review": "WebKit360x640 screenshot reviewed; no native TCC requests"
+    },
+    "validator_negative_positive": "Compiled strong SCK native probe rejected, weak probe accepted; reviewer independently rejected installed1.0.2 strong binary",
+    "modern_readonly_smoke": {
+      "source_commit": "5fa12295eda0590c060d4631e1c48135c3995c51",
+      "architecture": "arm64",
+      "binary_sha256": "a1215bfec72237ad13822d4a254d7a1908b25ed05b28aa5120c997bd35b4269a",
+      "command": "itda --permission-status",
+      "exit": 0,
+      "support": {
+        "supported": true,
+        "support_error": null
+      },
+      "permission_fields": "screen/access booleans returned; values intentionally omitted because this uninstalled candidate has its own code identity",
+      "scope": "Executed only read-only permission preflight on current macOS; no permission request, screen capture, GUI launch, installation or older-OS acceptance",
+      "binary_relationship": "Separate arm64 build from the same source5fa12295; this is not the universal packaged candidate. Its hash intentionally differs from the packaged binary hash."
+    }
+  },
+  "limitations": [
+    "No macOS12.0-12.2 execution or standard-viewer/files workflow; original lower-floor acceptance stays open",
+    "No screen capture session or actual permission request, no backend unsupported-state side-effect-order execution",
+    "No app installation, Developer ID release/notarization, production rollout or persona9/10 certification",
+    "CI for final evidence head pending"
+  ]
+}

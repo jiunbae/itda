@@ -11,6 +11,27 @@
   pending=false;
   if(m.copied){const b=document.querySelector('[data-action="copy"]');b.textContent='복사했어요';setTimeout(()=>b.textContent='앱 위치 복사',1500);}
   if(m.error){error(m.error);return;}error('');
+  if(m.supported===false){
+   clearInterval(timer);deadline=0;
+   document.querySelector('h1').textContent='이 Mac에서 고성능 공유를 사용할 수 없어요';
+   document.querySelector('.intro').textContent=m.support_error||'이 macOS에서는 고성능 캡처를 지원하지 않습니다.';
+   document.body.classList.remove('complete');
+   document.querySelector('.progress').textContent='기본 화면 연결과 파일 브라우저를 이용해 주세요.';
+   document.querySelector('.hp-state').hidden=true;
+   for(const row of document.querySelectorAll('[data-permission]')){row.hidden=true;row.querySelector('button').disabled=true;}
+   document.querySelector('.instructions').hidden=true;
+   document.querySelector('.recovery').hidden=true;
+   document.querySelector('.reminder').hidden=true;
+   document.querySelector('footer p').hidden=true;
+   document.querySelector('[data-action="status"]').hidden=true;
+   document.querySelector('.app-drag').disabled=true;
+   document.querySelector('.current-app').textContent=`Itda ${m.version||''} · ${m.app_path||'앱 위치를 확인할 수 없습니다'}`;
+   document.querySelector('[data-action="close"]').textContent='닫기';
+   return;
+  }
+  document.querySelector('.reminder').hidden=false;
+  document.querySelector('footer p').hidden=false;
+  document.querySelector('[data-action="status"]').hidden=false;
   const ready=m.screen&&m.access,count=Number(!!m.screen)+Number(!!m.access);
   // Keyboard and mouse first: screen recording reopens Itda, so it is the last step.
   const restartKeys=['access','screen'].filter(key=>!m[key]&&m[`configured_${key}`]===true),restart=restartKeys.length>0;
@@ -26,7 +47,7 @@
   // High-performance sharing has its own line: it starts by itself once both are allowed.
   const hp=document.querySelector('.hp-state');hp.hidden=!m.enabled;
   hp.textContent=!m.enabled?'':m.hp_serving&&ready?'⚡ 고성능 모드 켜짐 — 연결한 기기에서 자동으로 이어집니다':ready?'⚡ 고성능 모드를 시작하고 있어요…':'⚡ 고성능 모드: 두 권한을 허용하면 자동으로 켜집니다';
-  for(const key of ['access','screen']){const row=document.querySelector(`[data-permission="${key}"]`),done=!!m[key];row.classList.toggle('done',done);row.classList.toggle('pending',restartKeys.includes(key));row.classList.toggle('next',!done&&key===next);row.querySelector('.badge').textContent=done?'✓ 허용됨':restartKeys.includes(key)?'재시작 필요':'허용 필요';row.querySelector('button').disabled=done||restartKeys.includes(key);}
+  for(const key of ['access','screen']){const row=document.querySelector(`[data-permission="${key}"]`),done=!!m[key];row.hidden=false;row.classList.toggle('done',done);row.classList.toggle('pending',restartKeys.includes(key));row.classList.toggle('next',!done&&key===next);row.querySelector('.badge').textContent=done?'✓ 허용됨':restartKeys.includes(key)?'재시작 필요':'허용 필요';row.querySelector('button').disabled=done||restartKeys.includes(key);}
   document.querySelector('.recovery').hidden=ready;
   document.querySelector('.recovery h2').textContent=restart?'변경한 권한 적용':'설정에서 이미 허용했나요?';
   document.querySelector('.recovery-message').textContent=restart?ungranted.length?'허용한 권한이 실행 중인 Itda에 아직 반영되지 않았어요. 남은 권한을 설정한 후 Itda를 다시 열어 주세요.':'권한 변경을 확인했어요. 현재 실행 중인 Itda에 반영하려면 다시 열어 주세요.':checkedDenied?'현재 앱에서는 아직 허용을 확인하지 못했어요. 설정의 Itda가 이미 켜져 있다면 아래에서 앱을 다시 등록하는 방법을 확인해 주세요.':'권한을 켰어도 실행 중인 Itda에 바로 반영되지 않을 수 있어요. Itda를 다시 열어 확인해 주세요.';

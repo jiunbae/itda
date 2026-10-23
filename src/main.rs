@@ -22,6 +22,7 @@ pub const fn host_mac_port() -> u16 {
 #[cfg(all(test, target_os = "macos"))]
 mod h264_e2e;
 mod autostart;
+mod capture_support;
 mod demand;
 mod enc;
 mod files;
@@ -99,7 +100,8 @@ fn main() {
     #[cfg(target_os = "macos")]
     if std::env::args().nth(1).as_deref() == Some("--permission-status") {
         let (screen, access) = host_mac::permissions();
-        println!("{}", serde_json::json!({"screen":screen,"access":access}));
+        let support = host_mac::capture_support();
+        println!("{}", serde_json::json!({"screen":screen,"access":access,"supported":support.is_ok(),"support_error":support.err()}));
         return;
     }
     // Itda's high-performance sharing on this Mac (started by another Itda over SSH, or by hand).

@@ -1,0 +1,195 @@
+{
+  "checked_at": "2026-10-23T23:11:50.819883+00:00",
+  "pages_run": 40038085726,
+  "merge": "590d9926ba8891e1b7e376d6bee3c9048d84fc01",
+  "assets": [
+    {
+      "path": "docs/img/accounts-dark.png",
+      "url": "https://jiun.dev/itda/img/accounts-dark.png?v=7",
+      "bytes": 54135,
+      "sha256": "6c382d6a5479f2997053ceac31113ccd722a76fd382679c0aca2abc8b9d89fe0",
+      "matches": true
+    },
+    {
+      "path": "docs/img/accounts-light.png",
+      "url": "https://jiun.dev/itda/img/accounts-light.png?v=7",
+      "bytes": 54309,
+      "sha256": "474cd506e42ee9e79ee592611e2f90e0a614cdd7c1318d22b5e72b6b4c9a102d",
+      "matches": true
+    },
+    {
+      "path": "docs/img/editor.png",
+      "url": "https://jiun.dev/itda/img/editor.png?v=7",
+      "bytes": 139996,
+      "sha256": "c7a0c22392170aebddf206724ac6af4e71b7a80f7b46e1bceb3d84174957d2d4",
+      "matches": true
+    },
+    {
+      "path": "docs/img/files-columns-dark.png",
+      "url": "https://jiun.dev/itda/img/files-columns-dark.png?v=7",
+      "bytes": 56405,
+      "sha256": "9e3c0ca3ac8dd45918111001489c53af7fcb513d95143c9d0304d6308d13b6d4",
+      "matches": true
+    },
+    {
+      "path": "docs/img/files-columns-light.png",
+      "url": "https://jiun.dev/itda/img/files-columns-light.png?v=7",
+      "bytes": 56794,
+      "sha256": "8b3a0a7e688f8f1027bbd1a2b25687f2e13ef7a9109973496429059aab07dbcb",
+      "matches": true
+    },
+    {
+      "path": "docs/img/files-dark.png",
+      "url": "https://jiun.dev/itda/img/files-dark.png?v=7",
+      "bytes": 67347,
+      "sha256": "7950149a391e51cf74cbd53c7498ad89060ebfd9a2df3eaeddccc3e6f16ea850",
+      "matches": true
+    },
+    {
+      "path": "docs/img/files-focus-dark.png",
+      "url": "https://jiun.dev/itda/img/files-focus-dark.png?v=7",
+      "bytes": 71794,
+      "sha256": "afd04930d2936c66d59a97506211a11b29e2536edc501b9240d8ac73d27ea3d7",
+      "matches": true
+    },
+    {
+      "path": "docs/img/files-focus-light.png",
+      "url": "https://jiun.dev/itda/img/files-focus-light.png?v=7",
+      "bytes": 72038,
+      "sha256": "d05b37c6d17937f901d0dbddbd0870d051ad458d53bb7749eab573525258f238",
+      "matches": true
+    },
+    {
+      "path": "docs/img/files-gallery-dark.png",
+      "url": "https://jiun.dev/itda/img/files-gallery-dark.png?v=7",
+      "bytes": 57005,
+      "sha256": "5203896fb5e534400bcd957e6a59242921e5ce57f73fcb25bd5ad72f3529d10e",
+      "matches": true
+    },
+    {
+      "path": "docs/img/files-gallery-light.png",
+      "url": "https://jiun.dev/itda/img/files-gallery-light.png?v=7",
+      "bytes": 57435,
+      "sha256": "e08235dd5b75b02807307be579c6372d4fd41113679cd60683060ceee2598d39",
+      "matches": true
+    },
+    {
+      "path": "docs/img/files-light.png",
+      "url": "https://jiun.dev/itda/img/files-light.png?v=7",
+      "bytes": 67408,
+      "sha256": "0aa6b6b5d42e0973308e4f75ab95fc69e566b9347b6f53a44c8bc88bd0ccf544",
+      "matches": true
+    },
+    {
+      "path": "docs/img/files-medium-dark.png",
+      "url": "https://jiun.dev/itda/img/files-medium-dark.png?v=7",
+      "bytes": 50416,
+      "sha256": "4bace55b2d07c0cc5911bb6b9acd1c9d4c4edb7dd36eeb9527a2f74e5956cbe5",
+      "matches": true
+    },
+    {
+      "path": "docs/img/files-medium-light.png",
+      "url": "https://jiun.dev/itda/img/files-medium-light.png?v=7",
+      "bytes": 50214,
+      "sha256": "ce71c1fb0eda09ac096b225bffd64cb3491d887757f040076b2c7701a02cc00a",
+      "matches": true
+    },
+    {
+      "path": "docs/img/files-windows-dark.png",
+      "url": "https://jiun.dev/itda/img/files-windows-dark.png?v=7",
+      "bytes": 163723,
+      "sha256": "e78c9d7cd06a0e0bc8d4b1841f6198f5f07c2f45924a40dab92d02b8683a7684",
+      "matches": true
+    },
+    {
+      "path": "docs/img/files-windows-light.png",
+      "url": "https://jiun.dev/itda/img/files-windows-light.png?v=7",
+      "bytes": 165077,
+      "sha256": "eea9f8e52da4bba264e25d7e0b695216c839e2bdbed197334ede032b94e6f913",
+      "matches": true
+    },
+    {
+      "path": "docs/img/home-dark.png",
+      "url": "https://jiun.dev/itda/img/home-dark.png?v=7",
+      "bytes": 273085,
+      "sha256": "d3816dd7b12a206aefb6cb8312aedd165996c75b8ed632f18daf9535da8caa49",
+      "matches": true
+    },
+    {
+      "path": "docs/img/home-light.png",
+      "url": "https://jiun.dev/itda/img/home-light.png?v=7",
+      "bytes": 278947,
+      "sha256": "1fdc71786528cd937fa91995b334dc49c0b8c4bb5e5ba4c95e571980088906e7",
+      "matches": true
+    },
+    {
+      "path": "docs/img/home-window-dark.png",
+      "url": "https://jiun.dev/itda/img/home-window-dark.png?v=7",
+      "bytes": 794501,
+      "sha256": "32812a55bd465e7fdfd8ae14c97f4aefd658afff0c082e3b04698d0fd6cb1795",
+      "matches": true
+    },
+    {
+      "path": "docs/img/home-window-light.png",
+      "url": "https://jiun.dev/itda/img/home-window-light.png?v=7",
+      "bytes": 869073,
+      "sha256": "95baa6c0bb02c01da7543b28d9f6c4807165e07ecdd4eeef2437cfaa1357aef5",
+      "matches": true
+    },
+    {
+      "path": "docs/img/nearby-window.png",
+      "url": "https://jiun.dev/itda/img/nearby-window.png?v=7",
+      "bytes": 159745,
+      "sha256": "ea28a199b53624aca33892b508ec860c6379f86c58f94ed9ca4ffc3e5418c0f1",
+      "matches": true
+    },
+    {
+      "path": "docs/img/nearby.png",
+      "url": "https://jiun.dev/itda/img/nearby.png?v=7",
+      "bytes": 69574,
+      "sha256": "dcf807f548fa0ba81bbe1a006c7dbeae455113d636a855880e4b52feb70dfaa4",
+      "matches": true
+    },
+    {
+      "path": "docs/img/og.png",
+      "url": "https://jiun.dev/itda/img/og.png?v=7",
+      "bytes": 264147,
+      "sha256": "9eb649f9b79f2b98489832dd62d6127c037216138bb606c89cd79267cadc3d29",
+      "matches": true
+    },
+    {
+      "path": "docs/img/phone-list.png",
+      "url": "https://jiun.dev/itda/img/phone-list.png?v=7",
+      "bytes": 273188,
+      "sha256": "9aeabb0ed463aac36c671fe6715ed963807c457ed02fb5bfb1960b830c3a06ab",
+      "matches": true
+    },
+    {
+      "path": "docs/img/share-windows.png",
+      "url": "https://jiun.dev/itda/img/share-windows.png?v=7",
+      "bytes": 340511,
+      "sha256": "8c1c4a25394ed2f0646013a8ff57bc679f9948e541681a15dd0a13bedccdb286",
+      "matches": true
+    },
+    {
+      "path": "docs/img/share.png",
+      "url": "https://jiun.dev/itda/img/share.png?v=7",
+      "bytes": 82298,
+      "sha256": "c531e626adca706ba18a04c1957184609387944f88ab56a097f55d7c4fda98c2",
+      "matches": true
+    }
+  ],
+  "scope": "25 public website PNGs only; seven app help WebP assets require app release",
+  "browser_regression": {
+    "command": "SITE_URL=https://jiun.dev/itda/ node scripts/site-check.mjs",
+    "result": "PASS",
+    "cases": 40,
+    "dimensions": "five widths, KO/EN, light/dark, landing/start",
+    "scope": "Actual published static site in Chromium; not native app or physical phone"
+  },
+  "app_help_assets": "Seven help WebP files are merged but require a new app release. Production app remains1.0.2.",
+  "limits": [
+    "Published static-site browser and asset checks only; no physical phone/native app acceptance or verified persona score",
+    "The7 refreshed app help assets require an app release; production app remains1.0.2"
+  ]
+}

@@ -204,7 +204,7 @@
     },
     "readme_image_references": "All referenced local screenshot files exist; both languages use revision7."
   },
-  "deployment": "Updated asset publication pending PR merge/Pages build and new published-site verification. App help assets require a new installed app build; production app was not updated.",
+  "deployment": "PR109 merged590d9926, Pages40038085726 SUCCESS. Published40-layout regression PASS and25/25 public PNG checksums match; see site-refresh-deployed-2026-10-24.json. App help assets are not deployed in production1.0.2.",
   "limits": [
     "No physical phone, native Finder/Explorer, permission, transfer or screen-reader acceptance.",
     "Source screenshots are not proof of an installed or released binary.",

@@ -163,7 +163,12 @@ for a in /Applications/Itda.app "$HOME/Applications/Itda.app"; do [ -d "$a" ] &&
 echo "app=$app"
 [ -n "$app" ] && echo "ver=$(defaults read "$app/Contents/Info" CFBundleShortVersionString 2>/dev/null)"
 echo "arch=$(uname -m)"
+echo "macos=$(sw_vers -productVersion)"
 "#), None)?;
+    let version = field(&probe, "macos").ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "대상 Mac의 macOS 버전을 확인할 수 없습니다"))?;
+    if !crate::capture_support::macos_version_supported(version) {
+        return Err(io::Error::new(io::ErrorKind::Unsupported, format!("대상 Mac(macOS {version})에서는 고성능 공유를 사용할 수 없습니다. macOS 12.3 이상이 필요합니다. 기본 화면 연결과 파일 브라우저를 이용해 주세요.")));
+    }
     let have = field(&probe, "ver").filter(|v| !v.is_empty());
     let mut ready = Ready::default();
     let need = match (have, source) {

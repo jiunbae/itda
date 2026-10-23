@@ -30,12 +30,12 @@ fn pending_marker() -> PathBuf {
     crate::store::dir().join("permission-setup-pending")
 }
 pub(super) fn pending() -> bool {
-    pending_marker().exists()
+    crate::host_mac::capture_support().is_ok() && pending_marker().exists()
 }
 /// Pending from a setup still going on (marked in the last 10 minutes): a relaunch then is
 /// macOS's "Quit & Reopen", not someone opening Itda to use it.
 pub(super) fn pending_recently() -> bool {
-    std::fs::metadata(pending_marker()).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|d| d.as_secs() < 600))
+    pending() && std::fs::metadata(pending_marker()).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|d| d.as_secs() < 600))
 }
 /// Mid-setup relaunch: the permission still to do, so the guide carries on by itself.
 pub(super) fn next_missing() -> Option<&'static str> {
@@ -55,7 +55,10 @@ fn app_path() -> Option<PathBuf> {
 }
 fn state() -> Value {
     let (screen, access) = crate::host_mac::permissions();
+    let support = crate::host_mac::capture_support();
     let mut v = json!({"type":"permissions","screen":screen,"access":access,"app_path":app_path(),"version":crate::home::VERSION,"enabled":crate::host_mac::enabled(),"hp_serving":crate::host_mac::enabled() && std::fs::metadata(crate::store::dir().join("hp-status")).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|d| d.as_secs() < 10)),"requested":REQUESTED.with(|r|r.borrow().clone()),"requested_seq":REQUEST_SEQ.with(Cell::get)});
+    v["supported"] = json!(support.is_ok());
+    v["support_error"] = json!(support.err());
     FRESH.with(|fresh| {
         if let Some(fresh) = fresh.borrow().as_ref() {
             v["configured_screen"] = fresh["screen"].clone();
@@ -349,6 +352,7 @@ fn restart_app() -> Result<(), String> {
 }
 
 fn request(permission: &str) -> Result<(), String> {
+    crate::host_mac::capture_support().map_err(str::to_owned)?;
     if matches!(permission, "screen" | "access") {
         let _ = std::fs::write(pending_marker(), permission);
         REQUESTED.with(|r| *r.borrow_mut() = Some(permission.into()));
