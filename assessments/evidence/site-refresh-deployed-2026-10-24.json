@@ -187,5 +187,9 @@
     "dimensions": "five widths, KO/EN, light/dark, landing/start",
     "scope": "Actual published static site in Chromium; not native app or physical phone"
   },
-  "app_help_assets": "Seven help WebP files are merged but require a new app release. Production app remains1.0.2."
+  "app_help_assets": "Seven help WebP files are merged but require a new app release. Production app remains1.0.2.",
+  "limits": [
+    "Published static-site browser and asset checks only; no physical phone/native app acceptance or verified persona score",
+    "The7 refreshed app help assets require an app release; production app remains1.0.2"
+  ]
 }

@@ -171,7 +171,7 @@
   "persona_journeys": [
     {
       "persona": "novice-family",
-      "journey": "\uacf5\uc2dd \ub2e4\uc6b4\ub85c\ub4dc\u00b7\uc124\uce58",
+      "journey": "공식 다운로드·설치",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "baseline-novice-mobile",
@@ -182,7 +182,7 @@
     },
     {
       "persona": "novice-family",
-      "journey": "\ud654\uba74 \uacf5\uc720\uc640 \uc6d0\uaca9 \ub85c\uadf8\uc778 \uad6c\ubd84",
+      "journey": "화면 공유와 원격 로그인 구분",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "baseline-novice-mobile",
@@ -193,7 +193,7 @@
     },
     {
       "persona": "novice-family",
-      "journey": "\uad8c\ud55c \ub3c4\uc6b0\ubbf8\u00b7\uc7ac\ud655\uc778",
+      "journey": "권한 도우미·재확인",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "permissions-frontend"
@@ -203,7 +203,7 @@
     },
     {
       "persona": "novice-family",
-      "journey": "\uc2e4\ud328 \uc774\uc720 \uc774\ud574\uc640 \uae30\ubcf8 \ud654\uba74 \uacf5\uc720 \ubcf5\uad6c",
+      "journey": "실패 이유 이해와 기본 화면 공유 복구",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "permissions-frontend",
@@ -214,7 +214,7 @@
     },
     {
       "persona": "retina-worker",
-      "journey": "\uae30\uae30\u00b7\uacc4\uc815 \uc7ac\uc0ac\uc6a9",
+      "journey": "기기·계정 재사용",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "editor-frontend",
@@ -225,7 +225,7 @@
     },
     {
       "persona": "retina-worker",
-      "journey": "\uace0\uc131\ub2a5/\uae30\ubcf8 \ud654\uba74 \uacf5\uc720 \uad6c\ubd84",
+      "journey": "고성능/기본 화면 공유 구분",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "viewer-frontend"
@@ -235,7 +235,7 @@
     },
     {
       "persona": "retina-worker",
-      "journey": "\ube60\ub974\uac8c/\uc120\uba85\ud558\uac8c \uc0c1\ud0dc \ud655\uc778",
+      "journey": "빠르게/선명하게 상태 확인",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "viewer-frontend"
@@ -245,7 +245,7 @@
     },
     {
       "persona": "retina-worker",
-      "journey": "\ub2e4\uc911 \ubaa8\ub2c8\ud130\u00b7\uc7ac\uc5f0\uacb0\u00b7\ucc3d \uc885\ub8cc",
+      "journey": "다중 모니터·재연결·창 종료",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "monitor-frontend",
@@ -256,7 +256,7 @@
     },
     {
       "persona": "windows-office",
-      "journey": "\uc791\uc740 \ucc3d\uc758 \ud0d0\uc0c9\u00b7\uc81c\ubaa9 \ud0ed",
+      "journey": "작은 창의 탐색·제목 탭",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "windows-native-ui",
@@ -267,7 +267,7 @@
     },
     {
       "persona": "windows-office",
-      "journey": "\ud55c\uae00 \ud30c\uc77c\uba85\u00b7\ucda9\ub3cc \ucc98\ub9ac",
+      "journey": "한글 파일명·충돌 처리",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "unicode-native-backend"
@@ -277,7 +277,7 @@
     },
     {
       "persona": "windows-office",
-      "journey": "\uae30\uae30 \uac04 \ub4dc\ub798\uadf8\uc640 \ub300\uc0c1 \uc120\ud0dd",
+      "journey": "기기 간 드래그와 대상 선택",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "windows-native-recovery",
@@ -288,7 +288,7 @@
     },
     {
       "persona": "windows-office",
-      "journey": "\ud0d0\uc0c9\uae30\ub85c \ub04c\uc5b4\ub0b4\uae30\u00b7\ucde8\uc18c\u00b7\uc2e4\ud328 \uc548\ub0b4",
+      "journey": "탐색기로 끌어내기·취소·실패 안내",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "windows-native-background",
@@ -299,7 +299,7 @@
     },
     {
       "persona": "cross-platform-files",
-      "journey": "\uae30\uae30\u00b7\ud0ed\u00b7\ucc3d \ud0d0\uc0c9",
+      "journey": "기기·탭·창 탐색",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "files-frontend-backend",
@@ -311,7 +311,7 @@
     },
     {
       "persona": "cross-platform-files",
-      "journey": "\uc544\uc774\ucf58\u00b7\ubaa9\ub85d\u00b7\uc5f4\u00b7\uac24\ub7ec\ub9ac\u00b7\ubbf8\ub9ac\ubcf4\uae30",
+      "journey": "아이콘·목록·열·갤러리·미리보기",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "files-frontend-backend",
@@ -322,7 +322,7 @@
     },
     {
       "persona": "cross-platform-files",
-      "journey": "\ubcf5\uc0ac\u00b7\uc774\ub3d9\u00b7\ucda9\ub3cc\u00b7\ucde8\uc18c\u00b7\ubcf5\uad6c",
+      "journey": "복사·이동·충돌·취소·복구",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "unicode-native-backend",
@@ -334,7 +334,7 @@
     },
     {
       "persona": "cross-platform-files",
-      "journey": "\uc99d\ubd84 \uc804\uc1a1\uc758 \uc870\uac74\uacfc \ud55c\uacc4",
+      "journey": "증분 전송의 조건과 한계",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "files-frontend-backend",
@@ -345,7 +345,7 @@
     },
     {
       "persona": "ssh-admin",
-      "journey": "\uacc4\uc815\u00b7\ud638\uc2a4\ud2b8 \ud0a4 \ud655\uc778",
+      "journey": "계정·호스트 키 확인",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "remote-setup-frontend",
@@ -356,7 +356,7 @@
     },
     {
       "persona": "ssh-admin",
-      "journey": "\uc124\uce58 \ub300\uc0c1\u00b7\uc804\uc1a1 \ubc94\uc704 \ud655\uc778",
+      "journey": "설치 대상·전송 범위 확인",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "remote-setup-frontend"
@@ -366,7 +366,7 @@
     },
     {
       "persona": "ssh-admin",
-      "journey": "\uc554\ud638\u00b7\ud0a4\uc758 \uc120\ud0dd\uc801 \uacf5\uc720",
+      "journey": "암호·키의 선택적 공유",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "remote-setup-frontend"
@@ -376,7 +376,7 @@
     },
     {
       "persona": "ssh-admin",
-      "journey": "\uc2e4\ud328\u00b7\uc7ac\uc2dc\uc791\u00b7\uc5c5\ub370\uc774\ud2b8\u00b7\uae30\uc874 \uc124\uc815 \ubcf4\uc874",
+      "journey": "실패·재시작·업데이트·기존 설정 보존",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "remote-setup-frontend",
@@ -387,7 +387,7 @@
     },
     {
       "persona": "mobile-user",
-      "journey": "\ubaa8\ubc14\uc77c \ub79c\ub529\u00b7\uc124\uce58 \uad6c\ubd84",
+      "journey": "모바일 랜딩·설치 구분",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "site-browser",
@@ -398,7 +398,7 @@
     },
     {
       "persona": "mobile-user",
-      "journey": "QR\u00b7PIN\u00b7\ub124\ud2b8\uc6cc\ud06c \uc548\ub0b4",
+      "journey": "QR·PIN·네트워크 안내",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "phone-frontend",
@@ -409,7 +409,7 @@
     },
     {
       "persona": "mobile-user",
-      "journey": "\ud130\uce58\u00b7\ud0a4\ubcf4\ub4dc\u00b7\ud074\ub9bd\ubcf4\ub4dc",
+      "journey": "터치·키보드·클립보드",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "phone-frontend",
@@ -420,7 +420,7 @@
     },
     {
       "persona": "mobile-user",
-      "journey": "\uc5f0\uacb0 \uc2e4\ud328\u00b7\uc138\uc158 \uc885\ub8cc\u00b7\ubcf4\uc548 \uc0c1\ud0dc",
+      "journey": "연결 실패·세션 종료·보안 상태",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "phone-frontend",
@@ -431,7 +431,7 @@
     },
     {
       "persona": "keyboard-low-vision",
-      "journey": "\uba85\ud655\ud55c \uc774\ub984\u00b7\ub300\ube44\u00b7\ud655\ub300",
+      "journey": "명확한 이름·대비·확대",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "accessibility-reflow",
@@ -442,7 +442,7 @@
     },
     {
       "persona": "keyboard-low-vision",
-      "journey": "\ud0a4\ubcf4\ub4dc \ud0d0\uc0c9\u00b7\ud3ec\ucee4\uc2a4\u00b7\ubaa8\ub2ec \ubcf5\uadc0",
+      "journey": "키보드 탐색·포커스·모달 복귀",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "device-action-frontend",
@@ -453,7 +453,7 @@
     },
     {
       "persona": "keyboard-low-vision",
-      "journey": "\uc120\ud0dd\u00b7\uc624\ub958\u00b7\uc9c4\ud589 \uc0c1\ud0dc \uc804\ub2ec",
+      "journey": "선택·오류·진행 상태 전달",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "files-frontend-backend",
@@ -464,7 +464,7 @@
     },
     {
       "persona": "keyboard-low-vision",
-      "journey": "\ud30c\uc77c\u00b7\uacc4\uc815\u00b7\uc5f0\uacb0 \ud575\uc2ec \uc791\uc5c5",
+      "journey": "파일·계정·연결 핵심 작업",
       "status": "partial; final acceptance unproven",
       "evidence": [
         "editor-frontend",

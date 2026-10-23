@@ -45,7 +45,8 @@
         "support_error": null
       },
       "permission_fields": "screen/access booleans returned; values intentionally omitted because this uninstalled candidate has its own code identity",
-      "scope": "Executed only read-only permission preflight on current macOS; no permission request, screen capture, GUI launch, installation or older-OS acceptance"
+      "scope": "Executed only read-only permission preflight on current macOS; no permission request, screen capture, GUI launch, installation or older-OS acceptance",
+      "binary_relationship": "Separate arm64 build from the same source5fa12295; this is not the universal packaged candidate. Its hash intentionally differs from the packaged binary hash."
     }
   },
   "limitations": [
