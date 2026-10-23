@@ -575,6 +575,8 @@ function showOnboarding(step = 'welcome') {
       <div class="foot">${back}<span class="ob-dots"><i></i><i class="on"></i><i></i></span><button class="btn primary" data-ob="phone-on">${I('E768')}켜고 QR 보기</button></div>`,
   };
   const m = openModal('onboard', `<div class="dialog onboard">${steps[step]()}</div>`, { sticky: true });
+  const accountHelp = m.querySelector('[data-act=account-name-help]');
+  if (accountHelp) accountHelp.onclick = showAccountNameHelp;
   m.querySelectorAll('[data-ob]').forEach((b) => (b.onclick = () => {
     const a = b.dataset.ob;
     if (steps[a]) return showOnboarding(a);
@@ -1195,6 +1197,7 @@ ${quick ? sshBox : ''}
       ${tabs}${general}${quick ? '' : display + input + conn}</div><div class="foot">${foot}</div></div>`);
 
   m.dataset.host = h.id || '';
+  m.querySelector('#account-name-help').onclick = showAccountNameHelp;
   m.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => {
     m.querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('on', x === b));
     m.querySelectorAll('[data-pane]').forEach((p) => (p.hidden = p.dataset.pane !== b.dataset.tab));
@@ -1687,7 +1690,6 @@ function act(a, el) {
       return confirmDialog('새 공유 암호를 만들까요?', '지금 이 PC를 보고 있는 기기는 연결이 끊기고, 다음부터 새 암호가 필요합니다.', '새 암호 만들기', false, () => { S.share = {}; send('share_reset_pw'); toast('새 공유 암호를 만들었습니다', 'E72C'); });
     case 'share-kick': return send('share_kick');
     case 'onboard': return showOnboarding();
-    case 'account-name-help': return showAccountNameHelp();
     case 'update-check': toast('새 버전을 확인하는 중…', 'E72C'); return send('update_check');
     case 'update-install': {
       if (!S.update) return send('update_check');
