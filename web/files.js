@@ -88,7 +88,7 @@
     const focused = bar.contains(document.activeElement) && document.activeElement.matches('[role="tab"]');
     bar.hidden = false;
     const mixed = fileTabs.some(t => t.host && t.host.id !== host.id);
-    bar.innerHTML = `<div class="files-tab-owner" role="tablist" aria-label="폴더 탭" aria-owns="${fileTabs.map(t => `file-tab-${t.id}`).join(" ")}"></div>` + fileTabs.map(t => {
+    let html = `<div class="files-tab-owner" role="tablist" aria-label="폴더 탭" aria-owns="${fileTabs.map(t => `file-tab-${t.id}`).join(" ")}"></div>` + fileTabs.map(t => {
       const on = t.id === currentTab, h = on ? host : t.host || host;
       const side = on ? active : t.active, path = (on ? panes : t.panes)[side].path;
       const network = on ? networkMode : t.networkMode, home = on ? explorerHome : t.explorerHome;
@@ -96,13 +96,16 @@
       const remote = !network && side === "remote" && h.id !== NETWORK;
       const name = mixed && remote ? `${label(h)} · ${folder}` : folder;
       const title = remote ? `${label(h)} · ${folder}` : folder;
-      return `<div class="files-tab ${on ? "on" : ""}" data-tab="${t.id}" title="${esc(title)}"><span id="file-tab-${t.id}" role="tab" aria-selected="${on}" tabindex="${on ? 0 : -1}">${network ? I(home ? "E80F" : "E774") : icon(true)}${esc(name)}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`;
+      return `<div class="files-tab ${on ? "on" : ""}" data-id="file-tab-row-${t.id}" data-tab="${t.id}" title="${esc(title)}"><span id="file-tab-${t.id}" role="tab" aria-selected="${on}" tabindex="${on ? 0 : -1}">${network ? I(home ? "E80F" : "E774") : icon(true)}${esc(name)}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`;
     }).join("") + `<button class="files-tab-add" data-action="new-tab" aria-label="새 탭" title="새 탭 (${MAC ? "⌘T" : "Ctrl+T"})"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>`;
     // Windows file windows have no system title bar: the tab row is it, as in Explorer.
     // (Drawn as SVG: the caption glyph fonts differ between Windows 10 and 11.)
     const glyph = { minimize: '<path d="M1 5.5h9"/>', maximize: '<rect x="1" y="1" width="9" height="9"/>', restore: '<rect x="1" y="3" width="7" height="7"/><path d="M3 3V1h7v7H8"/>', close: '<path d="M1 1l9 9M10 1l-9 9"/>' };
     const svg = (k) => `<svg viewBox="0 0 11 11" aria-hidden="true">${glyph[k]}</svg>`;
-    if (CHROME) bar.insertAdjacentHTML("beforeend", `<div class="files-caption"><button data-window="minimize" aria-label="최소화" title="최소화">${svg("minimize")}</button><button data-window="maximize" aria-label="${maximized ? "이전 크기로" : "최대화"}" title="${maximized ? "이전 크기로" : "최대화"}">${svg(maximized ? "restore" : "maximize")}</button><button data-window="close" class="close" aria-label="닫기" title="닫기">${svg("close")}</button></div>`);
+    if (CHROME) html += `<div class="files-caption"><button data-window="minimize" aria-label="최소화" title="최소화">${svg("minimize")}</button><button data-window="maximize" aria-label="${maximized ? "이전 크기로" : "최대화"}" title="${maximized ? "이전 크기로" : "최대화"}">${svg(maximized ? "restore" : "maximize")}</button><button data-window="close" class="close" aria-label="닫기" title="닫기">${svg("close")}</button></div>`;
+    // A list response can arrive between Space down/up. Keep the tab controls
+    // themselves, so both keyboard focus and the browser's pending click survive.
+    morph(bar, html);
     if (focused) bar.querySelector('[role="tab"][aria-selected="true"]')?.focus({preventScroll:true});
   }
   function newTab(path, side) {
@@ -1656,11 +1659,13 @@
       .filter((j) => history || (j.id === host.id ? ["queued", "running", "failed", "cancelled"].includes(j.state) : ["failed", "cancelled"].includes(j.state)))
       .slice(-12);
     const box = layer.querySelector(".files-jobs");
-    // A rebuild keeps keyboard focus on the same job button.
+    // Preserve live controls across progress updates, including a Space press
+    // whose key-up has not arrived yet. Keys also prevent one job's button
+    // being reused for another job when a completed row disappears.
     const focused = box.contains(document.activeElement) && [...document.activeElement.attributes].find(a => /^data-(retry|goto|dismiss|cancel)-job$/.test(a.name));
     box.hidden = current.length === 0 && !history;
     layer.querySelectorAll('[data-action="transfers"]').forEach(b => b.setAttribute("aria-pressed", String(showTransferHistory)));
-    box.innerHTML = current
+    morph(box, current
       .map((j) => {
         const live = ["queued", "running"].includes(j.state);
         const ended = ["failed", "cancelled"].includes(j.state);
@@ -1676,11 +1681,11 @@
         const progress = ended && j.request && j.completed_names?.length ? ` · ${j.request.names.length}개 중 ${j.completed_names.length}개 끝남` : "";
         const hint = ended && j.kind === "export" ? " · 원본 폴더에서 다시 복사하거나 끌어 놓으세요" : "";
         const actions = live
-          ? `<progress ${j.total ? `max="${j.total}" value="${j.bytes || 0}"` : ""}></progress><button class="btn sm" data-cancel-job="${esc(j.job)}">취소</button>`
-          : `${ended && j.request ? `<button class="btn sm" data-retry-job="${esc(j.job)}">${j.source_closed ? "원본 기기 열기…" : "다시 시도…"}</button>` : ""}${device && tabOf(j.id) ? `<button class="btn sm" data-goto-job="${esc(j.job)}">${esc(label(device))} 탭 보기</button>` : ""}<button class="btn sm" data-dismiss-job="${esc(j.job)}" aria-label="전송 알림 닫기">닫기</button>`;
-        return `<div class="files-job ${ended ? "ended" : ""}"><span>${j.engine === "rsync" ? "증분" : "파일"}</span><span class="job-label" title="${esc(j.error || j.file || "")}">${device ? `${esc(label(device))} · ` : ""}${esc(what)} · ${esc(text)}${progress}${j.error ? ` · ${esc(j.error)}` : ""}${hint}</span>${actions}</div>`;
+          ? `<progress ${j.total ? `max="${j.total}" value="${j.bytes || 0}"` : ""}></progress><button class="btn sm" data-id="file-job-cancel-${esc(j.job)}" data-cancel-job="${esc(j.job)}">취소</button>`
+          : `${ended && j.request ? `<button class="btn sm" data-id="file-job-retry-${esc(j.job)}" data-retry-job="${esc(j.job)}">${j.source_closed ? "원본 기기 열기…" : "다시 시도…"}</button>` : ""}${device && tabOf(j.id) ? `<button class="btn sm" data-id="file-job-goto-${esc(j.job)}" data-goto-job="${esc(j.job)}">${esc(label(device))} 탭 보기</button>` : ""}<button class="btn sm" data-id="file-job-dismiss-${esc(j.job)}" data-dismiss-job="${esc(j.job)}" aria-label="전송 알림 닫기">닫기</button>`;
+        return `<div class="files-job ${ended ? "ended" : ""}" data-id="file-job-${esc(j.job)}"><span>${j.engine === "rsync" ? "증분" : "파일"}</span><span class="job-label" title="${esc(j.error || j.file || "")}">${device ? `${esc(label(device))} · ` : ""}${esc(what)} · ${esc(text)}${progress}${j.error ? ` · ${esc(j.error)}` : ""}${hint}</span>${actions}</div>`;
       })
-      .join("");
+      .join(""));
     box.querySelectorAll("[data-cancel-job]").forEach(
       (b) => (b.onclick = () => send("files", { id: jobs.get(b.dataset.cancelJob)?.id || host.id, window: pageToken, op: "cancel", job: b.dataset.cancelJob })),
     );
@@ -1688,7 +1693,10 @@
     box.querySelectorAll("[data-goto-job]").forEach(b => b.onclick = () => { const t = tabOf(jobs.get(b.dataset.gotoJob)?.id); if (t) switchTab(t.id); });
     box.querySelectorAll("[data-dismiss-job]").forEach(b => b.onclick = () => { jobs.delete(b.dataset.dismissJob); announcedJobs.delete(b.dataset.dismissJob); renderJobs(); });
     if (!current.length && history) box.textContent = "최근 전송 내역이 없습니다";
-    if (focused) (box.querySelector(`[${focused.name}="${CSS.escape(focused.value)}"]`) || box.querySelector("button") || layer.querySelector(`[data-pane="${active}"] .files-list`))?.focus();
+    if (focused) {
+      const row = box.querySelector(`[data-id="file-job-${CSS.escape(focused.value)}"]`);
+      (box.querySelector(`[${focused.name}="${CSS.escape(focused.value)}"]`) || row?.querySelector("button") || layer.querySelector(`[data-pane="${active}"] .files-list`) || layer.querySelector("[data-search]"))?.focus();
+    }
   }
   function context(e) {
     if (!layer) return;
