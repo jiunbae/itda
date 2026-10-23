@@ -1,0 +1,45 @@
+{
+  "status": "prerequisite-unavailable",
+  "recorded_at": "2026-10-23T21:47:25.812197+00:00",
+  "source_commit": "8168276b48927c77be84c867857bcfc01fb2f415",
+  "binary_sha256": "73d0af543a47f1971412b0265417ed6846def579a819c2406f40aded9534e41b",
+  "ci_run": 40027110595,
+  "artifact": {
+    "id": 12533277875,
+    "name": "itda-windows-x64"
+  },
+  "ci_artifact_verified": true,
+  "effective_ci_checkout": "8dfa60bcd1c5fee85cdffbb0acc5704231702136",
+  "attempted_driver_sha256": "cc5202f199f604c8cce5484a49069cce6283e10925c9df8564d136c4f86ec58a",
+  "prepared_driver_sha256": "4fef0334c1e596ade6e43b9411075ab6b9d5335507e0e69ec1590b30320d5546",
+  "attempt": {
+    "scenario": "wait",
+    "results": [],
+    "failure": "First SSH connection to jiun-home:22 timed out before the remote setup command could run; no native candidate app or task was launched.",
+    "cleanup": "Local SFTP fixture stopped and workspace removed. Conservative remote cleanup was attempted and also could not connect. No remote execution was acknowledged.",
+    "tailscale": {
+      "hostname": "jiun-home",
+      "online": false,
+      "last_seen": "2026-10-23T20:50:00.1Z"
+    },
+    "peer_confirmation": "Implementer separately checked TCP port 22 on LAN and Tailscale; both unreachable (muxa req_18e146cacfe7e7a0_10e)."
+  },
+  "prepared_probe": {
+    "path": "scripts/files-native-windows-quit-e2e.mjs",
+    "syntax_check": "node --check PASS",
+    "native_results": "NONE",
+    "design_review": "Independent review req_18e145ea8cc16f18_10a: safe to run on reviewed B head; no P1/P2. Read-only SSH preflight added afterward to avoid starting fixtures on an offline host.",
+    "scenarios": [
+      "wait",
+      "stop"
+    ],
+    "input": "PID-verified WM_QUERYENDSESSION and home WM_CLOSE; renderer controls through isolated WebView2 CDP. No physical input or actual OS shutdown/logout."
+  },
+  "limits": [
+    "This is an unmet prerequisite, not a product quit failure or pass.",
+    "Wait, Stop and Cancel native behavior have not been exercised by this probe.",
+    "No timeout/Force, installer/update, physical tray menu, Explorer OLE, Finder promise or AppleEvent runtime proof.",
+    "CI and independent source review passed for #102; production rollout and persona scores remain unverified."
+  ],
+  "checkout_equivalence": "Manually verified whole-tree equality: git diff 8168276b48927c77be84c867857bcfc01fb2f415 8dfa60bcd1c5fee85cdffbb0acc5704231702136 is empty. This post-run check is separate from the driver provenance gate."
+}
