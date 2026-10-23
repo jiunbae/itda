@@ -515,6 +515,15 @@ function finishOnboarding() {
   }
 }
 
+function showAccountNameHelp() {
+  const m = openModal('account-name-help', `<div class="dialog small"><div class="body"><h2>Mac 계정 이름 찾기</h2>
+    <p class="lead"><b>연결하려는 Mac</b>에서 확인하세요. Apple ID 이메일이나 화면에 보이는 전체 이름과 다를 수 있습니다.</p>
+    <ol><li>Finder를 엽니다.</li><li>위쪽 메뉴에서 <b>이동 → 홈</b>을 선택합니다 (⇧⌘H).</li><li>홈 폴더의 이름이 Mac 계정 이름입니다. Itda의 <b>Mac 계정 이름</b>에 그대로 입력하세요.</li></ol>
+    <p><a href="https://support.apple.com/guide/mac-help/mh35548/mac" data-ext>Apple의 계정 이름 안내</a></p>
+    </div><div class="foot"><button class="btn primary" data-x="close">확인</button></div></div>`);
+  m.querySelector('[data-x="close"]').onclick = () => closeModal('account-name-help');
+}
+
 function showOnboarding(step = 'welcome') {
   const choice = (key, icon, title, sub) => `<button class="ob-choice" data-ob="${key}">${I(icon)}<b>${title}</b><span>${sub}</span></button>`;
   const check = (n, html) => `<li><span class="ob-n">${n}</span><span>${html}</span></li>`;
@@ -533,8 +542,8 @@ function showOnboarding(step = 'welcome') {
         <div class="ob-split"><ol class="ob-list">
           ${check(1, `Mac에서 <b>시스템 설정 → 일반 → 공유</b>를 열고 <b>화면 공유</b>를 켭니다. <b>원격 관리</b>가 켜져 있다면 그대로 두어도 연결됩니다.`)}
           ${check(2, `화면 공유 옆 ⓘ → <b>접근 허용</b>에 내 계정이 있는지 확인합니다. 원격 관리라면 ⓘ → <b>옵션</b>에서 내 계정에 <b>관찰</b>과 <b>제어</b>를 켭니다.`)}
-          ${check(3, `Itda에는 <b>Mac 계정 이름(짧은 이름)</b>과 로그인 암호를 넣습니다. Apple ID가 아닙니다.`)}
-          ${check(4, `밖에서도 쓸 거라면 같은 화면의 <b>원격 로그인</b>도 켜 두세요 (SSH 암호화).`)}
+          ${check(3, `Itda에는 <b>Mac 계정 이름(짧은 이름)</b>과 로그인 암호를 넣습니다. Apple ID가 아닙니다. <button class="btn sm" data-act="account-name-help">계정 이름 찾기</button>`)}
+          ${check(4, `다른 장소에서 연결하려면 두 기기에 <b>Tailscale</b>을 설치하고 같은 네트워크에 로그인하세요. 연결의 <b>SSH 암호화</b> 옵션을 쓸 때는 이 Mac의 <b>원격 로그인</b>도 켭니다.`)}
         </ol><div class="ob-art">${typeof macWindow === 'function' ? macWindow('general', '공유', macSharing('screen')) : ''}</div></div></div>
       <div class="foot">${back}<span class="ob-dots"><i></i><i class="on"></i><i></i></span>
         <button class="btn" data-ob="mac-manual">주소로 직접 추가</button><button class="btn primary" data-ob="mac-nearby">${I('E701')}주변 Mac 찾기</button></div>`,
@@ -625,6 +634,7 @@ function renderNearby() {
     : S.found.length
       ? `<p class="note-line">같은 Wi-Fi에서 찾은 기기는 모두 주소록에 있습니다.</p>`
       : `<p class="note-line">${S.scanning ? '찾는 중…' : '같은 Wi-Fi에서 찾은 기기가 없습니다. 화면 공유가 켜진 Mac과 Itda가 켜진 PC·Mac이 여기에 나타납니다. 원격 데스크톱만 켠 PC는 주소로 직접 추가하세요.'}</p>`;
+  const networkHelp = MAC && !S.found.length && !S.scanning ? `<p class="note-line"><b>같은 Wi-Fi인데 기기가 안 보이나요?</b> 이 Mac의 <b>시스템 설정 → 개인정보 보호 및 보안 → 로컬 네트워크</b>에서 <b>Itda</b>를 허용한 뒤 다시 검색하세요. 연결할 기기의 화면 공유도 켜져 있어야 합니다.</p>` : '';
   const all = tailPeers();
   const peers = all.filter((p) => !peerInBook(p));
   const t = S.tailnet;
@@ -638,7 +648,7 @@ function renderNearby() {
           ? `<p class="note-line">Tailscale의 Mac·PC는 모두 주소록에 있습니다.</p>`
           : `<p class="note-line">같은 Tailscale 네트워크에 열 수 있는 Mac·PC가 없습니다.</p>`;
   return `<div class="page">${head}
-    <div class="section-head">${I('E701')}같은 Wi-Fi<span class="line"></span></div>${lan}
+    <div class="section-head">${I('E701')}같은 Wi-Fi<span class="line"></span></div>${lan}${networkHelp}
     <div class="section-head">${I('E774')}Tailscale — 어디서나${t && t.running ? ` · ${esc(t.me.name)}` : ''}<span class="line"></span></div>${ts}
     <p class="note-line" style="margin-top:18px">주소를 알면 <a href="#" data-act="new">직접 추가</a>할 수도 있습니다.</p></div>`;
 }
@@ -1144,7 +1154,7 @@ function openEdit(init = {}, mode = {}) {
         <span class="hint" id="acct-hint">${h.account ? acctHint(h.account) : '여러 기기에 같은 계정을 쓴다면 계정을 만들어 두면 암호를 한 번만 입력합니다.'}</span></div>
       <div id="own-creds" ${h.account ? 'hidden' : ''}>
         <div class="row">
-          <div class="field" id="user-field" ${KD.user ? '' : 'hidden'}><label id="user-label">${KD.user || ''}</label><input class="input" id="f-user" value="${esc(h.user)}" placeholder="${KD.userPh || ''}" ${quick || existing ? 'autofocus' : ''}><span class="hint" id="user-hint">${KD.userHint || ''}</span></div>
+          <div class="field" id="user-field" ${KD.user ? '' : 'hidden'}><label id="user-label">${KD.user || ''}</label><input class="input" id="f-user" value="${esc(h.user)}" placeholder="${KD.userPh || ''}" ${quick || existing ? 'autofocus' : ''}><span class="hint" id="user-hint">${KD.userHint || ''}</span><button type="button" class="btn sm subtle" id="account-name-help" data-act="account-name-help" ${K0 === 'mac' ? '' : 'hidden'}>계정 이름 찾기</button></div>
           <div class="field"><label id="pass-label">${KD.pass}</label><div class="input-wrap"><input class="input" id="f-pass" type="password" placeholder="${hasPw && !h.account ? '저장된 암호 사용 (바꾸려면 입력)' : KD.pass}"><button class="reveal i" tabindex="-1" title="암호 보기">&#xE7B3;</button></div></div>
         </div>
         <label class="check"><input type="checkbox" id="f-save" ${hasPw || !existing ? 'checked' : ''}>암호 저장 <span style="color:var(--text-3);font-size:12px">— ${MAC ? 'Mac 키체인에' : 'Windows 자격 증명 관리자에 암호화되어'} 저장됩니다</span></label>
@@ -1281,6 +1291,7 @@ ${quick ? sshBox : ''}
     m.querySelector('#user-field').hidden = !d.user;
     m.querySelector('#user-label').textContent = d.user || '';
     m.querySelector('#f-user').placeholder = d.userPh || '';
+    m.querySelector('#account-name-help').hidden = b.dataset.kind !== 'mac';
     m.querySelector('#user-hint').textContent = d.userHint || '';
     m.querySelector('#pass-label').textContent = d.pass;
     if (!(hasPw && !h.account)) pass.placeholder = d.pass;
@@ -1533,6 +1544,7 @@ function showError(id, kind, msg) {
     };
     tips = (OTHER[kind] && OTHER[kind][k]) || tips.map((t) => t.replace(/Mac/g, w));
   }
+  if (MAC && ['timeout', 'unreachable', 'dns'].includes(kind)) tips = [...tips, '같은 네트워크의 기기에 연결한다면, <b>이 Mac</b>의 <b>시스템 설정 → 개인정보 보호 및 보안 → 로컬 네트워크</b>에서 <b>Itda</b>가 허용되어 있는지 확인한 뒤 다시 시도하세요.'];
   const name = h ? label(h) : 'Mac';
   const primary = kind === 'auth' || kind === 'ssh_auth'
     ? `<button class="btn primary" data-x="password" autofocus>${I('E72E')}암호 다시 입력</button>`
@@ -1675,6 +1687,7 @@ function act(a, el) {
       return confirmDialog('새 공유 암호를 만들까요?', '지금 이 PC를 보고 있는 기기는 연결이 끊기고, 다음부터 새 암호가 필요합니다.', '새 암호 만들기', false, () => { S.share = {}; send('share_reset_pw'); toast('새 공유 암호를 만들었습니다', 'E72C'); });
     case 'share-kick': return send('share_kick');
     case 'onboard': return showOnboarding();
+    case 'account-name-help': return showAccountNameHelp();
     case 'update-check': toast('새 버전을 확인하는 중…', 'E72C'); return send('update_check');
     case 'update-install': {
       if (!S.update) return send('update_check');
