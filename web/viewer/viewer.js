@@ -46,7 +46,7 @@ const osMark = (x) => {
 const XK = { cmd: 0xffeb, opt: 0xffe9, ctrl: 0xffe3, shift: 0xffe1, esc: 0xff1b, tab: 0xff09, enter: 0xff0d, back: 0xff08, del: 0xffff, space: 0x20,
   left: 0xff51, up: 0xff52, right: 0xff53, down: 0xff54, f3: 0xffc0, f4: 0xffc1, win: 0xffeb, alt: 0xffe9 };
 
-const S = { hosts: [], accounts: [], rfb: null, ws: null, host: null, fit: true, viewOnly: false, mods: new Set(), clip: '', ever: false, tries: 0 };
+const S = { hosts: [], accounts: [], rfb: null, ws: null, host: null, fit: true, viewOnly: false, mods: new Set(), clip: '', ever: false, tries: 0, gen: 0 };
 
 // App window (Itda for Mac): this page shows one connection, chosen by the app, and reports
 // to the app's home instead of offering the list.
@@ -198,6 +198,7 @@ async function boot() {
 
 // The sign-in screen; `why` says why a session that was open needs the PIN again.
 function signIn(why = '') {
+  S.gen++; // a late answer for an earlier connection must not show over this screen
   close();
   closeEditor();
   status(null);
@@ -601,6 +602,7 @@ const RETRIES = 10;
 function open(h) {
   if (!h) return;
   close();
+  const gen = ++S.gen;
   S.host = h;
   show('view');
   renderTools();
@@ -650,12 +652,16 @@ function open(h) {
     S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; S.hpModeContext = null; S.hpMode = null; renderTools();
     if (APP) return setTimeout(() => appDropped(h, closeInfo), 50);
     setTimeout(async () => {
+      if (S.gen !== gen) return;
       const code = closeInfo ? closeInfo.code : 0;
       const known = CLOSE_TEXT[code];
-      // The gateway refuses a WebSocket without a live session before it opens (no close code).
-      if (!known && (await api('/api/me').catch(() => ({}))).status === 401) return expired();
       const [t, d] = known ? known(h) : ['연결이 끊겼습니다', closeInfo && closeInfo.reason ? closeInfo.reason : '네트워크 상태를 확인하고 다시 연결하세요.'];
       status('error', t, d, code);
+      if (known) return;
+      // The gateway refuses a WebSocket without a live session before it opens (no close code):
+      // ask, but don't wait long on a network that is gone.
+      const me = await Promise.race([api('/api/me').catch(() => ({})), new Promise((r) => setTimeout(() => r({}), 5000))]);
+      if (S.gen === gen && me.status === 401) expired();
     }, 50);
   });
   rfb.addEventListener('clipboard', (e) => {

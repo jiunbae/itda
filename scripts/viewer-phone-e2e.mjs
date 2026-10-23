@@ -13,7 +13,7 @@ if (shots) fs.mkdirSync(shots, { recursive: true });
 const assert = (c, m) => { if (!c) throw new Error(m); };
 
 // The gateway's state: one session, wrong PINs (5 → 429 like src/gateway.rs), saved devices.
-const st = { authed: false, wrong: 0, edits: [], hosts: [
+const st = { authed: false, wrong: 0, edits: [], holdMe: false, held: [], hosts: [
   { id: "mom", label: "엄마의 iMac", host: "mom-imac.local", user: "younghee", own_user: "younghee", os: "mac", kind: "vnc", has_pw: true, account: "" },
   { id: "pc", label: "거실 PC", host: "192.168.0.40", os: "windows", kind: "vnc", has_pw: false, account: "" },
   { id: "lab", label: "연구실 Mac", host: "lab.local", user: "kim", os: "mac", kind: "vnc", has_pw: true, account: "a1" },
@@ -22,6 +22,7 @@ const json = (res, code, body) => { res.writeHead(code, { "Content-Type": "appli
 const body = (req) => new Promise((r) => { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => r(JSON.parse(b || "{}"))); });
 const server = http.createServer(async (req, res) => {
   const p = new URL(req.url, "http://x").pathname;
+  if (p === "/api/me" && st.holdMe) return st.held.push(res); // a network that doesn't answer
   if (p === "/api/me") return json(res, st.authed ? 200 : 401, { ok: st.authed, local: false });
   if (p === "/api/login") {
     const { pin } = await body(req);
@@ -91,7 +92,11 @@ try {
   await page.locator("#loginForm button").tap();
   await page.waitForFunction(() => document.querySelector("#loginError").textContent.length > 0);
   assert(/공유 페이지/.test(await text("#loginError")) && /5번 틀리면 1분/.test(await text("#loginError")), "wrong-PIN advice");
-  for (let i = 0; i < 5; i++) { await page.fill("#pin", "222222"); await page.locator("#loginForm button").tap(); await page.waitForTimeout(80); }
+  for (let i = 0; i < 5; i++) {
+    await page.fill("#pin", "222222");
+    await Promise.all([page.waitForResponse((r) => r.url().endsWith("/api/login")), page.locator("#loginForm button").tap()]);
+  }
+  await page.waitForFunction(() => /초 뒤/.test(document.querySelector("#loginError").textContent), null, { timeout: 5000 });
   const locked = await text("#loginError");
   assert(/(\d+)초 뒤/.test(locked) && Number(locked.match(/(\d+)초/)[1]) <= 60, `lockout gives a bounded time: ${locked}`);
   assert(await page.locator("#loginForm button").isDisabled(), "sign-in button waits out the lockout");
@@ -158,6 +163,24 @@ try {
   await page.locator(".host[data-id=mom] .open").tap();
   await page.waitForSelector("#status [data-a=retry]");
   assert(!(await page.locator("#status [data-a=fix]").count()) && /Mac이 연결을 거부/.test(await text("#status")), "refused card");
+
+  // A dropped connection shows its card at once, without waiting on the session check; a
+  // late answer to that check doesn't replace the next connection's card.
+  st.holdMe = true;
+  await page.evaluate(() => (window.closeCode = 1006));
+  await page.locator("#status [data-a=list]").tap();
+  await page.waitForSelector("#list:not([hidden])");
+  await page.locator(".host[data-id=mom] .open").tap();
+  await page.waitForFunction(() => /연결이 끊겼습니다/.test(document.querySelector("#status").textContent), null, { timeout: 3000 });
+  assert(st.held.length === 1, "session check asked");
+  await page.locator("#status [data-a=list]").tap();
+  await page.evaluate(() => (window.closeCode = 4012));
+  await page.locator(".host[data-id=lab] .open").tap();
+  await page.waitForSelector("#status [data-a=retry]");
+  st.holdMe = false;
+  for (const res of st.held.splice(0)) json(res, 401, { ok: false });
+  await page.waitForTimeout(300);
+  assert(/Mac이 연결을 거부/.test(await text("#status")) && (await page.locator("#view").isVisible()), "late session answer ignored");
 
   // Toolbar at 390px: every control on screen, labelled, 44px or more.
   const tools = await page.evaluate(() => [...document.querySelectorAll("#tools button")].map((b) => {
