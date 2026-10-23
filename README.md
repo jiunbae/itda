@@ -94,6 +94,8 @@ On macOS, **Finder connection folder** creates `.inetloc` shortcuts in `…/Itda
 
 File browsing is independent of screen sharing. Closing a window leaves its ongoing transfers active. Unused browse connections are released when switching devices or closing a window; a running transfer keeps its connection until completion.
 
+After closing a file window, use **전송 (Transfers)** in the main window's sidebar to check its progress and outcome or cancel it. For a failed or cancelled transfer, **파일 창에서 다시 시도** opens the file window; review the remaining items and destination before sending them again. These transfer records do not survive an app restart.
+
 The macOS file window exports real file URLs for Finder's clipboard. Wait for **파일 복사 준비 완료** before pasting remote files; stale HTML is cleared while they are prepared. Staged copies stay under `…/Itda/file-exports` so the clipboard remains usable after quitting. In-window dragging keeps folder/tab transfers; dragging outside hands off to native file promises and downloads only after Finder accepts the drop. External drags copy without deleting remote originals. This applies to the file browser, independently of a Finder running inside a remote screen session.
 
 **macOS**
