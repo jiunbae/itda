@@ -159,10 +159,16 @@ pub fn files_new_window_at(id: &str, path: Option<&str>) {
     FILE_REQUESTS.with(|q| q.borrow_mut().push((id.into(), false, true, path.map(str::to_string))));
     wake();
 }
+/// The main window is the one in front (a message there is seen without a notification).
+pub fn home_focused() -> bool {
+    HOME_PANE.with(|h| h.borrow().as_ref().is_some_and(|p| p.window.is_visible() && p.window.is_focused()))
+}
+
 pub fn files_window_context(window: &str, id: &str, page: &str) {
     let title = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| format!("{} — 파일", h.label())).unwrap_or_else(|| "네트워크 — Itda".into()));
     let exists = FILE_PANES.with(|p| { if let Some(p) = p.borrow().get(window) { p.window.set_title(&title); true } else { false } });
-    if exists { FILE_PAGES.with(|p| {p.borrow_mut().insert(window.into(), page.into());}); FILE_HOSTS.with(|p| {p.borrow_mut().insert(window.into(), id.into());}); super::send_hosts(); }
+    // A reloaded page has a new token: the old page is gone, so its transfers become the app's.
+    if exists { if let Some(old) = FILE_PAGES.with(|p| p.borrow_mut().insert(window.into(), page.into())).filter(|old| old != page) { crate::files::release_page(&old); } FILE_HOSTS.with(|p| {p.borrow_mut().insert(window.into(), id.into());}); super::send_hosts(); }
 }
 
 pub fn eval(js: &str) {

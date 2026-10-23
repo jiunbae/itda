@@ -364,6 +364,7 @@ fn send_state() {
             "sessions": sessions_json(m),
             "file_windows": plat::file_windows(),
             "files_clipboard": m.file_clipboard,
+            "files_jobs": crate::files::background_jobs(),
             "online": m.online,
             "found": m.found,
             "dark": plat::system_dark(),
@@ -393,6 +394,15 @@ fn save_hosts() {
 
 fn s(v: &Value, k: &str) -> String {
     v.get(k).and_then(Value::as_str).unwrap_or("").to_string()
+}
+
+/// Stopping or dismissing a transfer needs no device or login: the device may be the
+/// device-less window's, or deleted since. Who may stop what is decided by files::dispatch
+/// (a page its own transfers; any page those whose window closed).
+fn files_control(v: &Value, id: &str, emit: crate::files::Emit) -> bool {
+    if !["cancel", "cancel_background", "dismiss_background"].contains(&v["op"].as_str().unwrap_or("")) { return false; }
+    crate::files::dispatch(v.clone(), Host { id: id.to_string(), ..Default::default() }, store::Login::default(), emit);
+    true
 }
 
 fn on_ipc(v: Value) {
@@ -455,6 +465,7 @@ fn on_ipc(v: Value) {
             });
         }
         "files" => {
+            if files_control(&v, &id, std::sync::Arc::new(|v| post(Event::Page(v)))) { return; }
             // The device-less file window still browses this computer's own files.
             // Transfers from it land on this computer (their source may be another window's
             // device, named by from_id); they never write to a device through this window.
@@ -1271,6 +1282,19 @@ fn drain() {
                         plat::session_eval(id, &format!("window.itdaHp&&itdaHp({v})"));
                     }
                 }
+                // A transfer whose file window closed: say how it ended, since no window shows it
+                // (the main window says it itself when it is in front).
+                if v["type"] == "files_job" && v["window"] == "app" && v["dismissed"] != true && !plat::home_focused()
+                    && ["completed", "failed", "cancelled"].contains(&v["state"].as_str().unwrap_or("")) {
+                    let what = if v["moving"] == true || v["request"]["move"] == true { "파일 이동" } else { "파일 복사" };
+                    let device = Some(host_label(v["id"].as_str().unwrap_or(""))).filter(|d| !d.is_empty()).unwrap_or_else(|| "이 컴퓨터".into());
+                    let text = match v["state"].as_str() {
+                        Some("completed") => format!("{device}: 끝났습니다"),
+                        Some("cancelled") => format!("{device}: 취소했습니다"),
+                        _ => format!("{device}: {}{}", v["error"].as_str().unwrap_or("실패했습니다"), if v["request"]["names"].is_array() { " — 그 기기의 파일 창에서 남은 항목을 다시 보낼 수 있습니다" } else { "" }),
+                    };
+                    notify(&format!("{what} {}", match v["state"].as_str() { Some("completed") => "완료", Some("cancelled") => "취소됨", _ => "실패" }), &text);
+                }
                 #[cfg(target_os = "macos")]
                 let mut v=v;
                 #[cfg(target_os = "macos")]
@@ -1609,5 +1633,30 @@ mod web_edit_tests {
         let mut v = as_json(&crate::store::Host { id: String::new(), host: "evil.example".into(), account: "acct".into(), ..Default::default() });
         assert_eq!(super::web_save_guard(&mut v, &hosts), None);
         assert_eq!(v["account"], json!(""));
+    }
+}
+
+#[cfg(test)]
+mod files_control_tests {
+    use serde_json::json;
+    use std::sync::Arc;
+
+    /// The router hands transfer control to files::dispatch before any device or login
+    /// lookup: the device-less window can stop its own transfer, another page can't, and an
+    /// adopted transfer of a deleted device can still be stopped.
+    #[test]
+    fn transfer_control_reaches_dispatch_without_a_device() {
+        let emit: crate::files::Emit = Arc::new(|_| {});
+        let (job, stopped) = crate::files::test_job("__network", "page-own");
+        assert!(super::files_control(&json!({"cmd":"files","op":"cancel","id":"__network","window":"page-other","job":job}), "__network", emit.clone()));
+        assert!(!stopped(), "another page stopped this page's transfer");
+        assert!(super::files_control(&json!({"cmd":"files","op":"cancel","id":"__network","window":"page-own","job":job}), "__network", emit.clone()));
+        assert!(stopped(), "the device-less window could not stop its own transfer");
+        let gone = crate::store::new_id();
+        let (job, stopped) = crate::files::test_job(&gone, "page-closed");
+        crate::files::test_adopt("page-closed", &gone, &job);
+        assert!(super::files_control(&json!({"cmd":"files","op":"cancel_background","id":gone,"window":"page-any","job":job}), &gone, emit.clone()));
+        assert!(stopped(), "an adopted transfer of a deleted device could not be stopped");
+        assert!(!super::files_control(&json!({"cmd":"files","op":"list","id":"x"}), "x", emit));
     }
 }

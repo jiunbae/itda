@@ -338,6 +338,7 @@ function renderNav() {
   html += navItem('favorites', 'E734', '즐겨찾기', fav || null);
   html += navItem('recent', 'E81C', '최근 사용', null);
   html += navItem('files', 'E8B7', '파일 브라우저', null);
+  html += transfersNav();
   html += navItem('accounts', 'E77B', '계정', S.accounts.length || null);
   if (live) html += navItem('live', 'E703', '연결 중', live);
   // Only devices that could still be added: the rest are in the book already.
@@ -963,6 +964,67 @@ function go(page) {
   if (page === 'settings') send('login_item');
   render();
 }
+
+// ---------------------------------------------------------------- background transfers
+
+// Copies and moves that keep running after their file window closed (files.js keeps them):
+// a sidebar entry while there are any, and a list to follow, stop or dismiss them.
+const transfers = () => (window.ITDA_FILE_HOST ? [] : window.ItdaFiles?.transfers() || []);
+const TRANSFER_STATE = { queued: '대기 중', running: '전송 중', completed: '완료', failed: '실패', cancelled: '취소됨' };
+function transfersNav() {
+  const all = transfers();
+  if (!all.length) return '';
+  const live = all.filter(j => ['queued', 'running'].includes(j.state)).length;
+  const failed = all.some(j => ['failed', 'cancelled'].includes(j.state));
+  const text = `전송${live ? ` · ${live}개 진행 중` : failed ? ' · 확인 필요' : ''}`;
+  return `<button class="nav-item nav-transfers" data-id="nav-transfers" data-transfers aria-haspopup="dialog" aria-label="${esc(text)}" title="${esc(text)}">${I('E896')}<span class="label">전송</span><span class="count">${live || (failed ? '!' : all.length)}</span></button>`;
+}
+function transferRows() {
+  const all = transfers().slice().reverse();
+  if (!all.length) return '<p class="hint">진행 중이거나 확인할 전송이 없습니다.</p>';
+  return `<ul class="transfer-list">${all.map(j => {
+    const live = ['queued', 'running'].includes(j.state);
+    const progress = live ? `<progress aria-label="${esc(j.name)} 진행률" ${j.total ? `max="${j.total}" value="${j.bytes || 0}"` : ''}></progress>` : '';
+    const done = !live && j.completed_names?.length && j.count ? ` · ${j.count}개 중 ${j.completed_names.length}개 끝남` : '';
+    return `<li class="transfer-row ${esc(j.state || '')}" data-id="transfer-${esc(j.job)}"><div class="transfer-what"><b>${esc(j.name)}</b>
+      <span>${esc(j.device)} · ${j.moving || j.request?.move ? '이동' : '복사'} · ${esc(live && j.detail ? j.detail : TRANSFER_STATE[j.state] || '')}${done}${j.error && j.state === 'failed' ? ` — ${esc(j.error)}` : ''}</span>${progress}</div>
+      <div class="transfer-actions">${live ? `<button class="btn sm" data-id="transfer-cancel-${esc(j.job)}" data-transfer-cancel="${esc(j.job)}">취소</button>` : ''}
+      <button class="btn sm" data-id="transfer-open-${esc(j.job)}" data-transfer-open="${esc(j.id)}">${['failed', 'cancelled'].includes(j.state) && j.request ? '파일 창에서 다시 시도' : '파일 창 열기'}</button>
+      ${live ? '' : `<button class="btn sm" data-id="transfer-dismiss-${esc(j.job)}" data-transfer-dismiss="${esc(j.job)}" aria-label="${esc(j.name)} 목록에서 지우기">지우기</button>`}</div></li>`;
+  }).join('')}</ul>`;
+}
+// What the dialog's live line says: changes only when a transfer starts or ends.
+function transferStatus() {
+  const all = transfers(), live = all.filter(j => ['queued', 'running'].includes(j.state)).length;
+  const failed = all.filter(j => j.state === 'failed').length;
+  return [live ? `${live}개 진행 중` : '진행 중인 전송 없음', failed ? `${failed}개 실패` : ''].filter(Boolean).join(' · ');
+}
+function showTransfers() {
+  const m = openModal('transfers', `<div class="dialog"><div class="body"><h2>전송</h2>
+    <p class="lead">파일 창을 닫아도 계속되는 복사·이동입니다. 끝나면 결과가 여기 남고, 실패한 전송은 그 기기의 파일 창에서 남은 항목만 다시 보낼 수 있습니다.</p>
+    <p class="transfer-status" role="status">${transferStatus()}</p>
+    <div class="transfer-box" role="region" aria-label="전송 목록">${transferRows()}</div></div>
+    <div class="foot"><button class="btn primary" data-x="close">닫기</button></div></div>`);
+  m.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.x === 'close') return closeModal('transfers');
+    if (b.dataset.transferCancel) return window.ItdaFiles?.cancelTransfer(b.dataset.transferCancel);
+    if (b.dataset.transferDismiss) return window.ItdaFiles?.dismissTransfer(b.dataset.transferDismiss);
+    if (b.dataset.transferOpen) { closeModal('transfers'); return send('files_window', { id: b.dataset.transferOpen }); }
+  });
+}
+window.addEventListener('itda-transfers', () => {
+  if (window.ITDA_FILE_HOST || !S.settings) return;
+  renderNav();
+  const box = $('#modals .scrim[data-key="transfers"] .transfer-box');
+  if (!box) return;
+  const focused = box.contains(document.activeElement) ? document.activeElement.dataset.id : null;
+  morph(box, transferRows());
+  const line = $('#modals .scrim[data-key="transfers"] .transfer-status');
+  if (line && line.textContent !== transferStatus()) line.textContent = transferStatus();
+  if (focused) (box.querySelector(`[data-id="${CSS.escape(focused)}"]`) || box.querySelector('button') || $('#modals .scrim[data-key="transfers"] [data-x="close"]'))?.focus();
+});
 
 // ---------------------------------------------------------------- modals
 
@@ -1821,6 +1883,7 @@ document.addEventListener('click', (e) => {
   if (ext) { e.preventDefault(); return send('url', { url: ext.href }); }
   const inCtx = e.target.closest('#ctx');
   if (!inCtx) hideCtx();
+  if (e.target.closest('[data-transfers]')) return showTransfers();
   const nav = e.target.closest('.nav-item');
   if (nav) return go(nav.dataset.page);
   const b = e.target.closest('[data-act]');

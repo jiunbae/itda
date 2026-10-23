@@ -6,6 +6,8 @@ pub mod export;
 pub mod drag;
 mod sftp;
 mod transfer;
+mod background;
+pub use background::snapshot as background_jobs;
 #[cfg(any(windows, test))]
 pub mod vdrag;
 use crate::{
@@ -120,6 +122,21 @@ type Jobs = HashMap<String, (String, Arc<Control>)>;
 static JOBS: OnceLock<Mutex<Jobs>> = OnceLock::new();
 /// Transfers queued or running, also those whose file window was already closed.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+/// A registered running transfer of `id` owned by page `window`, and whether it was stopped.
+#[cfg(test)]
+pub fn test_job(id: &str, window: &str) -> (String, impl Fn() -> bool) {
+    let job = crate::store::new_id();
+    let control = Arc::new(Control::default());
+    jobs().lock().unwrap().insert(job.clone(), (scoped_id(id, &json!(window)), control.clone()));
+    (job, move || control.check().is_err())
+}
+/// That transfer seen once by its page, which then closed.
+#[cfg(test)]
+pub fn test_adopt(window: &str, id: &str, job: &str) {
+    let t = background::track(&json!({"names":["a"]}), json!(window), Arc::new(|_| {}));
+    t(json!({"type":"files_job","id":id,"job":job,"state":"running"}));
+    release_page(window);
+}
 pub fn active_jobs() -> usize {
     jobs().lock().unwrap().len()
 }
@@ -464,6 +481,8 @@ fn retire(key: String) {
 }
 pub fn release_page(page: &str) {
     if page.is_empty() { return; }
+    // Its transfers keep running, now the app's (shown and cancellable from any Itda page).
+    background::adopt(page);
     let suffix = format!("\x1f{page}");
     let mut keys: Vec<String> = connections().lock().unwrap().keys().chain(connecting().lock().unwrap().keys()).filter(|key| key.ends_with(&suffix)).cloned().collect();
     keys.extend(jobs().lock().unwrap().values().filter(|(key,_)| key.ends_with(&suffix)).map(|(key,_)| key.clone()));
@@ -502,6 +521,23 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
     let id = host.id.clone();
     let key = scoped_id(&id, &v["window"]);
     let window = v["window"].clone();
+    if !["cancel", "cancel_background", "dismiss_background", "release"].contains(&op.as_str()) {
+        background::in_use(window.as_str().unwrap_or(""));
+    }
+    if op == "transfer" {
+        transfer::start(v.clone(), host, background::track(&v, window, emit));
+        return;
+    }
+    // A transfer whose window closed belongs to the app: any page may stop or dismiss it.
+    // A job whose page is open stays that page's own (below).
+    if op == "cancel_background" {
+        let job = get(&v, "job");
+        if background::is_orphan(&job) {
+            if let Some((_, c)) = jobs().lock().unwrap().get(&job) { c.stop(); }
+        }
+        return;
+    }
+    if op == "dismiss_background" { background::dismiss(&get(&v, "job")); return; }
     let emit: Emit = Arc::new(move |mut m| { m["window"] = window.clone(); emit(m); });
     if op == "release" { retire(key); return; }
     if op == "connect" { retired().lock().unwrap().remove(&key); }
@@ -513,10 +549,6 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
     }
     if op == "disconnect" {
         disconnect(&key);
-        return;
-    }
-    if op == "transfer" {
-        transfer::start(v, host, emit);
         return;
     }
     std::thread::spawn(move || {
