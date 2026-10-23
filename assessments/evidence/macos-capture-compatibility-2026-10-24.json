@@ -41,11 +41,12 @@
       }
     ]
   },
-  "implementation": "Not implemented yet. Preserve intended12.0+ standard viewer/files support by weak-linking SCK, gating SCK-only entry points and permissions/setup with an explicit12.3 requirement, and verifying every bundled slice is weak-linked. Do not declare support fixed merely by raising the documented floor.",
+  "implementation": "PR110 weak-links SCK, gates optional capture/permission/startup and remote HP setup before writes, and checks each packaged architecture. Candidate source5fa12295 built/inspected; see macos-optional-capture-candidate.json. Not yet older-OS accepted or released.",
   "documentation": "Recommend12.3+ for current public1.0.2 while12.0-12.2 compatibility is corrected. This is not a runtime certification of every12.3+ system.",
   "acceptance_remaining": [
-    "Guarded weak-linked candidate binary on both architectures",
-    "No SCK calls or permission requests on unsupported OS",
-    "Actual12.0-12.2 launch and ordinary viewer/files workflow before accepting the original lower-floor journey"
-  ]
+    "Exact final-head CI and independent review before merge",
+    "Actual12.0-12.2 launch with unavailable capture causing no SCK calls or permission prompts; ordinary viewer/files usable",
+    "Signed release/deployment and native acceptance on both architectures before closing original journey"
+  ],
+  "candidate_evidence": "assessments/evidence/macos-optional-capture-candidate.json"
 }
