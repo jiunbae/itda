@@ -720,9 +720,16 @@ impl Input {
             return;
         }
         if (ACTION_KEYSYM..ACTION_KEYSYM + 0x100).contains(&sym) {
-            // (Off the input thread: reading the shortcuts runs `defaults`.)
+            // One at a time, off the input thread (reading the shortcuts runs `defaults`); a
+            // few queued at most, more are dropped.
+            static ACTIONS: std::sync::OnceLock<std::sync::mpsc::SyncSender<u32>> = std::sync::OnceLock::new();
             if down {
-                std::thread::spawn(move || screen_action(sym - ACTION_KEYSYM));
+                let tx = ACTIONS.get_or_init(|| {
+                    let (tx, rx) = std::sync::mpsc::sync_channel::<u32>(4);
+                    std::thread::spawn(move || rx.into_iter().for_each(screen_action));
+                    tx
+                });
+                let _ = tx.try_send(sym - ACTION_KEYSYM);
             }
             return;
         }
@@ -869,7 +876,7 @@ fn write_status(screen: bool, access: bool) {
     let (native, dimensions) = current.as_ref().map(|c| { let c = c.lock().unwrap(); (c.native_pixels, (c.w, c.h)) })
         .unwrap_or_else(|| { let native = native_pixels_requested(); (native, display_dimensions(native)) });
     let quality = if native { "native" } else { "points" };
-    let _ = std::fs::write(crate::store::dir().join("hp-status"), format!("screen={} access={} port={PORT} quality={quality} quality_active={} capture_width={} capture_height={}\n", screen as u8, access as u8, current.is_some() as u8, dimensions.0, dimensions.1));
+    let _ = std::fs::write(crate::store::dir().join("hp-status"), format!("screen={} access={} port={PORT} quality={quality} quality_active={} capture_width={} capture_height={} actions=1\n", screen as u8, access as u8, current.is_some() as u8, dimensions.0, dimensions.1));
 }
 
 /// Start serving in the background of the running app (when `enabled`).

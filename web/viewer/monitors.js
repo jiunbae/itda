@@ -47,7 +47,7 @@ export class MonitorController {
     state() {
         const r=this.e.S.rfb;
         return {host:this.e.S.host,canvas:r?._display?._backbuffer,frame:r?._display?.itdaFrame || 0,
-            screens:this.screens,connected:r?._rfbConnectionState==='connected',viewOnly:this.e.S.viewOnly,hp:!!this.e.S.hpActual,
+            screens:this.screens,connected:r?._rfbConnectionState==='connected',viewOnly:this.e.S.viewOnly,hp:!!(this.e.S.hpActual&&this.e.S.hpActions),
             cursor:(r?._canvas?.style.cursor && r._canvas.style.cursor!=='none') ? r._canvas.style.cursor : 'default',scroll:this.e.S.macScroll};
     }
     pointer(x,y,mask,id) {
