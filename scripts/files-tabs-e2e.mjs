@@ -32,6 +32,7 @@ try{
     if(m.op==='connect'){if(!homes[m.id])return;result.data={path:homes[m.id],entries:tree[homes[m.id]],local_path:'/local',local_entries:tree['/local'],rsync:true};}
     else if(m.op==='list')result.data={path:m.path,entries:window.sortTesting&&m.path==='/Users/alex' ? [entry('Folder2',true),{...entry('file10.txt'),size:20,modified:300},{...entry('Zebra.pdf'),size:5,modified:100},entry('Docs',true),{...entry('file2.txt'),size:20,modified:200}] : tree[m.path]||[]};
     else return;
+    if(m.op==='list'&&window.holdListReplies){(window.heldListReplies||=[]).push(result);return;}
     setTimeout(()=>itda.recv(result),10);
    }};
   });
@@ -98,10 +99,19 @@ try{
   assert(await layer.locator('[data-tab]').count()===2,'New tab failed');
   // The tab's label and close button are separate keyboard controls. Arrow navigation
   // retains focus on the active tab; Space on close must close rather than preview a file.
+  await p.evaluate(()=>window.holdListReplies=true);
   await layer.getByRole('tab',{selected:true}).focus();await p.keyboard.press('ArrowLeft');
   await p.waitForFunction(()=>document.activeElement.matches('.files-tab [role="tab"][aria-selected="true"]'));
   await p.keyboard.press('ArrowRight');
-  await layer.locator('[data-tab]').nth(1).locator('[data-close-tab]').focus();await p.keyboard.press('Space');
+  const closeTabButton=layer.locator('[data-tab]').nth(1).locator('[data-close-tab]');
+  await closeTabButton.focus();await p.keyboard.down('Space');
+  // A real folder response may arrive while the person is holding Space. Keeping
+  // focus on a replacement button is insufficient: the pending native click is
+  // attached to the original control.
+  await p.evaluate(()=>{const reply=heldListReplies.pop();if(!reply)throw Error('No pending list reply');window.holdListReplies=false;heldListReplies.length=0;itda.recv(reply);});
+  assert(await closeTabButton.evaluate(e=>e===document.activeElement),'Folder reply lost the close button focus');
+  await p.keyboard.up('Space');
+  await p.waitForFunction(()=>document.querySelectorAll('.files-tab[data-tab]').length===1,null,{timeout:5000});
   assert(await layer.locator('[data-tab]').count()===1,'Keyboard close failed');
   await p.keyboard.press(`${mod}+t`);assert(await layer.locator('[data-tab]').count()===2,'Tab could not reopen after keyboard close');
 
@@ -166,9 +176,24 @@ try{
   await layer.locator('[data-tab]').nth(1).click();await row('Beta-B.txt').waitFor();
   assert(!(await layer.locator('.files-jobs').textContent()).includes('A-copy'),"Another device's transfer is shown in this tab");
   await layer.locator('[data-tab]').nth(0).click();await row('Inside-A.txt').waitFor();
-  await layer.locator('[data-cancel-job="job-A"]').click();
+  const cancelJobButton=layer.locator('[data-cancel-job="job-A"]');
+  await cancelJobButton.focus();await p.keyboard.down('Space');
+  await p.evaluate(()=>itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job:'job-A',state:'running',file:'A-copy',bytes:20,total:100}));
+  assert(await cancelJobButton.evaluate(e=>e===document.activeElement),'Progress lost the cancel button focus');
+  await p.keyboard.up('Space');
+  await p.waitForFunction(()=>testPackets.some(x=>x.op==='cancel'&&x.job==='job-A'),null,{timeout:5000});
+  assert((await packets()).filter(x=>x.op==='cancel'&&x.job==='job-A').length===1,'Space did not cancel the transfer exactly once');
   assert((await packets()).filter(x=>x.op==='cancel').at(-1)?.id==='studio','Cancel went to the wrong device');
   await p.evaluate(()=>itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job:'job-A',state:'cancelled',file:'A-copy'}));
+  // If the armed job finishes, its row must not become a different job's cancel
+  // button before key-up (which would cancel work the person never selected).
+  await p.evaluate(()=>{for(const job of ['keyboard-A','keyboard-B'])itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job,state:'running',file:job});});
+  await layer.locator('[data-cancel-job="keyboard-A"]').focus();await p.keyboard.down('Space');
+  await p.evaluate(()=>itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job:'keyboard-A',state:'completed'}));
+  assert(await layer.locator('[data-pane="remote"] .files-list').evaluate(e=>e===document.activeElement),'Completed job moved focus onto another transfer');
+  await p.keyboard.up('Space');
+  assert(!(await packets()).some(x=>x.op==='cancel'&&x.job==='keyboard-B'),'A disappearing row redirected Space to another transfer');
+  await p.evaluate(()=>itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job:'keyboard-B',state:'completed'}));
   // A transfer that fails on another tab is announced once (device and reason) without moving
   // this tab, stays reachable in the list here, and is retried for what is left only after
   // a new confirmation, on its own devices, without the original clipboard or drag token.
