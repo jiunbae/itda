@@ -19,6 +19,8 @@ struct Record {
     page: String,
     orphan: bool,
     ended: bool,
+    /// When it ended (a counter): the history keeps the latest outcomes, whatever the start order.
+    ended_at: u64,
     /// The job's latest event, merged (progress, outcome, completed names).
     event: Value,
     /// What was asked: devices, folders, names and options. Never a token or a secret.
@@ -27,6 +29,11 @@ struct Record {
 }
 
 static RECORDS: OnceLock<Mutex<Vec<Record>>> = OnceLock::new();
+static ENDINGS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Pages whose window closed (most recent last): a transfer they asked for whose first event
+/// comes only after that is the app's from the start.
+static RELEASED: Mutex<std::collections::VecDeque<String>> = Mutex::new(std::collections::VecDeque::new());
+const RELEASED_KEPT: usize = 64;
 fn records() -> &'static Mutex<Vec<Record>> {
     RECORDS.get_or_init(Default::default)
 }
@@ -70,7 +77,8 @@ pub(super) fn track(v: &Value, page: Value, emit: Emit) -> Emit {
         if !job.is_empty() && m["type"] == "files_job" {
             let mut all = records().lock().unwrap();
             if !all.iter().any(|r| r.job == job) {
-                all.push(Record { job: job.clone(), seq: 0, page: page_id.clone(), orphan: false, ended: false, event: json!({}), request: request.clone(), emit: raw.clone() });
+                let orphan = RELEASED.lock().unwrap().contains(&page_id);
+                all.push(Record { job: job.clone(), seq: 0, page: page_id.clone(), orphan, ended: false, ended_at: 0, event: json!({}), request: request.clone(), emit: raw.clone() });
             }
             let i = all.iter().position(|r| r.job == job).unwrap();
             let r = &mut all[i];
@@ -79,6 +87,7 @@ pub(super) fn track(v: &Value, page: Value, emit: Emit) -> Emit {
             } else {
                 r.event = m.clone();
             }
+            if terminal(&m) && !r.ended { r.ended_at = ENDINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1; }
             r.ended = terminal(&m);
             if r.orphan {
                 out = Some(shown(r));
@@ -101,7 +110,7 @@ pub(super) fn track(v: &Value, page: Value, emit: Emit) -> Emit {
 fn prune(all: &mut Vec<Record>) -> Vec<(Emit, Value)> {
     let mut gone = Vec::new();
     while all.iter().filter(|r| r.ended).count() > ENDED {
-        let i = all.iter().position(|r| r.ended).unwrap();
+        let i = all.iter().enumerate().filter(|(_, r)| r.ended).min_by_key(|(_, r)| r.ended_at).map(|(i, _)| i).unwrap();
         let r = all.remove(i);
         gone.push((r.emit.clone(), dismissed(&r)));
     }
@@ -113,6 +122,11 @@ fn dismissed(r: &Record) -> Value {
 
 /// The page's window closed: its live transfers continue as the app's. Returns how many.
 pub(super) fn adopt(page: &str) -> usize {
+    {
+        let mut released = RELEASED.lock().unwrap();
+        if !released.iter().any(|p| p == page) { released.push_back(page.to_string()); }
+        while released.len() > RELEASED_KEPT { released.pop_front(); }
+    }
     let mut all = records().lock().unwrap();
     let mut n = 0;
     let mut notice: Option<Emit> = None;
@@ -130,6 +144,13 @@ pub(super) fn adopt(page: &str) -> usize {
         emit(json!({"type": "files_background", "window": "app", "count": n}));
     }
     n
+}
+
+/// The page is in use again (the main window's file browser reopens with the same token):
+/// what it starts from now on is its own.
+pub(super) fn in_use(page: &str) {
+    let mut released = RELEASED.lock().unwrap();
+    if !released.is_empty() { released.retain(|p| p != page); }
 }
 
 /// Whether `job` is an adopted (app) transfer, which any Itda page may cancel or dismiss.
@@ -219,7 +240,7 @@ mod tests {
 
         // A transfer that ends while its page is open leaves nothing behind.
         let quick = crate::store::new_id();
-        let t = track(&request, json!(page), Arc::new(|_| {}));
+        let t = track(&request, json!(crate::store::new_id()), Arc::new(|_| {}));
         t(json!({"type":"files_job","id":host.id,"job":quick,"state":"queued"}));
         t(json!({"type":"files_job","id":host.id,"job":quick,"state":"completed"}));
         assert!(!records().lock().unwrap().iter().any(|r| r.job == quick));
@@ -239,6 +260,32 @@ mod tests {
         assert!(told.lock().unwrap().iter().any(|e| e["dismissed"] == true && e["job"] == json!(ids[0])), "pages were not told about a dropped outcome");
         assert!(all.iter().any(|r| r.job == live && !r.ended), "a running transfer was dropped");
         assert!(!all.iter().any(|r| r.job == ids[0]), "the oldest outcome was kept over newer ones");
+        drop(all);
+        // The long-running one ends last: its outcome is the newest and stays.
+        t(json!({"type":"files_job","id":host.id,"job":live,"state":"completed"}));
+        let all = records().lock().unwrap();
+        assert!(all.iter().any(|r| r.job == live && r.ended), "the latest outcome was dropped for an older one");
+        assert!(!all.iter().any(|r| r.job == ids[5]), "an older outcome was kept over the latest");
+    }
+
+    /// A window that closes before its transfer's first event still hands it over; the page
+    /// in use again (same token) starts its own transfers.
+    #[test]
+    fn a_transfer_born_after_its_window_closed_is_the_apps() {
+        let page = crate::store::new_id();
+        let (emit, seen) = collector();
+        adopt(&page);
+        let job = crate::store::new_id();
+        let t = track(&json!({"names":["a"]}), json!(page), emit.clone());
+        t(json!({"type":"files_job","id":"h","job":job,"state":"queued"}));
+        assert_eq!(seen.lock().unwrap().last().unwrap()["window"], "app");
+        assert!(is_orphan(&job));
+        in_use(&page);
+        let mine = crate::store::new_id();
+        let t = track(&json!({"names":["a"]}), json!(page), emit);
+        t(json!({"type":"files_job","id":"h","job":mine,"state":"queued"}));
+        assert_eq!(seen.lock().unwrap().last().unwrap()["window"], json!(page));
+        assert!(!is_orphan(&mine));
     }
 
     #[test]

@@ -396,6 +396,15 @@ fn s(v: &Value, k: &str) -> String {
     v.get(k).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
+/// Stopping or dismissing a transfer needs no device or login: the device may be the
+/// device-less window's, or deleted since. Who may stop what is decided by files::dispatch
+/// (a page its own transfers; any page those whose window closed).
+fn files_control(v: &Value, id: &str, emit: crate::files::Emit) -> bool {
+    if !["cancel", "cancel_background", "dismiss_background"].contains(&v["op"].as_str().unwrap_or("")) { return false; }
+    crate::files::dispatch(v.clone(), Host { id: id.to_string(), ..Default::default() }, store::Login::default(), emit);
+    true
+}
+
 fn on_ipc(v: Value) {
     let id = s(&v, "id");
     match s(&v, "cmd").as_str() {
@@ -456,19 +465,16 @@ fn on_ipc(v: Value) {
             });
         }
         "files" => {
+            if files_control(&v, &id, std::sync::Arc::new(|v| post(Event::Page(v)))) { return; }
             // The device-less file window still browses this computer's own files.
             // Transfers from it land on this computer (their source may be another window's
             // device, named by from_id); they never write to a device through this window.
             let local_only = id == crate::files::locations::NETWORK
-                && (v["op"] == "local_home" || v["op"] == "cancel_background" || v["op"] == "dismiss_background"
+                && (v["op"] == "local_home"
                     || (v["side"] == "local" && v["op"] != "transfer")
                     || (v["op"] == "transfer" && v["to"] == "local" && (v["from"] == "local" || v["from_id"].as_str().is_some_and(|f| !f.is_empty() && f != id))));
             let found = home(|m| m.hosts.iter().find(|h| h.id == id).cloned());
             let Some(mut host) = found.or_else(|| local_only.then(|| Host { id: id.clone(), ..Default::default() })) else { return };
-            // The app's transfers (their window closed) need no login to stop or dismiss.
-            if v["op"] == "cancel_background" || v["op"] == "dismiss_background" {
-                return crate::files::dispatch(v, host, store::Login::default(), std::sync::Arc::new(|v| post(Event::Page(v))));
-            }
             if v["op"] == "finder" {
                 std::thread::spawn(move || {
                     let result = crate::files::native_target(&host).and_then(|target| crate::files::open_native(&target));
@@ -1627,5 +1633,30 @@ mod web_edit_tests {
         let mut v = as_json(&crate::store::Host { id: String::new(), host: "evil.example".into(), account: "acct".into(), ..Default::default() });
         assert_eq!(super::web_save_guard(&mut v, &hosts), None);
         assert_eq!(v["account"], json!(""));
+    }
+}
+
+#[cfg(test)]
+mod files_control_tests {
+    use serde_json::json;
+    use std::sync::Arc;
+
+    /// The router hands transfer control to files::dispatch before any device or login
+    /// lookup: the device-less window can stop its own transfer, another page can't, and an
+    /// adopted transfer of a deleted device can still be stopped.
+    #[test]
+    fn transfer_control_reaches_dispatch_without_a_device() {
+        let emit: crate::files::Emit = Arc::new(|_| {});
+        let (job, stopped) = crate::files::test_job("__network", "page-own");
+        assert!(super::files_control(&json!({"cmd":"files","op":"cancel","id":"__network","window":"page-other","job":job}), "__network", emit.clone()));
+        assert!(!stopped(), "another page stopped this page's transfer");
+        assert!(super::files_control(&json!({"cmd":"files","op":"cancel","id":"__network","window":"page-own","job":job}), "__network", emit.clone()));
+        assert!(stopped(), "the device-less window could not stop its own transfer");
+        let gone = crate::store::new_id();
+        let (job, stopped) = crate::files::test_job(&gone, "page-closed");
+        crate::files::test_adopt("page-closed", &gone, &job);
+        assert!(super::files_control(&json!({"cmd":"files","op":"cancel_background","id":gone,"window":"page-any","job":job}), &gone, emit.clone()));
+        assert!(stopped(), "an adopted transfer of a deleted device could not be stopped");
+        assert!(!super::files_control(&json!({"cmd":"files","op":"list","id":"x"}), "x", emit));
     }
 }

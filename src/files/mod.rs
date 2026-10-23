@@ -122,6 +122,21 @@ type Jobs = HashMap<String, (String, Arc<Control>)>;
 static JOBS: OnceLock<Mutex<Jobs>> = OnceLock::new();
 /// Transfers queued or running, also those whose file window was already closed.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+/// A registered running transfer of `id` owned by page `window`, and whether it was stopped.
+#[cfg(test)]
+pub fn test_job(id: &str, window: &str) -> (String, impl Fn() -> bool) {
+    let job = crate::store::new_id();
+    let control = Arc::new(Control::default());
+    jobs().lock().unwrap().insert(job.clone(), (scoped_id(id, &json!(window)), control.clone()));
+    (job, move || control.check().is_err())
+}
+/// That transfer seen once by its page, which then closed.
+#[cfg(test)]
+pub fn test_adopt(window: &str, id: &str, job: &str) {
+    let t = background::track(&json!({"names":["a"]}), json!(window), Arc::new(|_| {}));
+    t(json!({"type":"files_job","id":id,"job":job,"state":"running"}));
+    release_page(window);
+}
 pub fn active_jobs() -> usize {
     jobs().lock().unwrap().len()
 }
@@ -506,6 +521,9 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
     let id = host.id.clone();
     let key = scoped_id(&id, &v["window"]);
     let window = v["window"].clone();
+    if !["cancel", "cancel_background", "dismiss_background", "release"].contains(&op.as_str()) {
+        background::in_use(window.as_str().unwrap_or(""));
+    }
     if op == "transfer" {
         transfer::start(v.clone(), host, background::track(&v, window, emit));
         return;
