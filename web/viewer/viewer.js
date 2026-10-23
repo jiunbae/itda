@@ -551,7 +551,7 @@ function open(h) {
   const size = follow && scr.clientWidth ? `w=${Math.round(scr.clientWidth)}&h=${Math.round(scr.clientHeight)}&` : '';
   // This attempt's own token: its high-performance outcome, not another viewer's.
   const attempt = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
-  S.hpFallback = null; S.hpFallbackSetup = false; S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; renderTools();
+  S.hpFallback = null; S.hpFallbackSetup = false; S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; S.hpMode = null; S.hpModeContext = null; S.hpQualityFailed = false; S.hpQualityPending = false; renderTools();
   const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}?${size}attempt=${attempt}`, ['binary']);
   let closeInfo = null;
   ws.addEventListener('close', (e) => { closeInfo = e; });
@@ -576,20 +576,7 @@ function open(h) {
     flushPaste();
     dimToolsSoon();
     // High-performance mode is the saved choice; say so when this connection didn't get it.
-    if (APP && S.host?.hp?.on) fetch(`/api/mode/${encodeURIComponent(h.id)}?attempt=${attempt}`).then(r => r.json()).then(m => {
-      if (S.rfb !== rfb || S.host?.id !== h.id || !m) return;
-      if (m.hp !== false) {
-        S.hpFallback = null; S.hpFallbackSetup = false; S.hpActual = m.hp === true; S.hpQuality = null; renderTools();
-        // What the Mac actually serves (points or native pixels), for the sharpness toggle.
-        if (S.hpActual) { S.hpStatusReq = attempt; S.hpStatusTries = 0; post({ ev: 'hp-status', req: attempt }); }
-        return;
-      }
-      S.hpActual = false;
-      S.hpFallback = m.reason || '연결하지 못했습니다';
-      S.hpFallbackSetup = !!m.setup;
-      renderTools();
-      toast(`고성능 모드로 연결하지 못해 기본 화면 공유로 연결했습니다 — ${S.hpFallback}`);
-    }).catch(() => {});
+    if (APP && S.host?.hp?.on) refreshHpMode(h, rfb, attempt);
     if (!APP) return toast(`${h.label}에 연결했습니다`);
     post(S.tries ? { ev: 'reconnected' } : { ev: 'connected', name, w: rfb._fbWidth || 0, h: rfb._fbHeight || 0 });
     S.ever = true;
@@ -599,7 +586,7 @@ function open(h) {
   rfb.addEventListener('disconnect', () => {
     if (S.rfb !== rfb) return;
     S.rfb = null;
-    S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null;
+    S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; S.hpModeContext = null; S.hpMode = null; renderTools();
     if (APP) return setTimeout(() => appDropped(h, closeInfo), 50);
     setTimeout(() => {
       const known = closeInfo && CLOSE_TEXT[closeInfo.code];
@@ -719,8 +706,77 @@ function leave() {
 // answers macOS's permission prompts on that Mac through this very connection, and then this
 // window reconnects to it. If it can't be reached, the app falls back to Screen Sharing.
 const hpCapable = () => APP && macHost(S.host) && S.host?.kind !== 'rdp';
+// A saved preference is not evidence of this connection's transport. Retrying this
+// diagnostic must keep the framebuffer, monitor windows and input session intact.
+function refreshHpMode(h, rfb, attempt) {
+  if (S.rfb !== rfb || S.host?.id !== h.id) return;
+  const context = { h, rfb, attempt };
+  S.hpModeContext = context;
+  S.hpMode = 'checking';
+  renderTools();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  fetch(`/api/mode/${encodeURIComponent(h.id)}?attempt=${attempt}`, { signal: controller.signal }).then(r => {
+    if (!r.ok) throw Error('mode unavailable');
+    return r.json();
+  }).then(m => {
+    if (S.hpModeContext !== context || S.rfb !== rfb || S.host?.id !== h.id) return;
+    if (typeof m?.hp !== 'boolean') throw Error('mode unknown');
+    S.hpMode = m.hp ? 'active' : 'fallback';
+    S.hpActual = m.hp;
+    S.hpFallback = m.hp ? null : m.reason || '연결하지 못했습니다';
+    S.hpFallbackSetup = !m.hp && !!m.setup;
+    S.hpQuality = null;
+    renderTools();
+    if (m.hp) {
+      requestHpQuality();
+    } else {
+      toast(`고성능 모드로 연결하지 못해 기본 화면 공유로 연결했습니다 — ${S.hpFallback}`);
+    }
+  }).catch(() => {
+    if (S.hpModeContext !== context || S.rfb !== rfb || S.host?.id !== h.id) return;
+    S.hpMode = 'unknown';
+    S.hpActual = false;
+    renderTools();
+    toast('현재 연결 모드를 확인하지 못했습니다. 고성능 모드 버튼을 눌러 다시 확인하세요. 화면 연결은 유지됩니다.');
+  }).finally(() => clearTimeout(timeout));
+}
+function requestHpQuality() {
+  if (!S.rfb || !S.hpActual || !S.hpModeContext || (S.hpQualityPending && !S.hpQualityFailed)) return;
+  S.hpQualityPending = true;
+  const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+  S.hpStatusReq = `${S.hpModeContext.attempt}:${nonce}`;
+  const req = S.hpStatusReq;
+  S.hpQualityFailed = false;
+  S.hpStatusTries = 0;
+  setTimeout(() => {
+    if (S.hpStatusReq === req && S.rfb && !S.hpQuality) { S.hpQualityFailed = true; S.hpQualityPending = false; renderTools(); }
+  }, 13000);
+  post({ ev: 'hp-status', req: S.hpStatusReq });
+  renderTools();
+}
+function hpModeLabel() {
+  if (S.host.hp?.on && !S.hpModeContext) return '고성능 모드 사용 설정됨 — 누르면 끄고 기본 화면 공유로 다시 연결';
+  if (S.host.hp?.on && S.hpMode === 'checking') return '현재 연결 모드 확인 중…';
+  if (S.host.hp?.on && (!S.hpMode || S.hpMode === 'unknown')) return '현재 연결 모드를 확인하지 못함 — 눌러 다시 확인 (화면 연결 유지)';
+  if (S.host.hp?.on && S.hpFallback) return `고성능 모드로 연결되지 않음 (${S.hpFallback}) — ${S.hpFallbackSetup ? '누르면 그 Mac에 다시 켭니다' : '누르면 다시 시도합니다'}`;
+  if (S.host.hp?.on && S.hpActual) return '고성능 모드 켜짐 — 누르면 끕니다';
+  return S.hpBusy ? '고성능 모드 준비 중…' : '고성능 모드 — 이 Mac에 Itda 고성능 공유를 켜고 전환합니다 (SSH)';
+}
+function hpDisable() {
+  if (!hpCapable() || S.hpBusy || !S.host.hp?.on) return;
+  S.host.hp = { ...S.host.hp, on: false };
+  post({ ev: 'hp-off' });
+  toast('고성능 모드를 껐습니다 — 기본 화면 공유로 다시 연결합니다');
+  return open(S.host);
+}
 function hpToggle() {
   if (!hpCapable() || S.hpBusy) return;
+  if (S.host.hp?.on && S.hpModeContext?.rfb === S.rfb && S.hpModeContext && (S.hpMode === 'unknown' || S.hpMode === 'checking')) {
+    const c = S.hpModeContext;
+    if (c && S.hpMode !== 'checking') refreshHpMode(c.h, c.rfb, c.attempt);
+    return;
+  }
   // Saved on but this connection fell back: try high-performance again (e.g. after unlocking),
   // or, when it isn't on there at all (e.g. Itda reinstalled), set it up again below.
   if (S.host.hp?.on && S.hpFallback && !S.hpFallbackSetup) {
@@ -729,10 +785,7 @@ function hpToggle() {
     return open(S.host);
   }
   if (S.host.hp?.on && !S.hpFallback) {
-    S.host.hp = { ...S.host.hp, on: false };
-    post({ ev: 'hp-off' });
-    toast('고성능 모드를 껐습니다 — 기본 화면 공유로 다시 연결합니다');
-    return open(S.host);
+    return hpDisable();
   }
   S.hpBusy = true; renderTools();
   const id=S.host.id;
@@ -744,6 +797,9 @@ function hpToggle() {
 }
 window.itdaHp = (m) => {
   if (S.host?.id !== m.id) return;
+  if (m.status && m.req && m.req === S.hpStatusReq && m.error) {
+    S.hpQualityFailed = true; S.hpQualityPending = false; renderTools(); return;
+  }
   // The Mac's report of what it serves: the toggle shows that, not just the saved choice.
   // Only the answer to this connection's own request (an older one may arrive late).
   if (m.status && typeof m.quality === 'string' && m.req && m.req === S.hpStatusReq) {
@@ -753,11 +809,13 @@ window.itdaHp = (m) => {
     S.hpActions = !!m.actions;
     const real = m.quality === '' || (m.quality_active && m.capture_width > 0 && m.capture_height > 0);
     S.hpQuality = real ? { quality: m.quality, active: !!m.quality_active, w: m.capture_width, h: m.capture_height } : null;
+    S.hpQualityFailed = !real && (S.hpStatusTries || 0) >= 4;
+    if (real || S.hpQualityFailed) S.hpQualityPending = false;
     renderTools();
     // Settling (the status file is rewritten every 2 s): ask again a few times, same request.
     if (!real && (S.hpStatusTries = (S.hpStatusTries || 0) + 1) < 5) {
       const req = m.req;
-      setTimeout(() => { if (S.hpStatusReq === req && S.rfb) post({ ev: 'hp-status', req }); }, 2500);
+      setTimeout(() => { if (S.hpStatusReq === req && S.rfb && !S.hpQualityFailed) post({ ev: 'hp-status', req }); }, 2500);
     }
   }
   if (typeof m.quality === 'boolean') {
@@ -774,7 +832,7 @@ function hpQualityShown() { return S.hpQuality?.quality === 'native'; }
 function hpQualityLabel() {
   if (S.hpQualityBusy) return '화질 바꾸는 중…';
   const want = !!S.host.hp?.native, q = S.hpQuality?.quality;
-  if (q === undefined) return want ? '선명하게 (Retina) — 원격 Mac의 화질을 확인하는 중' : '선명하게 (Retina) — 글자가 또렷해지고 프레임은 조금 줄어듭니다';
+  if (q === undefined) return S.hpQualityFailed ? '현재 화질을 확인하지 못함 — 눌러 다시 확인 (화면 연결 유지)' : '현재 화질 확인 중…';
   if (q === '') return '선명하게 (Retina) — 원격 Mac의 Itda를 업데이트하면 쓸 수 있습니다';
   if (want && q === 'native') return `선명하게 (Retina) 켜짐 · ${S.hpQuality.w}×${S.hpQuality.h} — 누르면 빠르게로 바꿉니다`;
   if (want) return '선명하게 (Retina) 적용 대기 — 이 Mac의 다른 고성능 연결이 모두 끝나면 적용됩니다';
@@ -786,20 +844,23 @@ function hpQualityLabel() {
 
 function renderTools() {
   const t = $('#tools');
+  const focused = t.contains(document.activeElement) ? document.activeElement.dataset.t : null;
   t.innerHTML = [
     ...(APP ? [] : [['back', 'back', '목록으로'], 'sep', ['keyboard', 'keyboard', '키보드']]),
     ['keys', 'command', `${isWin(S.host) ? 'Windows' : 'Mac'} 특수 키`],
     ...(macHost(S.host) ? [['mac-actions', 'mission', 'Mac 화면 동작 — Mission Control · Exposé']] : []),
     ...(APP && /Mac/.test(navigator.platform) && !IOS && ['mac', 'macos'].includes(S.host?.os) && S.host?.kind !== 'rdp' ? [['apple-screen-sharing', 'monitor', 'Apple 화면 공유 앱에서 열기 · 별도 앱으로 직접 연결']] : []),
     ...(hpCapable() && S.hpActual ? [['hp-quality', 'sparkle', hpQualityLabel(), hpQualityShown()]] : []),
-    ...(hpCapable() ? [['hp', 'bolt', S.host.hp?.on && S.hpFallback ? `고성능 모드로 연결되지 않음 (${S.hpFallback}) — ${S.hpFallbackSetup ? '누르면 그 Mac에 다시 켭니다' : '누르면 다시 시도합니다'}` : S.host.hp?.on ? '고성능 모드 켜짐 — 누르면 끕니다' : S.hpBusy ? '고성능 모드 준비 중…' : '고성능 모드 — 이 Mac에 Itda 고성능 공유를 켜고 전환합니다 (SSH)', !!S.host.hp?.on && !S.hpFallback]] : []),
+    ...(hpCapable() ? [['hp', 'bolt', hpModeLabel(), !!S.hpActual]] : []),
+    ...(hpCapable() && S.host.hp?.on && ['unknown', 'checking'].includes(S.hpMode) ? [['hp-disable', 'bolt', '고성능 모드 끄기 — 기본 화면 공유로 다시 연결']] : []),
     ...(APP ? [] : [['clip', 'clip', '클립보드']]),
     'sep',
     ['monitors', 'monitor', '모니터 선택 및 창 배치'],
     ['scale', S.fit ? 'fit' : 'actual', S.fit ? '실제 크기로' : '화면에 맞춤'],
     ['viewonly', 'eye', '보기 전용', S.viewOnly],
     ['full', 'full', '전체 화면'],
-  ].map((b) => (b === 'sep' ? '<span class="sep"></span>' : `<button data-t="${b[0]}" title="${b[2]}" aria-label="${b[2]}" class="${b[3] ? 'on' : ''}">${icon(b[1])}</button>`)).join('');
+  ].map((b) => (b === 'sep' ? '<span class="sep"></span>' : `<button data-t="${b[0]}" title="${esc(b[2])}" aria-label="${esc(b[2])}" class="${b[3] ? 'on' : ''}">${icon(b[1])}</button>`)).join('');
+  if (focused) t.querySelector(`[data-t="${focused}"]`)?.focus();
 }
 
 let dimTimer;
@@ -826,8 +887,10 @@ $('#tools').addEventListener('click', (e) => {
       }
       return;
     case 'hp': return hpToggle();
+    case 'hp-disable': return hpDisable();
     case 'hp-quality':
       if (S.hpQualityBusy) return;
+      if (!S.hpQuality) return requestHpQuality();
       S.hpQualityBusy = true; renderTools();
       // The opposite of what is on screen now (or of the saved choice while that is unknown).
       return post({ ev: 'hp-quality', native: !(S.hpQuality ? hpQualityShown() : !!S.host.hp?.native) });

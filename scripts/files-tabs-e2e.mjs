@@ -16,7 +16,7 @@ const server=http.createServer((req,res)=>{
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const base=`http://127.0.0.1:${server.address().port}`;
-const browser=await pw.chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
+const browser=await pw[process.env.BROWSER || "chromium"].launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
 const assert=(value,msg)=>{if(!value)throw Error(msg);};
 try{
  for(const platform of ['mac','windows']){
@@ -48,6 +48,15 @@ try{
   await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+v`);
   await p.locator('.files-prompt [data-choice="ok"]').click();
   {const t=(await packets()).filter(x=>x.op==='transfer').at(-1);assert(t?.from_id==='build'&&t.from_window==='prior-page'&&t.names[0]==='Beta-B.txt','New window lost the earlier copy: '+JSON.stringify(t));}
+
+  // Another device's clipboard can use delta when the target is this computer.
+  await layer.locator(platform==='mac' ? '.files-current-places [data-side="local"]' : '[data-network-sidebar] [data-bookmark="Documents"]').click();
+  await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+v`);
+  const deltaDialog=p.getByRole('dialog',{name:'파일 복사',exact:true});await deltaDialog.locator('summary').click();
+  await deltaDialog.getByLabel('같은 이름의 파일이 있으면',{exact:true}).selectOption('replace');
+  assert(!await deltaDialog.getByLabel('전송 방식',{exact:true}).locator('[value="rsync"]').isDisabled(),'Other-device to local copy unnecessarily blocked delta');
+  await deltaDialog.getByRole('button',{name:'취소',exact:true}).click();
+  await layer.locator('.files-sidebar [data-device="studio"]').first().click();await row('Alpha-A.txt').waitFor();
 
   // One sorting preference drives every layout, including cached ancestor columns.
   const sort=async name=>{await layer.locator('[data-action="sort"]').click();await p.getByRole('menuitemradio',{name,exact:true}).click();};
@@ -87,6 +96,15 @@ try{
 
   await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+t`);
   assert(await layer.locator('[data-tab]').count()===2,'New tab failed');
+  // The tab's label and close button are separate keyboard controls. Arrow navigation
+  // retains focus on the active tab; Space on close must close rather than preview a file.
+  await layer.getByRole('tab',{selected:true}).focus();await p.keyboard.press('ArrowLeft');
+  await p.waitForFunction(()=>document.activeElement.matches('.files-tab [role="tab"][aria-selected="true"]'));
+  await p.keyboard.press('ArrowRight');
+  await layer.locator('[data-tab]').nth(1).locator('[data-close-tab]').focus();await p.keyboard.press('Space');
+  assert(await layer.locator('[data-tab]').count()===1,'Keyboard close failed');
+  await p.keyboard.press(`${mod}+t`);assert(await layer.locator('[data-tab]').count()===2,'Tab could not reopen after keyboard close');
+
   // Open another device in the new tab.
   await layer.locator('[data-device="build"]').first().click();
   await row('Beta-B.txt').waitFor();

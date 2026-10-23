@@ -15,6 +15,7 @@
   const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
   const pageToken = randomId();
   let pendingFolder = null, tabSwitch = null, pendingDeviceDrop = null;
+  let localRsyncAvailable = false;
   let host,
     layer,
     setup,
@@ -84,15 +85,17 @@
   function tabBar() {
     if (!layer) return;
     const bar = layer.querySelector(".files-tabs");
+    const focused = bar.contains(document.activeElement) && document.activeElement.matches('[role="tab"]');
     bar.hidden = MAC && host.id === NETWORK;
     const mixed = fileTabs.some(t => t.host && t.host.id !== host.id);
-    bar.innerHTML = fileTabs.map(t => { const on = t.id === currentTab, h = on ? host : t.host || host, folder = (on ? panes[active].path : t.panes[t.active].path).split(/[\\/]/).filter(Boolean).pop() || (!MAC && (on ? panes[active].path : t.panes[t.active].path) === "" ? "내 PC" : "/"), name = mixed && h.id !== NETWORK ? `${label(h)} · ${folder}` : folder; return `<div role="tab" aria-selected="${on}" class="files-tab ${on ? "on" : ""}" data-tab="${t.id}" tabindex="${on ? 0 : -1}" title="${esc(h.id === NETWORK ? folder : `${label(h)} · ${folder}`)}"><span>${icon(true)}${esc(name)}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`; }).join("") + `<button class="files-tab-add" ${host.id === NETWORK ? "disabled" : ""} data-action="new-tab" aria-label="새 탭" title="새 탭 (${MAC ? "⌘T" : "Ctrl+T"})"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>`;
+    bar.innerHTML = `<div class="files-tab-owner" role="tablist" aria-label="폴더 탭" aria-owns="${fileTabs.map(t => `file-tab-${t.id}`).join(" ")}"></div>` + fileTabs.map(t => { const on = t.id === currentTab, h = on ? host : t.host || host, folder = (on ? panes[active].path : t.panes[t.active].path).split(/[\\/]/).filter(Boolean).pop() || (!MAC && (on ? panes[active].path : t.panes[t.active].path) === "" ? "내 PC" : "/"), name = mixed && h.id !== NETWORK ? `${label(h)} · ${folder}` : folder; return `<div class="files-tab ${on ? "on" : ""}" data-tab="${t.id}" title="${esc(h.id === NETWORK ? folder : `${label(h)} · ${folder}`)}"><span id="file-tab-${t.id}" role="tab" aria-selected="${on}" tabindex="${on ? 0 : -1}">${icon(true)}${esc(name)}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`; }).join("") + `<button class="files-tab-add" ${host.id === NETWORK ? "disabled" : ""} data-action="new-tab" aria-label="새 탭" title="새 탭 (${MAC ? "⌘T" : "Ctrl+T"})"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>`;
     if (!MAC && networkMode) { const t = bar.querySelector(".files-tab.on > span"); if (t) t.innerHTML = `${I(explorerHome ? "E80F" : "E774")}${explorerHome ? "홈" : "네트워크"}`; }
     // Windows file windows have no system title bar: the tab row is it, as in Explorer.
     // (Drawn as SVG: the caption glyph fonts differ between Windows 10 and 11.)
     const glyph = { minimize: '<path d="M1 5.5h9"/>', maximize: '<rect x="1" y="1" width="9" height="9"/>', restore: '<rect x="1" y="3" width="7" height="7"/><path d="M3 3V1h7v7H8"/>', close: '<path d="M1 1l9 9M10 1l-9 9"/>' };
     const svg = (k) => `<svg viewBox="0 0 11 11" aria-hidden="true">${glyph[k]}</svg>`;
     if (CHROME) bar.insertAdjacentHTML("beforeend", `<div class="files-caption"><button data-window="minimize" aria-label="최소화" title="최소화">${svg("minimize")}</button><button data-window="maximize" aria-label="${maximized ? "이전 크기로" : "최대화"}" title="${maximized ? "이전 크기로" : "최대화"}">${svg(maximized ? "restore" : "maximize")}</button><button data-window="close" class="close" aria-label="닫기" title="닫기">${svg("close")}</button></div>`);
+    if (focused) bar.querySelector('[role="tab"][aria-selected="true"]')?.focus({preventScroll:true});
   }
   function newTab(path, side) {
     if (host.id === NETWORK) return;
@@ -123,12 +126,14 @@
     for (const side of ["local", "remote"]) if (panes[side].busy || side === active) nav(side, panes[side].busy ? panes[side].history[panes[side].at] || panes[side].path : panes[side].path, false);
   }
   function closeTab(id) {
+    const focused = layer.querySelector(".files-tabs").contains(document.activeElement);
     if (fileTabs.length === 1) return act("close");
     const index = fileTabs.findIndex(t => t.id === id);
     if (id === currentTab) switchTab(fileTabs[index === 0 ? 1 : index - 1].id);
     const [closed] = fileTabs.splice(index, 1);
     releaseUnused(closed.host);
     tabBar();
+    if (focused) layer.querySelector('[role="tab"][aria-selected="true"]')?.focus();
   }
   // Point the window at the device of the current tab; the other tabs keep their connections.
   function useHost(h) {
@@ -161,7 +166,7 @@
         call("list", { side, path, seq });
       }
       const next = paths[n + 1];
-      return `<section class="files-column" data-column="${esc(path)}"><header>${esc(path.split(/[\\/]/).filter(Boolean).pop() || "/")}</header>${shown?.length ? shown.map((e, i) => current ? `<div class="files-item ${p.selected.has(e.name) ? "selected" : ""}" data-index="${i}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</div>` : `<button class="files-column-entry ${child(path,e.name) === next ? "on" : ""}" data-column-folder="${esc(e.dir ? child(path,e.name) : path)}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</button>`).join("") : `<p class="files-note">${loading || !entries ? "폴더를 읽는 중…" : "표시할 항목이 없습니다"}</p>`}</section>`;
+      return `<section class="files-column" data-column="${esc(path)}" role="${current ? "listbox" : "group"}" aria-label="${esc(path)}" ${current ? 'aria-multiselectable="true"' : ""}><header>${esc(path.split(/[\\/]/).filter(Boolean).pop() || "/")}</header>${shown?.length ? shown.map((e, i) => current ? `<div role="option" aria-selected="${p.selected.has(e.name)}" class="files-item ${p.selected.has(e.name) ? "selected" : ""}" data-index="${i}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</div>` : `<button class="files-column-entry ${child(path,e.name) === next ? "on" : ""}" data-column-folder="${esc(e.dir ? child(path,e.name) : path)}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</button>`).join("") : `<p class="files-note">${loading || !entries ? "폴더를 읽는 중…" : "표시할 항목이 없습니다"}</p>`}</section>`;
     }).join("")}</div>`;
   }
   function previewTarget() {
@@ -171,6 +176,8 @@
   function updatePreview() {
     if (!layer) return;
     const el = layer.querySelector(".files-preview"), entry = previewTarget();
+    const wasHidden = el.hidden, hadFocus = el.contains(document.activeElement);
+    const focusOverlay = () => { if (hadFocus || (wasHidden && !MAC && matchMedia("(max-width:600px)").matches)) el.querySelector('[data-action="close-preview"]')?.focus(); };
     const show = previewOn || view === "gallery" || previewModal;
     el.hidden = !show;
     el.classList.toggle("quick-look", previewModal);
@@ -184,9 +191,11 @@
     zoom = null;
     if (details) {
       el.innerHTML = `<header><strong>자세히</strong><span class="spacer"></span><button class="btn sm" data-action="close-preview" aria-label="자세히 창 닫기">×</button></header><div class="files-details">${entry ? `${icon(entry.dir, entry.name)}<h3>${esc(entry.name)}</h3><dl><dt>종류</dt><dd>${esc(kind(entry))}</dd><dt>위치</dt><dd>${esc(panes[active].path)}</dd>${entry.dir ? "" : `<dt>크기</dt><dd>${bytes(entry.size)}</dd>`}<dt>수정한 날짜</dt><dd>${entry.modified ? esc(new Date(entry.modified * 1000).toLocaleString()) : "—"}</dd></dl>` : '<p>파일을 선택하면 자세한 정보가 표시됩니다.</p>'}</div>`;
+      focusOverlay();
       return;
     }
     el.innerHTML = `<header><strong>미리보기</strong><span class="spacer"></span><button class="btn sm subtle files-zoom" data-action="zoom-fit" title="확대/축소: 핀치·${MAC ? "⌘" : "Ctrl+"}+/−, 두 번 클릭 또는 ${MAC ? "⌘" : "Ctrl+"}0으로 맞춤" hidden></button><button class="btn sm" data-action="close-preview" aria-label="미리보기 닫기">×</button></header><div class="files-preview-content">${entry ? icon(entry.dir,entry.name) : ""}<p>${entry ? esc(entry.name) : "미리볼 파일을 선택하세요"}</p></div>${entry ? `<footer>${esc(kind(entry))} · ${entry.dir ? "폴더" : bytes(entry.size)}</footer>` : ""}`;
+    focusOverlay();
     if (!entry || entry.dir || entry.link) return;
     const seq = previewSeq, side = active, path = child(panes[active].path, entry.name);
     el.querySelector(".files-preview-content").insertAdjacentHTML("beforeend", '<small>미리보기 불러오는 중…</small>');
@@ -339,12 +348,23 @@
   }
   function prompt(title, body, buttons) {
     return new Promise((resolve) => {
+      const returnFocus = document.activeElement;
       const el = document.createElement("div");
       el.style.cssText =
         "position:fixed;inset:0;z-index:3700;background:#0005;display:flex;align-items:center;justify-content:center";
       el.className = "files-prompt";
-      el.innerHTML = `<div class="dialog files-setup"><div class="body"><h2>${esc(title)}</h2>${body}</div><div class="foot">${buttons.map(([id, text, primary]) => `<button class="btn ${primary ? "primary" : ""}" data-choice="${id}">${esc(text)}</button>`).join("")}</div></div>`;
+      el.innerHTML = `<div class="dialog files-setup" role="dialog" aria-modal="true" aria-labelledby="files-prompt-title"><div class="body"><h2 id="files-prompt-title">${esc(title)}</h2>${body}</div><div class="foot">${buttons.map(([id, text, primary]) => `<button class="btn ${primary ? "primary" : ""}" data-choice="${id}">${esc(text)}</button>`).join("")}</div></div>`;
       document.body.append(el);
+      const policy = el.querySelector('[name="policy"]'), engine = el.querySelector('[name="engine"]');
+      if (policy && engine) {
+        const option = engine.querySelector('[value="rsync"]'), supported = !option.disabled;
+        const update = () => { option.disabled = !supported || policy.value !== "replace"; if (option.disabled && engine.value === "rsync") engine.value = "auto"; };
+        policy.addEventListener("change", update); update();
+      }
+      el.querySelectorAll(".field").forEach((field, index) => {
+        const label = field.querySelector("label"), input = field.querySelector("input,select,textarea");
+        if (label && input) { input.id = `files-prompt-field-${index}`; label.htmlFor = input.id; }
+      });
       el.addEventListener("click", (e) => {
         const b = e.target.closest("[data-choice]");
         if (!b) return;
@@ -355,6 +375,7 @@
           ]),
         );
         el.remove();
+        (returnFocus?.isConnected && returnFocus !== document.body ? returnFocus : layer?.querySelector(".files-list"))?.focus();
         resolve({ choice: b.dataset.choice, ...fields });
       });
       el.addEventListener("keydown", (e) => {
@@ -475,7 +496,7 @@
       layer.querySelector(".files-network h2").textContent = title;
       if (explorerHome) layer.querySelector(".files-network header p").textContent = "최근 폴더와 저장된 기기를 빠르게 열어 보세요.";
       updateExplorerAddress();
-      const tab = layer.querySelector('.files-tab[aria-selected="true"] > span');
+      const tab = layer.querySelector('.files-tab.on > span');
       if (tab) tab.innerHTML = `${I(explorerHome ? "E80F" : "E774")}${title}`;
     }
     layer.querySelector("[data-status]").textContent =
@@ -544,7 +565,11 @@
     const address = document.createElement("div"); address.className = "files-explorer-address";
     const folderTitle = title.querySelector(".files-folder-title"); folderTitle.hidden = true;
     const cut = get("cut"), copy = get("copy"), paste = get("paste"), rename = get("rename"), trash = get("trash"), more = get("more"), viewButton = get("view");
-    title.replaceChildren(nav, address, searchBox, folderTitle);
+    title.replaceChildren(button("locations-toggle", "위치 선택", "E774"), nav, address, searchBox, folderTitle);
+    const locations = get("locations-toggle");
+    locations.setAttribute("aria-controls", "files-locations-sidebar");
+    locations.setAttribute("aria-expanded", "false");
+    layer.querySelector(".files-sidebar").id = "files-locations-sidebar";
     layer.prepend(layer.querySelector(".files-tabs"));
     [[cut,"잘라내기","E8C6"],[copy,"복사","E8C8"],[paste,"붙여넣기","E77F"],[rename,"이름 변경","E70F"],[trash,"보관함으로 이동","E74D"]].forEach(([b,label,glyph])=>{b.title=label;b.setAttribute("aria-label",label);b.innerHTML=I(glyph);});
     viewButton.innerHTML = `${I("E8FD")}<span>보기</span><span class="files-chevron" aria-hidden="true">⌄</span>`;
@@ -813,8 +838,8 @@
     const tool = (action, glyph, text) =>
       `<button class="btn sm" data-action="${action}" title="${text}" aria-label="${text}">${I(glyph)}</button>`;
     layer.innerHTML = `<div class="files-title"><div class="files-nav">${tool("back", "E72B", "뒤로")}${tool("forward", "E76C", "앞으로")}</div>${icon(true)}<b>${esc(label(host))}</b><span class="files-folder-title"></span><span class="spacer"></span>${tool("view", "E80A", "보기")}${tool("mkdir", "E8F4", "새 폴더")}${tool("refresh", "E72C", "새로 고침")}<button class="btn sm" data-action="more" title="동작" aria-label="동작">${I("E712")}</button>${tool("settings", "E713", "연결 설정")}${tool("native", "E8A7", `${nativeName}에서 열기`)}<input class="input files-search" placeholder="검색" aria-label="파일 검색" data-search></div>
-      <nav class="files-tabs" role="tablist" aria-label="폴더 탭"></nav><aside class="files-preview" hidden></aside><nav class="files-locations" aria-label="기기 위치"></nav><div class="files-tools">${tool("up", "E80F", "상위 폴더")}${tool("copy", "E8C8", "복사")}<button class="btn sm" data-action="cut">잘라내기</button><button class="btn sm" data-action="paste">붙여넣기</button>${tool("rename", "E70F", "이름 변경")}${tool("trash", "E74D", "보관함으로")}${tool("undo", "E81C", "되돌리기")}<span class="spacer"></span><button class="btn sm" data-action="split">분할 보기</button><button class="btn sm" data-action="hidden">숨김 파일</button><button class="btn sm" data-action="transfers">전송 내역</button></div>
-      <div class="files-error" hidden role="alert"></div><div class="files-body"><aside class="files-sidebar"><div data-network-sidebar></div><div class="files-current-places"><h4>즐겨찾기</h4><button class="btn subtle" data-bookmark="home">${I("E80F")}홈 폴더</button><button class="btn subtle" data-bookmark="Downloads">${I("E8B7")}다운로드</button><button class="btn subtle" data-bookmark="Documents">${I("E8A5")}문서</button><button class="btn subtle" data-bookmark="Desktop">${I("E7F4")}${MAC ? "데스크탑" : "바탕 화면"}</button><h4>위치</h4><button class="btn subtle" data-side="remote">${I("E7F4")}${esc(label(host))}</button><button class="btn subtle" data-side="local">${I("E7F8")}${HERE}</button><h4>파일 관리</h4><button class="btn subtle" data-bookmark=".itda-trash">${I("E74D")}보관함</button></div></aside><div class="files-panes"></div></div><div class="files-jobs" hidden></div><div class="files-status"><div data-footer-path></div><span data-status></span><span data-location></span></div>`;
+      <nav class="files-tabs" aria-label="폴더 탭"></nav><aside class="files-preview" hidden></aside><nav class="files-locations" aria-label="기기 위치"></nav><div class="files-tools">${tool("up", "E80F", "상위 폴더")}${tool("copy", "E8C8", "복사")}<button class="btn sm" data-action="cut">잘라내기</button><button class="btn sm" data-action="paste">붙여넣기</button>${tool("rename", "E70F", "이름 변경")}${tool("trash", "E74D", "보관함으로")}${tool("undo", "E81C", "되돌리기")}<span class="spacer"></span><button class="btn sm" data-action="split">분할 보기</button><button class="btn sm" data-action="hidden">숨김 파일</button><button class="btn sm" data-action="transfers">전송 내역</button></div>
+      <div class="files-error" hidden role="alert"></div><div class="files-body"><aside class="files-sidebar"><div data-network-sidebar></div><div class="files-current-places"><h4>즐겨찾기</h4><button class="btn subtle" data-bookmark="home">${I("E80F")}홈 폴더</button><button class="btn subtle" data-bookmark="Downloads">${I("E8B7")}다운로드</button><button class="btn subtle" data-bookmark="Documents">${I("E8A5")}문서</button><button class="btn subtle" data-bookmark="Desktop">${I("E7F4")}${MAC ? "데스크탑" : "바탕 화면"}</button><h4>위치</h4><button class="btn subtle" data-side="remote">${I("E7F4")}${esc(label(host))}</button><button class="btn subtle" data-side="local">${I("E7F8")}${HERE}</button><h4>파일 관리</h4><button class="btn subtle" data-bookmark=".itda-trash">${I("E74D")}보관함</button></div></aside><div class="files-panes"></div></div><div class="files-jobs" hidden></div><div class="files-status"><div data-footer-path></div><span data-status></span><span class="files-selection-status" role="status" aria-atomic="true"></span><span data-location></span></div>`;
     document.body.append(layer);
     {
       const title = layer.querySelector(".files-title");
@@ -843,6 +868,18 @@
     if (!MAC) explorerChrome();
     layer.querySelector(".files-title").addEventListener("pointerdown", (e) => {
       if (MAC && e.button === 0 && !e.target.closest("button,input")) send("files_drag");
+    });
+    layer.addEventListener("pointerdown", e => {
+      if (!e.target.closest('.files-sidebar,[data-action="locations-toggle"]')) {
+        layer.classList.remove("locations-open");
+        layer.querySelector('[data-action="locations-toggle"]')?.setAttribute("aria-expanded", "false");
+      }
+    }, true);
+    layer.addEventListener("focusin", e => {
+      if (layer.classList.contains("locations-open") && !e.target.closest('.files-sidebar,[data-action="locations-toggle"]')) {
+        layer.classList.remove("locations-open");
+        layer.querySelector('[data-action="locations-toggle"]')?.setAttribute("aria-expanded", "false");
+      }
     });
     layer.addEventListener("pointerdown", resizeStart, true);
     layer.addEventListener("click", click);
@@ -1015,7 +1052,7 @@
         const list = visible(side);
         const cell = (e, i) =>
           `data-index="${i}" class="files-item ${p.selected.has(e.name) ? "selected" : ""}" aria-selected="${p.selected.has(e.name)}"`;
-        return `<section class="files-pane ${side === active ? "active" : ""}" data-pane="${side}">${!MAC && split ? pathHTML(side) : ""}<div class="files-list" tabindex="0" role="grid" aria-label="${side === "local" ? "내 기기" : "원격 기기"} 파일">${view === "columns" ? columnHTML(side) : p.busy ? '<div class="files-note">폴더를 읽는 중…</div>' : !list.length ? '<div class="files-note">표시할 항목이 없습니다</div>' : ["grid", "gallery"].includes(view) ? `<div class="files-grid ${view === "gallery" ? "files-gallery-strip" : ""}">${list.map((e, i) => `<div ${cell(e, i)}>${icon(e.dir, e.name)}<span>${esc(e.name)}${e.link ? " ↗" : ""}</span></div>`).join("")}</div>` : `<table><colgroup>${(MAC ? [47, 25, 12, 16] : [42, 24, 22, 12]).map((w, i) => `<col style="width:${columnWidths[side]?.[i] ? `${columnWidths[side][i]}px` : `${w}%`}">`).join("")}</colgroup><thead><tr>${(MAC ? [["name", "이름"], ["modified", "수정한 날짜"], ["size", "크기"], ["kind", "종류"]] : [["name", "이름"], ["modified", "수정한 날짜"], ["kind", "종류"], ["size", "크기"]]).map(([key, title], i) => `<th data-sort="${key}">${title}${sorting.key === key ? (sorting.desc ? " ▾" : " ▴") : ""}${i < 3 ? `<span data-resize-column="${i}" role="separator" aria-label="${title} 열 너비" aria-orientation="vertical" tabindex="0"></span>` : ""}</th>`).join("")}</tr></thead><tbody>${rows(side)}</tbody></table>`}</div></section>`;
+        return `<section class="files-pane ${side === active ? "active" : ""}" data-pane="${side}">${!MAC && split ? pathHTML(side) : ""}<div class="files-list" tabindex="0" role="group" aria-label="${side === "local" ? "내 기기" : "원격 기기"} 파일">${view === "columns" ? columnHTML(side) : p.busy ? '<div class="files-note">폴더를 읽는 중…</div>' : !list.length ? '<div class="files-note">표시할 항목이 없습니다</div>' : ["grid", "gallery"].includes(view) ? `<div class="files-grid ${view === "gallery" ? "files-gallery-strip" : ""}" role="listbox" aria-label="파일" aria-multiselectable="true">${list.map((e, i) => `<div role="option" ${cell(e, i)}>${icon(e.dir, e.name)}<span>${esc(e.name)}${e.link ? " ↗" : ""}</span></div>`).join("")}</div>` : `<table role="grid" aria-label="파일" aria-multiselectable="true"><colgroup>${(MAC ? [47, 25, 12, 16] : [42, 24, 22, 12]).map((w, i) => `<col style="width:${columnWidths[side]?.[i] ? `${columnWidths[side][i]}px` : `${w}%`}">`).join("")}</colgroup><thead><tr>${(MAC ? [["name", "이름"], ["modified", "수정한 날짜"], ["size", "크기"], ["kind", "종류"]] : [["name", "이름"], ["modified", "수정한 날짜"], ["kind", "종류"], ["size", "크기"]]).map(([key, title], i) => `<th data-sort="${key}">${title}${sorting.key === key ? (sorting.desc ? " ▾" : " ▴") : ""}${i < 3 ? `<span data-resize-column="${i}" role="separator" aria-label="${title} 열 너비" aria-orientation="vertical" tabindex="0"></span>` : ""}</th>`).join("")}</tr></thead><tbody>${rows(side)}</tbody></table>`}</div></section>`;
       })
       .join("");
     layer
@@ -1062,6 +1099,10 @@
     }
     layer.querySelector("[data-status]").textContent =
       `${visible(active).length}개 항목${p.selected.size ? ` · ${p.selected.size}개 선택됨` : ""}`;
+    const selectionStatus = layer.querySelector(".files-selection-status");
+    const focusedName = visible(active)[p.focus]?.name;
+    const announcement = p.selected.size ? `${p.selected.has(focusedName) ? focusedName : [...p.selected][0]} · ${p.selected.size}개 선택됨` : "";
+    if (selectionStatus.textContent !== announcement) selectionStatus.textContent = announcement;
     layer.querySelector("[data-location]").textContent = p.path;
     layer.querySelector(".files-folder-title").textContent =
       p.path.split(/[\\/]/).filter(Boolean).pop() || p.path;
@@ -1157,6 +1198,11 @@
     updatePreview();
   }
   function click(e) {
+    if (e.target.closest(".files-sidebar button") && layer.classList.contains("locations-open")) {
+      layer.classList.remove("locations-open");
+      const toggle = layer.querySelector('[data-action="locations-toggle"]');
+      toggle?.setAttribute("aria-expanded", "false"); toggle?.focus();
+    }
     if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopPropagation(); return; }
     const close = e.target.closest("[data-close-tab]");
     if (close) return closeTab(Number(close.dataset.closeTab));
@@ -1279,11 +1325,17 @@
       });
   }
   async function act(action) {
+    if (action === "locations-toggle") {
+      const open = layer.classList.toggle("locations-open");
+      layer.querySelector('[data-action="locations-toggle"]').setAttribute("aria-expanded", String(open));
+      if (open) layer.querySelector(".files-sidebar button:not([disabled])")?.focus();
+      return;
+    }
     if (action === "new-window") return launch(host, true);
     if (action === "new-tab") return newTab();
     if (action === "zoom-fit") { if (zoom === null) zoomBy(1, undefined, undefined, 1); else { zoom = null; applyZoom(); } return; }
     if (action === "preview" || action === "details") { previewOn = !(previewOn && previewKind === action); previewKind = action; previewKey = ""; renderPanes(); return; }
-    if (action === "close-preview") { previewOn = false; previewModal = false; if (view === "gallery") view = "list"; previewKey = ""; renderPanes(); return; }
+    if (action === "close-preview") { const restore = layer.querySelector(".files-preview").contains(document.activeElement) || (!MAC && matchMedia("(max-width:600px)").matches); previewOn = false; previewModal = false; if (view === "gallery") view = "list"; previewKey = ""; renderPanes(); if (restore) layer.querySelector(`[data-pane="${active}"] .files-list`)?.focus(); return; }
     if (action === "network") return network();
     if (action === "explorer-home") return network("home");
     if (action === "scan") {
@@ -1503,9 +1555,10 @@
       dest.path === destination
         ? names.filter((n) => dest.entries.some((e) => e.name === n))
         : [];
+    const deltaEligible = localRsyncAvailable && !move && from !== to;
     const r = await prompt(
       move ? "파일 이동" : "파일 복사",
-      `<p><b>${esc(names.length === 1 ? names[0] : `${names.length}개 항목`)}</b></p><p class="hint">${esc(where(from, source, cross ? origin.id : id))} → ${esc(where(to, destination, id))}</p>${collisions.length ? `<p>같은 이름의 항목 ${collisions.length}개가 있습니다.</p>` : ""}<div class="field"><label>같은 이름의 파일이 있으면</label><select class="input" name="policy"><option value="keep">둘 다 유지</option><option value="replace">변경된 파일 바꾸기 · 폴더는 합치기</option><option value="skip">기존 파일 건너뛰기</option></select></div><details><summary>전송 옵션 · 자동 선택</summary><div class="field"><label>전송 방식</label><select class="input" name="engine"><option value="auto">자동 · 가능한 경우 rsync 증분 전송</option><option value="sftp">일반 전송 · SFTP</option><option value="rsync">증분 전송 · rsync 필요</option></select></div></details>${move ? '<p class="hint">같은 파일시스템 안에서는 바로 이동하며, 장치 간 이동은 해시를 확인한 뒤 원본을 삭제합니다. 취소하거나 실패한 항목의 원본은 유지합니다.</p>' : ""}`,
+      `<p><b>${esc(names.length === 1 ? names[0] : `${names.length}개 항목`)}</b></p><p class="hint">${esc(where(from, source, cross ? origin.id : id))} → ${esc(where(to, destination, id))}</p>${collisions.length ? `<p>같은 이름의 항목 ${collisions.length}개가 있습니다.</p>` : ""}<div class="field"><label>같은 이름의 파일이 있으면</label><select class="input" name="policy"><option value="keep">둘 다 유지</option><option value="replace">변경된 파일 바꾸기 · 폴더는 합치기</option><option value="skip">기존 파일 건너뛰기</option></select></div><details><summary>전송 옵션 · 자동 선택</summary><div class="field"><label>전송 방식</label><select class="input" name="engine"><option value="auto">자동 · 가능한 경우 rsync 증분 전송</option><option value="sftp">일반 전송 · SFTP</option><option value="rsync" ${deltaEligible ? "" : "disabled"}>증분 전송 · 파일 바꾸기에서만 사용</option></select></div><p class="hint">증분 전송은 이 컴퓨터와 원격 기기 사이의 복사에서 ‘변경된 파일 바꾸기’를 선택하고 양쪽에 rsync가 있을 때 사용할 수 있습니다. Windows 한글 이름 변환이 필요한 항목은 자동 또는 일반 전송을 사용하세요. 자동은 가능한 방식을 선택합니다.</p></details>${move ? '<p class="hint">같은 파일시스템 안에서는 바로 이동하며, 장치 간 이동은 해시를 확인한 뒤 원본을 삭제합니다. 취소하거나 실패한 항목의 원본은 유지합니다.</p>' : ""}`,
       [
         ["cancel", "취소"],
         ["ok", move ? "이동" : "복사", true],
@@ -1635,14 +1688,20 @@
     if (!MAC && !networkMode && e.altKey && (e.code === "KeyP" || e.key.toLowerCase() === "p")) { e.preventDefault(); act(e.shiftKey ? "details" : "preview"); return; }
     if (document.querySelector(".files-prompt")) return;
     e.stopPropagation();
-    const focusedTab = e.target.closest("[data-tab]");
+    if (e.key === "Escape" && layer.classList.contains("locations-open")) {
+      e.preventDefault(); layer.classList.remove("locations-open");
+      const toggle = layer.querySelector('[data-action="locations-toggle"]'); toggle.setAttribute("aria-expanded", "false"); toggle.focus(); return;
+    }
+    const focusedTab = e.target.closest('[role="tab"]')?.closest("[data-tab]");
     if (focusedTab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
       e.preventDefault();
       const i = fileTabs.findIndex(t => t.id === currentTab);
       const next = e.key === "Home" ? 0 : e.key === "End" ? fileTabs.length - 1 : (i + (e.key === "ArrowRight" ? 1 : fileTabs.length - 1)) % fileTabs.length;
       switchTab(fileTabs[next].id);
-      layer.querySelector(`[data-tab="${currentTab}"]`)?.focus(); return;
+      layer.querySelector(`[data-tab="${currentTab}"] [role="tab"]`)?.focus(); return;
     }
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && ((['Enter', ' '].includes(e.key) && e.target.closest('button,select,summary,a[href]')) || (e.target.closest('select,summary') && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End'].includes(e.key)))) return;
+    if (focusedTab && ["Enter", " "].includes(e.key)) { e.preventDefault(); switchTab(Number(focusedTab.dataset.tab)); return; }
     const modKey = MAC ? e.metaKey : e.ctrlKey;
     if (modKey && e.key.toLowerCase() === "t") { e.preventDefault(); newTab(); return; }
     if (modKey && e.key.toLowerCase() === "w" && fileTabs.length > 1) { e.preventDefault(); closeTab(currentTab); return; }
@@ -1659,10 +1718,21 @@
       }
       return;
     }
-    if (e.key === "Escape" && previewModal) { e.preventDefault(); previewModal = false; previewKey = ""; updatePreview(); return; }
+    if (e.key === "Escape" && previewModal) {
+      e.preventDefault();
+      const restore = layer.querySelector(".files-preview").contains(document.activeElement);
+      previewModal = false; previewKey = ""; updatePreview();
+      if (restore) {
+        const pane = layer.querySelector(".files-preview");
+        if (!MAC && matchMedia("(max-width:600px)").matches && !pane.hidden) pane.querySelector('[data-action="close-preview"]')?.focus();
+        else layer.querySelector(`[data-pane="${active}"] .files-list`)?.focus();
+      }
+      return;
+    }
+    if (e.key === "Escape" && !e.target.closest("input,textarea") && !MAC && matchMedia("(max-width:600px)").matches && !layer.querySelector(".files-preview").hidden) { e.preventDefault(); act("close-preview"); return; }
     const input = e.target.closest("input,textarea");
     if (input) {
-      if (!MAC && e.key === "Escape" && input.dataset.path) { e.preventDefault(); layer.querySelector(".files-explorer-address").classList.remove("editing"); layer.querySelector(".files-list")?.focus(); return; }
+      if (!MAC && e.key === "Escape" && input.dataset.path) { e.preventDefault(); layer.querySelector(".files-explorer-address").classList.remove("editing"); const preview = layer.querySelector(".files-preview"); if (matchMedia("(max-width:600px)").matches && !preview.hidden) preview.querySelector('[data-action="close-preview"]')?.focus(); else layer.querySelector(`[data-pane="${active}"] .files-list`)?.focus(); return; }
       if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229 && input.dataset.path) {
         e.preventDefault();
         nav(input.dataset.path, input.value);
@@ -2084,6 +2154,7 @@
       return true;
     }
     if (m.op === "connect") {
+      localRsyncAvailable = m.data.rsync === true;
       if (setup) (layer ? adopt : workspace)(m.data);
       return true;
     }
@@ -2157,6 +2228,13 @@
     if(e.target.closest?.("input,textarea") || document.activeElement?.closest("input,textarea") || (!selected?.isCollapsed && selected?.anchorNode?.parentElement?.closest(".files-preview pre")))return;
     e.preventDefault();e.stopPropagation();act(type);
   },true);
+  matchMedia('(max-width:600px)').addEventListener('change', e => {
+    if (e.matches && layer && !MAC && !layer.querySelector('.files-preview').hidden && document.activeElement?.closest('.files-list')) layer.querySelector('[data-action="close-preview"]')?.focus();
+    if (!e.matches && layer) {
+      layer.classList.remove("locations-open");
+      layer.querySelector('[data-action="locations-toggle"]')?.setAttribute("aria-expanded", "false");
+    }
+  });
   document.addEventListener("keydown", key, true);
   document.addEventListener("click", browserClick);
   document.addEventListener("dblclick", (e) => {
