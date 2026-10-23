@@ -706,7 +706,25 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
         WM_GETMINMAXINFO => {
             let mi = &mut *(lp as *mut MINMAXINFO);
             let d = GetDpiForWindow(h).max(96) as i32;
-            mi.ptMinTrackSize = POINT { x: 720 * d / 96, y: 500 * d / 96 };
+            // File windows have a compact layout down to 440 CSS px. Do not force
+            // the home window's width on them, or that layout is unreachable.
+            let (w, height) = if chromeless(h) { (440, 400) } else { (720, 500) };
+            let mut minimum = POINT { x: w * d / 96, y: height * d / 96 };
+            if chromeless(h) {
+                // WM_NCCALCSIZE removes the caption, retaining side/bottom frames;
+                // resize_webview also reserves a small top resize strip.
+                minimum.x += 2 * (GetSystemMetricsForDpi(SM_CXFRAME, d as u32) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, d as u32));
+                minimum.y += frame_y(h) + top_edge(h);
+            }
+            // Track sizes are OUTER physical bounds. Both kinds of window must
+            // still fit a small/high-DPI monitor, including the non-client frame.
+            let mut monitor: MONITORINFO = std::mem::zeroed();
+            monitor.cbSize = size_of::<MONITORINFO>() as u32;
+            if GetMonitorInfoW(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mut monitor) != 0 {
+                minimum.x = minimum.x.min((monitor.rcWork.right - monitor.rcWork.left).max(1));
+                minimum.y = minimum.y.min((monitor.rcWork.bottom - monitor.rcWork.top).max(1));
+            }
+            mi.ptMinTrackSize = minimum;
         }
         WM_SETTINGCHANGE => {
             if lp != 0 {
