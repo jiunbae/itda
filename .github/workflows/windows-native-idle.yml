@@ -1,0 +1,66 @@
+name: Windows native idle pilot
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-native-idle.yml'
+      - 'scripts/windows-native-idle-*'
+      - 'scripts/windows-native-preflight.ps1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  idle-pilot:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install CDP client (no browser installation)
+        run: npm install --no-save --package-lock=false playwright
+      - name: Build this job's candidate
+        shell: pwsh
+        run: ./scripts/windows-release.ps1
+      - name: Fresh same-machine prerequisites
+        continue-on-error: true
+        shell: pwsh
+        env:
+          ITDA_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: ./scripts/windows-native-preflight.ps1 -Receipt test-artifacts/native-idle/preflight.json
+      - name: Launch isolated native app and probe idle close
+        shell: pwsh
+        timeout-minutes: 3
+        env:
+          ITDA_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $p = 'test-artifacts/native-idle/preflight.json'
+          $r = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json
+          if ($r.status -eq 'prerequisite-unavailable') {
+            @{status='prerequisite-unavailable';scope='No native app launched';unmet=$r.unmet} | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 test-artifacts/native-idle/result.json
+            exit 0
+          }
+          if ($r.status -ne 'eligible-for-idle-pilot') { throw 'Native prerequisites probe failed' }
+          node scripts/windows-native-idle-e2e.mjs
+          if ($LASTEXITCODE) { throw 'Native idle pilot failed; inspect receipt' }
+      - name: Report narrow native scope
+        if: always()
+        shell: pwsh
+        run: |
+          $p = 'test-artifacts/native-idle/result.json'
+          if (-not (Test-Path -LiteralPath $p)) { throw 'Native pilot produced no result receipt' }
+          $r = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json
+          @('### Windows native idle pilot', "Status: $($r.status)", 'Own native HWND messages and isolated WebView2 only. No transfer, physical-input, real shutdown, user-machine or persona-score acceptance.') | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-native-idle-pilot
+          path: |
+            test-artifacts/native-idle/
+            target/release/itda.exe
+          if-no-files-found: error
