@@ -1,0 +1,46 @@
+name: Windows native prerequisites
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-native-preflight.yml'
+      - 'scripts/windows-native-preflight.ps1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prerequisites:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect desktop and runtime (no app launch)
+        id: probe
+        continue-on-error: true
+        shell: pwsh
+        env:
+          ITDA_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: ./scripts/windows-native-preflight.ps1 -Receipt test-artifacts/native-prerequisites/result.json
+      - name: Publish prerequisite scope and outcome
+        if: always()
+        shell: pwsh
+        run: |
+          $p = 'test-artifacts/native-prerequisites/result.json'
+          if (-not (Test-Path -LiteralPath $p)) { throw 'Prerequisite probe produced no receipt' }
+          $r = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json
+          @(
+            '### Windows native-test environment'
+            "Status: $($r.status)"
+            "Unmet: $($r.unmet -join ', ')"
+            'Environment evidence only. Itda was not launched; no native user journey passed.'
+            'This informational probe does not unlock a desktop, install a runtime or change permissions.'
+          ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          if ($r.status -eq 'probe-error') { throw 'Prerequisite probe failed; inspect the receipt' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-native-prerequisites
+          path: test-artifacts/native-prerequisites/result.json
+          if-no-files-found: error
