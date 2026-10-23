@@ -12,7 +12,7 @@
 use crate::demand::{self, Demand};
 use crate::enc::{ext_desktop_size, screens_in, Encoder, PixelFormat, Screen, Update, ENC_EXT_DESKTOP_SIZE, ENC_H264, ENC_ZRLE};
 use crate::outbox::Outbox;
-use crate::rfb::{vnc_response, PIXEL_FORMAT};
+use crate::rfb::{vnc_response, ENC_EXT_CLIPBOARD, PIXEL_FORMAT};
 use std::io::{self, BufReader, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
@@ -167,6 +167,75 @@ enum Msg {
     Frame,
     /// The viewer's connection was closed (the frame waker keeps the channel open).
     Gone,
+    /// A reply from the reader (extended clipboard), sent as is.
+    Send(Vec<u8>),
+}
+
+// ---------------------------------------------------------------- extended clipboard
+// Classic CutText is Latin-1 (noVNC turns anything else into '?', and reads our bytes as
+// Latin-1): with the viewer's Extended Clipboard, text goes as UTF-8 both ways.
+
+const CLIP_TEXT: u32 = 1;
+const CLIP_CAPS: u32 = 1 << 24;
+const CLIP_REQUEST: u32 = 1 << 25;
+const CLIP_PEEK: u32 = 1 << 26;
+const CLIP_NOTIFY: u32 = 1 << 27;
+const CLIP_PROVIDE: u32 = 1 << 28;
+const CLIP_MAX: u32 = 16 << 20;
+
+/// ServerCutText carrying an extended clipboard message.
+fn clip_msg(flags: u32, data: &[u8]) -> Vec<u8> {
+    let mut m = vec![3, 0, 0, 0];
+    m.extend_from_slice(&(-(4 + data.len() as i32)).to_be_bytes());
+    m.extend_from_slice(&flags.to_be_bytes());
+    m.extend_from_slice(data);
+    m
+}
+
+fn clip_provide(text: &str) -> Vec<u8> {
+    use flate2::{write::ZlibEncoder, Compression};
+    let t = text.replace("\r\n", "\n");
+    let mut inner = ((t.len() + 1) as u32).to_be_bytes().to_vec();
+    inner.extend_from_slice(t.as_bytes());
+    inner.push(0);
+    let mut z = ZlibEncoder::new(Vec::new(), Compression::fast());
+    let _ = z.write_all(&inner);
+    clip_msg(CLIP_PROVIDE | CLIP_TEXT, &z.finish().unwrap_or_default())
+}
+
+/// The text in the viewer's Provide (zlib: length, UTF-8 text with a trailing NUL).
+fn clip_text(data: &[u8]) -> Option<String> {
+    // noVNC ends its stream with a full flush, not a finished zlib stream: read what decodes
+    // (bounded: a small compressed message must not expand without end), then require all of
+    // the declared text.
+    let mut inner = Vec::new();
+    let _ = flate2::read::ZlibDecoder::new(data).take(CLIP_MAX as u64 + 4).read_to_end(&mut inner);
+    let n = u32::from_be_bytes(inner.get(..4)?.try_into().ok()?) as usize;
+    let body = inner.get(4..4 + n)?;
+    let body = body.strip_suffix(&[0]).unwrap_or(body);
+    Some(String::from_utf8_lossy(body).replace("\r\n", "\n"))
+}
+
+/// The viewer's extended clipboard message: the reply to send, if any.
+fn on_clip(p: &[u8], view_only: bool) -> Option<Vec<u8>> {
+    let flags = u32::from_be_bytes(p.get(..4)?.try_into().ok()?);
+    if flags & CLIP_CAPS != 0 {
+        None // its capabilities: nothing to answer
+    } else if flags & CLIP_REQUEST != 0 && flags & CLIP_TEXT != 0 {
+        (!view_only).then(|| clip_provide(&platform::clipboard_get().unwrap_or_default()))
+    } else if flags & CLIP_PEEK != 0 {
+        Some(clip_msg(CLIP_NOTIFY | if view_only { 0 } else { CLIP_TEXT }, &[]))
+    } else if flags & CLIP_NOTIFY != 0 {
+        // It has new text: fetch it (unless this viewer may only watch).
+        (flags & CLIP_TEXT != 0 && !view_only).then(|| clip_msg(CLIP_REQUEST | CLIP_TEXT, &[]))
+    } else if flags & CLIP_PROVIDE != 0 && flags & CLIP_TEXT != 0 && !view_only {
+        if let Some(t) = clip_text(&p[4..]) {
+            platform::clipboard_set(&t);
+        }
+        None
+    } else {
+        None
+    }
 }
 
 fn rd<const N: usize>(r: &mut impl Read) -> io::Result<[u8; N]> {
@@ -352,7 +421,11 @@ fn read_client(mut r: BufReader<TcpStream>, tx: &Sender<Msg>, input: &mut platfo
                 let n = i32::from_be_bytes([b[3], b[4], b[5], b[6]]);
                 let mut d = vec![0u8; n.unsigned_abs().min(16 << 20) as usize];
                 r.read_exact(&mut d)?;
-                if n > 0 && !view_only {
+                if n < 0 {
+                    if let Some(reply) = on_clip(&d, view_only) {
+                        let _ = tx.send(Msg::Send(reply));
+                    }
+                } else if n > 0 && !view_only {
                     let text = String::from_utf8(d).unwrap_or_else(|e| e.into_bytes().iter().map(|&b| b as char).collect());
                     platform::clipboard_set(&text);
                 }
@@ -485,6 +558,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
     let mut u = Update::default();
     let mut clip_seq = platform::clipboard_seq();
     let mut clip_check = Instant::now();
+    let mut ext_clip = false;
     loop {
         if stop.load(Relaxed) {
             return Ok(());
@@ -519,6 +593,11 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                         prev.clear();
                         exact.clear();
                     }
+                    if e.contains(&ENC_EXT_CLIPBOARD) && !ext_clip {
+                        // Our capabilities: text, and the actions noVNC needs to send UTF-8.
+                        ext_clip = true;
+                        reply.extend(clip_msg(CLIP_CAPS | CLIP_TEXT | CLIP_REQUEST | CLIP_PEEK | CLIP_NOTIFY | CLIP_PROVIDE, &CLIP_MAX.to_be_bytes()));
+                    }
                     reset = true;
                     encs = e;
                     told = None; // (re)introduce the displays
@@ -529,6 +608,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                     arrived = true;
                 }
                 Msg::Gone => return Ok(()),
+                Msg::Send(m) => reply.extend(m),
                 Msg::Request { incremental } => demand.request(incremental),
                 Msg::Ext(m) => {
                     if demand.ext(m, size.0, size.1, &mut reply) {
@@ -545,7 +625,9 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
             let seq = platform::clipboard_seq();
             if seq != clip_seq {
                 clip_seq = seq;
-                if let Some(t) = platform::clipboard_get() {
+                if let Some(t) = platform::clipboard_get().filter(|_| ext_clip) {
+                    out.send(clip_provide(&t))?;
+                } else if let Some(t) = platform::clipboard_get() {
                     let b = t.replace("\r\n", "\n").into_bytes();
                     let mut m = vec![3, 0, 0, 0];
                     m.extend_from_slice(&(b.len() as u32).to_be_bytes());
@@ -700,6 +782,28 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
 
 #[cfg(test)]
 mod tests {
+    /// Korean text survives the Extended Clipboard both ways (Provide is what noVNC parses),
+    /// and the viewer's Notify is answered with a Request.
+    #[test]
+    fn extended_clipboard_text() {
+        use super::*;
+        let m = clip_provide("안녕 Itda\r\n둘째 줄");
+        assert_eq!(&m[..4], &[3, 0, 0, 0]);
+        assert_eq!(i32::from_be_bytes(m[4..8].try_into().unwrap()), -((m.len() - 8) as i32));
+        assert_eq!(u32::from_be_bytes(m[8..12].try_into().unwrap()), CLIP_PROVIDE | CLIP_TEXT);
+        assert_eq!(clip_text(&m[12..]).as_deref(), Some("안녕 Itda\n둘째 줄"));
+        let notify = (CLIP_NOTIFY | CLIP_TEXT).to_be_bytes();
+        assert_eq!(on_clip(&notify, false), Some(clip_msg(CLIP_REQUEST | CLIP_TEXT, &[])));
+        assert_eq!(on_clip(&notify, true), None);
+        assert_eq!(on_clip(&(CLIP_CAPS | CLIP_TEXT).to_be_bytes(), false), None);
+        // What the bundled noVNC actually sends (full flush, no zlib trailer), with emoji.
+        let novnc = include_bytes!("../tests/fixtures/novnc-clipboard-provide.bin");
+        assert_eq!(u32::from_be_bytes(novnc[8..12].try_into().unwrap()), CLIP_PROVIDE | CLIP_TEXT);
+        assert_eq!(clip_text(&novnc[12..]).as_deref(), Some("클라이언트 🌍\n두 번째"));
+        // Cut short: not all of the declared text.
+        assert_eq!(clip_text(&novnc[12..novnc.len() - 12]), None);
+    }
+
     /// Real VideoToolbox -> production pump -> TCP -> independent ZRLE solid-tile reader.
     /// Opt-in: no screen capture, input, permissions or production listener involved.
     /// ITDA_REFINE_DIMS=3840x2160 cargo test --release fixed_frame_refines -- --ignored --nocapture
