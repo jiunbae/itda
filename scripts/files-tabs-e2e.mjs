@@ -198,12 +198,14 @@ try{
   const retryDialog=p.getByRole('dialog',{name:'남은 파일 다시 이동',exact:true});
   const note=await retryDialog.textContent();
   assert(note.includes('남은 2개')&&note.includes('이미 끝난 1개')&&note.includes('‘Docs’ 폴더는 일부만'),'Retry dialog: '+note);
-  assert(await retryDialog.getByLabel('같은 이름의 파일이 있으면',{exact:true}).inputValue()==='replace','Partial folder retry does not propose merging');
+  // Merging is only suggested: the other remaining name keeps the original 'keep both'.
+  assert(await retryDialog.getByLabel('같은 이름의 파일이 있으면',{exact:true}).inputValue()==='keep'&&note.includes('남은 다른 항목에도 적용'),'Partial folder retry escalated the policy for other names');
+  assert(note.includes('남은 파일만 새 이름의 폴더로 옮깁니다'),'Move retry keep-both text is not move-aware');
   assert((await packets()).filter(x=>x.op==='transfer').length===sentBefore,'Retry ran before it was confirmed');
   await retryDialog.getByRole('button',{name:'다시 이동',exact:true}).click();
   {const t=(await packets()).filter(x=>x.op==='transfer').at(-1);
    const token=await p.evaluate(()=>ItdaFiles.windowToken);
-   assert(t.id==='build'&&t.move&&JSON.stringify(t.names)==='["Docs","Gamma.txt"]'&&t.from_id==='studio'&&t.from_window===token&&!t.from_clip&&!t.from_drag&&t.source==='/Users/alex'&&t.policy==='replace'&&t.req!==moved.req,'Retry request: '+JSON.stringify(t));
+   assert(t.id==='build'&&t.move&&JSON.stringify(t.names)==='["Docs","Gamma.txt"]'&&t.from_id==='studio'&&t.from_window===token&&!t.from_clip&&!t.from_drag&&t.source==='/Users/alex'&&t.policy==='keep'&&t.req!==moved.req,'Retry request: '+JSON.stringify(t));
    assert(!(await layer.locator('[data-retry-job="job-M"]').count()),'The retried job stays in the list');
    // The retry, cancelled in the background: announced as cancelled, retry offered again.
    await job({id:'build',job:'job-R',req:t.req,state:'queued',moving:true});

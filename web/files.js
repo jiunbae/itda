@@ -1563,14 +1563,17 @@
     }
     const dest = panes[to];
     // Names already there can be counted only for the folder on screen (of this device).
-    const listed = dest.path === destination && id === host.id;
+    const listed = dest.path === destination && (to === "local" || id === host.id);
     const collisions = listed ? names.filter((n) => dest.entries.some((e) => e.name === n)) : [];
     const deltaEligible = localRsyncAvailable && !move && from !== to;
     const verb = move ? "이동" : "복사";
     const partialFolder = retry?.partial?.dir && names.includes(retry.partial.name) ? retry.partial.name : "";
-    const policy = retry ? (partialFolder ? "replace" : retry.policy) : "keep";
+    const partialFile = retry?.partial && !retry.partial.dir && move && names.includes(retry.partial.name) ? retry.partial.name : "";
+    // Merging is proposed only when the cut-off folder is all that is left: for the other
+    // names it would replace files the person chose to keep.
+    const policy = retry ? (partialFolder && names.length === 1 ? "replace" : retry.policy) : "keep";
     const option = (value, text) => `<option value="${value}" ${value === policy ? "selected" : ""}>${text}</option>`;
-    const retryNote = retry ? `<div class="files-retry-note"><p>이전 전송이 ${retry.state === "cancelled" ? "취소되어" : "실패해"} 남은 ${names.length}개 항목만 다시 ${verb}합니다.${retry.done ? ` 이미 끝난 ${retry.done}개 항목은 다시 보내지 않습니다.` : ""}</p>${partialFolder ? `<p>‘${esc(partialFolder)}’ 폴더는 일부만 ${move ? "옮겨졌" : "복사되었"}습니다. 대상에 생긴 폴더와 합쳐 나머지를 보내려면 ‘변경된 파일 바꾸기 · 폴더는 합치기’를 고르세요. ‘기존 파일 건너뛰기’는 이 폴더 전체를 건너뛰어 일부만 남기고, ‘둘 다 유지’는 새 이름의 폴더에 처음부터 다시 만듭니다.</p>` : ""}<p class="hint">같은 이름 처리 방식을 다시 확인한 뒤 ${verb}하세요.</p></div>` : "";
+    const retryNote = retry ? `<div class="files-retry-note"><p>이전 전송이 ${retry.state === "cancelled" ? "취소되어" : "실패해"} 남은 ${names.length}개 항목만 다시 ${verb}합니다.${retry.done ? ` 이미 끝난 ${retry.done}개 항목은 다시 보내지 않습니다.` : ""}</p>${partialFolder ? `<p>‘${esc(partialFolder)}’ 폴더는 일부만 ${move ? "옮겨졌" : "복사되었"}습니다. 대상에 생긴 폴더와 합쳐 나머지를 보내려면 ‘변경된 파일 바꾸기 · 폴더는 합치기’를 고르세요${names.length > 1 ? ". 이 방식은 남은 다른 항목에도 적용되어 대상의 같은 이름 파일을 바꿉니다" : ""}. ‘기존 파일 건너뛰기’는 이 폴더 전체를 건너뛰어 일부만 남기고, ‘둘 다 유지’는 ${move ? "남은 파일만 새 이름의 폴더로 옮깁니다(이미 옮긴 파일은 원래 대상 폴더에 남습니다)" : "새 이름의 폴더에 처음부터 다시 만듭니다"}.</p>` : ""}${partialFile ? `<p>‘${esc(partialFile)}’은(는) 이동 중에 끊겨 대상에 이미 복사되었을 수 있습니다. ‘둘 다 유지’면 새 이름으로 하나 더 생깁니다.</p>` : ""}<p class="hint">같은 이름 처리 방식을 다시 확인한 뒤 ${verb}하세요.</p></div>` : "";
     const r = await prompt(
       retry ? `남은 파일 다시 ${verb}` : move ? "파일 이동" : "파일 복사",
       `${retryNote}<p><b>${esc(names.length === 1 ? names[0] : `${names.length}개 항목`)}</b></p><p class="hint">${esc(where(from, source, cross ? origin.id : id))} → ${esc(where(to, destination, id))}</p>${collisions.length ? `<p>같은 이름의 항목 ${collisions.length}개가 있습니다.</p>` : listed ? "" : '<p class="hint">대상 폴더에 같은 이름이 있는지는 전송하면서 확인하고, 아래에서 고른 방식대로 처리합니다.</p>'}<div class="field"><label>같은 이름의 파일이 있으면</label><select class="input" name="policy">${option("keep", "둘 다 유지")}${option("replace", "변경된 파일 바꾸기 · 폴더는 합치기")}${option("skip", "기존 파일 건너뛰기")}</select></div><details><summary>전송 옵션 · 자동 선택</summary><div class="field"><label>전송 방식</label><select class="input" name="engine"><option value="auto">자동 · 가능한 경우 rsync 증분 전송</option><option value="sftp" ${retry?.engine === "sftp" ? "selected" : ""}>일반 전송 · SFTP</option><option value="rsync" ${deltaEligible ? "" : "disabled"} ${retry?.engine === "rsync" && deltaEligible ? "selected" : ""}>증분 전송 · 파일 바꾸기에서만 사용</option></select></div><p class="hint">증분 전송은 이 컴퓨터와 원격 기기 사이의 복사에서 ‘변경된 파일 바꾸기’를 선택하고 양쪽에 rsync가 있을 때 사용할 수 있습니다. 자동은 그중 폴더와 8MiB 이상의 파일에만 rsync를 쓰고, 나머지와 rsync가 없는 기기에는 일반 전송을 씁니다. Windows 한글 이름 변환이 필요한 항목은 자동 또는 일반 전송을 사용하세요.</p></details>${move ? '<p class="hint">같은 파일시스템 안에서는 바로 이동하며, 장치 간 이동은 해시를 확인한 뒤 원본을 삭제합니다. 취소하거나 실패한 항목의 원본은 유지합니다.</p>' : ""}`,
@@ -1607,7 +1610,7 @@
     const done = new Set(j.completed_names || []);
     const left = r.names.filter(n => !done.has(n));
     if (!left.length) {
-      jobs.delete(key); renderJobs();
+      jobs.delete(key); announcedJobs.delete(key); renderJobs();
       return toast(`이 전송의 항목은 모두 이미 ${r.move ? "옮겨졌" : "복사되었"}습니다`, "E8B7");
     }
     const reopen = async (id, what) => {
@@ -1625,7 +1628,7 @@
     }
     const sent = await transfer(r.from, r.source, left, r.to, r.destination, r.move, r.id, origin,
       { state: j.state, done: r.names.length - left.length, partial: j.partial, policy: r.policy, engine: r.engine });
-    if (sent) { jobs.delete(key); renderJobs(); }
+    if (sent) { jobs.delete(key); announcedJobs.delete(key); renderJobs(); }
   }
   // "Device: path" for the transfer dialog ("이 컴퓨터" for this computer's side).
   function where(side, path, id) {
@@ -1673,7 +1676,7 @@
     );
     box.querySelectorAll("[data-retry-job]").forEach(b => b.onclick = () => retryJob(b.dataset.retryJob));
     box.querySelectorAll("[data-goto-job]").forEach(b => b.onclick = () => { const t = tabOf(jobs.get(b.dataset.gotoJob)?.id); if (t) switchTab(t.id); });
-    box.querySelectorAll("[data-dismiss-job]").forEach(b => b.onclick = () => { jobs.delete(b.dataset.dismissJob); renderJobs(); });
+    box.querySelectorAll("[data-dismiss-job]").forEach(b => b.onclick = () => { jobs.delete(b.dataset.dismissJob); announcedJobs.delete(b.dataset.dismissJob); renderJobs(); });
     if (!current.length && showTransferHistory) box.textContent = "최근 전송 내역이 없습니다";
   }
   function context(e) {
@@ -2140,7 +2143,7 @@
         const old = [...jobs].find(([, j]) =>
           ["completed", "failed", "cancelled"].includes(j.state),
         );
-        if (old) jobs.delete(old[0]);
+        if (old) { jobs.delete(old[0]); announcedJobs.delete(old[0]); }
       }
       if (
         m.state === "completed" &&
