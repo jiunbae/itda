@@ -1,5 +1,6 @@
 //! Tiny diagnostics log: %TEMP%\itda.log for the home window (overwritten each run),
 //! %TEMP%\itda\session-<pid>.log for each connection (old ones are pruned).
+//! With ITDA_DATA_DIR, both live under <override>/Itda/logs instead.
 
 use std::fs::File;
 use std::io::Write;

@@ -1,3 +1,5 @@
+// This saved-device read-only probe intentionally reuses real vault identities.
+// Never edit/delete the copied device or account through its temporary UI.
 // Read-only display probe through the real installed app's gateway and saved account.
 // Private copies of host/settings metadata; no input or TCC changes. Credentials are never printed.
 import fs from 'node:fs';import path from 'node:path';import os from 'node:os';import net from 'node:net';import {spawn} from 'node:child_process';import {pathToFileURL} from 'node:url';

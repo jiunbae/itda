@@ -1,5 +1,6 @@
 //! Persistent data in %APPDATA%\Itda (macOS: ~/Library/Application Support/Itda): the
-//! address book (hosts.json), app settings (settings.json) and thumbnails. Passwords live in
+//! address book (hosts.json), app settings (settings.json) and thumbnails. ITDA_DATA_DIR
+//! overrides the parent directory on both platforms. Passwords live in
 //! Windows Credential Manager (macOS: the login Keychain). Only the home process (on macOS,
 //! the gateway) writes these files.
 
