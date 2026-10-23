@@ -295,6 +295,10 @@
   const panes = { local: emptyPane(), remote: emptyPane() };
   const jobs = new Map();
   let showTransferHistory = false;
+  // What each transfer asked for, by the request handle the backend echoes in its job: the
+  // devices, folders, names and options, never a drag or clipboard token.
+  const transferRequests = new Map();
+  const announcedJobs = new Set();
   const extension = (name = "") => name.includes(".") ? name.split(".").pop().toLowerCase() : "";
   const kind = (e) => e.link ? "심볼릭 링크" : e.dir && !MAC && /^[A-Za-z]:$/.test(e.name) ? "로컬 디스크" : e.dir ? "폴더" : ({ txt: "텍스트 문서", md: "Markdown 문서", pdf: "PDF 문서", png: "PNG 이미지", jpg: "JPEG 이미지", jpeg: "JPEG 이미지", heic: "HEIF 이미지", zip: "ZIP 아카이브", mp4: "MPEG-4 동영상", mp3: "MP3 오디오" }[extension(e.name)] || (extension(e.name) ? `${extension(e.name).toUpperCase()} 문서` : "문서"));
   const icon = (dir, name = "") => {
@@ -595,6 +599,7 @@
     const key = `${networkMode}:${title}:${active}:${p.path}`;
     if (el.dataset.explorerLocation === key) return;
     el.dataset.explorerLocation = key; el.classList.remove("editing");
+    el.title = networkMode ? title : `${title} › ${p.path}`;
     el.innerHTML = `${I(networkMode ? explorerHome ? "E80F" : "E774" : active === "local" ? "E7F8" : "E7F4")}<span class="files-address-root">${esc(title)}</span>${networkMode ? "" : `<span aria-hidden="true">›</span><nav class="files-breadcrumbs" aria-label="폴더 경로">${crumbs(p.path,active)}</nav><input class="input" data-path="${active}" aria-label="주소" value="${esc(p.path)}">`}`;
     layer.querySelector("[data-search]").placeholder = `${networkMode ? title : p.path.split(/[\\/]/).filter(Boolean).pop() || title} 검색`;
   }
@@ -845,7 +850,7 @@
       `<button class="btn sm" data-action="${action}" title="${text}" aria-label="${text}">${I(glyph)}</button>`;
     layer.innerHTML = `<div class="files-title"><div class="files-nav">${tool("back", "E72B", "뒤로")}${tool("forward", "E76C", "앞으로")}</div>${icon(true)}<b>${esc(label(host))}</b><span class="files-folder-title"></span><span class="spacer"></span>${tool("view", "E80A", "보기")}${tool("mkdir", "E8F4", "새 폴더")}${tool("refresh", "E72C", "새로 고침")}<button class="btn sm" data-action="more" title="동작" aria-label="동작">${I("E712")}</button>${tool("settings", "E713", "연결 설정")}${tool("native", "E8A7", `${nativeName}에서 열기`)}<input class="input files-search" placeholder="검색" aria-label="파일 검색" data-search></div>
       <nav class="files-tabs" aria-label="폴더 탭"></nav><aside class="files-preview" hidden></aside><nav class="files-locations" aria-label="기기 위치"></nav><div class="files-tools">${tool("up", "E80F", "상위 폴더")}${tool("copy", "E8C8", "복사")}<button class="btn sm" data-action="cut">잘라내기</button><button class="btn sm" data-action="paste">붙여넣기</button>${tool("rename", "E70F", "이름 변경")}${tool("trash", "E74D", "보관함으로")}${tool("undo", "E81C", "되돌리기")}<span class="spacer"></span><button class="btn sm" data-action="split">분할 보기</button><button class="btn sm" data-action="hidden">숨김 파일</button><button class="btn sm" data-action="transfers">전송 내역</button></div>
-      <div class="files-error" hidden role="alert"></div><div class="files-body"><aside class="files-sidebar"><div data-network-sidebar></div><div class="files-current-places"><h4>즐겨찾기</h4><button class="btn subtle" data-bookmark="home">${I("E80F")}홈 폴더</button><button class="btn subtle" data-bookmark="Downloads">${I("E8B7")}다운로드</button><button class="btn subtle" data-bookmark="Documents">${I("E8A5")}문서</button><button class="btn subtle" data-bookmark="Desktop">${I("E7F4")}${MAC ? "데스크탑" : "바탕 화면"}</button><h4>위치</h4><button class="btn subtle" data-side="remote">${I("E7F4")}${esc(label(host))}</button><button class="btn subtle" data-side="local">${I("E7F8")}${HERE}</button><h4>파일 관리</h4><button class="btn subtle" data-bookmark=".itda-trash">${I("E74D")}보관함</button></div></aside><div class="files-panes"></div></div><div class="files-jobs" hidden></div><div class="files-status"><div data-footer-path></div><span data-status></span><span class="files-selection-status" role="status" aria-atomic="true"></span><span data-location></span></div>`;
+      <div class="files-error" hidden role="alert"></div><div class="files-body"><aside class="files-sidebar"><div data-network-sidebar></div><div class="files-current-places"><h4>즐겨찾기</h4><button class="btn subtle" data-bookmark="home">${I("E80F")}홈 폴더</button><button class="btn subtle" data-bookmark="Downloads">${I("E8B7")}다운로드</button><button class="btn subtle" data-bookmark="Documents">${I("E8A5")}문서</button><button class="btn subtle" data-bookmark="Desktop">${I("E7F4")}${MAC ? "데스크탑" : "바탕 화면"}</button><h4>위치</h4><button class="btn subtle" data-side="remote">${I("E7F4")}${esc(label(host))}</button><button class="btn subtle" data-side="local">${I("E7F8")}${HERE}</button><h4>파일 관리</h4><button class="btn subtle" data-bookmark=".itda-trash">${I("E74D")}보관함</button></div></aside><div class="files-panes"></div></div><div class="files-jobs" role="region" aria-label="파일 전송" hidden></div><div class="files-status"><div data-footer-path></div><span data-status></span><span class="files-selection-status" role="status" aria-atomic="true"></span><span data-location></span></div>`;
     document.body.append(layer);
     {
       const title = layer.querySelector(".files-title");
@@ -1545,7 +1550,7 @@
   }
   // `origin`: where remote source files live when that is another device (a tab or another
   // file window) than the destination `id`; the transfer then runs device to device.
-  async function transfer(from, source, names, to, destination, move = false, id = host.id, origin = null) {
+  async function transfer(from, source, names, to, destination, move = false, id = host.id, origin = null, retry = null) {
     if (!names.length) return;
     const cross = from === "remote" && origin && (origin.id !== id || (origin.window && origin.window !== pageToken));
     if (id === NETWORK && to === "remote") {
@@ -1557,21 +1562,29 @@
       return;
     }
     const dest = panes[to];
-    const collisions =
-      dest.path === destination
-        ? names.filter((n) => dest.entries.some((e) => e.name === n))
-        : [];
+    // Names already there can be counted only for the folder on screen (of this device).
+    const listed = dest.path === destination && id === host.id;
+    const collisions = listed ? names.filter((n) => dest.entries.some((e) => e.name === n)) : [];
     const deltaEligible = localRsyncAvailable && !move && from !== to;
+    const verb = move ? "이동" : "복사";
+    const partialFolder = retry?.partial?.dir && names.includes(retry.partial.name) ? retry.partial.name : "";
+    const policy = retry ? (partialFolder ? "replace" : retry.policy) : "keep";
+    const option = (value, text) => `<option value="${value}" ${value === policy ? "selected" : ""}>${text}</option>`;
+    const retryNote = retry ? `<div class="files-retry-note"><p>이전 전송이 ${retry.state === "cancelled" ? "취소되어" : "실패해"} 남은 ${names.length}개 항목만 다시 ${verb}합니다.${retry.done ? ` 이미 끝난 ${retry.done}개 항목은 다시 보내지 않습니다.` : ""}</p>${partialFolder ? `<p>‘${esc(partialFolder)}’ 폴더는 일부만 ${move ? "옮겨졌" : "복사되었"}습니다. 대상에 생긴 폴더와 합쳐 나머지를 보내려면 ‘변경된 파일 바꾸기 · 폴더는 합치기’를 고르세요. ‘기존 파일 건너뛰기’는 이 폴더 전체를 건너뛰어 일부만 남기고, ‘둘 다 유지’는 새 이름의 폴더에 처음부터 다시 만듭니다.</p>` : ""}<p class="hint">같은 이름 처리 방식을 다시 확인한 뒤 ${verb}하세요.</p></div>` : "";
     const r = await prompt(
-      move ? "파일 이동" : "파일 복사",
-      `<p><b>${esc(names.length === 1 ? names[0] : `${names.length}개 항목`)}</b></p><p class="hint">${esc(where(from, source, cross ? origin.id : id))} → ${esc(where(to, destination, id))}</p>${collisions.length ? `<p>같은 이름의 항목 ${collisions.length}개가 있습니다.</p>` : ""}<div class="field"><label>같은 이름의 파일이 있으면</label><select class="input" name="policy"><option value="keep">둘 다 유지</option><option value="replace">변경된 파일 바꾸기 · 폴더는 합치기</option><option value="skip">기존 파일 건너뛰기</option></select></div><details><summary>전송 옵션 · 자동 선택</summary><div class="field"><label>전송 방식</label><select class="input" name="engine"><option value="auto">자동 · 가능한 경우 rsync 증분 전송</option><option value="sftp">일반 전송 · SFTP</option><option value="rsync" ${deltaEligible ? "" : "disabled"}>증분 전송 · 파일 바꾸기에서만 사용</option></select></div><p class="hint">증분 전송은 이 컴퓨터와 원격 기기 사이의 복사에서 ‘변경된 파일 바꾸기’를 선택하고 양쪽에 rsync가 있을 때 사용할 수 있습니다. Windows 한글 이름 변환이 필요한 항목은 자동 또는 일반 전송을 사용하세요. 자동은 가능한 방식을 선택합니다.</p></details>${move ? '<p class="hint">같은 파일시스템 안에서는 바로 이동하며, 장치 간 이동은 해시를 확인한 뒤 원본을 삭제합니다. 취소하거나 실패한 항목의 원본은 유지합니다.</p>' : ""}`,
+      retry ? `남은 파일 다시 ${verb}` : move ? "파일 이동" : "파일 복사",
+      `${retryNote}<p><b>${esc(names.length === 1 ? names[0] : `${names.length}개 항목`)}</b></p><p class="hint">${esc(where(from, source, cross ? origin.id : id))} → ${esc(where(to, destination, id))}</p>${collisions.length ? `<p>같은 이름의 항목 ${collisions.length}개가 있습니다.</p>` : listed ? "" : '<p class="hint">대상 폴더에 같은 이름이 있는지는 전송하면서 확인하고, 아래에서 고른 방식대로 처리합니다.</p>'}<div class="field"><label>같은 이름의 파일이 있으면</label><select class="input" name="policy">${option("keep", "둘 다 유지")}${option("replace", "변경된 파일 바꾸기 · 폴더는 합치기")}${option("skip", "기존 파일 건너뛰기")}</select></div><details><summary>전송 옵션 · 자동 선택</summary><div class="field"><label>전송 방식</label><select class="input" name="engine"><option value="auto">자동 · 가능한 경우 rsync 증분 전송</option><option value="sftp" ${retry?.engine === "sftp" ? "selected" : ""}>일반 전송 · SFTP</option><option value="rsync" ${deltaEligible ? "" : "disabled"} ${retry?.engine === "rsync" && deltaEligible ? "selected" : ""}>증분 전송 · 파일 바꾸기에서만 사용</option></select></div><p class="hint">증분 전송은 이 컴퓨터와 원격 기기 사이의 복사에서 ‘변경된 파일 바꾸기’를 선택하고 양쪽에 rsync가 있을 때 사용할 수 있습니다. 자동은 그중 폴더와 8MiB 이상의 파일에만 rsync를 쓰고, 나머지와 rsync가 없는 기기에는 일반 전송을 씁니다. Windows 한글 이름 변환이 필요한 항목은 자동 또는 일반 전송을 사용하세요.</p></details>${move ? '<p class="hint">같은 파일시스템 안에서는 바로 이동하며, 장치 간 이동은 해시를 확인한 뒤 원본을 삭제합니다. 취소하거나 실패한 항목의 원본은 유지합니다.</p>' : ""}`,
       [
         ["cancel", "취소"],
-        ["ok", move ? "이동" : "복사", true],
+        ["ok", retry ? `다시 ${verb}` : verb, true],
       ],
     );
     if (r.choice !== "ok") return false;
-    send("files", { id, window: pageToken, op: "transfer",
+    const req = randomId();
+    transferRequests.set(req, { id, from, source, names, to, destination, move, policy: r.policy, engine: r.engine,
+      fromId: cross ? origin.id : null, fromWindow: cross ? origin.window || pageToken : null, retry: !!retry });
+    if (transferRequests.size > 100) transferRequests.delete(transferRequests.keys().next().value);
+    send("files", { id, window: pageToken, op: "transfer", req,
         ...(cross ? { from_id: origin.id, from_window: origin.window || pageToken, ...(origin.cid ? { from_clip: origin.cid } : {}), ...(origin.drag ? { from_drag: origin.drag } : {}) } : {}),
         from,
         source,
@@ -1583,6 +1596,36 @@
         engine: r.engine,
       });
     return true;
+  }
+  // The device of `id` in one of this window's tabs (its file connection is open here).
+  function tabOf(id) { return fileTabs.find(t => (t.id === currentTab ? host : t.host)?.id === id); }
+  // A failed or cancelled transfer, again for what is left: confirmed like any transfer, on
+  // the devices it named; a closed source or destination is opened first, not retried blind.
+  async function retryJob(key) {
+    const j = jobs.get(key), r = j?.request;
+    if (!r) return;
+    const done = new Set(j.completed_names || []);
+    const left = r.names.filter(n => !done.has(n));
+    if (!left.length) {
+      jobs.delete(key); renderJobs();
+      return toast(`이 전송의 항목은 모두 이미 ${r.move ? "옮겨졌" : "복사되었"}습니다`, "E8B7");
+    }
+    const reopen = async (id, what) => {
+      const h = hostById(id);
+      const answer = await prompt(`${what} 기기의 연결이 닫혔습니다`, `<p>${esc(h ? label(h) : "그 기기")}의 파일 연결이 닫혀 이 전송을 다시 시작할 수 없습니다. 기기를 새 탭에서 연 뒤 전송 내역에서 다시 시도하세요.</p>`, [["cancel", "취소"], ...(h ? [["open", `${label(h)} 열기`, true]] : [])]);
+      if (answer.choice === "open" && h) { newTab(); launch(h); }
+    };
+    // The destination device's connection is this window's tab on it.
+    if (r.id !== NETWORK && (r.to === "remote" || (r.from === "remote" && !r.fromId)) && !tabOf(r.id)) return reopen(r.id, "대상");
+    let origin = null;
+    if (r.fromId) {
+      if (tabOf(r.fromId)) origin = { id: r.fromId, window: pageToken };
+      else if (r.fromWindow && r.fromWindow !== pageToken && !j.source_closed) origin = { id: r.fromId, window: r.fromWindow };
+      else return reopen(r.fromId, "원본");
+    }
+    const sent = await transfer(r.from, r.source, left, r.to, r.destination, r.move, r.id, origin,
+      { state: j.state, done: r.names.length - left.length, partial: j.partial, policy: r.policy, engine: r.engine });
+    if (sent) { jobs.delete(key); renderJobs(); }
   }
   // "Device: path" for the transfer dialog ("이 컴퓨터" for this computer's side).
   function where(side, path, id) {
@@ -1596,14 +1639,18 @@
   }
   function renderJobs() {
     if (!layer) return;
+    // This device's transfers, and any other tab's that failed or were cancelled (they need
+    // the person's attention wherever they are); the history shows every one.
     const current = [...jobs.values()]
-      .filter((j) => j.id === host.id && (showTransferHistory || ["queued", "running", "failed"].includes(j.state)))
+      .filter((j) => showTransferHistory || (j.id === host.id ? ["queued", "running", "failed", "cancelled"].includes(j.state) : ["failed", "cancelled"].includes(j.state)))
       .slice(-12);
-    layer.querySelector(".files-jobs").hidden = current.length === 0 && !showTransferHistory;
+    const box = layer.querySelector(".files-jobs");
+    box.hidden = current.length === 0 && !showTransferHistory;
     layer.querySelectorAll('[data-action="transfers"]').forEach(b => b.setAttribute("aria-pressed", String(showTransferHistory)));
-    layer.querySelector(".files-jobs").innerHTML = current
+    box.innerHTML = current
       .map((j) => {
         const live = ["queued", "running"].includes(j.state);
+        const ended = ["failed", "cancelled"].includes(j.state);
         const text = {
           queued: "대기 중",
           running: j.detail || "전송 중",
@@ -1611,16 +1658,23 @@
           failed: "실패",
           cancelled: "취소됨",
         }[j.state];
-        return `<div class="files-job"><span>${j.engine === "rsync" ? "증분" : "파일"}</span><span class="job-label" title="${esc(j.error || j.file || "")}">${esc(j.file || "파일 전송")} · ${esc(text)}${j.error ? ` · ${esc(j.error)}` : ""}</span>${live ? `<progress ${j.total ? `max="${j.total}" value="${j.bytes || 0}"` : ""}></progress><button class="btn sm" data-cancel-job="${esc(j.job)}">취소</button>` : `<button class="btn sm" data-dismiss-job="${esc(j.job)}" aria-label="전송 알림 닫기">닫기</button>`}</div>`;
+        const device = j.id !== host.id && hostById(j.id);
+        const what = j.file || (j.request ? (j.request.names.length === 1 ? j.request.names[0] : `${j.request.names.length}개 항목`) : "파일 전송");
+        const progress = ended && j.request && j.completed_names?.length ? ` · ${j.request.names.length}개 중 ${j.completed_names.length}개 끝남` : "";
+        const hint = ended && j.kind === "export" ? " · 원본 폴더에서 다시 복사하거나 끌어 놓으세요" : "";
+        const actions = live
+          ? `<progress ${j.total ? `max="${j.total}" value="${j.bytes || 0}"` : ""}></progress><button class="btn sm" data-cancel-job="${esc(j.job)}">취소</button>`
+          : `${ended && j.request ? `<button class="btn sm" data-retry-job="${esc(j.job)}">${j.source_closed ? "원본 기기 열기…" : "다시 시도…"}</button>` : ""}${device && tabOf(j.id) ? `<button class="btn sm" data-goto-job="${esc(j.job)}">${esc(label(device))} 탭 보기</button>` : ""}<button class="btn sm" data-dismiss-job="${esc(j.job)}" aria-label="전송 알림 닫기">닫기</button>`;
+        return `<div class="files-job ${ended ? "ended" : ""}"><span>${j.engine === "rsync" ? "증분" : "파일"}</span><span class="job-label" title="${esc(j.error || j.file || "")}">${device ? `${esc(label(device))} · ` : ""}${esc(what)} · ${esc(text)}${progress}${j.error ? ` · ${esc(j.error)}` : ""}${hint}</span>${actions}</div>`;
       })
       .join("");
-    layer
-      .querySelectorAll("[data-cancel-job]")
-      .forEach(
-        (b) => (b.onclick = () => send("files", { id: jobs.get(b.dataset.cancelJob)?.id || host.id, window: pageToken, op: "cancel", job: b.dataset.cancelJob })),
-      );
-    layer.querySelectorAll("[data-dismiss-job]").forEach(b => b.onclick = () => { jobs.delete(b.dataset.dismissJob); renderJobs(); });
-    if (!current.length && showTransferHistory) layer.querySelector(".files-jobs").textContent = "최근 전송 내역이 없습니다";
+    box.querySelectorAll("[data-cancel-job]").forEach(
+      (b) => (b.onclick = () => send("files", { id: jobs.get(b.dataset.cancelJob)?.id || host.id, window: pageToken, op: "cancel", job: b.dataset.cancelJob })),
+    );
+    box.querySelectorAll("[data-retry-job]").forEach(b => b.onclick = () => retryJob(b.dataset.retryJob));
+    box.querySelectorAll("[data-goto-job]").forEach(b => b.onclick = () => { const t = tabOf(jobs.get(b.dataset.gotoJob)?.id); if (t) switchTab(t.id); });
+    box.querySelectorAll("[data-dismiss-job]").forEach(b => b.onclick = () => { jobs.delete(b.dataset.dismissJob); renderJobs(); });
+    if (!current.length && showTransferHistory) box.textContent = "최근 전송 내역이 없습니다";
   }
   function context(e) {
     if (!layer) return;
@@ -1954,7 +2008,7 @@
   function dropOnDevice(d, id, move) {
     const h = hostById(id);
     if (!h || setup) return;
-    const t = fileTabs.find(t => (t.id === currentTab ? host : t.host)?.id === id);
+    const t = tabOf(id);
     if (t) {
       switchTab(t.id);
       active = "remote"; networkMode = false; renderPanes();
@@ -2067,10 +2121,20 @@
     }
     if (m.type === "files_job") {
       const previous = jobs.get(m.job) || {};
-      jobs.set(m.job, { ...previous, ...m });
+      const request = previous.request || (m.req && transferRequests.get(m.req)) || null;
+      if (m.req) transferRequests.delete(m.req);
+      jobs.set(m.job, { ...previous, ...m, request });
+      const device = hostById(m.id);
       if (m.state === "completed" && previous.state !== "completed") {
-        const device = hostById(m.id);
-        toast(`${device ? `${label(device)} · ` : ""}${previous.kind === "export" || m.kind === "export" ? "파일 내보내기 완료" : previous.moving || m.moving ? "파일 이동 완료" : "파일 복사 완료"}`, "E8B7");
+        toast(`${device ? `${label(device)} · ` : ""}${previous.kind === "export" || m.kind === "export" ? "파일 내보내기 완료" : request?.retry ? `남은 파일 ${previous.moving || m.moving ? "이동" : "복사"} 완료` : previous.moving || m.moving ? "파일 이동 완료" : "파일 복사 완료"}`, "E8B7");
+      }
+      // A transfer that ends badly is announced once, on whichever tab it belongs to; it
+      // stays in the transfer list (with its retry) until dismissed. Only one this window
+      // saw start (a repeated or stray end event says nothing).
+      if (["failed", "cancelled"].includes(m.state) && !announcedJobs.has(m.job) && (previous.state || request)) {
+        announcedJobs.add(m.job);
+        const kindText = (previous.kind || m.kind) === "export" ? "파일 내보내기" : previous.moving || m.moving || request?.move ? "파일 이동" : "파일 복사";
+        toast(`${device ? `${label(device)} · ` : ""}${kindText} ${m.state === "failed" ? "실패" : "취소됨"}${m.error && m.state === "failed" ? ` — ${m.error}` : ""}${request ? " · 전송 목록에서 다시 시도할 수 있습니다" : ""}`, "E783", m.state === "failed");
       }
       if (jobs.size > 200) {
         const old = [...jobs].find(([, j]) =>

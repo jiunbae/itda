@@ -118,6 +118,20 @@ try{
   await p.locator('.files-prompt [data-choice="ok"]').click();
   {const t=(await p.evaluate(()=>testPackets)).filter(x=>x.op==='transfer').at(-1);
    assert(t&&t.id==='__network'&&t.from==='local'&&t.to==='local'&&t.source==='C:\\'&&t.destination==='C:\\Users\\alex\\Downloads'&&!t.from_id,'Device-less local copy: '+JSON.stringify(t));}
+  // That copy fails: retried on this computer for what is left, after a new confirmation.
+  {const t=(await p.evaluate(()=>testPackets)).filter(x=>x.op==='transfer').at(-1);
+   await p.evaluate(req=>{const w=ItdaFiles.windowToken;itda.recv({type:'files_job',window:w,id:'__network',job:'job-L',req,state:'queued'});itda.recv({type:'files_job',window:w,id:'__network',job:'job-L',req,state:'failed',error:'디스크가 가득 찼습니다',completed_names:[],partial:{name:'Users',dir:true},source_closed:false});},t.req);
+   await layer.getByRole('button',{name:'다시 시도…'}).click();
+   const d=p.getByRole('dialog',{name:'남은 파일 다시 복사',exact:true});
+   assert((await d.textContent()).includes('‘Users’ 폴더는 일부만'),'Local retry lacks the partial folder note');
+   await d.getByRole('button',{name:'다시 복사',exact:true}).click();
+   const r=(await p.evaluate(()=>testPackets)).filter(x=>x.op==='transfer').at(-1);
+   assert(r.id==='__network'&&r.from==='local'&&r.to==='local'&&JSON.stringify(r.names)==='["Users"]'&&r.policy==='replace'&&r.req!==t.req,'Local retry: '+JSON.stringify(r));}
+  // A long path keeps the current folder in view in a narrow window (leading crumbs are cut).
+  await p.setViewportSize({width:480,height:700});
+  {const box=await layer.locator('.files-explorer-address').boundingBox(),last=await layer.locator('.files-explorer-address .files-breadcrumbs button').last().boundingBox();
+   assert((await layer.locator('.files-explorer-address .files-breadcrumbs button').last().textContent()).includes('Downloads')&&last.x>=box.x&&last.x+last.width<=box.x+box.width+1,'Current folder hidden in the address bar: '+JSON.stringify({box,last}));}
+  await p.setViewportSize({width:1200,height:800});
   assert(!errors.length,errors.join('\n'));
   // A slow home answer must not pull an already opened This PC back to the home folder.
   {

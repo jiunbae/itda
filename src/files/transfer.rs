@@ -464,6 +464,9 @@ pub(super) fn export_batch(files: &[super::export::File], targets: &[PathBuf], e
 pub fn start(v: Value, host: Host, emit: Emit) {
     let id = host.id.clone();
     let key = super::scoped_id(&id, &v["window"]);
+    // The page's own handle for this request, so its job can be matched to what was asked
+    // (for a retry of what is left). Not a secret, and never a path or a token.
+    let req: String = v["req"].as_str().unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric()).take(64).collect();
     // Another device's files (another tab, or another file window's page) as the source; the
     // job belongs to the destination device, where it shows and can be cancelled.
     let source_key = v["from_id"].as_str().filter(|f| !f.is_empty()).map(|f| {
@@ -478,6 +481,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
     let held_source = if v["from"] == "remote" && !same_device {
         source_key.as_ref().map(|k| super::transfer_source(k, v["from_clip"].as_str(), v["from_drag"].as_str())).transpose()
     } else { Ok(None) };
+    let source_closed = held_source.is_err();
     let job = crate::store::new_id();
     let control = Arc::new(Control::default());
     jobs()
@@ -489,13 +493,17 @@ pub fn start(v: Value, host: Host, emit: Emit) {
         if q.len() > 32 {
             q.remove(&job);
             emit(
-                json!({"type":"files_job","id":id,"job":job,"state":"failed","error":"대기 중인 전송이 많습니다. 일부 작업이 끝난 뒤 다시 시도하세요"}),
+                json!({"type":"files_job","id":id,"job":job,"req":req,"state":"failed","error":"대기 중인 전송이 많습니다. 일부 작업이 끝난 뒤 다시 시도하세요","completed_names":[]}),
             );
             return;
         }
     }
-    emit(json!({"type":"files_job","id":id,"job":job,"state":"queued","moving":v["move"]}));
+    emit(json!({"type":"files_job","id":id,"job":job,"req":req,"state":"queued","moving":v["move"]}));
     std::thread::spawn(move || {
+        // Top-level names finished (copied, moved, or skipped by the policy) and the one being
+        // worked on: after a failure or cancel, a retry offers only what is left.
+        let mut completed: Vec<String> = Vec::new();
+        let mut partial: Option<(String, bool)> = None;
         let result = (|| -> io::Result<()> {
             let _slot = slot(&control)?;
             let from_remote = v["from"] == "remote";
@@ -645,6 +653,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                 let entry = src
                     .stat(&from)?
                     .ok_or_else(|| error("원본 파일이 없습니다"))?;
+                partial = Some((n.to_string(), entry.dir));
                 let destination = dst.stat(&to)?;
                 if destination
                     .as_ref()
@@ -696,6 +705,8 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                 } else {
                     cx.copy(&mut src, &mut dst, &from, &to, 0)?;
                 }
+                completed.push(n.to_string());
+                partial = None;
             }
             Ok(())
         })();
@@ -710,8 +721,10 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                 e.to_string()
             }
         });
+        let partial = partial.filter(|_| error.is_some()).map(|(name, dir)| json!({"name":name,"dir":dir}));
         emit(
-            json!({"type":"files_job","id":id,"job":job,"state":if error.is_none(){"completed"}else if cancelled{"cancelled"}else{"failed"},"error":error}),
+            json!({"type":"files_job","id":id,"job":job,"req":req,"state":if error.is_none(){"completed"}else if cancelled{"cancelled"}else{"failed"},"error":error,
+                "completed_names":completed,"partial":partial,"source_closed":source_closed&&error.is_some()}),
         );
     });
 }
@@ -1111,6 +1124,42 @@ mod tests {
         assert_eq!(std::fs::metadata(from).unwrap().len(), 4 << 20);
         assert_eq!(std::fs::read_dir(r.join("to")).unwrap().count(), 1);
         std::fs::remove_dir_all(r).unwrap();
+    }
+    /// The job's end says which top-level names finished and which one was cut off, for a
+    /// retry of what is left; the page's request handle comes back with it.
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_job_reports_finished_and_partial_names() {
+        let root = std::env::temp_dir().join(format!("itda-job-test-{}", crate::store::new_id()));
+        let (from, to) = (root.join("from"), root.join("to"));
+        std::fs::create_dir_all(from.join("dir")).unwrap();
+        std::fs::create_dir_all(&to).unwrap();
+        std::fs::write(from.join("a.txt"), b"a").unwrap();
+        std::fs::write(from.join("dir/x.txt"), b"x").unwrap();
+        std::os::unix::fs::symlink("x.txt", from.join("dir/link")).unwrap();
+        std::fs::write(from.join("b.txt"), b"b").unwrap();
+        let run = |names: Value| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let tx = Mutex::new(tx);
+            let v = json!({"from":"local","to":"local","source":from.to_str().unwrap(),"destination":to.to_str().unwrap(),
+                "names":names,"policy":"keep","move":false,"engine":"sftp","req":"r1/../x"});
+            start(v, Host { id: crate::store::new_id(), ..Default::default() }, Arc::new(move |e: Value| { let _ = tx.lock().unwrap().send(e); }));
+            loop {
+                let e = rx.recv_timeout(Duration::from_secs(20)).unwrap();
+                let state = e["state"].as_str().unwrap_or("");
+                if state != "running" { assert_eq!(e["req"], "r1x", "{e}"); }
+                if ["completed", "failed", "cancelled"].contains(&state) { return e; }
+            }
+        };
+        let e = run(json!(["a.txt", "missing.txt", "b.txt"]));
+        assert_eq!(e["state"], "failed");
+        assert_eq!(e["completed_names"], json!(["a.txt"]));
+        assert!(e["partial"].is_null() && e["source_closed"] == false);
+        let e = run(json!(["b.txt", "dir"]));
+        assert_eq!(e["state"], "failed");
+        assert_eq!(e["completed_names"], json!(["b.txt"]));
+        assert_eq!(e["partial"], json!({"name":"dir","dir":true}));
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn shell_quote() {
