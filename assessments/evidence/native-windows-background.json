@@ -1,0 +1,232 @@
+{
+  "assessment_id": "itda-quality-2026-10-23",
+  "status": "native-windows-candidate-background-lifecycle-verified; rollout-and-other-journeys-pending",
+  "method": "Actual Windows console WebView2, renderer input through private CDP/SSH, native caption close. Generated Mac read-only SFTP fixture and generated Windows destination; no physical OS input, clipboard, user file or TCC changes.",
+  "baseline": {
+    "source_commit": "0cafc9f3eed010d42aeebb4c8518ac1640408ae5",
+    "binary_sha256": "6bc072cbacb04817d12da0b833077b5fa862d1bd4ae851be07be3736015c9897",
+    "ci_run": 40012257699,
+    "artifact": {
+      "id": 12526383890,
+      "name": "itda-windows-x64"
+    },
+    "ci_artifact_verified": true,
+    "driver_sha256": "fddcce8b1a2e56885d1ef1a650972bc2b93b8ce8ff143a14f450316aa51a8bdc",
+    "sftp_fixture_sha256": "7597afe6ad9476eea7c7507565ea83cccf76de71a377f55a69d7ed03fca2786e",
+    "sftp_library": "5.1.0",
+    "cleanup": {
+      "status": "passed",
+      "end_receipt_present": true,
+      "startup_unchanged_end": true
+    }
+  },
+  "candidate": {
+    "sftp_fixture_sha256": "ae87c302dfd571c510729575c5d3514cf6becabfc40e9ee8c708937e5af79fae",
+    "driver_sha256": "f6d904718bd683f891e2512d75ff9e74d2cddfd964d722e76d0d5ca33b30c567",
+    "source_commit": "f6b0eb0556479790df392b2e2d8d0dbfe936a5ce",
+    "binary_sha256": "10f1e2b073559d0501e6a2ed25f751f50cfab7684f9a2f34960d1d40fb7bb6a5",
+    "ci_run": 40019962558,
+    "artifact": {
+      "id": 12530093722,
+      "name": "itda-windows-x64"
+    },
+    "ci_artifact_verified": true,
+    "sftp_library": "5.1.0",
+    "phase": "background-completion",
+    "cancel_observation": {
+      "job": "e930d1fb012b",
+      "barrier_offset": 2097152,
+      "events": [
+        {
+          "type": "files_job",
+          "window": "owning-file-page",
+          "state": "queued",
+          "job": "e930d1fb012b"
+        },
+        {
+          "type": "files_job",
+          "window": "owning-file-page",
+          "state": "running",
+          "job": "e930d1fb012b"
+        },
+        {
+          "type": "files_job",
+          "window": "app",
+          "orphan": true,
+          "state": "running",
+          "job": "e930d1fb012b"
+        },
+        {
+          "type": "files_background",
+          "count": 1,
+          "window": "app"
+        },
+        {
+          "type": "files_job",
+          "window": "app",
+          "orphan": true,
+          "state": "cancelled",
+          "job": "e930d1fb012b",
+          "error": "전송을 취소했습니다"
+        }
+      ]
+    },
+    "method": "actual Windows console app, existing WebView2 attached through private loopback CDP/SSH tunnel; no emulated Windows UA",
+    "results": [
+      {
+        "check": "actual native Windows WebView2 with private UDF and unchanged startup entry",
+        "result": "PASS",
+        "startup_entry_existed": false,
+        "existing_app_processes": 1
+      },
+      {
+        "check": "fixture reached actual mid-stream SFTP read and destination staging before native caption close",
+        "result": "PASS",
+        "scope": "precondition only; does not prove background recovery",
+        "barrier_offset": 2097152,
+        "staging_bytes": 2097152,
+        "native_file_window_closed": true
+      },
+      {
+        "check": "actual native file-window close adopts a mid-stream SFTP copy; main-window cancellation cleans staging and preserves source",
+        "result": "PASS",
+        "cancelled_before_release": true,
+        "job": "e930d1fb012b"
+      },
+      {
+        "check": "actual background SFTP copy completes after native window close and main window retains outcome with destination SHA256 match",
+        "result": "PASS",
+        "bytes": 4194304,
+        "sha256": "2b07811057df887086f06a67edc6ebf911de8b6741156e7a2eb1416a4b8b1b2e",
+        "events": [
+          {
+            "type": "files_job",
+            "window": "owning-file-page",
+            "state": "queued",
+            "job": "e930d1fb012b"
+          },
+          {
+            "type": "files_job",
+            "window": "owning-file-page",
+            "state": "running",
+            "job": "e930d1fb012b"
+          },
+          {
+            "type": "files_job",
+            "window": "app",
+            "orphan": true,
+            "state": "running",
+            "job": "e930d1fb012b"
+          },
+          {
+            "type": "files_background",
+            "count": 1,
+            "window": "app"
+          },
+          {
+            "type": "files_job",
+            "window": "app",
+            "orphan": true,
+            "state": "cancelled",
+            "job": "e930d1fb012b",
+            "error": "전송을 취소했습니다"
+          },
+          {
+            "type": "files_job",
+            "window": "app",
+            "orphan": true,
+            "job": "e930d1fb012b"
+          },
+          {
+            "type": "files_job",
+            "window": "owning-file-page",
+            "state": "queued",
+            "job": "fdbb2017b95b"
+          },
+          {
+            "type": "files_job",
+            "window": "owning-file-page",
+            "state": "running",
+            "job": "fdbb2017b95b"
+          },
+          {
+            "type": "files_job",
+            "window": "app",
+            "orphan": true,
+            "state": "running",
+            "job": "fdbb2017b95b"
+          },
+          {
+            "type": "files_background",
+            "count": 1,
+            "window": "app"
+          },
+          {
+            "type": "files_job",
+            "window": "app",
+            "orphan": true,
+            "state": "running",
+            "job": "fdbb2017b95b"
+          },
+          {
+            "type": "files_job",
+            "window": "app",
+            "orphan": true,
+            "state": "running",
+            "job": "fdbb2017b95b"
+          },
+          {
+            "type": "files_job",
+            "window": "app",
+            "orphan": true,
+            "state": "completed",
+            "job": "fdbb2017b95b",
+            "error": null
+          }
+        ]
+      }
+    ],
+    "status": "passed",
+    "limits": [
+      "candidate build, not production rollout",
+      "loopback CDP is reachable by other local processes; use a trusted test account/machine",
+      "CDP renderer input does not prove physical keyboard/global Windows accelerators",
+      "no real Explorer OLE drop, physical input, screen reader, multi-monitor or phone verified",
+      "OS notifications disabled and untested; quit during transfer untested",
+      "main-window cancellation only; cancellation from a second file window is untested",
+      "This cancellation proof requires the current implementation to close the SSH transport; channel-only cancellation is not evaluated by this fixture.",
+      "Real Mac native window lifecycle, OS notifications, native clipboard/OLE, physical keyboard, screen readers, quit guard and production rollout remain unverified by this run.",
+      "Two of the four passing checks are isolation/setup prerequisites; the two functional checks prove only the specified native Windows copy lifecycles."
+    ],
+    "cleanup": {
+      "status": "passed",
+      "end_receipt_present": true,
+      "startup_unchanged_end": true,
+      "sftp_workspace_removed": true
+    }
+  },
+  "reproduction": {
+    "driver": "scripts/files-native-windows-background-e2e.mjs",
+    "fixture": "scripts/fixtures/read-only-sftp-barrier.py",
+    "dependencies": "scripts/fixtures/requirements-sftp.txt",
+    "baseline_driver_commit": "d83580e7a8ce26a506cc3ddd0e5d8e31956a6f8d",
+    "candidate_driver_commit": "edad1da7d10290c2ba4612cd6269128a246cfaea",
+    "baseline_result": "FAIL at missing main [data-transfers] after SFTP barrier, nonzero own staging and actual native file-window close. Preconditions were enforced by the committed driver but not separately serialized in this older baseline receipt.",
+    "candidate_result": "PASS: 2 MiB source read and destination staging; native close; adopted job/notice in main window; cancel before barrier release; transport abort, no further served bytes after release, no destination/staging residue and retained source. Second native close completes with exactly one 4 MiB SHA256-matching file and retained main-window result.",
+    "environment": [
+      "ITDA_WINDOWS_SSH",
+      "ITDA_WINDOWS_APP",
+      "ITDA_SOURCE_COMMIT",
+      "ITDA_WINDOWS_RUN_ID",
+      "ITDA_SFTP_PYTHON (private Paramiko interpreter)",
+      "PLAYWRIGHT",
+      "ITDA_UI_RESULT"
+    ]
+  },
+  "evidence_notes": [
+    "Original native receipts remain private. Existing app PIDs are omitted; non-app event routing IDs are labelled owning-file-page. No screenshots or account paths are published.",
+    "The first candidate probe reached app-scoped cancellation before release but failed a fixture read-audit assertion. Independent review found the fixture could drain buffered SFTP requests after transport closure; the fixture now rejects aborted/inactive reads and requires transport_closed rather than timeout/shutdown. The successful rerun used the identical CI executable; assertions were preserved and strengthened.",
+    "Earlier harness development failures (pre-remote source-variable shadowing; first-batch barrier before any destination bytes and attempted hash of a locked staging file) were not product failures. The final fixture pauses after a full 64 x 32 KiB batch, sizes staging via a shared handle and hashes only the completed destination.",
+    "No persona score is certified by these narrow checks."
+  ]
+}

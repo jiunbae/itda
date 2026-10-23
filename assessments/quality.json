@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "assessment_id": "itda-quality-2026-10-23",
-  "status": "iteration-3-native-copy-and-background-recovery",
+  "status": "iteration-4-native-background-lifecycle",
   "goal": "Every persona scores at least 9/10 on verified core journeys, with no unresolved P1/P2 task blockers.",
   "baseline": {
     "commit": "521202025e7c5a984f089c1d1df77e846f63fd33",
@@ -533,25 +533,53 @@
         {
           "id": "window-close-orphan-transfer",
           "severity": "P2",
-          "status": "confirmed; implementation assigned",
+          "status": "fixed in merged PR101; production deployment pending",
           "evidence": "Independent source review at main9a7e037: release_page retains active jobs but future events target the closed page; surviving pages lack snapshots and cancel authority. No native acceptance yet.",
           "affected_personas": [
             "windows-office",
             "cross-platform-files"
-          ]
+          ],
+          "fixing_pr": 101,
+          "verification": "Native Windows close/cancel/completion proof in iteration4"
         },
         {
           "id": "local-only-cancel-router",
           "severity": "P2",
-          "status": "source finding; implementation assigned; native cancellation pending",
+          "status": "fixed in merged PR101; production deployment pending",
           "evidence": "home.rs files routing requires a saved host or local_only operation. The cancel request from files.js sends NETWORK id without side, which is not admitted by local_only; routing returns before the existing owner-scoped cancellation check. Successful native copy/retry does not prove cancel.",
           "affected_personas": [
             "windows-office",
             "cross-platform-files"
-          ]
+          ],
+          "fixing_pr": 101,
+          "verification": "Owner-scoped router regression and independent source review; native own-page NETWORK cancellation remains untested"
         }
       ],
       "acceptance_note": "Native candidate: ten checks passed, including real local-copy hash and missing-source failure → Home retry → re-confirmed copy hash. All verified persona scores remain null. Actual Explorer OLE, assistive technology, other platform journeys, mid-stream failures and deployed-build checks remain pending."
+    },
+    {
+      "id": 4,
+      "status": "in-progress",
+      "changes": [
+        {
+          "pr": 101,
+          "head": "f6b0eb0556479790df392b2e2d8d0dbfe936a5ce",
+          "merge_commit": "6b236514117cc9200e780fbff9b1bd4c2e3a8a30",
+          "scope": "App-owned transfers after native file-window close: state hydration, main-window progress/cancel/outcome, scoped controls without host/login lookup, event ordering, reload adoption and bounded latest-outcome retention",
+          "status": "merged; candidate native Windows lifecycle verified; deployment pending",
+          "verification": "Independent exact-head APPROVE; CI40019962558 all three jobs passed; root WebKit background fixture passed; exact Windows artifact passed controlled mid-stream native close/cancel and close/complete SHA256 checks."
+        }
+      ],
+      "native_windows_evidence": "assessments/evidence/native-windows-background.json",
+      "open_findings": [
+        {
+          "id": "quit-during-active-transfer",
+          "severity": "P2",
+          "status": "implementation and independent design review in progress; not merged or native verified",
+          "scope": "Normal app quit/update can interrupt active jobs; required follow-up guard must defer update filesystem writes, allow wait/cancel, cleanly stop jobs and fail closed on cleanup timeout."
+        }
+      ],
+      "acceptance_note": "Verified persona scores remain null. Native Windows proof is limited to specified copy lifecycles; full goal, quit protection, other platforms, OLE/clipboard, assistive technology and production rollout are pending."
     }
   ]
 }
