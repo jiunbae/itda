@@ -111,9 +111,18 @@ pub fn run(quick: Option<String>) {
     unsafe {
         // One home window: a second launch just brings the first to the front.
         // Test runs are single-instance among themselves, apart from a real one.
+        use sha2::Digest;
+        let profile = store::override_base().map(|_| {
+            let dir = store::dir();
+            let dir = dir.canonicalize().unwrap_or(dir);
+            format!("{:x}", sha2::Sha256::digest(dir.to_string_lossy().to_lowercase().as_bytes()))
+        });
         let (name, title) = match std::env::var("ITDA_TEST_HTTP") {
             Ok(port) => (format!("Local\\itda-home-test-{port}"), format!("{} (test {port})", crate::APP)),
-            Err(_) => ("Local\\itda-home".to_string(), crate::APP.to_string()),
+            Err(_) => match profile {
+                Some(tag) => (format!("Local\\itda-home-profile-{tag}"), format!("{} (profile {})", crate::APP, &tag[..16])),
+                None => ("Local\\itda-home".to_string(), crate::APP.to_string()),
+            },
         };
         CreateMutexW(null(), 0, wide(&name).as_ptr());
         if GetLastError() == ERROR_ALREADY_EXISTS {
@@ -203,7 +212,11 @@ pub(super) fn native_file_drag(v: Value) {
 }
 
 fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&str>, file_path: Option<&str>) -> wry::Result<WebView> {
-    let data = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir).join(crate::APP).join("WebView2");
+    let data = if store::override_base().is_some() {
+        store::dir().join("WebView2")
+    } else {
+        std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir).join(crate::APP).join("WebView2")
+    };
     let mut ctx = wry::WebContext::new(Some(data));
     let bg = if dark { (32, 32, 32, 255) } else { (243, 243, 243, 255) };
     let devtools = std::env::var_os("ITDA_DEVTOOLS").is_some();

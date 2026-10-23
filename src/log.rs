@@ -17,11 +17,13 @@ pub fn path() -> PathBuf {
 
 pub fn init(kind: &str) {
     T0.get_or_init(Instant::now);
+    let root = crate::store::override_base().map(|p| p.join(crate::APP).join("logs")).unwrap_or_else(std::env::temp_dir);
+    let _ = std::fs::create_dir_all(&root);
     let p = if kind.is_empty() {
-        prune();
-        std::env::temp_dir().join("itda.log")
+        prune(&root);
+        root.join("itda.log")
     } else {
-        let d = std::env::temp_dir().join("itda");
+        let d = root.join("itda");
         let _ = std::fs::create_dir_all(&d);
         d.join(format!("{kind}-{}.log", std::process::id()))
     };
@@ -30,8 +32,8 @@ pub fn init(kind: &str) {
 }
 
 /// Drop session logs older than three days.
-fn prune() {
-    let Ok(rd) = std::fs::read_dir(std::env::temp_dir().join("itda")) else { return };
+fn prune(root: &std::path::Path) {
+    let Ok(rd) = std::fs::read_dir(root.join("itda")) else { return };
     let cutoff = SystemTime::now() - Duration::from_secs(3 * 86400);
     for e in rd.flatten() {
         if e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t < cutoff) {

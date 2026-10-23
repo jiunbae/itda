@@ -173,7 +173,7 @@ fn started() {
     // Again each launch: the entry names this exe, which may have moved. (Only while the entry
     // is there: one removed in Windows' settings stays removed. On macOS the item follows the app.)
     #[cfg(windows)]
-    if crate::autostart::state().on() {
+    if !store::isolated() && crate::autostart::state().on() {
         if let Err(e) = crate::autostart::set(true) {
             crate::log!("login start: {e}");
         }
@@ -682,7 +682,10 @@ fn on_ipc(v: Value) {
         "settings" => {
             if let Ok(mut st) = serde_json::from_value::<Settings>(v["settings"].clone()) {
                 // The system holds this one: keep what it actually did.
-                if st.login_start != home(|m| m.settings.login_start) {
+                if st.login_start != home(|m| m.settings.login_start) && store::isolated() {
+                    st.login_start = home(|m| m.settings.login_start);
+                    send(json!({"type":"toast","text":"별도 설정으로 실행한 앱에서는 로그인 시 실행을 변경할 수 없습니다","err":true}));
+                } else if st.login_start != home(|m| m.settings.login_start) {
                     let (login, err) = crate::autostart::apply(st.login_start, crate::autostart::set, crate::autostart::state);
                     st.login_start = login.on();
                     if let Some(e) = err {

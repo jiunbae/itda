@@ -6,17 +6,23 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// A deliberately separate configuration; an empty override is treated as unset.
+pub fn override_base() -> Option<PathBuf> {
+    std::env::var_os("ITDA_DATA_DIR").filter(|p| !p.is_empty()).map(PathBuf::from)
+}
+pub fn isolated() -> bool {
+    override_base().is_some() || std::env::var_os("ITDA_TEST_HTTP").is_some()
+}
+
 pub fn dir() -> PathBuf {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
         #[cfg(windows)]
-        let base = std::env::var_os("ITDA_DATA_DIR")
-            .or_else(|| std::env::var_os("APPDATA"))
-            .map(PathBuf::from)
+        let base = override_base()
+            .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))
             .unwrap_or_else(std::env::temp_dir);
         #[cfg(not(windows))]
-        let base = std::env::var_os("ITDA_DATA_DIR")
-            .map(PathBuf::from)
+        let base = override_base()
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support")))
             .unwrap_or_else(std::env::temp_dir);
         let d = base.join(crate::APP);
