@@ -9,6 +9,7 @@ use objc2_video_toolbox::*;
 use std::ffi::c_void;
 use std::ptr::{null_mut, NonNull};
 use std::sync::Mutex;
+use std::time::Instant;
 
 const CODEC_H264: u32 = u32::from_be_bytes(*b"avc1");
 
@@ -24,7 +25,28 @@ pub struct H264 {
     buffer: CFRetained<CVPixelBuffer>,
     pub width: usize,
     pub height: usize,
-    frame: i64,
+    clock: FrameClock,
+}
+
+/// Rate control must see actual submission time. A fixed frame/60 clock compresses
+/// time whenever capture, encoding or backpressure reduces the frame rate, spending
+/// a 60-fps bit budget on a much slower stream (and unnecessarily dropping pictures).
+#[derive(Default)]
+struct FrameClock {
+    start: Option<Instant>,
+    last: i64,
+}
+
+impl FrameClock {
+    fn next(&mut self, now: Instant) -> i64 {
+        let Some(start) = self.start else {
+            self.start = Some(now);
+            return 0;
+        };
+        let elapsed = now.saturating_duration_since(start).as_micros().min((i64::MAX - 1) as u128) as i64;
+        self.last = elapsed.max(self.last + 1);
+        self.last
+    }
 }
 
 // The session and pixel buffer are used by one viewer thread at a time.
@@ -82,7 +104,7 @@ impl H264 {
         };
         let r = unsafe { CVPixelBufferCreate(None, width, height, kCVPixelFormatType_32BGRA, Some(attrs.as_opaque()), NonNull::from(&mut pb)) };
         let buffer = NonNull::new(pb).filter(|_| r == 0).ok_or_else(|| format!("CVPixelBufferCreate {r}"))?;
-        Ok(H264 { session, out, buffer: unsafe { CFRetained::from_raw(buffer) }, width, height, frame: 0 })
+        Ok(H264 { session, out, buffer: unsafe { CFRetained::from_raw(buffer) }, width, height, clock: FrameClock::default() })
     }
 
     /// Encode one frame (`px`: rows of `stride` pixels, at least width x height); `key` forces
@@ -104,8 +126,7 @@ impl H264 {
 
     /// Encode a ready pixel buffer (e.g. a captured IOSurface) of this encoder's size.
     pub fn encode_buffer(&mut self, pb: &CVPixelBuffer, key: bool) -> Result<Unit, String> {
-        let pts = unsafe { CMTime::new(self.frame, 60) };
-        self.frame += 1;
+        let pts = unsafe { CMTime::new(self.clock.next(Instant::now()), 1_000_000) };
         let props = key.then(|| unsafe {
             CFDictionary::<CFString, CFType>::from_slices(&[kVTEncodeFrameOptionKey_ForceKeyFrame], &[CFBoolean::new(true).as_ref()])
         });
@@ -185,6 +206,22 @@ fn parameter_set(fd: &CMFormatDescription, index: usize) -> Option<&[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoder_time_tracks_slow_frames_and_resume_after_idle() {
+        use std::time::Duration;
+        let start = Instant::now();
+        let mut clock = FrameClock::default();
+        assert_eq!(clock.next(start), 0);
+        // A 30 fps source must not be described as 60 fps to rate control.
+        assert_eq!(clock.next(start + Duration::from_micros(33_333)), 33_333);
+        assert_eq!(clock.next(start + Duration::from_micros(66_666)), 66_666);
+        // Backpressure/idle is elapsed media time too, not one more 1/60 second.
+        assert_eq!(clock.next(start + Duration::from_secs(2)), 2_000_000);
+        assert_eq!(clock.next(start + Duration::from_micros(2_016_667)), 2_016_667);
+        // Rapid submissions/retries still have strictly increasing timestamps.
+        assert_eq!(clock.next(start + Duration::from_micros(2_016_667)), 2_016_668);
+    }
 
     /// NAL unit types in an Annex B stream.
     fn types(b: &[u8]) -> Vec<u8> {
