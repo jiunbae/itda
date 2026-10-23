@@ -2,7 +2,7 @@
 (() => {
  'use strict';
  let current,timer;
- const clear=()=>{clearTimeout(timer);current?.panel.remove();current=null;};
+ const clear=()=>{clearTimeout(timer);const c=current;if(!c)return;const focused=c.panel.contains(document.activeElement);c.panel.remove();current=null;if(focused&&c.previous?.isConnected)c.previous.focus();};
  function render(){
   const c=current;if(!c)return;
   // The helper on the remote Mac guides each step: here only a one-line progress, not the
@@ -28,9 +28,13 @@
  function begin(options){
   clear();const panel=document.createElement('aside');panel.className='hp-setup';panel.setAttribute('aria-label','고성능 모드 설정');
   panel.innerHTML='<header><span>⚡</span><h2></h2></header><p data-hp-stage role="status" aria-live="polite"></p><p class="hp-explain" data-hp-remote hidden>원격 Mac 화면에 <b>Itda 권한 도우미</b>가 열려 있어요. 아래 화면에서 도우미를 따라 허용하면 자동으로 이어집니다.</p><p class="hp-explain" data-hp-manual>설정은 <b>원격 Mac</b>에서 진행합니다. 이 창 아래의 기존 화면 공유로 설정을 조작할 수 있어요.</p><div class="hp-permission" data-hp-permission="access"><div><strong>1. 키보드·마우스 조작</strong><span class="hp-result"></span></div><button data-hp-open="access">원격 조작 권한 설정 열기 ↗</button></div><div class="hp-permission" data-hp-permission="screen"><div><strong>2. 화면 보기</strong><span class="hp-result"></span></div><button data-hp-open="screen">원격 화면 권한 설정 열기 ↗</button></div><p class="hp-explain" data-hp-manual>Itda 스위치를 켜세요. ‘종료 후 다시 열기’가 나오면 선택하세요. 준비가 끝나면 자동으로 이어집니다.</p><p data-hp-error role="alert" hidden></p><footer><button data-hp-action="helper">원격 Mac의 도우미 열기</button><button data-hp-action="check">다시 확인</button><button data-hp-action="later">나중에</button></footer>';
-  current={...options,panel,stage:'원격 Mac을 준비하고 있어요…',ready:false,screen:null,access:null,deadline:Date.now()+300000};
+  current={...options,panel,previous:document.activeElement,stage:'원격 Mac을 준비하고 있어요…',ready:false,screen:null,access:null,deadline:Date.now()+300000};
   panel.addEventListener('click',e=>{const c=current;if(!c)return;const permission=e.target.closest('[data-hp-open]')?.dataset.hpOpen;if(permission){c.error='';c.send('permissions',{permission});render();return;}const action=e.target.closest('[data-hp-action]')?.dataset.hpAction;if(action==='helper'){c.deadline=Date.now()+300000;c.send('permissions');poll();}if(action==='check'){c.deadline=Date.now()+300000;c.error='';const failed=c.failed;c.failed=false;c.stage=failed?'다시 준비하고 있어요…':c.stage;c.send(failed?'upgrade':'status');render();}if(action==='later'){const cancel=c.cancel;clear();cancel?.();}});
-  document.body.append(panel);render();
+  (options.container||document.body).append(panel);
+  // From the connection editor, keep helper controls inside its modal focus scope.
+  // Closing that editor must leave the ongoing setup available as a standalone guide.
+  options.container?.closest('.scrim')?.addEventListener('itda-modal-close',()=>{if(panel.isConnected)document.body.append(panel);},{once:true});
+  render();
  }
  function message(m){
   const c=current;if(!c||m.id!==c.id)return false;

@@ -20,7 +20,7 @@ const S = {
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const I = (code) => `<span class="i">&#x${code};</span>`;
+const I = (code) => `<span class="i" aria-hidden="true">&#x${code};</span>`;
 
 // Operating system marks (Segoe Fluent has no logos, so these are SVG everywhere).
 const OS_SVG = {
@@ -650,8 +650,12 @@ function seg(key, value, options, path = 'settings') {
   return `<div class="seg">${options.map(([v, t]) => `<button data-seg="${esc(key)}" data-path="${path}" data-v="${esc(v)}" class="${String(value) === String(v) ? 'on' : ''}">${esc(t)}</button>`).join('')}</div>`;
 }
 
+let accessibleId = 0;
 function setting(icon, title, desc, control, last = false) {
-  return `<div class="setting${last ? ' last' : ''}">${I(icon)}<div class="txt"><b>${title}</b>${desc ? `<span>${desc}</span>` : ''}</div>${control}</div>`;
+  const id = `setting-label-${++accessibleId}`;
+  control = control.replace(/<(input|select)(?=\s)/g, `<$1 aria-labelledby="${id}"`);
+  control = control.replace('<div class="seg">', `<div class="seg" role="group" aria-labelledby="${id}">`);
+  return `<div class="setting${last ? ' last' : ''}">${I(icon)}<div class="txt"><b id="${id}">${title}</b>${desc ? `<span>${desc}</span>` : ''}</div>${control}</div>`;
 }
 
 function sharePanel(sh) {
@@ -950,23 +954,75 @@ function go(page) {
 
 // ---------------------------------------------------------------- modals
 
+const modalFocusable = (m) => [...m.querySelectorAll('button, input, select, textarea, a[href], [tabindex]')]
+  .filter(e => !e.disabled && e.tabIndex >= 0 && !e.closest('[hidden], [inert]') && e.getClientRects().length);
+function syncModalState() {
+  const top = topModal();
+  $('.app').inert = !!top;
+  $$('#modals .scrim').forEach(m => { m.inert = m !== top; });
+}
 function openModal(key, html, opts = {}) {
   closeModal(key);
+  const previous = document.activeElement;
   const scrim = document.createElement('div');
   scrim.className = 'scrim';
   scrim.dataset.key = key;
   scrim.innerHTML = html;
-  scrim.addEventListener('mousedown', (e) => {
+  scrim.returnFocus = previous;
+  const dialog = scrim.querySelector('.dialog') || scrim.firstElementChild;
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+  dialog.tabIndex = -1;
+  const title = dialog.querySelector('h2, h3');
+  if (title) { title.id ||= `dialog-title-${++accessibleId}`; dialog.setAttribute('aria-labelledby', title.id); }
+  // Associate the visible field/option label with its actual control, including nested input wraps.
+  scrim.querySelectorAll('.field').forEach(field => {
+    const label = field.querySelector('label:not([for])');
+    const input = field.querySelector('input, select, textarea');
+    if (label && input && !label.contains(input)) { input.id ||= `dialog-field-${++accessibleId}`; label.htmlFor = input.id; }
+  });
+  scrim.querySelectorAll('.opt').forEach(opt => {
+    const label = opt.querySelector('.txt b');
+    const input = opt.querySelector('input[type=checkbox]');
+    if (label && input) { label.id ||= `option-label-${++accessibleId}`; input.setAttribute('aria-labelledby', label.id); }
+  });
+  scrim.querySelectorAll('.reveal').forEach(button => { button.removeAttribute('tabindex'); });
+  scrim.addEventListener('keydown', e => {
+    if (e.key !== 'Tab' || topModal() !== scrim) return;
+    const items = modalFocusable(scrim), first = items[0];
+    // WebKit may Tab only between text fields unless Full Keyboard Access is enabled.
+    // Traverse our controls explicitly so buttons remain reachable in either OS policy.
+    e.preventDefault();
+    if (!first) dialog.focus();
+    else {
+      const i = items.indexOf(document.activeElement);
+      items[i < 0 ? (e.shiftKey ? items.length - 1 : 0) : (i + (e.shiftKey ? -1 : 1) + items.length) % items.length].focus();
+    }
+  });
+  scrim.addEventListener('mousedown', e => {
     if (e.target === scrim && !opts.sticky) closeModal(key);
   });
   $('#modals').appendChild(scrim);
-  const first = scrim.querySelector('[autofocus]') || scrim.querySelector('input, .btn.primary');
-  if (first) setTimeout(() => first.focus(), 30);
+  syncModalState();
+  setTimeout(() => {
+    if (topModal() !== scrim) return;
+    const first = scrim.querySelector('[autofocus]');
+    (first && modalFocusable(scrim).includes(first) ? first : modalFocusable(scrim)[0] || dialog).focus();
+  }, 30);
   return scrim;
 }
 
 function closeModal(key) {
-  $$(`#modals .scrim${key ? `[data-key="${key}"]` : ''}`).forEach((m) => {m.dispatchEvent(new Event('itda-modal-close'));m.remove();});
+  const top = topModal();
+  const removed = $$('#modals .scrim').filter(m => !key || m.dataset.key === key);
+  removed.forEach(m => { m.dispatchEvent(new Event('itda-modal-close')); m.remove(); });
+  syncModalState();
+  if (removed.includes(top)) {
+    const target = top.returnFocus;
+    if (target?.isConnected && !target.closest('[inert]')) target.focus();
+    else if (topModal()) (modalFocusable(topModal())[0] || topModal().querySelector('[role=dialog]')).focus();
+    else $('#newBtn').focus();
+  }
 }
 
 function topModal() {
@@ -1107,8 +1163,8 @@ function openEdit(init = {}, mode = {}) {
   const hasPw = existing && existing.has_pw;
   const ssh = h.ssh || { on: false, user: '', port: 0 };
   const title = quick ? `${esc(h.host)}에 연결` : existing ? '연결 편집' : '새 연결';
-  const tabs = quick ? '' : `<div class="tabs" role="tablist">
-      <button class="on" data-tab="general">일반</button><button data-tab="display">화면</button>${MAC ? '' : '<button data-tab="input">키보드</button>'}<button data-tab="conn">연결</button></div>`;
+  const tabs = quick ? '' : `<div class="tabs" role="tablist" aria-label="연결 설정">
+      <button role="tab" aria-selected="true" class="on" data-tab="general">일반</button><button role="tab" aria-selected="false" tabindex="-1" data-tab="display">화면</button>${MAC ? '' : '<button role="tab" aria-selected="false" tabindex="-1" data-tab="input">키보드</button>'}<button role="tab" aria-selected="false" tabindex="-1" data-tab="conn">연결</button></div>`;
   const chipList = (gs) => gs.map((g) => `<span class="chip" data-chip="${esc(g)}">${esc(g)}<button type="button" class="chip-x" data-chip-x="${esc(g)}" aria-label="${esc(g)} 그룹 빼기">×</button></span>`).join('');
   const groupField = quick ? '' : `<div class="field"><label for="f-group">그룹</label>
       <div class="group-wrap"><div class="chips input" id="group-chips">${chipList(hostGroups(h))}<input id="f-group" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="group-suggest" aria-expanded="false" placeholder="${hostGroups(h).length ? '' : '없음 — 예: 집, 회사'}" aria-label="그룹 추가"></div>
@@ -1186,9 +1242,16 @@ ${quick ? sshBox : ''}
 
   m.dataset.host = h.id || '';
   m.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => {
-    m.querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('on', x === b));
+    m.querySelectorAll('[data-tab]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-selected', x === b); x.tabIndex = x === b ? 0 : -1; });
     m.querySelectorAll('[data-pane]').forEach((p) => (p.hidden = p.dataset.pane !== b.dataset.tab));
   }));
+  m.querySelector('.tabs')?.addEventListener('keydown', e => {
+    const tabs = [...m.querySelectorAll('[role=tab]')], i = tabs.indexOf(document.activeElement);
+    if (i < 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+    e.preventDefault();
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[next].click(); tabs[next].focus();
+  });
   const chips = m.querySelector('#group-chips');
   if (chips) {
     const gin = chips.querySelector('#f-group');
@@ -1269,7 +1332,7 @@ ${quick ? sshBox : ''}
   if (hpEnable) hpEnable.onclick = () => {
     hpEnable.disabled = true;
     hpEnable.textContent = '준비 중…';
-    window.ItdaHpSetup.begin({id:h.id,name:label(h),send:(op,extra={})=>send(`hp_${op}`,{id:h.id,...extra}),done:()=>toast(`${label(h)} 고성능 모드가 준비됐습니다`, 'E73E'),cancel:()=>{if(hpEnable.isConnected){hpEnable.disabled=false;hpEnable.textContent='다시 확인';}}});
+    window.ItdaHpSetup.begin({container:m.querySelector('.dialog'),id:h.id,name:label(h),send:(op,extra={})=>send(`hp_${op}`,{id:h.id,...extra}),done:()=>toast(`${label(h)} 고성능 모드가 준비됐습니다`, 'E73E'),cancel:()=>{if(hpEnable.isConnected){hpEnable.disabled=false;hpEnable.textContent='다시 확인';}}});
     send('hp_upgrade', { id: h.id });
   };
   const pass = m.querySelector('#f-pass');

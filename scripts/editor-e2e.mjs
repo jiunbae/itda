@@ -38,6 +38,33 @@ try {
     await page.waitForTimeout(150);
   };
   await settled();
+  // A keyboard-only user must stay in the modal, including reverse traversal and
+  // nested confirmations; closing restores the actual trigger rather than <body>.
+  assert(await page.getByRole('dialog', { name: '연결 편집' }).count() === 1, 'editor has no named dialog');
+  assert(await page.locator('#user-label').getAttribute('for') === 'f-user', 'login label is not associated');
+  for (let i = 0; i < 50; i++) {
+    await page.keyboard.press(i < 25 ? 'Tab' : 'Shift+Tab');
+    assert(await page.evaluate(() => !!document.activeElement.closest('#modals [data-key="edit"]')), 'Tab escaped the editor');
+  }
+  await page.locator('[data-tab=general]').focus();
+  await page.keyboard.press('ArrowRight');
+  assert(await page.locator('[data-tab=display]').getAttribute('aria-selected') === 'true', 'arrow key did not select display tab');
+  await page.keyboard.press('Home');
+  assert(await page.locator('[data-tab=general]').getAttribute('aria-selected') === 'true', 'Home did not select first tab');
+  await page.locator('#f-host').focus();
+  await page.evaluate(() => confirmDialog('검토 확인', '테스트', '확인', false, () => {}));
+  await settled();
+  assert(await page.locator('[data-key=edit]').evaluate(e => e.inert), 'underlying modal is not inert');
+  await page.keyboard.press('Escape');
+  assert(await page.locator('#f-host').evaluate(e => document.activeElement === e), 'nested modal did not return focus');
+  await page.evaluate(() => closeModal());
+  await page.locator('#newBtn').focus();
+  await page.keyboard.press('Enter');
+  await settled();
+  await page.keyboard.press('Escape');
+  assert(await page.locator('#newBtn').evaluate(e => document.activeElement === e), 'editor did not restore trigger focus');
+  await page.evaluate(h => openEdit(h), mac);
+  await settled();
   const chips = () => page.locator("#group-chips [data-chip]").evaluateAll((e) => e.map((x) => x.dataset.chip));
   await page.locator("#f-group").fill("회사");
   await page.locator("#f-group").press("Enter");
@@ -53,6 +80,11 @@ try {
   await page.locator("[data-tab=conn]").click();
   await page.locator("#hp-enable").click();
   assert((await page.evaluate(() => sent.at(-1))).cmd === "hp_upgrade", "켜기 did not ask for the upgrade");
+  assert(await page.locator('[data-key=edit] .hp-setup').count() === 1, 'HP guide is outside editor keyboard scope');
+  await page.locator('[data-hp-action=later]').focus();
+  await page.keyboard.press('Tab');
+  assert(await page.evaluate(() => !!document.activeElement.closest('[data-key=edit]')), 'Tab escaped via HP guide');
+
   await page.evaluate((h) => { itda.recv({ type: "hosts", hosts: [{ ...h, hp: { on: true, port: 5910 } }] }); itda.recv({ type: "hp", id: h.id, ready: true, screen: true, access: true }); }, mac);
   await page.locator("#f-lan").fill(" 192.168.32.32 ");
   await page.locator("[data-x=save]").click();
