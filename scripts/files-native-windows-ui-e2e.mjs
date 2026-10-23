@@ -115,6 +115,37 @@ try{
  const note=files.locator('.files-list [data-index]').filter({hasText:'Notes.txt'}).first();await note.waitFor();await note.click();
  await files.keyboard.press('Alt+p');await files.locator('.files-preview-content pre').waitFor();assert((await files.locator('.files-preview-content pre').textContent()).includes('Native Windows preview fixture'),'native local preview bytes missing');await files.locator('[data-action=close-preview]').click();
  results.push({check:'actual native file window with integrated tabs, local folder listing and real text preview',result:'PASS'});
+ await files.evaluate(()=>{window.localCopyJobs=[];const old=ItdaFiles.message;ItdaFiles.message=function(m){if(m.type==='files_job')localCopyJobs.push({state:m.state,req:m.req,error:m.error,completed_names:m.completed_names});return old.call(this,m);};});
+ const project=files.locator('.files-list [data-index]').filter({hasText:'Projects'}).first();const a=await note.boundingBox(),b=await project.boundingBox();assert(a&&b,'Owned local source/destination rows missing');
+ await files.mouse.move(a.x+55,a.y+a.height/2);await files.mouse.down();await files.mouse.move(b.x+55,b.y+b.height/2,{steps:12});await files.mouse.up();
+ const copy=files.getByRole('dialog',{name:'파일 복사',exact:true});await copy.waitFor();await copy.getByRole('button',{name:'복사',exact:true}).click();
+ await files.waitForFunction(()=>localCopyJobs.some(j=>j.state==='completed'),null,{timeout:15000});
+ const same=ps(`$r=${q(remote.root)};((Get-FileHash -LiteralPath (Join-Path $r 'files\\Notes.txt') -Algorithm SHA256).Hash-eq (Get-FileHash -LiteralPath (Join-Path $r 'files\\Projects\\Notes.txt') -Algorithm SHA256).Hash)`);assert(same==='True','Native local copy destination hash differs');await new Promise(r=>setTimeout(r,500));
+ const errorVisible=await files.locator('.files-error').isVisible(),errorText=errorVisible?await files.locator('.files-error').textContent():'';results.push({check:'native managed local copy succeeds without a remote-connection error',result:errorVisible?'FAIL':'PASS',error:errorText,jobs:await files.evaluate(()=>localCopyJobs)});assert(!errorVisible,'Local copy completed but UI reported: '+errorText);
+
+ // Delete only the generated source after confirmation opens: exercise the real
+ // Rust error path, then recover through the visible Home retry control.
+ const failedSource=remote.root+'\\files\\Retry.txt';
+ ps(`Set-Content -LiteralPath ${q(failedSource)} -Value 'private retry fixture' -Encoding UTF8`);
+ await files.keyboard.press('Control+l');await address.fill(remote.root+'\\files');await address.press('Enter');
+ const retryNote=files.locator('.files-list [data-index]').filter({hasText:'Retry.txt'}).first();await retryNote.waitFor();
+ const ra=await retryNote.boundingBox(),rb=await project.boundingBox();assert(ra&&rb,'Retry rows missing');
+ await files.mouse.move(ra.x+55,ra.y+ra.height/2);await files.mouse.down();await files.mouse.move(rb.x+55,rb.y+rb.height/2,{steps:12});await files.mouse.up();
+ await copy.waitFor();ps(`Remove-Item -LiteralPath ${q(failedSource)} -Force`);await copy.getByRole('button',{name:'복사',exact:true}).click();
+ await files.waitForFunction(()=>localCopyJobs.some(j=>j.state==='failed'),null,{timeout:15000});
+ const failure=await files.evaluate(()=>localCopyJobs.find(j=>j.state==='failed'));assert(failure?.error?.includes('원본 파일이 없습니다')&&Array.isArray(failure.completed_names)&&failure.completed_names.length===0,'Expected missing-source failure with no completed names');
+ const queuedBeforeRetry=await files.evaluate(()=>localCopyJobs.filter(j=>j.state==='queued').length);
+ const retryButton=files.locator('[data-retry-job]');await retryButton.waitFor();
+ const home=files.locator('[data-network-sidebar] [data-action=explorer-home]');
+ assert(await home.count()===1,'Home navigation selector changed');await home.click();await retryButton.waitFor({state:'visible'});await files.waitForTimeout(1000);assert(await files.evaluate(()=>localCopyJobs.filter(j=>j.state==='queued').length)===queuedBeforeRetry,'Home automatically retried the failed copy');
+ ps(`Set-Content -LiteralPath ${q(failedSource)} -Value 'private retry fixture restored' -Encoding UTF8`);
+ await retryButton.click();const retryDialog=files.getByRole('dialog',{name:'남은 파일 다시 복사',exact:true});await retryDialog.waitFor();await files.waitForTimeout(1000);assert(await files.evaluate(()=>localCopyJobs.filter(j=>j.state==='queued').length)===queuedBeforeRetry,'Retry ran before confirmation');await retryDialog.getByRole('button',{name:'다시 복사',exact:true}).click();
+ await files.waitForFunction(()=>localCopyJobs.some(j=>j.state==='completed'&&j.completed_names?.includes('Retry.txt')),null,{timeout:15000});
+ const retried=await files.evaluate(()=>localCopyJobs.find(j=>j.state==='completed'&&j.completed_names?.includes('Retry.txt')));assert(retried.req&&retried.req!==failure.req,'Retry must use a new request');
+ assert(await retryButton.count()===0,'Recovered failure row remains retryable');
+ assert(ps(`((Get-FileHash -LiteralPath ${q(failedSource)} -Algorithm SHA256).Hash-eq (Get-FileHash -LiteralPath ${q(remote.root+'\\files\\Projects\\Retry.txt')} -Algorithm SHA256).Hash)`)==='True','Retried destination hash differs');
+ results.push({check:'native failed copy remains actionable on Home and retry requires confirmation then copies restored source',result:'PASS',jobs:await files.evaluate(()=>localCopyJobs),confirmation_required:true,new_request_verified:true});
+ await files.locator('[data-network-sidebar] [data-side=local]').click();await files.keyboard.press('Control+l');await address.fill(remote.root+'\\files');await address.press('Enter');await note.waitFor();
  const tabsBefore=await files.getByRole('tab').count();await files.locator('.files-list').focus();await files.keyboard.press('Control+t');await files.waitForTimeout(250);const tabsAfter=await files.getByRole('tab').count();results.push({check:'local-only folder supports Ctrl+T',result:tabsAfter===tabsBefore+1?'PASS':'FAIL',tabs_before:tabsBefore,tabs_after:tabsAfter,new_tab_disabled:await files.locator('[data-action=new-tab]').isDisabled()});await files.locator('[data-action=new-tab]').click();await files.waitForTimeout(200);results.push({check:'local-only new-tab button changes tab count',result:await files.getByRole('tab').count()===tabsAfter+1?'PASS':'FAIL',tabs_after_click:await files.getByRole('tab').count(),native_host:await files.evaluate(()=>window.ITDA_FILE_HOST),tab_title:await files.locator('.files-tab.on').getAttribute('title')});
  const dpr=await files.evaluate(()=>devicePixelRatio),request=randomUUID();const cmd=JSON.stringify({op:'resize-file',width:Math.round(560*dpr),height:Math.round(540*dpr),request});
  ps(`$r=${q(remote.root)};Set-Content -LiteralPath (Join-Path $r 'command.tmp') -Value ${q(cmd)} -Encoding UTF8;Move-Item -LiteralPath (Join-Path $r 'command.tmp') -Destination (Join-Path $r 'command.json') -Force`);

@@ -1,0 +1,152 @@
+{
+  "driver_sha256": "f71381980af0c48d833eb2fff3f9882535f8df561e1a37ef520d7222f3ff4054",
+  "source_commit": "0cafc9f3eed010d42aeebb4c8518ac1640408ae5",
+  "binary_sha256": "6bc072cbacb04817d12da0b833077b5fa862d1bd4ae851be07be3736015c9897",
+  "ci_run": 40012257699,
+  "artifact": {
+    "id": 12526383890,
+    "name": "itda-windows-x64"
+  },
+  "ci_artifact_verified": true,
+  "method": "actual Windows console app, existing WebView2 attached through private loopback CDP/SSH tunnel; no emulated Windows UA",
+  "results": [
+    {
+      "check": "actual native Windows WebView2 with private UDF and unchanged startup entry",
+      "result": "PASS",
+      "startup_entry_existed": false,
+      "existing_app_processes": 1
+    },
+    {
+      "check": "native Windows setting checkbox accessible name",
+      "result": "PASS"
+    },
+    {
+      "check": "native renderer modal traversal, nested guide and preserved editor/focus return",
+      "result": "PASS"
+    },
+    {
+      "check": "actual native file window with integrated tabs, local folder listing and real text preview",
+      "result": "PASS"
+    },
+    {
+      "check": "native managed local copy succeeds without a remote-connection error",
+      "result": "PASS",
+      "error": "",
+      "jobs": [
+        {
+          "state": "queued",
+          "req": "2ab89131650b2ae2059161aa79ca4bcd"
+        },
+        {
+          "state": "running"
+        },
+        {
+          "state": "completed",
+          "req": "2ab89131650b2ae2059161aa79ca4bcd",
+          "error": null,
+          "completed_names": [
+            "Notes.txt"
+          ]
+        }
+      ]
+    },
+    {
+      "check": "native failed copy remains actionable on Home and retry requires confirmation then copies restored source",
+      "result": "PASS",
+      "jobs": [
+        {
+          "state": "queued",
+          "req": "2ab89131650b2ae2059161aa79ca4bcd"
+        },
+        {
+          "state": "running"
+        },
+        {
+          "state": "completed",
+          "req": "2ab89131650b2ae2059161aa79ca4bcd",
+          "error": null,
+          "completed_names": [
+            "Notes.txt"
+          ]
+        },
+        {
+          "state": "queued",
+          "req": "dd2194cbffb6a6f3f52a1140065ab665"
+        },
+        {
+          "state": "failed",
+          "req": "dd2194cbffb6a6f3f52a1140065ab665",
+          "error": "원본 파일이 없습니다",
+          "completed_names": []
+        },
+        {
+          "state": "queued",
+          "req": "c1a7dfbdcc2e6eeedbf0aab866a73764"
+        },
+        {
+          "state": "running"
+        },
+        {
+          "state": "completed",
+          "req": "c1a7dfbdcc2e6eeedbf0aab866a73764",
+          "error": null,
+          "completed_names": [
+            "Retry.txt"
+          ]
+        }
+      ],
+      "confirmation_required": true,
+      "new_request_verified": true
+    },
+    {
+      "check": "local-only folder supports Ctrl+T",
+      "result": "PASS",
+      "tabs_before": 1,
+      "tabs_after": 2,
+      "new_tab_disabled": false
+    },
+    {
+      "check": "local-only new-tab button changes tab count",
+      "result": "PASS",
+      "tabs_after_click": 3,
+      "native_host": "__network",
+      "tab_title": "files"
+    },
+    {
+      "check": "native file window can fit requested small viewport",
+      "result": "PASS",
+      "requested_css_width": 560,
+      "actual_css_width": 546,
+      "dpr": 1.5
+    },
+    {
+      "check": "actual-width native Windows file window retains visible details and Escape focus recovery",
+      "result": "PASS",
+      "viewport": {
+        "width": 546,
+        "height": 529
+      },
+      "dpr": 1.5
+    }
+  ],
+  "status": "passed",
+  "limits": [
+    "candidate build, not production rollout",
+    "loopback CDP is reachable by other local processes; use a trusted test account/machine",
+    "CDP renderer input does not prove physical keyboard/global Windows accelerators",
+    "no real Explorer OLE drop or native multi-monitor/phone verified",
+    "Absent startup entry unchanged; enabled-entry preservation not tested",
+    "Failure is a deliberately missing private source before copy starts; mid-stream network failure/cancel not tested",
+    "No VoiceOver/Narrator, actual Mac UI, real phone or deployed-build acceptance"
+  ],
+  "cleanup": {
+    "status": "passed",
+    "end_receipt_present": true,
+    "startup_unchanged_end": true
+  },
+  "assessment_id": "itda-quality-2026-10-23",
+  "scope": "Actual native Windows candidate verification; no persona score certification or production rollout",
+  "test_development_note": "First recovery run timed out because the probe expected the initial-copy title after clicking Retry. Product correctly displayed the distinct retry dialog. Corrected the probe to require 남은 파일 다시 복사 and 다시 복사, then reran successfully; no product change for this timeout.",
+  "driver_note": "Executed scripts/files-native-windows-ui-e2e.mjs directly from this isolated repository. driver_sha256 matches the persisted script byte-for-byte. Pass-through real job observation; renderer drag between generated local-file rows; actual Rust-managed copy/failure/retry and SHA256 comparison. No native OLE/OS clipboard/physical input.",
+  "hypothesis_result": "A suspected local-copy remote-connection error was not reproduced. No product change was made for that hypothesis."
+}
