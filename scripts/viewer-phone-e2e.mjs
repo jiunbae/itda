@@ -165,22 +165,45 @@ try {
   assert(!(await page.locator("#status [data-a=fix]").count()) && /Mac이 연결을 거부/.test(await text("#status")), "refused card");
 
   // A dropped connection shows its card at once, without waiting on the session check; a
-  // late answer to that check doesn't replace the next connection's card.
+  // late answer to that check touches neither the next connection nor the list.
+  const until = async (f) => { for (let i = 0; i < 100 && !f(); i++) await page.waitForTimeout(50); assert(f(), "fixture state"); };
+  const release = async (code) => {
+    const answered = page.waitForResponse((r) => r.url().endsWith("/api/me"));
+    st.holdMe = false;
+    for (const res of st.held.splice(0)) json(res, code, { ok: code === 200 });
+    await answered;
+    await page.waitForTimeout(100); // the viewer's handling of that answer
+  };
   st.holdMe = true;
   await page.evaluate(() => (window.closeCode = 1006));
   await page.locator("#status [data-a=list]").tap();
   await page.waitForSelector("#list:not([hidden])");
   await page.locator(".host[data-id=mom] .open").tap();
   await page.waitForFunction(() => /연결이 끊겼습니다/.test(document.querySelector("#status").textContent), null, { timeout: 3000 });
-  assert(st.held.length === 1, "session check asked");
+  await until(() => st.held.length === 1);
   await page.locator("#status [data-a=list]").tap();
   await page.evaluate(() => (window.closeCode = 4012));
   await page.locator(".host[data-id=lab] .open").tap();
   await page.waitForSelector("#status [data-a=retry]");
-  st.holdMe = false;
-  for (const res of st.held.splice(0)) json(res, 401, { ok: false });
-  await page.waitForTimeout(300);
-  assert(/Mac이 연결을 거부/.test(await text("#status")) && (await page.locator("#view").isVisible()), "late session answer ignored");
+  await release(401);
+  assert(/Mac이 연결을 거부/.test(await text("#status")) && (await page.locator("#view").isVisible()), "late answer ignored by the next connection");
+  await page.locator("#status [data-a=list]").tap();
+  st.holdMe = true;
+  await page.evaluate(() => (window.closeCode = 1006));
+  await page.waitForSelector("#list:not([hidden])");
+  await page.locator(".host[data-id=mom] .open").tap();
+  await page.waitForFunction(() => /연결이 끊겼습니다/.test(document.querySelector("#status").textContent), null, { timeout: 3000 });
+  await until(() => st.held.length === 1);
+  await page.locator("#status [data-a=list]").tap();
+  await page.waitForSelector("#list:not([hidden])");
+  await page.locator(".host[data-id=mom] [data-edit]").tap();
+  await page.fill("#edForm [name=name]", "편집 중");
+  await release(401);
+  assert(await page.locator("#editor").isVisible() && (await page.inputValue("#edForm [name=name]")) === "편집 중", "late answer ignored on the list");
+  await page.locator("[data-a=cancel]").tap();
+  await page.evaluate(() => (window.closeCode = 4012));
+  await page.locator(".host[data-id=mom] .open").tap();
+  await page.waitForSelector("#status [data-a=retry]");
 
   // Toolbar at 390px: every control on screen, labelled, 44px or more.
   const tools = await page.evaluate(() => [...document.querySelectorAll("#tools button")].map((b) => {

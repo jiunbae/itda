@@ -764,6 +764,7 @@ function close(notifyNative=true) {
 }
 
 function leave() {
+  S.gen++;
   close();
   status(null);
   loadHosts();
