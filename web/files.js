@@ -80,16 +80,24 @@
   }
   function saveTab() {
     const t = fileTabs.find(t => t.id === currentTab);
-    if (t) Object.assign(t, { host, panes: structuredClone(panes), active, view, search, hidden, split, returnPage });
+    if (t) Object.assign(t, { host, panes: structuredClone(panes), active, view, search, hidden, split, returnPage, networkMode, explorerHome });
   }
   function tabBar() {
     if (!layer) return;
     const bar = layer.querySelector(".files-tabs");
     const focused = bar.contains(document.activeElement) && document.activeElement.matches('[role="tab"]');
-    bar.hidden = MAC && host.id === NETWORK;
+    bar.hidden = false;
     const mixed = fileTabs.some(t => t.host && t.host.id !== host.id);
-    bar.innerHTML = `<div class="files-tab-owner" role="tablist" aria-label="폴더 탭" aria-owns="${fileTabs.map(t => `file-tab-${t.id}`).join(" ")}"></div>` + fileTabs.map(t => { const on = t.id === currentTab, h = on ? host : t.host || host, folder = (on ? panes[active].path : t.panes[t.active].path).split(/[\\/]/).filter(Boolean).pop() || (!MAC && (on ? panes[active].path : t.panes[t.active].path) === "" ? "내 PC" : "/"), name = mixed && h.id !== NETWORK ? `${label(h)} · ${folder}` : folder; return `<div class="files-tab ${on ? "on" : ""}" data-tab="${t.id}" title="${esc(h.id === NETWORK ? folder : `${label(h)} · ${folder}`)}"><span id="file-tab-${t.id}" role="tab" aria-selected="${on}" tabindex="${on ? 0 : -1}">${icon(true)}${esc(name)}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`; }).join("") + `<button class="files-tab-add" ${host.id === NETWORK ? "disabled" : ""} data-action="new-tab" aria-label="새 탭" title="새 탭 (${MAC ? "⌘T" : "Ctrl+T"})"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>`;
-    if (!MAC && networkMode) { const t = bar.querySelector(".files-tab.on > span"); if (t) t.innerHTML = `${I(explorerHome ? "E80F" : "E774")}${explorerHome ? "홈" : "네트워크"}`; }
+    bar.innerHTML = `<div class="files-tab-owner" role="tablist" aria-label="폴더 탭" aria-owns="${fileTabs.map(t => `file-tab-${t.id}`).join(" ")}"></div>` + fileTabs.map(t => {
+      const on = t.id === currentTab, h = on ? host : t.host || host;
+      const side = on ? active : t.active, path = (on ? panes : t.panes)[side].path;
+      const network = on ? networkMode : t.networkMode, home = on ? explorerHome : t.explorerHome;
+      const folder = network ? home ? "홈" : "네트워크" : path.split(/[\\/]/).filter(Boolean).pop() || (!MAC && path === "" ? "내 PC" : "/");
+      const remote = !network && side === "remote" && h.id !== NETWORK;
+      const name = mixed && remote ? `${label(h)} · ${folder}` : folder;
+      const title = remote ? `${label(h)} · ${folder}` : folder;
+      return `<div class="files-tab ${on ? "on" : ""}" data-tab="${t.id}" title="${esc(title)}"><span id="file-tab-${t.id}" role="tab" aria-selected="${on}" tabindex="${on ? 0 : -1}">${network ? I(home ? "E80F" : "E774") : icon(true)}${esc(name)}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`;
+    }).join("") + `<button class="files-tab-add" data-action="new-tab" aria-label="새 탭" title="새 탭 (${MAC ? "⌘T" : "Ctrl+T"})"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>`;
     // Windows file windows have no system title bar: the tab row is it, as in Explorer.
     // (Drawn as SVG: the caption glyph fonts differ between Windows 10 and 11.)
     const glyph = { minimize: '<path d="M1 5.5h9"/>', maximize: '<rect x="1" y="1" width="9" height="9"/>', restore: '<rect x="1" y="3" width="7" height="7"/><path d="M3 3V1h7v7H8"/>', close: '<path d="M1 1l9 9M10 1l-9 9"/>' };
@@ -98,32 +106,30 @@
     if (focused) bar.querySelector('[role="tab"][aria-selected="true"]')?.focus({preventScroll:true});
   }
   function newTab(path, side) {
-    if (host.id === NETWORK) return;
-    networkMode = false;
     saveTab();
     currentTab = ++tabId;
     fileTabs.push({ id: currentTab, host });
     for (const side of ["local", "remote"]) panes[side] = structuredClone(panes[side]);
     if (side) active = side;
+    if (path || side) networkMode = false;
     saveTab();
     if (path) nav(active, path); else renderPanes();
   }
   function switchTab(id) {
-    if (id === currentTab) { if (networkMode && host.id !== NETWORK) { networkMode = false; renderPanes(); } return; }
-    networkMode = false;
+    if (id === currentTab) return;
     saveTab();
     const t = fileTabs.find(t => t.id === id);
     if (!t) return;
     currentTab = id;
     Object.assign(panes, structuredClone(t.panes));
-    ({ active, view, search, hidden, split } = t);
+    ({ active, view, search, hidden, split, networkMode, explorerHome } = t);
     returnPage = t.returnPage || null;
     if (t.host && t.host.id !== host.id) useHost(t.host);
     layer.querySelector("[data-search]").value = search;
     previewKey = "";
     renderPanes();
     // A tab switched during a list request must not wait for a now-stale response.
-    for (const side of ["local", "remote"]) if (panes[side].busy || side === active) nav(side, panes[side].busy ? panes[side].history[panes[side].at] || panes[side].path : panes[side].path, false);
+    for (const side of ["local", "remote"]) if (!networkMode && (side !== "remote" || host.id !== NETWORK) && (panes[side].busy || side === active)) nav(side, panes[side].busy ? panes[side].history[panes[side].at] || panes[side].path : panes[side].path, false);
   }
   function closeTab(id) {
     const focused = layer.querySelector(".files-tabs").contains(document.activeElement);
@@ -638,7 +644,7 @@
   function open(h, reuse = false) {
     if (!h) return;
     if (host && host.id !== h.id) {
-      if (layer && host.id !== NETWORK) {
+      if (layer) {
         // Open the device in this tab; other tabs keep their own devices and connections.
         saveTab();
         tabSwitch ||= { previous: host };
@@ -2113,6 +2119,21 @@
       return true;
     }
     if (m.type !== "files_result") return false;
+    if (m.op === "local_home" && m.ok) {
+      if (!layer) return true;
+      // This computer's home is shared by every tab, even if the active tab
+      // adopted a device while discovery was pending. Do not replace a folder
+      // or This PC that the user already opened in any of those tabs.
+      for (const state of [panes, ...fileTabs.map(t => t.panes).filter(Boolean)]) {
+        const p = state.local;
+        const fresh = !p.path && !(p.entries || []).length && !p.busy;
+        if (fresh) Object.assign(p, emptyPane(), { path: m.data.path, home: m.data.path, entries: m.data.entries, history: [m.data.path], at: 0 });
+        else p.home ||= m.data.path;
+      }
+      saveTab();
+      renderPanes();
+      return true;
+    }
     if (!host || m.id !== host.id) {
       // The tab moved to another device; let its folder be asked for again on return,
       // and free the preview slot so this device's previews are requested.
@@ -2142,17 +2163,6 @@
       fail(m.error || "파일 작업에 실패했습니다");
       return true;
     }
-    if (m.op === "local_home") {
-      if (!layer) return true;
-      // Only the home is new; a pane already browsing (This PC, a drive) keeps its place.
-      const fresh = !panes.local.path && !(panes.local.entries || []).length && !panes.local.busy;
-      for (const t of fileTabs) if (t.panes?.local && !t.panes.local.home) t.panes.local.home = m.data.path;
-      if (fresh) Object.assign(panes.local, emptyPane(), { path: m.data.path, home: m.data.path, entries: m.data.entries, history: [m.data.path], at: 0 });
-      else panes.local.home ||= m.data.path;
-      saveTab();
-      renderPanes();
-      return true;
-    }
     if (m.op === "connect") {
       localRsyncAvailable = m.data.rsync === true;
       if (setup) (layer ? adopt : workspace)(m.data);
@@ -2160,10 +2170,19 @@
     }
     if (m.op === "native") {
       if (pendingDeviceDrop) { pendingDeviceDrop = null; toast("기기 간 전송은 SSH / SFTP로 연결한 뒤 다시 시도해 주세요", "E8B7"); }
-      if (window.ITDA_FILE_HOST)
-        send("files_window", { id: host.id, window: fileWindow(), close: true });
       setup?.remove();
       setup = null;
+      if (tabSwitch) {
+        // A native SMB handoff opens Explorer/Finder; it must not close this
+        // workspace or replace the tab with an unconnected device's context.
+        const { previous } = tabSwitch;
+        tabSwitch = null;
+        useHost(previous);
+        renderPanes();
+        layer.querySelector(networkMode ? "[data-search]" : ".files-list")?.focus({ preventScroll: true });
+      } else if (window.ITDA_FILE_HOST && fileTabs.length === 1) {
+        send("files_window", { id: host.id, window: fileWindow(), close: true });
+      }
       toast(`${nativeName}에 파일 연결을 요청했습니다`, "E8B7");
       return true;
     }

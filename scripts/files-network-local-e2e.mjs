@@ -23,11 +23,12 @@ try{
   await c.addInitScript(()=>{
     const entry=(name,dir=false)=>({name,dir,size:100,modified:1780000000});
     const home='C:\\Users\\alex';
-    const tree={[home]:[entry('Desktop',true),entry('Downloads',true),entry('Documents',true),entry('note.txt')],[home+'\\Desktop']:[entry('on-desktop.txt')],[home+'\\Downloads']:[entry('setup.exe')],'':[entry('C:',true),entry('D:',true)],'C:\\':[entry('Users',true),entry('Windows',true)],'C:\\Users':[entry('alex',true)],'D:\\':[entry('Games',true)]};
+    const tree={'/remote':[entry('remote.txt')],[home]:[entry('Desktop',true),entry('Downloads',true),entry('Documents',true),entry('note.txt')],[home+'\\Desktop']:[entry('on-desktop.txt')],[home+'\\Downloads']:[entry('setup.exe')],'':[entry('C:',true),entry('D:',true)],'C:\\':[entry('Users',true),entry('Windows',true)],'C:\\Users':[entry('alex',true)],'D:\\':[entry('Games',true)]};
     window.testPackets=[];
-    window.ipc={postMessage:raw=>{const m=JSON.parse(raw);if(m.cmd!=='files')return;testPackets.push(m);
+    window.ipc={postMessage:raw=>{const m=JSON.parse(raw);testPackets.push(m);if(m.cmd!=='files')return;
       const r={...m,type:'files_result',ok:true};
-      if(m.op==='connect')r.data={path:'/remote',entries:[entry('remote.txt')],local_path:home,local_entries:tree[home]};
+      if(m.op==='connect'&&m.options?.method==='smb'){r.op='native';r.data={};}
+      else if(m.op==='connect')r.data={path:'/remote',entries:[entry('remote.txt')],local_path:home,local_entries:tree[home]};
       else if(m.op==='local_home')r.data={path:home,entries:tree[home]};
       else if(m.op==='list')r.data={path:m.path,entries:tree[m.path]||[]};
       else return;
@@ -39,6 +40,48 @@ try{
   await p.goto(base+'/web/');
   await p.evaluate(()=>{S.hosts=[{id:'studio',name:'Studio Mac',host:'studio.local',os:'mac',kind:'vnc',login_user:'alex',has_pw:true,files:{method:'sftp',user:'alex'}}];S.settings={...S.settings,onboarded:true,theme:'light'};render();ItdaFiles.network();});
   const layer=p.locator('.files-layer'),row=n=>layer.locator('[data-index]').filter({hasText:n}).first();
+  // Home/Network and local-only folders are real tabs before any remote connection.
+  const tabs=layer.locator('[data-tab]'), selected=()=>layer.getByRole('tab',{selected:true});
+  await layer.locator('[data-network-sidebar] [data-bookmark="Desktop"]:not([disabled])').waitFor();
+  await layer.getByRole('button',{name:'새 탭',exact:true}).click();
+  assert(await tabs.count()===2,'Network new-tab button did nothing');
+  await layer.locator('[data-action="explorer-home"]').click();
+  await selected().focus();await p.keyboard.press('Control+t');
+  assert(await tabs.count()===3,'Home Ctrl+T did nothing');
+  assert((await selected().textContent()).includes('홈'),'Duplicating Home lost its page');
+  await layer.locator('[data-network-sidebar] [data-bookmark="Desktop"]').click();await row('on-desktop.txt').waitFor();
+  await layer.locator('.files-list').focus();await p.keyboard.press('Control+t');
+  assert(await tabs.count()===4,'Device-less folder Ctrl+T did nothing');
+  await row('on-desktop.txt').waitFor();
+  await layer.locator('[data-network-sidebar] [data-bookmark="Downloads"]').click();await row('setup.exe').waitFor();
+  await tabs.nth(2).click();await row('on-desktop.txt').waitFor();
+  await layer.locator('[data-action="back"]').click();
+  assert((await layer.locator('.files-network h2').textContent())==='홈','Local tab lost its own Home back target');
+  await tabs.nth(0).click();
+  assert((await layer.locator('.files-network h2').textContent())==='네트워크',"Network tab changed into another tab's page");
+  await tabs.nth(1).click();
+  assert((await layer.locator('.files-network h2').textContent())==='홈','Inactive Home tab state lost');
+  // Native SMB handoff must preserve this window and restore its prior context.
+  await p.evaluate(()=>{window.ITDA_FILE_HOST='__network';window.ITDA_FILE_WINDOW='fixture-window';S.hosts.push({id:'share',name:'Shared Files',host:'share.local',files:{method:'smb',share:'smb://share.local/files'}});ItdaFiles.network('home');});
+  await layer.locator('[data-device="share"]').first().click();
+  await p.locator('.files-setup').waitFor({state:'hidden'});
+  assert(!(await p.evaluate(()=>testPackets)).some(x=>x.cmd==='files_window'&&x.close),'SMB handoff closed the entire file window');
+  assert(await tabs.count()===4,'SMB handoff destroyed other tabs');
+  await layer.locator('[data-network-sidebar] [data-bookmark="Desktop"]').click();await row('on-desktop.txt').waitFor();
+  assert((await p.evaluate(()=>testPackets)).filter(x=>x.op==='list').at(-1)?.id==='__network','SMB handoff left an unconnected device as this tab context');
+  await layer.locator('[data-action="back"]').click();
+  // Adopt a remote device in this tab without destroying the other local/start tabs.
+  await layer.locator('[data-device="studio"]').first().click();await row('remote.txt').waitFor();
+  assert(await tabs.count()===4,'Opening a device destroyed device-less tabs');
+  await tabs.nth(3).click();await row('setup.exe').waitFor();
+  assert((await p.evaluate(()=>testPackets)).filter(x=>x.op==='list').at(-1)?.id==='__network','Local tab switched to the remote device');
+  await tabs.nth(1).click();await row('remote.txt').waitFor();
+  assert((await p.evaluate(()=>testPackets)).filter(x=>x.op==='connect'&&x.id==='studio').length===1,'Switching back reconnected remote device');
+  // Remove remote tab: remaining local tabs survive and unused connection is released.
+  await tabs.nth(1).locator('[data-close-tab]').click();
+  assert((await p.evaluate(()=>testPackets)).some(x=>x.op==='release'&&x.id==='studio'),'Last remote tab did not release connection');
+  while(await tabs.count()>1)await tabs.last().locator('[data-close-tab]').click();
+  await layer.locator('.files-network h2').waitFor();
   // This computer's places work before any device is connected.
   await layer.locator('[data-network-sidebar] [data-bookmark="Desktop"]:not([disabled])').waitFor();
   assert(!await layer.locator('[data-network-sidebar] [data-side="local"]').isDisabled(),'This PC disabled without a device');
@@ -90,6 +133,21 @@ try{
     await l.locator('[data-network-sidebar] [data-bookmark="Desktop"]:not([disabled])').waitFor();
     await q.close();
   }
+  // Home discovery can finish after a different tab adopted a remote device.
+  {
+    const q=await c.newPage();
+    if(process.platform!=='win32')await q.route('**/icons.js',route=>route.fulfill({contentType:'text/javascript',body:fs.readFileSync(path.join(root,'web/icons.js'),'utf8').replace('if (/Windows/.test(navigator.userAgent)) return;','')}));
+    await q.goto(base+'/web/');
+    await q.evaluate(()=>{window.slowHome=700;S.hosts=[{id:'studio',name:'Studio Mac',host:'studio.local',os:'mac',login_user:'alex',has_pw:true,files:{method:'sftp',user:'alex'}}];S.settings={...S.settings,onboarded:true};render();ItdaFiles.network();});
+    const l=q.locator('.files-layer');
+    await l.getByRole('button',{name:'새 탭',exact:true}).click();
+    await l.locator('[data-device="studio"]').first().click();
+    await l.locator('[data-index]').filter({hasText:'remote.txt'}).waitFor();
+    await q.waitForTimeout(900);
+    await l.locator('[data-tab]').first().click();
+    await l.locator('[data-network-sidebar] [data-bookmark="Desktop"]:not([disabled])').waitFor({timeout:2000});
+    await q.close();
+  }
   // Each tab returns to its own page.
   {
     const q=await c.newPage();
@@ -110,5 +168,5 @@ try{
     await q.close();
   }
   await c.close();
-  console.log('PASS: device-less file window: places, This PC drives (read-only), Up/Back, slow home answer, per-tab Back, device-less copy explained');
+  console.log('PASS: device-less file window: places, This PC drives (read-only), Up/Back, slow home answer, per-tab Back, device-less copy, start/local tabs, SMB handoff and delayed home across devices');
 }finally{await browser.close();server.closeAllConnections();await new Promise(r=>server.close(r));}
