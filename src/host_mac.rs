@@ -624,6 +624,74 @@ fn key_flags(code: u16) -> CGEventFlags {
     }
 }
 
+/// The viewer's Mac screen actions (Mission Control…) arrive as these keysyms plus the action's
+/// macOS symbolic hotkey number: no keyboard sends them, and old servers ignore them.
+const ACTION_KEYSYM: u32 = 0x1100_0000;
+
+/// The shortcut this Mac's user has for a symbolic hotkey (System Settings › Keyboard ›
+/// Shortcuts), or the default one: (key code, modifier flags), None when switched off.
+fn hotkey(id: u32) -> Option<(u16, u64)> {
+    let default = match id {
+        32 => (126, 0x84_0000), // Mission Control: ⌃↑
+        33 => (125, 0x84_0000), // Application windows: ⌃↓
+        36 => (103, 0x80_0000), // Show Desktop: F11
+        79 => (123, 0x84_0000), // Move left a space: ⌃←
+        81 => (124, 0x84_0000), // Move right a space: ⌃→
+        64 => (49, 0x10_0000),  // Spotlight: ⌘Space
+        _ => return None,
+    };
+    let export = std::process::Command::new("/usr/bin/defaults").args(["export", "com.apple.symbolichotkeys", "-"]).output().ok()?;
+    let mut json = std::process::Command::new("/usr/bin/plutil")
+        .args(["-convert", "json", "-o", "-", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+    let _ = std::io::Write::write_all(&mut json.stdin.take()?, &export.stdout);
+    let v: serde_json::Value = serde_json::from_slice(&json.wait_with_output().ok()?.stdout).unwrap_or_default();
+    hotkey_in(&v, id, default)
+}
+
+fn hotkey_in(v: &serde_json::Value, id: u32, default: (u16, u64)) -> Option<(u16, u64)> {
+    let entry = &v["AppleSymbolicHotKeys"][id.to_string()];
+    if entry.is_null() {
+        return Some(default); // never changed
+    }
+    if entry["enabled"] == false || entry["enabled"] == 0 {
+        return None;
+    }
+    let p = &entry["value"]["parameters"];
+    Some((p[1].as_u64().filter(|c| *c < 0xffff)? as u16, p[2].as_u64()?))
+}
+
+/// Run a screen action with this Mac's own shortcut for it.
+fn screen_action(id: u32) {
+    let Some((code, mods)) = hotkey(id) else {
+        crate::log!("hp: screen action {id} has no shortcut on this Mac");
+        return;
+    };
+    // The modifiers go down first and come up last, as on a keyboard.
+    let held: Vec<(u16, u64)> = [(59, 0x4_0000), (58, 0x8_0000), (56, 0x2_0000), (55, 0x10_0000)].into_iter().filter(|(_, f)| mods & f != 0).collect();
+    let mut flags = 0;
+    for (k, f) in &held {
+        flags |= f;
+        let e = CGEvent::new_keyboard_event(None, *k, true);
+        CGEvent::set_flags(e.as_deref(), CGEventFlags(flags));
+        post(e);
+    }
+    for down in [true, false] {
+        let e = CGEvent::new_keyboard_event(None, code, down);
+        CGEvent::set_flags(e.as_deref(), CGEventFlags(mods | key_flags(code).0));
+        post(e);
+    }
+    for (k, f) in held.iter().rev() {
+        flags &= !f;
+        let e = CGEvent::new_keyboard_event(None, *k, false);
+        CGEvent::set_flags(e.as_deref(), CGEventFlags(flags));
+        post(e);
+    }
+}
+
 fn post(e: Option<CFRetained<CGEvent>>) {
     CGEvent::post(CGEventTapLocation::HIDEventTap, e.as_deref());
 }
@@ -649,6 +717,20 @@ impl Input {
     pub(crate) fn key(&mut self, down: bool, sym: u32) {
         self.last_key = Instant::now();
         if self.view_only {
+            return;
+        }
+        if (ACTION_KEYSYM..ACTION_KEYSYM + 0x100).contains(&sym) {
+            // One at a time, off the input thread (reading the shortcuts runs `defaults`); a
+            // few queued at most, more are dropped.
+            static ACTIONS: std::sync::OnceLock<std::sync::mpsc::SyncSender<u32>> = std::sync::OnceLock::new();
+            if down {
+                let tx = ACTIONS.get_or_init(|| {
+                    let (tx, rx) = std::sync::mpsc::sync_channel::<u32>(4);
+                    std::thread::spawn(move || rx.into_iter().for_each(screen_action));
+                    tx
+                });
+                let _ = tx.try_send(sym - ACTION_KEYSYM);
+            }
             return;
         }
         let (code, flag) = match keycode(sym) {
@@ -794,7 +876,7 @@ fn write_status(screen: bool, access: bool) {
     let (native, dimensions) = current.as_ref().map(|c| { let c = c.lock().unwrap(); (c.native_pixels, (c.w, c.h)) })
         .unwrap_or_else(|| { let native = native_pixels_requested(); (native, display_dimensions(native)) });
     let quality = if native { "native" } else { "points" };
-    let _ = std::fs::write(crate::store::dir().join("hp-status"), format!("screen={} access={} port={PORT} quality={quality} quality_active={} capture_width={} capture_height={}\n", screen as u8, access as u8, current.is_some() as u8, dimensions.0, dimensions.1));
+    let _ = std::fs::write(crate::store::dir().join("hp-status"), format!("screen={} access={} port={PORT} quality={quality} quality_active={} capture_width={} capture_height={} actions=1\n", screen as u8, access as u8, current.is_some() as u8, dimensions.0, dimensions.1));
 }
 
 /// Start serving in the background of the running app (when `enabled`).
@@ -845,5 +927,19 @@ mod session_tests {
     #[test]
     fn session_state_reads() {
         eprintln!("session (locked, on console) = {:?}", super::session_state());
+    }
+}
+
+#[cfg(test)]
+mod action_tests {
+    /// A Mac with its own shortcuts (Mission Control on ⌃H), one switched off, one never changed.
+    #[test]
+    fn screen_action_uses_this_macs_shortcut() {
+        let v: serde_json::Value = serde_json::from_str(r#"{"AppleSymbolicHotKeys":{
+            "32":{"enabled":true,"value":{"parameters":[104,4,262144],"type":"standard"}},
+            "36":{"enabled":false,"value":{"parameters":[65535,103,8388608],"type":"standard"}}}}"#).unwrap();
+        assert_eq!(super::hotkey_in(&v, 32, (126, 0x84_0000)), Some((4, 0x4_0000)));
+        assert_eq!(super::hotkey_in(&v, 36, (103, 0x80_0000)), None);
+        assert_eq!(super::hotkey_in(&v, 33, (125, 0x84_0000)), Some((125, 0x84_0000)));
     }
 }

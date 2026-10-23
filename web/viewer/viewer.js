@@ -4,7 +4,7 @@
 'use strict';
 import './novnc.min.js';
 import { MonitorController, startMirror } from './monitors.js';
-import { WheelInput, macHost, macActions, macMenu, sendChord } from './interaction.js';
+import { WheelInput, macHost, macActions, macMenu, sendChord, sendMacAction } from './interaction.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -551,7 +551,7 @@ function open(h) {
   const size = follow && scr.clientWidth ? `w=${Math.round(scr.clientWidth)}&h=${Math.round(scr.clientHeight)}&` : '';
   // This attempt's own token: its high-performance outcome, not another viewer's.
   const attempt = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
-  S.hpFallback = null; S.hpFallbackSetup = false; S.hpActual = false; S.hpQuality = null; S.hpStatusReq = null; renderTools();
+  S.hpFallback = null; S.hpFallbackSetup = false; S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; renderTools();
   const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}?${size}attempt=${attempt}`, ['binary']);
   let closeInfo = null;
   ws.addEventListener('close', (e) => { closeInfo = e; });
@@ -599,7 +599,7 @@ function open(h) {
   rfb.addEventListener('disconnect', () => {
     if (S.rfb !== rfb) return;
     S.rfb = null;
-    S.hpActual = false; S.hpQuality = null; S.hpStatusReq = null;
+    S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null;
     if (APP) return setTimeout(() => appDropped(h, closeInfo), 50);
     setTimeout(() => {
       const known = closeInfo && CLOSE_TEXT[closeInfo.code];
@@ -749,6 +749,8 @@ window.itdaHp = (m) => {
   if (m.status && typeof m.quality === 'string' && m.req && m.req === S.hpStatusReq) {
     // While connected the capture is active with a real size; a report saying otherwise is
     // stale or settling: unknown.
+    // A Mac whose Itda takes screen actions itself (else the default shortcuts go as keys).
+    S.hpActions = !!m.actions;
     const real = m.quality === '' || (m.quality_active && m.capture_width > 0 && m.capture_height > 0);
     S.hpQuality = real ? { quality: m.quality, active: !!m.quality_active, w: m.capture_width, h: m.capture_height } : null;
     renderTools();
@@ -911,7 +913,7 @@ function toggleSheet(kind) {
 $('#sheet').addEventListener('click', async (e) => {
   if (MIRROR !== null) return; // The mirror routes its menu through the owner's bridge.
   const action = e.target.closest('[data-mac-action]');
-  if(action) { const a=macActions.find(a=>a[0]===action.dataset.macAction); if(a&&macHost(S.host))sendCombo(a[3]); $('#sheet').hidden=true; S.rfb?.focus(); return; }
+  if(action) { const a=macActions.find(a=>a[0]===action.dataset.macAction); if(a&&macHost(S.host)&&S.rfb&&!S.viewOnly){const r=S.rfb;sendMacAction(a,!!(S.hpActual&&S.hpActions),(k,down)=>r.sendKey(k,null,down));} $('#sheet').hidden=true; S.rfb?.focus(); return; }
   const m = e.target.closest('[data-mod]');
   if (m) {
     const k = m.dataset.mod;

@@ -112,6 +112,8 @@ pub struct Status {
     /// What its capture serves: "native" or "points" ("" from an Itda before the option).
     pub quality: String,
     pub quality_active: bool,
+    /// It takes Mac screen actions as Itda's own keysyms (1.0.2+).
+    pub actions: bool,
     pub capture: (u32, u32),
 }
 /// The picture that Mac's Itda serves from its next capture: native (Retina) pixels, or points.
@@ -131,7 +133,7 @@ if [ "$age" -ge 0 ] && [ "$age" -le 15 ] && lsof -nP -a -c itda -iTCP:{port} -sT
     let yes = |k: &str| out.split_whitespace().any(|p| p == format!("{k}=1"));
     let val = |k: &str| out.split_whitespace().find_map(|p| p.strip_prefix(k)?.strip_prefix('=')).unwrap_or("");
     let quality = Some(val("quality")).filter(|q| matches!(*q, "native" | "points")).unwrap_or("").to_string();
-    Ok(Status {screen:yes("screen"),access:yes("access"),running:yes("running"),quality,quality_active:yes("quality_active"),capture:(val("capture_width").parse().unwrap_or(0),val("capture_height").parse().unwrap_or(0))})
+    Ok(Status {screen:yes("screen"),access:yes("access"),running:yes("running"),quality,quality_active:yes("quality_active"),actions:yes("actions"),capture:(val("capture_width").parse().unwrap_or(0),val("capture_height").parse().unwrap_or(0))})
 }
 
 /// The guide and system settings open on the remote Mac, never on the viewer's computer.
