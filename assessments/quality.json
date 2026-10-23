@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "assessment_id": "itda-quality-2026-10-23",
-  "status": "iteration-2-native-verification",
+  "status": "iteration-3-native-copy-and-background-recovery",
   "goal": "Every persona scores at least 9/10 on verified core journeys, with no unresolved P1/P2 task blockers.",
   "baseline": {
     "commit": "521202025e7c5a984f089c1d1df77e846f63fd33",
@@ -507,6 +507,51 @@
         }
       ],
       "acceptance_note": "Native candidate checks do not prove production rollout. Existing provisional baseline scores remain unchanged; no persona certified 9/10."
+    },
+    {
+      "id": 3,
+      "status": "in-progress",
+      "changes": [
+        {
+          "pr": 98,
+          "head": "cc64eaae953bc726972c41d21c8b470ea1ea8004",
+          "scope": "Background failure/cancel feedback, confirmed remaining-item retry, Home visibility, long breadcrumbs and qualified transfer guidance",
+          "status": "merged; production deployment pending",
+          "verification": "Independent review approved; all CI jobs passed. Initial native keyboard CI failure was investigated and addressed in PR99."
+        },
+        {
+          "pr": 99,
+          "head": "0cafc9f3eed010d42aeebb4c8518ac1640408ae5",
+          "merge_commit": "9a7e03711c42cae9271b46b9584cf7299fecf4e7",
+          "scope": "Retain focused/armed tab and job controls across asynchronous DOM updates; stable job keys prevent cancelling another transfer",
+          "status": "merged; production deployment pending",
+          "verification": "Independent exact-head approval; CI40012257699 all jobs passed. Controlled key-down/update/key-up fixtures passed in WebKit."
+        }
+      ],
+      "native_windows_evidence": "assessments/evidence/native-windows-copy-recovery.json",
+      "open_findings": [
+        {
+          "id": "window-close-orphan-transfer",
+          "severity": "P2",
+          "status": "confirmed; implementation assigned",
+          "evidence": "Independent source review at main9a7e037: release_page retains active jobs but future events target the closed page; surviving pages lack snapshots and cancel authority. No native acceptance yet.",
+          "affected_personas": [
+            "windows-office",
+            "cross-platform-files"
+          ]
+        },
+        {
+          "id": "local-only-cancel-router",
+          "severity": "P2",
+          "status": "source finding; implementation assigned; native cancellation pending",
+          "evidence": "home.rs files routing requires a saved host or local_only operation. The cancel request from files.js sends NETWORK id without side, which is not admitted by local_only; routing returns before the existing owner-scoped cancellation check. Successful native copy/retry does not prove cancel.",
+          "affected_personas": [
+            "windows-office",
+            "cross-platform-files"
+          ]
+        }
+      ],
+      "acceptance_note": "Native candidate: ten checks passed, including real local-copy hash and missing-source failure → Home retry → re-confirmed copy hash. All verified persona scores remain null. Actual Explorer OLE, assistive technology, other platform journeys, mid-stream failures and deployed-build checks remain pending."
     }
   ]
 }

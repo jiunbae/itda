@@ -743,3 +743,13 @@ details.raw code { display: block; margin-top: 6px; padding: 8px 10px; border-ra
   background: transparent; color: var(--text); cursor: pointer;
 }
 .group-suggest .sug:hover, .group-suggest .sug.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* Background transfers (the main window's list) */
+.transfer-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow: auto; }
+.transfer-row { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.transfer-row.failed { border-color: color-mix(in srgb, var(--danger, #c42b1c) 45%, var(--border)); }
+.transfer-what { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.transfer-what b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.transfer-what span { color: var(--text-2); font-size: 12px; }
+.transfer-what progress { width: 100%; }
+.transfer-actions { display: flex; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
