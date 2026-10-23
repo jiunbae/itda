@@ -2,7 +2,6 @@
   "recorded_at": "2026-10-23T22:06:22.259305+00:00",
   "app_version": "1.0.2",
   "bundle": "dev.jiun.itda",
-  "pid": 87882,
   "method": "Installed signed Tacto helper, native AX observation and menu actions",
   "activation": {
     "foreground_verified": true,
