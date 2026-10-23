@@ -303,6 +303,7 @@
   const transferRequests = new Map();
   const announcedJobs = new Set();
   const droppedJobs = new Set();
+  const dropJob = (key) => { droppedJobs.add(key); if (droppedJobs.size > 500) droppedJobs.delete(droppedJobs.values().next().value); };
   let jobsHomeView = false;
   const extension = (name = "") => name.includes(".") ? name.split(".").pop().toLowerCase() : "";
   const kind = (e) => e.link ? "심볼릭 링크" : e.dir && !MAC && /^[A-Za-z]:$/.test(e.name) ? "로컬 디스크" : e.dir ? "폴더" : ({ txt: "텍스트 문서", md: "Markdown 문서", pdf: "PDF 문서", png: "PNG 이미지", jpg: "JPEG 이미지", jpeg: "JPEG 이미지", heic: "HEIF 이미지", zip: "ZIP 아카이브", mp4: "MPEG-4 동영상", mp3: "MP3 오디오" }[extension(e.name)] || (extension(e.name) ? `${extension(e.name).toUpperCase()} 문서` : "문서"));
@@ -1648,7 +1649,7 @@
   }
   function dismissTransfer(key) {
     const j = jobs.get(key);
-    if (j?.orphan) { send("files", { id: j.id, window: pageToken, op: "dismiss_background", job: key }); droppedJobs.add(key); }
+    if (j?.orphan) { send("files", { id: j.id, window: pageToken, op: "dismiss_background", job: key }); dropJob(key); }
     jobs.delete(key); announcedJobs.delete(key);
     renderJobs(); transfersChanged();
   }
@@ -1662,7 +1663,7 @@
     // nothing brings back a dismissed one.
     if (droppedJobs.has(m.job) || (m.seq && previous.seq && m.seq <= previous.seq)) return;
     if (m.dismissed) {
-      droppedJobs.add(m.job); if (droppedJobs.size > 500) droppedJobs.delete(droppedJobs.values().next().value);
+      dropJob(m.job);
       jobs.delete(m.job); announcedJobs.delete(m.job); renderJobs(); transfersChanged(); return;
     }
     const r = m.request || {};
