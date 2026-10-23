@@ -2119,6 +2119,21 @@
       return true;
     }
     if (m.type !== "files_result") return false;
+    if (m.op === "local_home" && m.ok) {
+      if (!layer) return true;
+      // This computer's home is shared by every tab, even if the active tab
+      // adopted a device while discovery was pending. Do not replace a folder
+      // or This PC that the user already opened in any of those tabs.
+      for (const state of [panes, ...fileTabs.map(t => t.panes).filter(Boolean)]) {
+        const p = state.local;
+        const fresh = !p.path && !(p.entries || []).length && !p.busy;
+        if (fresh) Object.assign(p, emptyPane(), { path: m.data.path, home: m.data.path, entries: m.data.entries, history: [m.data.path], at: 0 });
+        else p.home ||= m.data.path;
+      }
+      saveTab();
+      renderPanes();
+      return true;
+    }
     if (!host || m.id !== host.id) {
       // The tab moved to another device; let its folder be asked for again on return,
       // and free the preview slot so this device's previews are requested.
@@ -2148,17 +2163,6 @@
       fail(m.error || "파일 작업에 실패했습니다");
       return true;
     }
-    if (m.op === "local_home") {
-      if (!layer) return true;
-      // Only the home is new; a pane already browsing (This PC, a drive) keeps its place.
-      const fresh = !panes.local.path && !(panes.local.entries || []).length && !panes.local.busy;
-      for (const t of fileTabs) if (t.panes?.local && !t.panes.local.home) t.panes.local.home = m.data.path;
-      if (fresh) Object.assign(panes.local, emptyPane(), { path: m.data.path, home: m.data.path, entries: m.data.entries, history: [m.data.path], at: 0 });
-      else panes.local.home ||= m.data.path;
-      saveTab();
-      renderPanes();
-      return true;
-    }
     if (m.op === "connect") {
       localRsyncAvailable = m.data.rsync === true;
       if (setup) (layer ? adopt : workspace)(m.data);
@@ -2166,10 +2170,19 @@
     }
     if (m.op === "native") {
       if (pendingDeviceDrop) { pendingDeviceDrop = null; toast("기기 간 전송은 SSH / SFTP로 연결한 뒤 다시 시도해 주세요", "E8B7"); }
-      if (window.ITDA_FILE_HOST)
-        send("files_window", { id: host.id, window: fileWindow(), close: true });
       setup?.remove();
       setup = null;
+      if (tabSwitch) {
+        // A native SMB handoff opens Explorer/Finder; it must not close this
+        // workspace or replace the tab with an unconnected device's context.
+        const { previous } = tabSwitch;
+        tabSwitch = null;
+        useHost(previous);
+        renderPanes();
+        layer.querySelector(networkMode ? "[data-search]" : ".files-list")?.focus({ preventScroll: true });
+      } else if (window.ITDA_FILE_HOST && fileTabs.length === 1) {
+        send("files_window", { id: host.id, window: fileWindow(), close: true });
+      }
       toast(`${nativeName}에 파일 연결을 요청했습니다`, "E8B7");
       return true;
     }
