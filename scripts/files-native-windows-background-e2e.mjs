@@ -41,14 +41,14 @@ function cleanupRemote(){
 async function cleanupServer(){
  sftpTunnel?.kill();
  if(serverProcess&&serverProcess.exitCode===null&&serverProcess.signalCode===null){serverProcess.kill();await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{serverProcess.kill('SIGKILL');},3000);const fail=setTimeout(()=>reject(Error('Owned SFTP fixture did not stop')),6000);serverProcess.once('exit',()=>{clearTimeout(timer);clearTimeout(fail);resolve();});});}
- if(serverRoot&&path.basename(serverRoot).startsWith('itda-quality-sftp-')&&path.resolve(path.dirname(serverRoot))===path.resolve(os.tmpdir()))fs.rmSync(serverRoot,{recursive:true,force:true});
+ if(serverRoot){if(!path.basename(serverRoot).startsWith('itda-quality-sftp-')||path.resolve(path.dirname(serverRoot))!==path.resolve(os.tmpdir()))throw Error('SFTP workspace ownership mismatch during cleanup');fs.rmSync(serverRoot,{recursive:true,force:true});if(fs.existsSync(serverRoot))throw Error('SFTP fixture workspace remains after cleanup');}
 }
 for(const signal of ['SIGINT','SIGTERM'])process.once(signal,async()=>{
  if(finalizing){interrupted=signal;process.exitCode=signal==='SIGINT'?130:143;return;}
  let cleanupError;
  try{cleanupRemote();}catch(e){cleanupError=e;}
- fs.writeFileSync(resultFile,JSON.stringify({status:'interrupted',signal,...provenance,results,cleanup:{status:cleanupError?'failed':'passed',...cleanupReceipt,...(cleanupError?{error:cleanupError.message}:{})}},null,2));
- try{await cleanupServer();}catch{}
+ try{await cleanupServer();}catch(e){cleanupError||=e;}
+ fs.writeFileSync(resultFile,JSON.stringify({status:'interrupted',signal,...provenance,results,cleanup:{status:cleanupError?'failed':'passed',...cleanupReceipt,sftp_workspace_removed:!serverRoot||!fs.existsSync(serverRoot),...(cleanupError?{error:cleanupError.message}:{})}},null,2));
  process.exit(signal==='SIGINT'?130:143);
 });
 try{
@@ -90,11 +90,11 @@ try{
  try{$env:ITDA_DATA_DIR=Join-Path $r 'data';$env:ITDA_DEBUG_PORT='${remote.port}';$env:ITDA_DEVTOOLS='1';$p=Start-Process -FilePath $exe -PassThru -WindowStyle Minimized;if($existing-contains $p.Id){throw 'candidate PID was already present'}
  $isolated=$false;for($i=0;$i-lt 60;$i++){$p.Refresh();if($p.HasExited){throw 'candidate exited before isolation verified'};if((Test-Path (Join-Path $env:ITDA_DATA_DIR 'Itda\WebView2'))-and(@(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" -ErrorAction SilentlyContinue|Where-Object {$_.CommandLine -like ('*'+$r+'*')}).Count-gt 0)){$isolated=$true;break};Start-Sleep -Milliseconds 250};if(-not $isolated){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue;throw 'private WebView2 profile not verified; stopped candidate'}
  for($i=0;$i-lt 60;$i++){$p.Refresh();if($p.HasExited){throw 'candidate exited'};if($p.MainWindowHandle-ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 500}
- Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class ItdaQualityWindow{public delegate bool CB(IntPtr h,IntPtr p);[DllImport("user32.dll")]public static extern bool ShowWindowAsync(IntPtr h,int c);[DllImport("user32.dll")]static extern bool EnumWindows(CB cb,IntPtr p);[DllImport("user32.dll")]static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);[DllImport("user32.dll")]static extern bool IsWindowVisible(IntPtr h);[DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern int GetWindowTextLength(IntPtr h);[DllImport("user32.dll")]static extern IntPtr SetThreadDpiAwarenessContext(IntPtr value);[DllImport("user32.dll")]static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int w,int hh,uint flags);public static long ResizeFile(uint pid,long main,int w,int hh){var a=new System.Collections.Generic.List<IntPtr>();EnumWindows((h,p)=>{uint id;GetWindowThreadProcessId(h,out id);if(id==pid&&h.ToInt64()!=main&&IsWindowVisible(h)&&GetWindowTextLength(h)>0)a.Add(h);return true;},IntPtr.Zero);if(a.Count!=1||w<380||w>3000||hh<300||hh>3000)return 0;var old=SetThreadDpiAwarenessContext(new IntPtr(-4));if(old==IntPtr.Zero)return 0;try{return SetWindowPos(a[0],IntPtr.Zero,50,50,w,hh,0x14)?a[0].ToInt64():0;}finally{SetThreadDpiAwarenessContext(old);}}}'
+ Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class ItdaQualityWindow{[DllImport("user32.dll")]public static extern bool ShowWindowAsync(IntPtr h,int c);}'
  [ItdaQualityWindow]::ShowWindowAsync($p.MainWindowHandle,4)|Out-Null
  $after=(Get-ItemProperty -Path $run -Name Itda -ErrorAction SilentlyContinue).Itda
  [pscustomobject]@{pid=$p.Id;hwnd=$p.MainWindowHandle.ToInt64();existing_app_processes=$existing.Count;existing_app_pids=$existing;startup_unchanged=($before-eq $after);startup_entry_existed=($null-ne $before);udf_exists=(Test-Path (Join-Path $env:ITDA_DATA_DIR 'Itda\WebView2'))}|ConvertTo-Json -Compress|Set-Content -LiteralPath (Join-Path $r 'started.json') -Encoding UTF8
- $main=$p.MainWindowHandle.ToInt64();$until=[DateTime]::UtcNow.AddSeconds(300);while(-not $p.HasExited-and[DateTime]::UtcNow-lt $until){$f=Join-Path $r 'command.json';if(Test-Path $f){$c=Get-Content $f -Raw|ConvertFrom-Json;Remove-Item $f;if($c.op-eq 'resize-file'){$hw=[ItdaQualityWindow]::ResizeFile($p.Id,$main,$c.width,$c.height);[pscustomobject]@{request=$c.request;hwnd=$hw}|ConvertTo-Json -Compress|Set-Content -LiteralPath (Join-Path $r 'command-result.json') -Encoding UTF8}};Start-Sleep -Milliseconds 100;$p.Refresh()}
+ $until=[DateTime]::UtcNow.AddSeconds(300);while(-not $p.HasExited-and[DateTime]::UtcNow-lt $until){Start-Sleep -Milliseconds 100;$p.Refresh()}
  }catch{$_|Out-String|Set-Content -LiteralPath (Join-Path $r 'error.txt') -Encoding UTF8}
  finally{if($p-and-not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue};$current=(Get-ItemProperty -Path $run -Name Itda -ErrorAction SilentlyContinue).Itda;$unchanged=($before-eq $current);if($current-and $current.Contains($exe)){if($null-ne $before){Set-ItemProperty -Path $run -Name Itda -Value $before}else{Remove-ItemProperty -Path $run -Name Itda -ErrorAction SilentlyContinue}};[pscustomobject]@{startup_unchanged_end=$unchanged}|ConvertTo-Json -Compress|Set-Content -LiteralPath (Join-Path $r 'finished.json') -Encoding UTF8}
  `;
@@ -144,12 +144,16 @@ try{
  const inspectDestination=()=>JSON.parse(ps(`$r=Join-Path ${q(remote.root)} 'files\\Projects';$a=@(Get-ChildItem -LiteralPath $r -Force -Recurse|ForEach-Object{$entry=$_;$size=$entry.Length;$hash='';if($entry.Name-eq 'payload.bin'){$hash=(Get-FileHash -LiteralPath $entry.FullName -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()}elseif(-not $entry.PSIsContainer){try{$f=[IO.File]::Open($entry.FullName,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite-bor[IO.FileShare]::Delete));try{$size=$f.Length}finally{$f.Dispose()}}catch{}};[pscustomobject]@{name=$entry.Name;size=$size;sha256=$hash}});ConvertTo-Json -InputObject $a -Compress`));
  const nav=page.locator('[data-transfers]');
  // Cancel a genuine mid-stream transfer after the actual native file-window close.
- const first=await beginCopy();await waitFor(()=>inspectDestination().some(f=>/^\.itda-.*\.partial$/.test(f.name)&&f.size>0),'No actual destination staging bytes before native window close');const closed=first.waitForEvent('close');await first.locator('[data-window=close]').click();await closed;
+ provenance.phase='midstream-preconditions';
+ const first=await beginCopy();await waitFor(()=>inspectDestination().some(f=>/^\.itda-.*\.partial$/.test(f.name)&&f.size>0),'No actual destination staging bytes before native window close');const staged=inspectDestination().find(f=>/^\.itda-.*\.partial$/.test(f.name)&&f.size>0),held=audit().filter(e=>e.event==='read-blocked').at(-1);const closed=first.waitForEvent('close');await first.locator('[data-window=close]').click();await closed;
+ results.push({check:'fixture reached actual mid-stream SFTP read and destination staging before native caption close',result:'PASS',scope:'precondition only; does not prove background recovery',barrier_offset:held.offset,staging_bytes:staged.size,native_file_window_closed:true});
+ provenance.phase='closed-window-transfer-controls';
  await nav.waitFor();await nav.click();const dialog=page.getByRole('dialog',{name:'전송',exact:true});await dialog.waitFor();
  const liveRow=dialog.locator('.transfer-row').filter({has:page.getByRole('button',{name:'취소',exact:true})});await liveRow.waitFor();
  const firstJob=(await liveRow.getAttribute('data-id')).slice('transfer-'.length);
  assert(await page.evaluate(job=>bgObserved.some(m=>m.job===job&&m.window==='app'&&m.orphan===true)&&bgObserved.some(m=>m.type==='files_background'&&m.count>=1),firstJob),'Closed native window did not publish adopted job and background notice');
  assert(!inspectDestination().some(f=>f.name==='payload.bin'),'Destination committed while source barrier held');
+ provenance.phase='background-cancellation';
  const cancelStart=audit().length,barrier=audit().filter(e=>e.event==='read-blocked').at(-1);
  await liveRow.getByRole('button',{name:'취소',exact:true}).click();await new Promise(r=>setTimeout(r,1000));
  assert(!inspectDestination().some(f=>f.name==='payload.bin'),'Cancelled transfer committed while source remained blocked');
@@ -164,6 +168,7 @@ try{
  results.push({check:'actual native file-window close adopts a mid-stream SFTP copy; main-window cancellation cleans staging and preserves source',result:'PASS',cancelled_before_release:true,job:firstJob});
  await dialog.getByRole('button',{name:/목록에서 지우기/}).click();await dialog.getByRole('button',{name:'닫기',exact:true}).click();
  // A second transfer finishes after close and remains visible with its verified outcome.
+ provenance.phase='background-completion';
  const second=await beginCopy();const closedAgain=second.waitForEvent('close');await second.locator('[data-window=close]').click();await closedAgain;await nav.waitFor();
  fs.writeFileSync(path.join(serverRoot,'release-read'),'resume');
  await waitFor(()=>inspectDestination().some(f=>f.name==='payload.bin'&&f.sha256===payload.sha256),'Background copy did not commit matching bytes',20000);
@@ -180,7 +185,7 @@ try{
  let timer;
  try{await Promise.race([browser?.close(),new Promise(resolve=>{timer=setTimeout(resolve,3000);})]);}catch{}finally{clearTimeout(timer);}
  const receipt=fs.existsSync(resultFile)?JSON.parse(fs.readFileSync(resultFile,'utf8')):{...provenance,results};
- receipt.cleanup={status:cleanupError?'failed':'passed',...cleanupReceipt,...(cleanupError?{error:cleanupError.message}:{})};
+ receipt.cleanup={status:cleanupError?'failed':'passed',...cleanupReceipt,sftp_workspace_removed:!serverRoot||!fs.existsSync(serverRoot),...(cleanupError?{error:cleanupError.message}:{})};
  if(interrupted){receipt.status='interrupted';receipt.signal=interrupted;}
  if(cleanupError)receipt.status='cleanup-failed';else if(receipt.status==='checks-passed-cleanup-pending')receipt.status='passed';
  fs.writeFileSync(resultFile,JSON.stringify(receipt,null,2));
