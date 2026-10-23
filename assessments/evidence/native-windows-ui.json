@@ -1,0 +1,159 @@
+{
+  "results": [
+    {
+      "check": "actual native Windows WebView2 with private UDF and unchanged startup entry",
+      "result": "PASS",
+      "startup_entry_existed": false
+    },
+    {
+      "check": "native Windows setting checkbox accessible name",
+      "result": "PASS"
+    },
+    {
+      "check": "native renderer modal traversal, nested guide and preserved editor/focus return",
+      "result": "PASS"
+    },
+    {
+      "check": "actual native file window with integrated tabs, local folder listing and real text preview",
+      "result": "PASS"
+    },
+    {
+      "check": "local-only folder supports Ctrl+T",
+      "result": "FAIL",
+      "tabs_before": 1,
+      "tabs_after": 1,
+      "new_tab_disabled": false
+    },
+    {
+      "check": "local-only new-tab button changes tab count",
+      "result": "FAIL",
+      "tabs_after_click": 1,
+      "native_host": "__network",
+      "tab_title": "files"
+    },
+    {
+      "check": "native file window can fit requested small viewport",
+      "result": "FAIL",
+      "requested_css_width": 560,
+      "actual_css_width": 706,
+      "dpr": 1.5
+    }
+  ],
+  "source_commit": "2a023bb6e6df66ded48e5ea239e15c32b93e1145",
+  "interpretation": {
+    "tab_issue": "Confirmed: Ctrl+T and enabled New Tab button do nothing in local-only __network folder. Source newTab() returns for NETWORK.",
+    "resize_issue": "Actual requested560CSS became706CSS atDPR1.5. Native minimum is720logical for main andfilewindows. Fixture used per-monitor-v2 thread context.",
+    "escape": "NOT A PRODUCT FAILURE: still at706CSS persistent Details pane, not a narrow overlay; omit assertion from acceptance."
+  },
+  "assessment_id": "itda-quality-2026-10-23",
+  "status": "baseline-findings-fixed-and-native-candidate-verified; production deployment pending",
+  "binary_sha256": "a59c5197d97fa6ac4074d1eadeeccbf93dce0b45f31512adfa52e679129ef798",
+  "artifact": {
+    "ci_run": 39990726325,
+    "source_commit": "2a023bb6e6df66ded48e5ea239e15c32b93e1145",
+    "production_install": false
+  },
+  "method": "Actual Windows console, existing WebView2, CDP renderer input over private loopback SSH tunnel, per-monitor-v2 native resize; 150% DPI. No emulated Windows UA.",
+  "reproduction": {
+    "script": "scripts/files-native-windows-ui-e2e.mjs",
+    "prerequisites": [
+      "trusted SSH alias to already logged-in Windows console of the same user",
+      "local Windows artifact built from identified source commit",
+      "Windows WebView2 and Playwright on the driver"
+    ],
+    "configuration": [
+      "ITDA_WINDOWS_SSH",
+      "ITDA_WINDOWS_APP",
+      "ITDA_SOURCE_COMMIT",
+      "PLAYWRIGHT (optional dependency path)",
+      "ITDA_UI_RESULT (optional receipt path)",
+      "ITDA_WINDOWS_RUN_ID (successful CI run whose artifact exactly matches candidate)"
+    ]
+  },
+  "limits": [
+    "Not production deployment verification",
+    "CDP input does not prove physical OS keyboard/global accelerators or assistive technology",
+    "Startup Run entry was absent; preservation of an enabled entry not tested",
+    "No actual Explorer OLE drag/drop or multi-monitor hardware test",
+    "Mac private bundle failed AX/onscreen attachment; cleaned up, no acceptance credit",
+    "Real iOS/Android camera, QR, IME, pinch and PWA remain pending",
+    "Loopback CDP can be reached by other local processes; requires trusted test account/machine"
+  ],
+  "cleanup": "Each run removed only its own app/profile processes, same-user temporary task and remote fixture; no production installation or TCC changes",
+  "hash_provenance": "Recorded manually by SHA256 of the downloaded CI executable before the baseline run; the earlier private driver did not include the hash on its failure path. The persisted driver now hashes every receipt and verifies local/remote bytes against the identified CI artifact before launch.",
+  "candidate": {
+    "source_commit": "fe5e94a280ffed5f1d1d9d2b87964469d897be87",
+    "binary_sha256": "95be717db19c34ade5a003bea4cdf7021f597502e125c79a59b57d80571a2706",
+    "ci_run": 39997670076,
+    "artifact": {
+      "id": 12521655035,
+      "name": "itda-windows-x64"
+    },
+    "ci_artifact_verified": true,
+    "method": "actual Windows console app, existing WebView2 attached through private loopback CDP/SSH tunnel; no emulated Windows UA",
+    "results": [
+      {
+        "check": "actual native Windows WebView2 with private UDF and unchanged startup entry",
+        "result": "PASS",
+        "startup_entry_existed": false,
+        "existing_app_processes": 1
+      },
+      {
+        "check": "native Windows setting checkbox accessible name",
+        "result": "PASS"
+      },
+      {
+        "check": "native renderer modal traversal, nested guide and preserved editor/focus return",
+        "result": "PASS"
+      },
+      {
+        "check": "actual native file window with integrated tabs, local folder listing and real text preview",
+        "result": "PASS"
+      },
+      {
+        "check": "local-only folder supports Ctrl+T",
+        "result": "PASS",
+        "tabs_before": 1,
+        "tabs_after": 2,
+        "new_tab_disabled": false
+      },
+      {
+        "check": "local-only new-tab button changes tab count",
+        "result": "PASS",
+        "tabs_after_click": 3,
+        "native_host": "__network",
+        "tab_title": "files"
+      },
+      {
+        "check": "native file window can fit requested small viewport",
+        "result": "PASS",
+        "requested_css_width": 560,
+        "actual_css_width": 546,
+        "dpr": 1.5
+      },
+      {
+        "check": "actual-width native Windows file window retains visible details and Escape focus recovery",
+        "result": "PASS",
+        "viewport": {
+          "width": 546,
+          "height": 529
+        },
+        "dpr": 1.5
+      }
+    ],
+    "status": "passed",
+    "limits": [
+      "candidate build, not production rollout",
+      "loopback CDP is reachable by other local processes; use a trusted test account/machine",
+      "CDP renderer input does not prove physical keyboard/global Windows accelerators",
+      "no real Explorer OLE drop or native multi-monitor/phone verified"
+    ],
+    "cleanup": {
+      "status": "passed",
+      "end_receipt_present": true,
+      "startup_unchanged_end": true
+    },
+    "visual_inspection": "Native compact screenshot reviewed privately: three tabs and caption controls, address/search row, file list and status row visible without overlap after closing Details. Screenshot is omitted from this report because the actual breadcrumb contains the Windows account name.",
+    "driver_revision_note": "Successful native run used the reviewed driver before the final optional signal-receipt, no-remote-action cleanup and fork-origin guards. Native assertions were unchanged; final guards were syntax checked and independently reviewed. CI head_repository was separately verified as jiunbae/itda. Future receipts also include the driver SHA256."
+  }
+}
