@@ -15,8 +15,14 @@ const server=http.createServer((req,res)=>{
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const base=`http://127.0.0.1:${server.address().port}`;
-const browser=await pw.chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
+const browser=await pw[process.env.BROWSER || "chromium"].launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
 const assert=(value,msg)=>{if(!value)throw Error(msg);};
+async function auditFiles(p){
+ if(!process.env.AXE)return;
+ if(!await p.evaluate(()=>!!window.axe))await p.addScriptTag({path:process.env.AXE});
+ const result=await p.evaluate(async()=>await axe.run(document.querySelector('.files-layer'),{runOnly:{type:'rule',values:['aria-required-children','aria-required-parent','nested-interactive','aria-allowed-attr','aria-valid-attr-value']}}));
+ assert(!result.violations.length,'File ARIA: '+JSON.stringify(result.violations));
+}
 try{
  for(const platform of ['windows','mac']){
   const c=await browser.newContext({viewport:{width:1200,height:800},reducedMotion:'reduce',userAgent:platform==='mac'?'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)':'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
@@ -53,6 +59,35 @@ try{
    await layer.locator('[data-action="close-preview"]').click();
    await layer.locator('.files-list').focus();await p.keyboard.press('Alt+p');await layer.locator('.files-preview-content pre').waitFor();assert(await layer.locator('.files-preview-content pre').textContent()==='Preview fixture','Preview failed');
    await layer.locator('[data-action="close-preview"]').click();
+   // Native toolbar activation must reach its button, never open the selected file.
+   for (const key of ['Space','Enter']) {
+    const before=await p.evaluate(()=>testPackets.filter(m=>m.op==='open').length);
+    await layer.locator('[data-action="new"]').focus();await p.keyboard.press(key);
+    await p.getByRole('menuitem',{name:'폴더',exact:true}).waitFor();
+    assert(await p.evaluate(()=>testPackets.filter(m=>m.op==='open').length)===before,`${key} opened selected file from toolbar`);
+    await p.keyboard.press('Escape');
+   }
+   // Transfer fields are named; the safe keep-both default cannot force rsync.
+   await layer.locator('[data-action="paste"]').focus();await p.keyboard.press('Enter');
+   const dialog=p.getByRole('dialog',{name:'파일 복사',exact:true});await dialog.waitFor();
+   const policy=dialog.getByLabel('같은 이름의 파일이 있으면',{exact:true});
+   await dialog.locator('summary').click();
+   const engine=dialog.getByLabel('전송 방식',{exact:true});
+   assert(await engine.locator('[value="rsync"]').isDisabled(),'Keep-both offered forced rsync');
+   await policy.selectOption('replace');
+   assert(await engine.locator('[value="rsync"]').isDisabled(),'Same-side copy offered forced rsync');
+   await dialog.getByRole('button',{name:'취소',exact:true}).click();
+   assert(await layer.locator('[data-action="paste"]').evaluate(e=>document.activeElement===e),'Dialog lost initiating focus');
+   await layer.locator('[data-network-sidebar] [data-bookmark="Documents"]').click();
+   await layer.locator('[data-action="paste"]').click();await dialog.waitFor();await dialog.locator('summary').click();
+   await policy.selectOption('replace');assert(!await engine.locator('[value="rsync"]').isDisabled(),'Eligible overwrite copy cannot choose rsync');
+   await engine.selectOption('rsync');await policy.selectOption('keep');assert(await engine.inputValue()==='auto','Invalid forced rsync remained selected');
+   await dialog.getByRole('button',{name:'취소',exact:true}).click();
+   await layer.locator('[data-network-sidebar] [data-device="test"]').click();await layer.locator('tbody tr').filter({hasText:'Notes.txt'}).waitFor();
+   await auditFiles(p);
+   await layer.locator('[data-action="view"]').click();await p.getByRole('menuitemradio',{name:'큰 아이콘',exact:true}).click();await auditFiles(p);
+   await layer.locator('[data-action="view"]').click();await p.getByRole('menuitemradio',{name:'자세히',exact:true}).click();
+
    await p.keyboard.press('Control+l');assert(await layer.locator('.files-explorer-address').evaluate(e=>e.classList.contains('editing')),'Ctrl+L did not edit address');
    await layer.locator('input[data-path]').fill('/Users/alex/Documents');await p.keyboard.press('Enter');await layer.locator('tbody tr').filter({hasText:'Alpha.txt'}).waitFor();
    await p.keyboard.press('Alt+ArrowLeft');await layer.locator('tbody tr').filter({hasText:'Notes.txt'}).waitFor();
@@ -76,6 +111,7 @@ try{
    assert(!await layer.locator('.files-explorer-address').count(),'Mac layout was replaced');
    await layer.locator('[data-mode="columns"]').click();assert(await layer.locator('.files-columns').count()===1,'Mac columns regressed');
    await layer.locator('[data-mode="list"]').click();await layer.locator('tbody tr').filter({hasText:'Notes.txt'}).click();await p.keyboard.press('Meta+c');assert(!await layer.locator('[data-action="paste"]').isDisabled(),'Mac copy regressed');
+   for(const mode of ['grid','list','columns','gallery']) {await layer.locator(`[data-mode="${mode}"]`).click();await auditFiles(p);}
    await p.screenshot({path:path.join(out,'finder.png')});
   }
   assert(!errors.length,errors.join('\n'));await c.close();
@@ -115,6 +151,18 @@ try{
    assert(!out.length,`${w}px: controls outside the window ${JSON.stringify(out)}`);
    if(w<=600)assert(await layer.locator('.files-sidebar').isHidden(),`${w}px: navigation pane still squeezing the list`);
   }
+  // At small widths, navigation targets and details content must remain usable.
+  await layer.locator('[data-action="locations-toggle"]').click();
+  await layer.locator('[data-network-sidebar] [data-side="local"]').click();
+  assert(await layer.locator('[data-pane="local"]').count()===1,'Compact This PC navigation failed');
+  await layer.locator('[data-action="locations-toggle"]').click();
+  await layer.locator('.files-sidebar [data-device="test"]').first().click();
+  await layer.locator('tbody tr').filter({hasText:'Notes.txt'}).click();
+  await layer.locator('[data-action="details"]').click();
+  const rect=await layer.locator('.files-preview').boundingBox();assert(rect.width>200&&rect.x>=0&&rect.x+rect.width<=440,'Narrow details invisible: '+JSON.stringify(rect));
+  assert(await layer.locator('.files-details').innerText().then(t=>t.includes('Notes.txt')),'Narrow details content missing');
+  await p.screenshot({path:path.join(out,'narrow-details.png')});
+  await layer.locator('[data-action="close-preview"]').click();
   await p.screenshot({path:path.join(out,'windows-title-bar-narrow.png')});
   assert(!errors.length,errors.join('\n'));await c.close();
  }

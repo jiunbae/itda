@@ -1112,3 +1112,14 @@ body:has(.files-layer) #modals .scrim { z-index: 3800; }
  .files-layer.windows .files-explorer-address { min-width:60px; }
  .files-command-divider { display:none; }
 }
+
+/* The tablist owns only tab labels; close and window controls remain sibling buttons. */
+.files-tab-owner { position:absolute; width:0; height:0; overflow:hidden; }
+.files-tab > [role="tab"] { flex:1; min-width:0; height:100%; align-items:center; }
+.files-tab > [role="tab"]:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.files-layer.windows [data-action="locations-toggle"] { display:none; }
+@media(max-width:600px) {
+ .files-layer.windows [data-action="locations-toggle"] { display:inline-flex; flex-shrink:0; }
+ .files-layer.windows.locations-open .files-sidebar { display:block; grid-area:auto; position:absolute; left:0; top:144px; bottom:28px; width:220px; z-index:12; box-shadow:4px 0 12px #0003; }
+ .files-layer.windows .files-preview:not(.quick-look):not([hidden]) { grid-area:auto; position:absolute; inset:144px 0 28px; width:auto; z-index:11; background:var(--surface); }
+}

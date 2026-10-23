@@ -86,7 +86,7 @@
     const bar = layer.querySelector(".files-tabs");
     bar.hidden = MAC && host.id === NETWORK;
     const mixed = fileTabs.some(t => t.host && t.host.id !== host.id);
-    bar.innerHTML = fileTabs.map(t => { const on = t.id === currentTab, h = on ? host : t.host || host, folder = (on ? panes[active].path : t.panes[t.active].path).split(/[\\/]/).filter(Boolean).pop() || (!MAC && (on ? panes[active].path : t.panes[t.active].path) === "" ? "내 PC" : "/"), name = mixed && h.id !== NETWORK ? `${label(h)} · ${folder}` : folder; return `<div role="tab" aria-selected="${on}" class="files-tab ${on ? "on" : ""}" data-tab="${t.id}" tabindex="${on ? 0 : -1}" title="${esc(h.id === NETWORK ? folder : `${label(h)} · ${folder}`)}"><span>${icon(true)}${esc(name)}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`; }).join("") + `<button class="files-tab-add" ${host.id === NETWORK ? "disabled" : ""} data-action="new-tab" aria-label="새 탭" title="새 탭 (${MAC ? "⌘T" : "Ctrl+T"})"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>`;
+    bar.innerHTML = `<div class="files-tab-owner" role="tablist" aria-label="폴더 탭" aria-owns="${fileTabs.map(t => `file-tab-${t.id}`).join(" ")}"></div>` + fileTabs.map(t => { const on = t.id === currentTab, h = on ? host : t.host || host, folder = (on ? panes[active].path : t.panes[t.active].path).split(/[\\/]/).filter(Boolean).pop() || (!MAC && (on ? panes[active].path : t.panes[t.active].path) === "" ? "내 PC" : "/"), name = mixed && h.id !== NETWORK ? `${label(h)} · ${folder}` : folder; return `<div class="files-tab ${on ? "on" : ""}" data-tab="${t.id}" title="${esc(h.id === NETWORK ? folder : `${label(h)} · ${folder}`)}"><span id="file-tab-${t.id}" role="tab" aria-selected="${on}" tabindex="${on ? 0 : -1}">${icon(true)}${esc(name)}</span><button data-close-tab="${t.id}" aria-label="탭 닫기">×</button></div>`; }).join("") + `<button class="files-tab-add" ${host.id === NETWORK ? "disabled" : ""} data-action="new-tab" aria-label="새 탭" title="새 탭 (${MAC ? "⌘T" : "Ctrl+T"})"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>`;
     if (!MAC && networkMode) { const t = bar.querySelector(".files-tab.on > span"); if (t) t.innerHTML = `${I(explorerHome ? "E80F" : "E774")}${explorerHome ? "홈" : "네트워크"}`; }
     // Windows file windows have no system title bar: the tab row is it, as in Explorer.
     // (Drawn as SVG: the caption glyph fonts differ between Windows 10 and 11.)
@@ -161,7 +161,7 @@
         call("list", { side, path, seq });
       }
       const next = paths[n + 1];
-      return `<section class="files-column" data-column="${esc(path)}"><header>${esc(path.split(/[\\/]/).filter(Boolean).pop() || "/")}</header>${shown?.length ? shown.map((e, i) => current ? `<div class="files-item ${p.selected.has(e.name) ? "selected" : ""}" data-index="${i}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</div>` : `<button class="files-column-entry ${child(path,e.name) === next ? "on" : ""}" data-column-folder="${esc(e.dir ? child(path,e.name) : path)}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</button>`).join("") : `<p class="files-note">${loading || !entries ? "폴더를 읽는 중…" : "표시할 항목이 없습니다"}</p>`}</section>`;
+      return `<section class="files-column" data-column="${esc(path)}" role="${current ? "listbox" : "group"}" aria-label="${esc(path)}" ${current ? 'aria-multiselectable="true"' : ""}><header>${esc(path.split(/[\\/]/).filter(Boolean).pop() || "/")}</header>${shown?.length ? shown.map((e, i) => current ? `<div role="option" aria-selected="${p.selected.has(e.name)}" class="files-item ${p.selected.has(e.name) ? "selected" : ""}" data-index="${i}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</div>` : `<button class="files-column-entry ${child(path,e.name) === next ? "on" : ""}" data-column-folder="${esc(e.dir ? child(path,e.name) : path)}">${icon(e.dir,e.name)}<span>${esc(e.name)}</span>${e.dir ? "<b>›</b>" : ""}</button>`).join("") : `<p class="files-note">${loading || !entries ? "폴더를 읽는 중…" : "표시할 항목이 없습니다"}</p>`}</section>`;
     }).join("")}</div>`;
   }
   function previewTarget() {
@@ -339,12 +339,23 @@
   }
   function prompt(title, body, buttons) {
     return new Promise((resolve) => {
+      const returnFocus = document.activeElement;
       const el = document.createElement("div");
       el.style.cssText =
         "position:fixed;inset:0;z-index:3700;background:#0005;display:flex;align-items:center;justify-content:center";
       el.className = "files-prompt";
-      el.innerHTML = `<div class="dialog files-setup"><div class="body"><h2>${esc(title)}</h2>${body}</div><div class="foot">${buttons.map(([id, text, primary]) => `<button class="btn ${primary ? "primary" : ""}" data-choice="${id}">${esc(text)}</button>`).join("")}</div></div>`;
+      el.innerHTML = `<div class="dialog files-setup" role="dialog" aria-modal="true" aria-labelledby="files-prompt-title"><div class="body"><h2 id="files-prompt-title">${esc(title)}</h2>${body}</div><div class="foot">${buttons.map(([id, text, primary]) => `<button class="btn ${primary ? "primary" : ""}" data-choice="${id}">${esc(text)}</button>`).join("")}</div></div>`;
       document.body.append(el);
+      const policy = el.querySelector('[name="policy"]'), engine = el.querySelector('[name="engine"]');
+      if (policy && engine) {
+        const option = engine.querySelector('[value="rsync"]'), supported = !option.disabled;
+        const update = () => { option.disabled = !supported || policy.value !== "replace"; if (option.disabled && engine.value === "rsync") engine.value = "auto"; };
+        policy.addEventListener("change", update); update();
+      }
+      el.querySelectorAll(".field").forEach((field, index) => {
+        const label = field.querySelector("label"), input = field.querySelector("input,select,textarea");
+        if (label && input) { input.id = `files-prompt-field-${index}`; label.htmlFor = input.id; }
+      });
       el.addEventListener("click", (e) => {
         const b = e.target.closest("[data-choice]");
         if (!b) return;
@@ -355,6 +366,7 @@
           ]),
         );
         el.remove();
+        (returnFocus?.isConnected && returnFocus !== document.body ? returnFocus : layer?.querySelector(".files-list"))?.focus();
         resolve({ choice: b.dataset.choice, ...fields });
       });
       el.addEventListener("keydown", (e) => {
@@ -475,7 +487,7 @@
       layer.querySelector(".files-network h2").textContent = title;
       if (explorerHome) layer.querySelector(".files-network header p").textContent = "최근 폴더와 저장된 기기를 빠르게 열어 보세요.";
       updateExplorerAddress();
-      const tab = layer.querySelector('.files-tab[aria-selected="true"] > span');
+      const tab = layer.querySelector('.files-tab.on > span');
       if (tab) tab.innerHTML = `${I(explorerHome ? "E80F" : "E774")}${title}`;
     }
     layer.querySelector("[data-status]").textContent =
@@ -544,7 +556,11 @@
     const address = document.createElement("div"); address.className = "files-explorer-address";
     const folderTitle = title.querySelector(".files-folder-title"); folderTitle.hidden = true;
     const cut = get("cut"), copy = get("copy"), paste = get("paste"), rename = get("rename"), trash = get("trash"), more = get("more"), viewButton = get("view");
-    title.replaceChildren(nav, address, searchBox, folderTitle);
+    title.replaceChildren(button("locations-toggle", "위치 선택", "E774"), nav, address, searchBox, folderTitle);
+    const locations = get("locations-toggle");
+    locations.setAttribute("aria-controls", "files-locations-sidebar");
+    locations.setAttribute("aria-expanded", "false");
+    layer.querySelector(".files-sidebar").id = "files-locations-sidebar";
     layer.prepend(layer.querySelector(".files-tabs"));
     [[cut,"잘라내기","E8C6"],[copy,"복사","E8C8"],[paste,"붙여넣기","E77F"],[rename,"이름 변경","E70F"],[trash,"보관함으로 이동","E74D"]].forEach(([b,label,glyph])=>{b.title=label;b.setAttribute("aria-label",label);b.innerHTML=I(glyph);});
     viewButton.innerHTML = `${I("E8FD")}<span>보기</span><span class="files-chevron" aria-hidden="true">⌄</span>`;
@@ -813,7 +829,7 @@
     const tool = (action, glyph, text) =>
       `<button class="btn sm" data-action="${action}" title="${text}" aria-label="${text}">${I(glyph)}</button>`;
     layer.innerHTML = `<div class="files-title"><div class="files-nav">${tool("back", "E72B", "뒤로")}${tool("forward", "E76C", "앞으로")}</div>${icon(true)}<b>${esc(label(host))}</b><span class="files-folder-title"></span><span class="spacer"></span>${tool("view", "E80A", "보기")}${tool("mkdir", "E8F4", "새 폴더")}${tool("refresh", "E72C", "새로 고침")}<button class="btn sm" data-action="more" title="동작" aria-label="동작">${I("E712")}</button>${tool("settings", "E713", "연결 설정")}${tool("native", "E8A7", `${nativeName}에서 열기`)}<input class="input files-search" placeholder="검색" aria-label="파일 검색" data-search></div>
-      <nav class="files-tabs" role="tablist" aria-label="폴더 탭"></nav><aside class="files-preview" hidden></aside><nav class="files-locations" aria-label="기기 위치"></nav><div class="files-tools">${tool("up", "E80F", "상위 폴더")}${tool("copy", "E8C8", "복사")}<button class="btn sm" data-action="cut">잘라내기</button><button class="btn sm" data-action="paste">붙여넣기</button>${tool("rename", "E70F", "이름 변경")}${tool("trash", "E74D", "보관함으로")}${tool("undo", "E81C", "되돌리기")}<span class="spacer"></span><button class="btn sm" data-action="split">분할 보기</button><button class="btn sm" data-action="hidden">숨김 파일</button><button class="btn sm" data-action="transfers">전송 내역</button></div>
+      <nav class="files-tabs" aria-label="폴더 탭"></nav><aside class="files-preview" hidden></aside><nav class="files-locations" aria-label="기기 위치"></nav><div class="files-tools">${tool("up", "E80F", "상위 폴더")}${tool("copy", "E8C8", "복사")}<button class="btn sm" data-action="cut">잘라내기</button><button class="btn sm" data-action="paste">붙여넣기</button>${tool("rename", "E70F", "이름 변경")}${tool("trash", "E74D", "보관함으로")}${tool("undo", "E81C", "되돌리기")}<span class="spacer"></span><button class="btn sm" data-action="split">분할 보기</button><button class="btn sm" data-action="hidden">숨김 파일</button><button class="btn sm" data-action="transfers">전송 내역</button></div>
       <div class="files-error" hidden role="alert"></div><div class="files-body"><aside class="files-sidebar"><div data-network-sidebar></div><div class="files-current-places"><h4>즐겨찾기</h4><button class="btn subtle" data-bookmark="home">${I("E80F")}홈 폴더</button><button class="btn subtle" data-bookmark="Downloads">${I("E8B7")}다운로드</button><button class="btn subtle" data-bookmark="Documents">${I("E8A5")}문서</button><button class="btn subtle" data-bookmark="Desktop">${I("E7F4")}${MAC ? "데스크탑" : "바탕 화면"}</button><h4>위치</h4><button class="btn subtle" data-side="remote">${I("E7F4")}${esc(label(host))}</button><button class="btn subtle" data-side="local">${I("E7F8")}${HERE}</button><h4>파일 관리</h4><button class="btn subtle" data-bookmark=".itda-trash">${I("E74D")}보관함</button></div></aside><div class="files-panes"></div></div><div class="files-jobs" hidden></div><div class="files-status"><div data-footer-path></div><span data-status></span><span data-location></span></div>`;
     document.body.append(layer);
     {
@@ -1015,7 +1031,7 @@
         const list = visible(side);
         const cell = (e, i) =>
           `data-index="${i}" class="files-item ${p.selected.has(e.name) ? "selected" : ""}" aria-selected="${p.selected.has(e.name)}"`;
-        return `<section class="files-pane ${side === active ? "active" : ""}" data-pane="${side}">${!MAC && split ? pathHTML(side) : ""}<div class="files-list" tabindex="0" role="grid" aria-label="${side === "local" ? "내 기기" : "원격 기기"} 파일">${view === "columns" ? columnHTML(side) : p.busy ? '<div class="files-note">폴더를 읽는 중…</div>' : !list.length ? '<div class="files-note">표시할 항목이 없습니다</div>' : ["grid", "gallery"].includes(view) ? `<div class="files-grid ${view === "gallery" ? "files-gallery-strip" : ""}">${list.map((e, i) => `<div ${cell(e, i)}>${icon(e.dir, e.name)}<span>${esc(e.name)}${e.link ? " ↗" : ""}</span></div>`).join("")}</div>` : `<table><colgroup>${(MAC ? [47, 25, 12, 16] : [42, 24, 22, 12]).map((w, i) => `<col style="width:${columnWidths[side]?.[i] ? `${columnWidths[side][i]}px` : `${w}%`}">`).join("")}</colgroup><thead><tr>${(MAC ? [["name", "이름"], ["modified", "수정한 날짜"], ["size", "크기"], ["kind", "종류"]] : [["name", "이름"], ["modified", "수정한 날짜"], ["kind", "종류"], ["size", "크기"]]).map(([key, title], i) => `<th data-sort="${key}">${title}${sorting.key === key ? (sorting.desc ? " ▾" : " ▴") : ""}${i < 3 ? `<span data-resize-column="${i}" role="separator" aria-label="${title} 열 너비" aria-orientation="vertical" tabindex="0"></span>` : ""}</th>`).join("")}</tr></thead><tbody>${rows(side)}</tbody></table>`}</div></section>`;
+        return `<section class="files-pane ${side === active ? "active" : ""}" data-pane="${side}">${!MAC && split ? pathHTML(side) : ""}<div class="files-list" tabindex="0" role="group" aria-label="${side === "local" ? "내 기기" : "원격 기기"} 파일">${view === "columns" ? columnHTML(side) : p.busy ? '<div class="files-note">폴더를 읽는 중…</div>' : !list.length ? '<div class="files-note">표시할 항목이 없습니다</div>' : ["grid", "gallery"].includes(view) ? `<div class="files-grid ${view === "gallery" ? "files-gallery-strip" : ""}" role="listbox" aria-label="파일" aria-multiselectable="true">${list.map((e, i) => `<div role="option" ${cell(e, i)}>${icon(e.dir, e.name)}<span>${esc(e.name)}${e.link ? " ↗" : ""}</span></div>`).join("")}</div>` : `<table role="grid" aria-label="파일" aria-multiselectable="true"><colgroup>${(MAC ? [47, 25, 12, 16] : [42, 24, 22, 12]).map((w, i) => `<col style="width:${columnWidths[side]?.[i] ? `${columnWidths[side][i]}px` : `${w}%`}">`).join("")}</colgroup><thead><tr>${(MAC ? [["name", "이름"], ["modified", "수정한 날짜"], ["size", "크기"], ["kind", "종류"]] : [["name", "이름"], ["modified", "수정한 날짜"], ["kind", "종류"], ["size", "크기"]]).map(([key, title], i) => `<th data-sort="${key}">${title}${sorting.key === key ? (sorting.desc ? " ▾" : " ▴") : ""}${i < 3 ? `<span data-resize-column="${i}" role="separator" aria-label="${title} 열 너비" aria-orientation="vertical" tabindex="0"></span>` : ""}</th>`).join("")}</tr></thead><tbody>${rows(side)}</tbody></table>`}</div></section>`;
       })
       .join("");
     layer
@@ -1157,6 +1173,10 @@
     updatePreview();
   }
   function click(e) {
+    if (e.target.closest(".files-sidebar button") && layer.classList.contains("locations-open")) {
+      layer.classList.remove("locations-open");
+      layer.querySelector('[data-action="locations-toggle"]')?.setAttribute("aria-expanded", "false");
+    }
     if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopPropagation(); return; }
     const close = e.target.closest("[data-close-tab]");
     if (close) return closeTab(Number(close.dataset.closeTab));
@@ -1279,6 +1299,11 @@
       });
   }
   async function act(action) {
+    if (action === "locations-toggle") {
+      const open = layer.classList.toggle("locations-open");
+      layer.querySelector('[data-action="locations-toggle"]').setAttribute("aria-expanded", String(open));
+      return;
+    }
     if (action === "new-window") return launch(host, true);
     if (action === "new-tab") return newTab();
     if (action === "zoom-fit") { if (zoom === null) zoomBy(1, undefined, undefined, 1); else { zoom = null; applyZoom(); } return; }
@@ -1503,9 +1528,10 @@
       dest.path === destination
         ? names.filter((n) => dest.entries.some((e) => e.name === n))
         : [];
+    const deltaEligible = !move && from !== to && !cross;
     const r = await prompt(
       move ? "파일 이동" : "파일 복사",
-      `<p><b>${esc(names.length === 1 ? names[0] : `${names.length}개 항목`)}</b></p><p class="hint">${esc(where(from, source, cross ? origin.id : id))} → ${esc(where(to, destination, id))}</p>${collisions.length ? `<p>같은 이름의 항목 ${collisions.length}개가 있습니다.</p>` : ""}<div class="field"><label>같은 이름의 파일이 있으면</label><select class="input" name="policy"><option value="keep">둘 다 유지</option><option value="replace">변경된 파일 바꾸기 · 폴더는 합치기</option><option value="skip">기존 파일 건너뛰기</option></select></div><details><summary>전송 옵션 · 자동 선택</summary><div class="field"><label>전송 방식</label><select class="input" name="engine"><option value="auto">자동 · 가능한 경우 rsync 증분 전송</option><option value="sftp">일반 전송 · SFTP</option><option value="rsync">증분 전송 · rsync 필요</option></select></div></details>${move ? '<p class="hint">같은 파일시스템 안에서는 바로 이동하며, 장치 간 이동은 해시를 확인한 뒤 원본을 삭제합니다. 취소하거나 실패한 항목의 원본은 유지합니다.</p>' : ""}`,
+      `<p><b>${esc(names.length === 1 ? names[0] : `${names.length}개 항목`)}</b></p><p class="hint">${esc(where(from, source, cross ? origin.id : id))} → ${esc(where(to, destination, id))}</p>${collisions.length ? `<p>같은 이름의 항목 ${collisions.length}개가 있습니다.</p>` : ""}<div class="field"><label>같은 이름의 파일이 있으면</label><select class="input" name="policy"><option value="keep">둘 다 유지</option><option value="replace">변경된 파일 바꾸기 · 폴더는 합치기</option><option value="skip">기존 파일 건너뛰기</option></select></div><details><summary>전송 옵션 · 자동 선택</summary><div class="field"><label>전송 방식</label><select class="input" name="engine"><option value="auto">자동 · 가능한 경우 rsync 증분 전송</option><option value="sftp">일반 전송 · SFTP</option><option value="rsync" ${deltaEligible ? "" : "disabled"}>증분 전송 · 파일 바꾸기에서만 사용</option></select></div><p class="hint">증분 전송은 이 컴퓨터와 원격 기기 사이의 복사에서 ‘변경된 파일 바꾸기’를 선택하고 양쪽에 rsync가 있을 때 사용할 수 있습니다. Windows 한글 이름 변환이 필요한 항목은 자동 또는 일반 전송을 사용하세요. 자동은 가능한 방식을 선택합니다.</p></details>${move ? '<p class="hint">같은 파일시스템 안에서는 바로 이동하며, 장치 간 이동은 해시를 확인한 뒤 원본을 삭제합니다. 취소하거나 실패한 항목의 원본은 유지합니다.</p>' : ""}`,
       [
         ["cancel", "취소"],
         ["ok", move ? "이동" : "복사", true],
@@ -1635,14 +1661,20 @@
     if (!MAC && !networkMode && e.altKey && (e.code === "KeyP" || e.key.toLowerCase() === "p")) { e.preventDefault(); act(e.shiftKey ? "details" : "preview"); return; }
     if (document.querySelector(".files-prompt")) return;
     e.stopPropagation();
-    const focusedTab = e.target.closest("[data-tab]");
+    if (e.key === "Escape" && layer.classList.contains("locations-open")) {
+      e.preventDefault(); layer.classList.remove("locations-open");
+      const toggle = layer.querySelector('[data-action="locations-toggle"]'); toggle.setAttribute("aria-expanded", "false"); toggle.focus(); return;
+    }
+    const focusedTab = e.target.closest('[role="tab"]')?.closest("[data-tab]");
     if (focusedTab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
       e.preventDefault();
       const i = fileTabs.findIndex(t => t.id === currentTab);
       const next = e.key === "Home" ? 0 : e.key === "End" ? fileTabs.length - 1 : (i + (e.key === "ArrowRight" ? 1 : fileTabs.length - 1)) % fileTabs.length;
       switchTab(fileTabs[next].id);
-      layer.querySelector(`[data-tab="${currentTab}"]`)?.focus(); return;
+      layer.querySelector(`[data-tab="${currentTab}"] [role="tab"]`)?.focus(); return;
     }
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && e.target.closest('button,select,summary,a[href]')) return;
+    if (focusedTab && ["Enter", " "].includes(e.key)) { e.preventDefault(); switchTab(Number(focusedTab.dataset.tab)); return; }
     const modKey = MAC ? e.metaKey : e.ctrlKey;
     if (modKey && e.key.toLowerCase() === "t") { e.preventDefault(); newTab(); return; }
     if (modKey && e.key.toLowerCase() === "w" && fileTabs.length > 1) { e.preventDefault(); closeTab(currentTab); return; }

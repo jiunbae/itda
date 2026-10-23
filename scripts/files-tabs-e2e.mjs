@@ -16,7 +16,7 @@ const server=http.createServer((req,res)=>{
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const base=`http://127.0.0.1:${server.address().port}`;
-const browser=await pw.chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
+const browser=await pw[process.env.BROWSER || "chromium"].launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
 const assert=(value,msg)=>{if(!value)throw Error(msg);};
 try{
  for(const platform of ['mac','windows']){
