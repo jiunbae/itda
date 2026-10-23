@@ -189,12 +189,25 @@ try{
   // button before key-up (which would cancel work the person never selected).
   await p.evaluate(()=>{for(const job of ['keyboard-A','keyboard-B'])itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job,state:'running',file:job});});
   await layer.locator('[data-cancel-job="keyboard-A"]').focus();await p.keyboard.down('Space');
-  await p.evaluate(()=>itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job:'keyboard-A',state:'completed'}));
-  const completionFocus=await layer.locator('[data-pane="remote"] .files-list').evaluate(e=>{
+  // Hold the completion's listing reply so both sides of the DOM replacement are
+  // observed deterministically. A Locator resolves an ElementHandle before evaluate;
+  // that handle can be detached by a reply before its callback runs.
+  await p.evaluate(()=>{window.holdListReplies=true;itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job:'keyboard-A',state:'completed'});});
+  const focusSnapshot=()=>p.evaluate(()=>{
+   const e=document.querySelector('.files-layer [data-pane="remote"] .files-list');
    const a=document.activeElement;
-   return {expected:e===a,focused:{tag:a?.tagName,id:a?.id,role:a?.getAttribute('role'),classes:a?.className,pane:a?.closest('[data-pane]')?.dataset.pane,cancelJob:a?.getAttribute('data-cancel-job'),dismissJob:a?.getAttribute('data-dismiss-job')},listVisible:!!(e.offsetWidth||e.offsetHeight),documentFocused:document.hasFocus()};
+   const listVisible=!!(e?.offsetWidth||e?.offsetHeight);
+   return {expected:!!e&&e===a&&e.isConnected&&listVisible,focused:{tag:a?.tagName,id:a?.id,role:a?.getAttribute('role'),classes:a?.className,pane:a?.closest('[data-pane]')?.dataset.pane,cancelJob:a?.getAttribute('data-cancel-job'),dismissJob:a?.getAttribute('data-dismiss-job')},listVisible,documentFocused:document.hasFocus()};
   });
+  const completionFocus=await focusSnapshot();
   assert(completionFocus.expected,'Completed job moved focus onto another transfer: '+JSON.stringify(completionFocus));
+  await p.waitForFunction(()=>window.heldListReplies?.length>0);
+  const priorList=await layer.locator('[data-pane="remote"] .files-list').elementHandle();
+  await p.evaluate(()=>{window.holdListReplies=false;const replies=window.heldListReplies.splice(0);for(const reply of replies)itda.recv(reply);});
+  const refreshedFocus=await focusSnapshot();
+  assert(refreshedFocus.expected,'Listing refresh lost completed-job focus: '+JSON.stringify(refreshedFocus));
+  assert(await priorList.evaluate(e=>!e.isConnected&&e!==document.activeElement),'Listing refresh did not replace the old focus target');
+  await priorList.dispose();
   await p.keyboard.up('Space');
   assert(!(await packets()).some(x=>x.op==='cancel'&&x.job==='keyboard-B'),'A disappearing row redirected Space to another transfer');
   await p.evaluate(()=>itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job:'keyboard-B',state:'completed'}));

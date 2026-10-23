@@ -1,0 +1,53 @@
+{
+  "recorded_at": "2026-10-23T23:25:05.182836+00:00",
+  "base": "590d9926ba8891e1b7e376d6bee3c9048d84fc01",
+  "scope": "Test oracle and deterministic mocked listing delivery only; no product source changes, native UI, user files or production deployment",
+  "observed_ci_failure": {
+    "run": 40038809002,
+    "job": 120704723892,
+    "source": "13d9110f (PR110 prior evidence head; product files.js unchanged)",
+    "diagnostic": {
+      "expected": false,
+      "focused": {
+        "tag": "DIV",
+        "role": "group",
+        "classes": "files-list",
+        "pane": "remote",
+        "cancelJob": null,
+        "dismissJob": null
+      },
+      "listVisible": false,
+      "documentFocused": true
+    },
+    "limit": "Original snapshot did not include expectedNode.isConnected. The controlled stale-handle reproduction and source ordering explain how this diagnostic can arise; no captured trace proves the precise original scheduler interleaving."
+  },
+  "mechanism": "Completion removes the armed job row and focuses the current file list. Mock list replies then rebuild that list and preserve focus on the new element. Locator.evaluate resolves an ElementHandle before executing its callback; an intervening reply can detach that handle, so old-node equality fails despite correct focus on the new list. Installed Playwright coreBundle.js _withElement confirms separate waitForSelector/handle.evaluate steps.",
+  "change": "Read the current target and activeElement within one page.evaluate. Hold completion listing replies, assert correct connected visible remote-list focus, release replies synchronously, assert again and prove the prior handle detached. Retain Space key-up and no-cancel-keyboard-B checks.",
+  "validation": {
+    "positive": {
+      "chromium": "Full files-tabs fixture PASS, both Mac/Windows layouts",
+      "webkit": "Full files-tabs fixture PASS, both Mac/Windows layouts"
+    },
+    "negative": [
+      {
+        "mutant": "Completion fallback focuses another job cancel button",
+        "exit": 1,
+        "discriminator": "Completed job moved focus onto another transfer; active cancelJob keyboard-B"
+      },
+      {
+        "mutant": "Disable listing-refresh focus restoration only after first assertion",
+        "exit": 1,
+        "discriminator": "Listing refresh lost completed-job focus; activeElement BODY"
+      }
+    ],
+    "additional_probe": "Globally removing listing focus restoration failed the first focus assertion, before the targeted phase; a staged mutant was then used to distinguish the post-refresh assertion. No successful negative result is claimed for that earlier targeted phase.",
+    "stale_handle_proof": "After releasing held real-frontend mock replies, priorList.isConnected is false and it is not activeElement; fresh connected visible remote list is active."
+  },
+  "script_sha256": "cd865ae87f4c33498df54eb4142e23464389561b1f9cac156a5bfab921e71ad2",
+  "independent_analysis": "muxa req_18e14c0b5ef80d90_135; exact final source/evidence review pending",
+  "limits": [
+    "No product P2 declared or product focus bug claimed fixed",
+    "No persona score increase or native keyboard/screen-reader acceptance",
+    "Windows CI execution of the revised fixture is pending"
+  ]
+}
