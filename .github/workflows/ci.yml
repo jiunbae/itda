@@ -111,6 +111,8 @@ jobs:
           SCREENSHOT_DIR: test-artifacts/file-ui
       - name: Tabs on different devices
         run: node scripts/files-tabs-e2e.mjs
+      - name: Background transfer UI (closed-window state, recovery and ordering)
+        run: node scripts/files-background-e2e.mjs
       - name: File window without a device (Windows places, This PC)
         run: node scripts/files-network-local-e2e.mjs
       - name: Self-update UI
