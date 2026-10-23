@@ -1018,7 +1018,13 @@ body:has(.files-layer) #modals .scrim { z-index: 3800; }
 .files-layer.windows .files-explorer-address { display:flex; align-items:center; gap:9px; flex:1; min-width:100px; height:34px; padding:0 10px; background:var(--bg); border:1px solid var(--border); border-bottom-color:var(--border-strong); border-radius:5px; cursor:text; overflow:hidden; }
 .files-address-root { white-space:nowrap; flex:none; font-size:12px; }
 .files-layer.windows .files-explorer-address>.i { color:var(--text-2); flex:none; }
-.files-layer.windows .files-explorer-address .files-breadcrumbs { min-width:0; overflow:hidden; flex:1; }
+/* A long path keeps its end in view (the current folder), as Explorer does: the crumbs take
+   only the room they need and, when that runs out, the leading ones are cut instead. */
+.files-layer.windows .files-explorer-address .files-breadcrumbs { min-width:0; overflow:hidden; flex:0 1 auto; justify-content:flex-end; }
+.files-layer.windows .files-breadcrumbs button { flex:none; }
+/* Tabbing through the crumbs shows each one (the clipped start can't otherwise be reached);
+   keyboard focus only, so a click doesn't shift the crumbs under the pointer. */
+.files-layer.windows .files-explorer-address .files-breadcrumbs:has(:focus-visible) { justify-content:flex-start; overflow-x:auto; scrollbar-width:none; }
 .files-layer.windows .files-breadcrumbs button { font-size:12px; padding:3px 4px; border-radius:3px; }
 .files-layer.windows .files-explorer-address input { display:none; width:100%; min-width:0; height:30px; padding:0; background:transparent; border:0; outline:0; border-radius:0; font-size:13px; }
 .files-layer.windows .files-explorer-address.editing { border-color:var(--accent); }
@@ -1125,3 +1131,9 @@ body:has(.files-layer) #modals .scrim { z-index: 3800; }
 }
 
 .files-selection-status { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+
+.files-job.ended .job-label { color:var(--text); }
+.files-job button { flex:none; }
+.files-retry-note { margin:0 0 10px; padding:10px 12px; border-radius:6px; background:color-mix(in srgb, var(--accent) 10%, transparent); }
+.files-retry-note p { margin:0 0 6px; }
+.files-retry-note p:last-child { margin-bottom:0; }

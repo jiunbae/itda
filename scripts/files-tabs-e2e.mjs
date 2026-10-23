@@ -169,6 +169,95 @@ try{
   await layer.locator('[data-cancel-job="job-A"]').click();
   assert((await packets()).filter(x=>x.op==='cancel').at(-1)?.id==='studio','Cancel went to the wrong device');
   await p.evaluate(()=>itda.recv({type:'files_job',window:ItdaFiles.windowToken,id:'studio',job:'job-A',state:'cancelled',file:'A-copy'}));
+  // A transfer that fails on another tab is announced once (device and reason) without moving
+  // this tab, stays reachable in the list here, and is retried for what is left only after
+  // a new confirmation, on its own devices, without the original clipboard or drag token.
+  const job=(m)=>p.evaluate(m=>itda.recv({type:'files_job',window:ItdaFiles.windowToken,...m}),m);
+  const toasts=(text)=>p.locator('#toasts .toast').filter({hasText:text}).count();
+  const activeTab=()=>layer.locator('[data-tab].on').getAttribute('title');
+  await layer.locator('[data-tab]').nth(1).click();await row('Beta-B.txt').waitFor();
+  await p.evaluate(()=>itda.recv({type:'files_clipboard',clip:{cid:'move-clip',host:'studio',window:'other-window',side:'remote',path:'/Users/alex',names:['Alpha-A.txt','Docs','Gamma.txt'],move:true}}));
+  await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+v`);
+  await p.locator('.files-prompt [data-choice="ok"]').click();
+  const moved=(await packets()).filter(x=>x.op==='transfer').at(-1);
+  assert(moved.id==='build'&&moved.move&&moved.req&&moved.from_clip==='move-clip','Move request: '+JSON.stringify(moved));
+  await job({id:'build',job:'job-M',req:moved.req,state:'queued',moving:true});
+  await layer.locator('[data-tab]').nth(0).click();await row('Inside-A.txt').waitFor();
+  const failed={id:'build',job:'job-M',req:moved.req,state:'failed',error:'SFTP 연결이 끊겼습니다',completed_names:['Alpha-A.txt'],partial:{name:'Docs',dir:true},source_closed:false};
+  await job(failed);await job(failed);
+  assert((await activeTab()).startsWith('Studio Mac'),'A background failure moved the tab');
+  assert(await toasts('Build Server · 파일 이동 실패 — SFTP 연결이 끊겼습니다')===1,'Background failure not announced exactly once');
+  const failedRow=layer.locator('.files-job').filter({hasText:'Build Server ·'});
+  await failedRow.waitFor();
+  assert((await failedRow.textContent()).includes('3개 중 1개 끝남'),'Failed row lacks progress: '+await failedRow.textContent());
+  await failedRow.getByRole('button',{name:'Build Server 탭 보기'}).click();
+  assert((await activeTab()).startsWith('Build Server'),'Job row did not lead to its tab');
+  await layer.locator('[data-tab]').nth(0).click();await row('Inside-A.txt').waitFor();
+  const sentBefore=(await packets()).filter(x=>x.op==='transfer').length;
+  await failedRow.getByRole('button',{name:'다시 시도…'}).click();
+  const retryDialog=p.getByRole('dialog',{name:'남은 파일 다시 이동',exact:true});
+  const note=await retryDialog.textContent();
+  assert(note.includes('남은 2개')&&note.includes('이미 끝난 1개')&&note.includes('‘Docs’ 폴더는 일부만'),'Retry dialog: '+note);
+  // Merging is only suggested: the other remaining name keeps the original 'keep both'.
+  assert(await retryDialog.getByLabel('같은 이름의 파일이 있으면',{exact:true}).inputValue()==='keep'&&note.includes('남은 다른 항목에도 적용'),'Partial folder retry escalated the policy for other names');
+  assert(note.includes('남은 파일만 새 이름의 폴더로 옮깁니다'),'Move retry keep-both text is not move-aware');
+  assert((await packets()).filter(x=>x.op==='transfer').length===sentBefore,'Retry ran before it was confirmed');
+  await retryDialog.getByRole('button',{name:'다시 이동',exact:true}).click();
+  {const t=(await packets()).filter(x=>x.op==='transfer').at(-1);
+   const token=await p.evaluate(()=>ItdaFiles.windowToken);
+   assert(t.id==='build'&&t.move&&JSON.stringify(t.names)==='["Docs","Gamma.txt"]'&&t.from_id==='studio'&&t.from_window===token&&!t.from_clip&&!t.from_drag&&t.source==='/Users/alex'&&t.policy==='keep'&&t.req!==moved.req,'Retry request: '+JSON.stringify(t));
+   assert(!(await layer.locator('[data-retry-job="job-M"]').count()),'The retried job stays in the list');
+   // The retry, cancelled in the background: announced as cancelled, retry offered again.
+   await job({id:'build',job:'job-R',req:t.req,state:'queued',moving:true});
+   await job({id:'build',job:'job-R',req:t.req,state:'cancelled',error:'전송을 취소했습니다',completed_names:[],partial:null,source_closed:false});
+   assert(await toasts('Build Server · 파일 이동 취소됨')===1,'Background cancel not announced');
+   assert(await layer.locator('[data-retry-job="job-R"]').count()===1,'Cancelled retry has no retry');
+   await layer.locator('[data-dismiss-job="job-R"]').click();}
+  // Another device's failure stays in view, with its retry, on Home/Network and through a
+  // Network refresh; opening them doesn't jump to that device's tab.
+  await layer.locator('[data-tab]').nth(1).click();await row('Beta-B.txt').waitFor();
+  await p.evaluate(()=>itda.recv({type:'files_clipboard',clip:{cid:'home-clip',host:'studio',window:'other-window',side:'remote',path:'/Users/alex',names:['Alpha-A.txt'],move:false}}));
+  await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+v`);
+  await p.locator('.files-prompt [data-choice="ok"]').click();
+  {const t=(await packets()).filter(x=>x.op==='transfer').at(-1);
+   await job({id:'build',job:'job-H',req:t.req,state:'queued'});
+   await layer.locator('[data-tab]').nth(0).click();await row('Inside-A.txt').waitFor();
+   await job({id:'build',job:'job-H',req:t.req,state:'failed',error:'홈 확인용 실패',completed_names:[],partial:null,source_closed:false});}
+  const homeRow=layer.locator('.files-job').filter({hasText:'홈 확인용 실패'});
+  await homeRow.waitFor();
+  for(const page of platform==='mac'?['network']:['explorer-home','network']){
+    await layer.locator(`.files-sidebar [data-action="${page}"]`).first().click();
+    await p.waitForFunction(()=>document.querySelector('.files-network'));
+    for(const step of ['open','refresh']){
+      if(step==='refresh')await p.evaluate(()=>ItdaFiles.refreshNetwork());
+      assert(await homeRow.isVisible()&&await homeRow.getByRole('button',{name:'다시 시도…'}).isVisible(),`Failed job or its retry hidden on ${page} (${step})`);
+    }
+    assert(!(await activeTab()).startsWith('Build Server')&&await layer.locator('[data-tab]').nth(0).evaluate(e=>e.classList.contains('on')),'Home/Network jumped to the job\'s tab');
+  }
+  await layer.locator('[data-dismiss-job="job-H"]').click();
+  await layer.locator('.files-sidebar [data-device="studio"]').first().click();await row('Inside-A.txt').waitFor();
+  // The source device's connection is gone (no tab here, its window closed): guidance to open
+  // it, no transfer.
+  await layer.locator('[data-tab]').nth(1).click();await row('Beta-B.txt').waitFor();
+  await p.evaluate(()=>itda.recv({type:'files_clipboard',clip:{cid:'fresh-clip',host:'fresh',window:'closed-window',side:'remote',path:'/fresh',names:['Fresh.txt'],move:false}}));
+  await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+v`);
+  await p.locator('.files-prompt [data-choice="ok"]').click();
+  {const t=(await packets()).filter(x=>x.op==='transfer').at(-1);
+   await job({id:'build',job:'job-F',req:t.req,state:'queued'});
+   await job({id:'build',job:'job-F',req:t.req,state:'failed',error:'원본 기기의 파일 연결이 닫혔습니다. 그 기기의 탭이나 창을 다시 열어 주세요',completed_names:[],partial:null,source_closed:true});
+   const before=(await packets()).filter(x=>x.op==='transfer').length;
+   await layer.getByRole('button',{name:'원본 기기 열기…'}).click();
+   const guide=p.getByRole('dialog',{name:'원본 기기의 연결이 닫혔습니다',exact:true});
+   assert((await guide.textContent()).includes('Fresh Server'),'Closed source guidance does not name the device');
+   assert(await guide.getByRole('button',{name:'Fresh Server 열기',exact:true}).count()===1,'No way to reopen the source');
+   await guide.getByRole('button',{name:'취소',exact:true}).click();
+   assert((await packets()).filter(x=>x.op==='transfer').length===before,'Closed source retried blindly');
+   await layer.locator('[data-dismiss-job="job-F"]').click();}
+  // An end event for a job this window never saw start says nothing.
+  await job({id:'build',job:'job-stray',state:'failed',error:'stray'});
+  assert(await toasts('stray')===0,'Stray end event announced');
+  await layer.locator('[data-dismiss-job="job-stray"]').click().catch(()=>{});
+  await layer.locator('[data-tab]').nth(0).click();await row('Inside-A.txt').waitFor();
   // A preview answered after the tab moved to another device must not block that device's previews.
   await row('Inside-A.txt').click();
   if(platform==='mac')await layer.locator('[data-action="preview"]').click();else{await layer.locator('.files-list').focus();await p.keyboard.press('Alt+p');}
