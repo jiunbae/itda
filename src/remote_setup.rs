@@ -383,6 +383,16 @@ fn validate(p: &Package) -> io::Result<()> {
             return Err(error("공유 설정에 중복되거나 빈 식별자가 있습니다"));
         }
     }
+    // Secrets must belong to a section actually selected in this package. Check
+    // before key/backup/configuration writes or any native credential-store call.
+    let account_ids: HashSet<_> = p.accounts.iter().map(|a| a.id.as_str()).collect();
+    let host_ids: HashSet<_> = p.hosts.iter().map(|h| h.id.as_str()).collect();
+    if p.secrets.iter().any(|secret| !match secret.kind {
+        SecretKind::Account | SecretKind::KeyPass => account_ids.contains(secret.owner.as_str()),
+        SecretKind::Host | SecretKind::Hp | SecretKind::Files => host_ids.contains(secret.owner.as_str()),
+    }) {
+        return Err(error("공유할 암호의 계정 또는 연결이 선택되지 않았습니다"));
+    }
     let key_ids: HashSet<_> = p.keys.iter().map(|k| &k.account).collect();
     if key_ids.len() != p.keys.len()
         || p.keys.iter().map(|k| k.bytes.len() as u64).sum::<u64>() > MAX_PACKAGE / 4
@@ -1675,6 +1685,46 @@ function Invoke-CimMethod {
         assert!(apply(&dir.0, &invalid, &mut NoVault).is_err());
         let _live = lock_at(&dir.0).unwrap();
         assert!(apply(&dir.0, &empty_package(), &mut NoVault).is_err());
+    }
+    #[test]
+    fn preservation_secret_owners_are_validated_before_any_side_effect() {
+        for remove_section in [true, false] {
+            for case in 0..5 {
+                let dir = Scratch::new();
+                // Even selected malformed JSON must not be read before validation.
+                for name in ["hosts.json", "accounts.json", "settings.json"] { write_raw(&dir, name, b"invalid existing fixture JSON\n"); }
+                let before: Vec<_> = ["hosts.json", "accounts.json", "settings.json"].map(|n| raw_state(&dir, n)).into();
+                let mut p = package();
+                let account = case < 2;
+                if remove_section { if account { p.accounts.clear(); } else { p.hosts.clear(); } }
+                if !p.accounts.is_empty() { p.keys.push(Key { account: "source-account".into(), bytes: b"generated-unused-key-fixture".to_vec() }); }
+                let kind = match case { 0 => SecretKind::Account, 1 => SecretKind::KeyPass, 2 => SecretKind::Host, 3 => SecretKind::Hp, _ => SecretKind::Files };
+                let owner = if !remove_section { "not-selected" } else if account { "source-account" } else { "source-host" };
+                p.secrets.push(Secret { kind, owner: owner.into(), value: "generated-invalid-owner-fixture".into() });
+                let error = apply(&dir.0, &p, &mut NoVault).unwrap_err();
+                assert!(error.to_string().contains("암호의 계정 또는 연결"), "configuration was parsed before secret dependency validation: {error}");
+                let after: Vec<_> = ["hosts.json", "accounts.json", "settings.json"].map(|n| raw_state(&dir, n)).into();
+                assert_eq!(after, before);
+                assert!(!dir.0.join("configuration.lock").exists());
+                assert!(!dir.0.join("configuration-backups").exists());
+                assert!(!dir.0.join("imported-keys").exists());
+                assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 3);
+            }
+        }
+    }
+    #[test]
+    fn preservation_valid_selected_secret_dependencies_still_import() {
+        let dir = Scratch::new();
+        let mut p = package();
+        for (kind, owner) in [(SecretKind::Account, "source-account"), (SecretKind::KeyPass, "source-account"), (SecretKind::Host, "source-host"), (SecretKind::Hp, "source-host"), (SecretKind::Files, "source-host")] {
+            p.secrets.push(Secret { kind, owner: owner.into(), value: "generated-selected-secret-fixture".into() });
+        }
+        let mut vault = FakeVault::default();
+        let result = apply(&dir.0, &p, &mut vault).unwrap();
+        assert_eq!(result["secrets"], 5);
+        assert_eq!(vault.calls, 5);
+        assert_eq!(read_json::<Vec<Host>>(&dir.0, "hosts.json").unwrap().len(), 1);
+        assert_eq!(read_json::<Vec<Account>>(&dir.0, "accounts.json").unwrap().len(), 1);
     }
     #[test]
     fn preservation_host_only_leaves_unselected_bytes_modes_and_absence() {
