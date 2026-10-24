@@ -888,7 +888,7 @@
           "run_id": 40065218281,
           "status": "second native OLE attempt failed attribution guard after owned moves/possible activation click, before source drag mousedown; cleanup passed",
           "evidence": "assessments/evidence/native-windows-explorer-ole.json",
-          "acceptance_scope": "Setup/layout and cleanup component facts only; first-run cleanup failure preserved; no OLE/drop/release acceptance. Prior local32ec diagnostic snapshot retained; merged diagnostic-only PR128/new run40067869121 has no result yet."
+          "acceptance_scope": "Setup/layout and cleanup component facts only; first-run cleanup failure preserved; no OLE/drop/release acceptance. Later PR128 diagnostic run40067869121 failed layout JSON reading before source Drag command/SendInput; third-run cleanup passed."
         },
         {
           "run_id": 40066106737,
@@ -900,9 +900,10 @@
         },
         {
           "pr": 128,
-          "status": "diagnostic-only merged5a8f; source176/178 approved; four CI checks passed; new diagnostic run40067869121 in progress with no result",
+          "status": "diagnostic-only merged5a8f; source176/178 approved and four CI checks passed, but native run40067869121 failed with Unexpected end of JSON input before source Drag command/SendInput; cleanup passed",
           "evidence": "assessments/evidence/native-windows-explorer-ole.json",
-          "acceptance_scope": "Source/compile evidence only until an actual bounded result is reviewed. No new native OLE acceptance."
+          "acceptance_scope": "The third actual failure is recorded with checks[] and absent layout/viewport; owned-window setup may have occurred. No OLE/drop/release acceptance. Separate atomic receipt-publication follow-up is a source inference, not a fixed runtime proof.",
+          "run_id": 40067869121
         },
         {
           "scope": "bounded remote Mac rollout inventory",
@@ -915,13 +916,13 @@
         "Actual permission-helper restart during managed transfer, guide_reset/native permission changes, and the actual updater admission/installation/quit scenarios remain unverified. Source fixes and unit/browser CI do not certify those native paths.",
         "Mac actual4MiB managed-copy Wait/Stop approval remains unanswered after the earlier pre-dispatch Tacto policy refusal; no native Mac Wait/Stop credit.",
         "Mac Dock/AppleEvent/logout, Finder promise queue, updater/remote-installer/Force and corresponding native lifetimes remain unverified.",
-        "Windows Explorer/OLE attempts ended before source drag mousedown; no OLE/virtual-file release acceptance. Physical user-PC input, 150% scaling and assistive technology remain unverified.",
+        "All three native Explorer/OLE attempts failed before source drag mousedown; third-run layout JSON parsing failed with no complete layout/viewport receipt, although owned-window setup may have occurred. No OLE/virtual-file release acceptance. Physical user-PC input,150% scaling and assistive technology remain unverified.",
         "iOS remains hard-blocked pending concrete new-device/process pasteboard isolation; disconnected phones and build-only XCTest scaffolding provide no physical phone, QR camera, Korean IME, clipboard/privacy or real LAN/HTTPS acceptance.",
         "Older macOS native runtime including 12.0–12.2 remains unverified; minimum-version/weak-link probes do not certify older OS runtime. 12.3+ remains recommended.",
         "Two anonymous remote Macs still run default-installed1.0.2 and0.9.24; signed/hash-checked1.0.5 candidates are staged only with matching designated requirements. Human idle-state information/close approval is pending because both old tags use predefined unguarded menu Quit. No remote installed-app/configuration/TCC change or completed remote rollout is claimed.",
         "All seven verified persona scores remain null; 28 complete core journeys have not been certified at 9/10. No global claim that all P1/P2 defects are absent."
       ],
-      "acceptance_note": "Public1.0.5 and local native smoke are verified. The actual managed Wait/Stop regression has root and independent177 approval but is limited to a distinct same-source CI candidate. Two remote Macs remain older/staged-only pending human idle/close information and approval. PR128 code/CI passed, but its new diagnostic run has no result. Historical failures and all seven null persona scores remain intact; the active goal has not reached full9/10."
+      "acceptance_note": "Public1.0.5 and local native smoke are verified. The actual managed Wait/Stop regression has root and independent177 approval but is limited to a distinct same-source CI candidate. Two remote Macs remain older/staged-only pending human idle/close information and approval. All three OLE attempts failed before source drag; latest diagnostic JSON-read failure and cleanup PASS do not establish input or OLE acceptance. Historical failures and seven null persona scores remain intact; the active goal has not reached full9/10."
     }
   ],
   "current_release": {
@@ -956,9 +957,12 @@
     "all_remote_machines_updated": false,
     "explorer_diagnostic_run": {
       "run_id": 40067869121,
-      "source_prefix": "5a8f",
-      "status": "in-progress; result not supplied",
-      "acceptance_credit": false
-    }
+      "source_commit": "5a8f454e719d6df016c99c6a967453dbda9081cd",
+      "status": "failed: Unexpected end of JSON input before source Drag command/SendInput",
+      "result_available": true,
+      "acceptance_credit": false,
+      "cleanup_status": "passed"
+    },
+    "guide_reset_resolution": "feature-removed-manual-guidance; unreachable reset UI/handler/tccutil path removed and replaced by current-app manual re-registration/reveal guidance"
   }
 }

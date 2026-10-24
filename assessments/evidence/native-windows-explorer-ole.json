@@ -2,7 +2,7 @@
   "schema_version": 1,
   "component": "native-windows-explorer-ole",
   "recorded_at": "2026-10-24T05:10:55.208123+00:00",
-  "status": "two-bounded-runs-failed; further-diagnostic-in-progress-without-result; no-native-OLE-acceptance; first-cleanup-failed-and-second-cleanup-passed",
+  "status": "three-bounded-runs-failed; no-native-OLE-acceptance; first-cleanup-failed-and-later-cleanups-passed",
   "release_context": {
     "public_release_at_preparation": "1.0.4",
     "future_checkpoint": "1.0.5",
@@ -122,10 +122,10 @@
     "native_ole_acceptance_after_fix": false
   },
   "verification_gaps": [
-    "Neither completed bounded attempt reached source drag mousedown or OLE/drop/virtual-file release acceptance. The second attempt did include owned window moves and possible activation click.",
-    "First-run overall cleanup failed; second-run overall cleanup passed. These outcomes are distinct and neither is rewritten.",
-    "Diagnostic-only PR128 is merged with code review176/178 and four green CI checks; new diagnostic run40067869121 at5a8f is in progress with no result supplied. No runtime acceptance is granted.",
-    "Physical user-PC input, 150% scaling/layout, assistive technology and full file journeys remain unverified."
+    "All three completed bounded attempts ended before source drag mousedown or OLE/drop/virtual-file release acceptance. The second had owned window moves and possible activation click; the third may have created/laid out owned windows before the JSON-read failure.",
+    "First-run overall cleanup failed; second- and third-run overall cleanup passed. These outcomes remain separate and are not rewritten.",
+    "PR128 source review and four green CI checks did not yield native OLE acceptance: diagnostic run40067869121 failed reading layout JSON. A suspected non-atomic receipt-publication race is under separate follow-up review17a/root work; no corrected runtime result is available.",
+    "Physical user-PC input,150% scaling/layout, assistive technology and full file journeys remain unverified."
   ],
   "goal_achieved": false,
   "privacy": "Only sanitized public source/build identifiers, hashes and scoped outcomes are included. Personal names, raw paths, process IDs, creation ticks, document case IDs, credentials, key fingerprints, screenshots and accessibility trees are omitted.",
@@ -150,7 +150,7 @@
     "Original overall cleanup failed; later diagnosis does not retroactively certify cleanup.",
     "No full persona journey or 9/10 score is established."
   ],
-  "amended_at": "2026-10-24T05:56:09.700855+00:00",
+  "amended_at": "2026-10-24T06:06:07.204537+00:00",
   "current_checkpoint_context": {
     "public_release": "1.0.5",
     "source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
@@ -254,14 +254,79 @@
       "run_id": 40067869121,
       "run_url": "https://github.com/jiunbae/itda/actions/runs/40067869121",
       "expected_source_prefix": "5a8f",
-      "status": "in-progress as reported; no result receipt supplied",
-      "result_available": false,
-      "acceptance_credit": false
-    }
+      "status": "failed with Unexpected end of JSON input before source Drag command/SendInput; no OLE acceptance",
+      "result_available": true,
+      "acceptance_credit": false,
+      "evidence_key": "third_failed_run"
+    },
+    "actual_runtime_source_commit": "5a8f454e719d6df016c99c6a967453dbda9081cd"
   },
   "previous_local_diagnostic": {
     "local_commit": "32ec0c4eca63ba44634eb059660be9887f1fc11f",
     "status": "local diagnostic source only",
     "native_runtime_executed": false
+  },
+  "third_failed_run": {
+    "run_id": 40067869121,
+    "run_url": "https://github.com/jiunbae/itda/actions/runs/40067869121",
+    "run_attempt": 1,
+    "source_and_harness": {
+      "checkout": "5a8f454e719d6df016c99c6a967453dbda9081cd",
+      "expected_source_prefix": "5a8f",
+      "actual_checkout_matches_expected_prefix": true,
+      "candidate_binary_sha256": "e87d9db42a19c8065b1b1945153a7214cfd8166738bc9c85473a6739f9773894",
+      "controller_driver_source_sha256": "573c9e5a3ce6a7fb1c180b7759871dd11fbe350141a7ff0ea6f0bdb58b7d6b3a",
+      "native_driver_source_sha256": "f5ccdfa68e54f42298745724ac1ec3a789cbde5030fa894d93d746bdc890d942",
+      "sftp_fixture_source_sha256": "36e07cb00361a01607b6a754dc0826204007abecbc9b941698578081403c2eba",
+      "build": "same-job Windows non-release CI candidate, not a public-executable acceptance result"
+    },
+    "checks": [],
+    "layout_record_present": false,
+    "viewport_record_present": false,
+    "candidate_setup": {
+      "private_candidate_sftp_list_reached": true,
+      "sftp_audit_event_types": [
+        "list"
+      ],
+      "sftp_list_event_count": 1,
+      "scope": "SFTP listing only. Owned window creation/layout may already have occurred, but no complete layout/viewport receipt or layout assertion was produced."
+    },
+    "outcome": {
+      "status": "failed",
+      "failure_category": "Unexpected end of JSON input",
+      "failure_phase": "layout receipt JSON read before source Drag command or its SendInput stage",
+      "source_drag_command_dispatched": false,
+      "drag_send_input_reached": false,
+      "owned_window_creation_or_layout_may_have_occurred": true,
+      "ole_drop_or_virtual_file_release_acceptance": false,
+      "product_failure_established": false,
+      "scope": "A harness receipt-read failure. Absence of a complete layout record does not prove that no native setup happened. No input, OLE or product acceptance is granted."
+    },
+    "cleanup": {
+      "original_overall_status": "passed",
+      "controller_exit_code": 0,
+      "app_exit_code": 0,
+      "forced_candidate": false,
+      "remaining_owned_app_processes": 0,
+      "startup_unchanged": true,
+      "owned_explorer_state": "closed",
+      "owned_explorer_window_absence_confirmed": true,
+      "sftp_termination_requested": true,
+      "sftp_exit": {
+        "code": null,
+        "signal": "SIGTERM",
+        "exit_event_observed": true
+      },
+      "workspaces_removed": true,
+      "emergency_source_release_count": 0,
+      "unapproved_confirmation_count": 0,
+      "scope": "Third-run cleanup passed. This does not change the first-run cleanup failure or constitute OLE acceptance."
+    },
+    "receipt_publication_inference": {
+      "status": "source inference; follow-up under review, not a corrected runtime result",
+      "summary": "Direct PowerShell Set-Content publication of layout.json can expose an empty or partial file between Node existence detection and JSON read. This is a suspected harness receipt-publication race, not a demonstrated product defect.",
+      "follow_up_review_reference": "17a",
+      "follow_up_scope": "Separate root-owned atomic receipt publication work; no fixed runtime proof is included."
+    }
   }
 }

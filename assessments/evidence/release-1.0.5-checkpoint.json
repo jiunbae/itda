@@ -164,7 +164,9 @@
       "prior_release": "1.0.4",
       "published_fix_release": "1.0.5",
       "fix_source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
-      "status": "addressed in published source with unit/browser CI coverage; affected native scenario acceptance remains pending"
+      "status": "addressed in published source with unit/browser CI coverage; affected native scenario acceptance remains pending",
+      "resolution": "feature-removed-manual-guidance",
+      "resolution_detail": "The unreachable reset UI, native guide_reset handler and tccutil reset path were removed. Current-app manual re-registration and reveal guidance replace automated reset; the old reset command was not made reachable."
     },
     {
       "id": "UPDATE-WAIT-STALE-CANCEL-ADMISSION",
@@ -181,12 +183,12 @@
       "status": "addressed in published source with unit/browser CI coverage; affected native scenario acceptance remains pending"
     }
   ],
-  "source_fix_verification_scope": "Published 1.0.5 addresses the four specifically recorded 1.0.4 source defects: permission restart/admission guard, guide_reset forwarding, stale update Cancel admission, and Windows quit during update. Unit/browser CI coverage passed; no full affected native restart/update acceptance or global P1/P2 absence claim.",
+  "source_fix_verification_scope": "Published1.0.5 addresses the four specifically recorded1.0.4 source defects: permission restart/admission guard; removal of the unreachable guide_reset UI/handler/tccutil path and replacement with current-app manual re-registration/reveal guidance; stale update Cancel admission; and Windows quit during update. Unit/browser CI coverage passed; no full affected native restart/update acceptance or global P1/P2 absence claim.",
   "verification_gaps": [
     "Actual permission-helper restart during managed transfer, guide_reset/native permission changes, and the actual updater admission/installation/quit scenarios remain unverified. Source fixes and unit/browser CI do not certify those native paths.",
     "Mac actual4MiB managed-copy Wait/Stop approval remains unanswered after the earlier pre-dispatch Tacto policy refusal; no native Mac Wait/Stop credit.",
     "Mac Dock/AppleEvent/logout, Finder promise queue, updater/remote-installer/Force and corresponding native lifetimes remain unverified.",
-    "Windows Explorer/OLE attempts ended before source drag mousedown; no OLE/virtual-file release acceptance. Physical user-PC input, 150% scaling and assistive technology remain unverified.",
+    "All three native Explorer/OLE attempts failed before source drag mousedown; third-run layout JSON parsing failed with no complete layout/viewport receipt, although owned-window setup may have occurred. No OLE/virtual-file release acceptance. Physical user-PC input,150% scaling and assistive technology remain unverified.",
     "iOS remains hard-blocked pending concrete new-device/process pasteboard isolation; disconnected phones and build-only XCTest scaffolding provide no physical phone, QR camera, Korean IME, clipboard/privacy or real LAN/HTTPS acceptance.",
     "Older macOS native runtime including 12.0–12.2 remains unverified; minimum-version/weak-link probes do not certify older OS runtime. 12.3+ remains recommended.",
     "Two anonymous remote Macs still run default-installed1.0.2 and0.9.24; signed/hash-checked1.0.5 candidates are staged only with matching designated requirements. Human idle-state information/close approval is pending because both old tags use predefined unguarded menu Quit. No remote installed-app/configuration/TCC change or completed remote rollout is claimed.",
@@ -196,7 +198,7 @@
   "goal_achieved": false,
   "privacy": "No personal names, raw install/profile/workspace paths, process IDs, creation ticks, profile fingerprints, credentials, pasteboard metadata/content, screenshots or raw accessibility trees are included.",
   "historical_receipts": "Earlier failed checks, native failures, cleanup failures and release/score snapshots remain historical; this checkpoint does not retroactively change them.",
-  "amended_at": "2026-10-24T05:56:09.700860+00:00",
+  "amended_at": "2026-10-24T06:06:07.204633+00:00",
   "remote_rollout": {
     "status": "two remote Macs remain on older default-installed running apps; 1.0.5 candidates staged only; not a completed remote rollout",
     "inventory_scope": "Two anonymous remote Mac installations from the bounded read-only inventory, not a complete fleet inventory. Facts relayed by the release owner; no remote action was performed by this documentation task.",
@@ -240,8 +242,10 @@
   "native_explorer_diagnostic": {
     "evidence": "assessments/evidence/native-windows-explorer-ole.json",
     "pr": 128,
-    "source_review_and_ci": "merged5a8f; source176/178 approved; all four CI checks green",
+    "source_review_and_ci": "Diagnostic-only PR128 merged5a8f; source176/178 approved; all four CI checks green, distinct from its failed native attempt.",
     "run_id": 40067869121,
-    "status": "in-progress, no result receipt; no OLE acceptance"
+    "status": "failed: Unexpected end of JSON input before source Drag command/SendInput; checks empty, layout/viewport absent; owned-window setup may have occurred; cleanup passed; no OLE acceptance",
+    "source_commit": "5a8f454e719d6df016c99c6a967453dbda9081cd",
+    "result_available": true
   }
 }
