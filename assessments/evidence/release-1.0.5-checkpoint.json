@@ -1,0 +1,251 @@
+{
+  "schema_version": 1,
+  "component": "1.0.5-public-release-and-local-install",
+  "recorded_at": "2026-10-24T05:23:26.397100+00:00",
+  "status": "published-and-local-component-smoke-verified; full-quality-goal-incomplete",
+  "source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
+  "tag": "v1.0.5",
+  "release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.5",
+  "published_at": "2026-10-24T05:22:32Z",
+  "latest_at_public_check": true,
+  "final_ci": {
+    "run_id": 40065021161,
+    "url": "https://github.com/jiunbae/itda/actions/runs/40065021161",
+    "head_sha": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
+    "checks": {
+      "macos": "success",
+      "build": "success",
+      "windows-file-ui": "success"
+    }
+  },
+  "public_download": {
+    "checked_at": "2026-10-24T05:23:26.397100+00:00",
+    "all_three_assets": [
+      {
+        "name": "Itda-macos-universal.zip",
+        "sha256": "b09c2c2fffd12d14f217e1bc4a7b09cf8531df6322d6c17b913c10582659a325",
+        "bytes": 8766808,
+        "matches_trusted_ci": true
+      },
+      {
+        "name": "itda.exe",
+        "sha256": "88a4478d8f89acb884b955ac5bd7a59f0f0d057b64fd787d65598e367d5168dc",
+        "bytes": 7522816,
+        "matches_trusted_ci": true
+      },
+      {
+        "name": "SHA256SUMS.txt",
+        "sha256": "3a7f363b8d59ae6dd4e0830b7b849fabf2ea5a59711ae9e99b7e17a771b0463f",
+        "bytes": 166,
+        "matches_trusted_ci": true
+      }
+    ],
+    "api_asset_digests_match": true
+  },
+  "independent_artifact_review": {
+    "request_id": "req_18e15f4242ac9940_172",
+    "result": "approved",
+    "scope": "Independent artifact copies verified against the recorded hashes, Mac signature/notary, Windows PE Security Directory and whole embedded source blobs. Public association is separately established by public download/API digests; no unrecorded independent public-copy parsing or native journey acceptance is claimed."
+  },
+  "mac_artifact": {
+    "version": "1.0.5",
+    "bundle_id": "dev.jiun.itda",
+    "architectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "executable_sha256": "e5e13894f2244b351c866020c9115ee047b6345001a06e7f321be276f0d39fae",
+    "developer_id": true,
+    "codesign_verification": "pass",
+    "gatekeeper_notarized": "pass",
+    "stapled_ticket_validation": "pass",
+    "plist_minimum_system_version": "12.0",
+    "older_os_runtime_acceptance": false
+  },
+  "windows_artifact": {
+    "architecture": "AMD64",
+    "subsystem": "Windows GUI",
+    "file_version": "1.0.5",
+    "product_version": "1.0.5",
+    "dpi": "PerMonitorV2",
+    "execution_levels": [
+      "asInvoker"
+    ],
+    "authenticode_signed": false,
+    "authenticode_security_directory_size": 0,
+    "scope": "Unsigned public binary metadata inspection; not Windows native journey acceptance."
+  },
+  "embedded_ui_whole_blob_proof": [
+    {
+      "file": "web/files.js",
+      "lf_source_sha256": "92764241f6028a6e2360c7eaee6663cfd1872179e9ae76a547fbe496daf8057d",
+      "windows_crlf_sha256": "65348e158b83809563dbd0854046912f0d4d57ff5de665b3aba4f39d1e60036a",
+      "mac_exact_lf_count": 2,
+      "windows_exact_crlf_count": 1,
+      "transform": "only LF-to-CRLF on Windows checkout"
+    },
+    {
+      "file": "web/permissions.js",
+      "lf_source_sha256": "0727d5c47ea58658dc8f1d54f5f6a7c399b15c09b76205dbba640a5c7bc5d976",
+      "windows_crlf_sha256": "4880a73657a4c6271f586228699dad130d588527671d7da33d7b35323a3c3548",
+      "mac_exact_lf_count": 2,
+      "windows_exact_crlf_count": 1,
+      "transform": "only LF-to-CRLF on Windows checkout"
+    }
+  ],
+  "prepublication_check_provenance": {
+    "initial_status": "failed-check-logic",
+    "initial_expected_notes_wrongly_rstripped": true,
+    "actual_github_body_equals_unmodified_local_notes": true,
+    "initial_check_published_release": false,
+    "artifacts_unchanged": true,
+    "corrected_notes_match_exactly_including_final_newline": true,
+    "corrected_tag_target_matches_source": true,
+    "note": "The first draft assertion incorrectly removed the expected final newline. Correcting the exact-body assertion required no artifact or tag change; the initial failed check is retained and not relabeled as all-green."
+  },
+  "local_mac_install": {
+    "version_before": "1.0.4",
+    "version_after": "1.0.5",
+    "verified_at": "2026-10-24T05:29:28.629412+00:00",
+    "fresh_installed_process_version_and_executable_verified": true,
+    "installed_executable_matches_verified_release": true,
+    "old_quit": {
+      "native_menu_quit_invoked": true,
+      "tool_postcondition": "target_not_found after dispatch",
+      "old_application_absence_verified_by_native_application_list": true,
+      "old_exit_code_observed": false,
+      "old_exit_code": null,
+      "forced_quit": false,
+      "scope": "Native application absence was checked after Quit; no old-process exit code was observed."
+    },
+    "designated_requirement_unchanged": true,
+    "permission_status_before": {
+      "access": true,
+      "screen": false
+    },
+    "permission_status_after": {
+      "access": true,
+      "screen": false
+    },
+    "permission_writes": false,
+    "hosts_accounts_settings_semantically_unchanged": true,
+    "hosts_accounts_settings_semantically_unchanged_after_smoke": true,
+    "main_readiness_provenance": {
+      "initial_heading_assertion": "failed",
+      "initial_frame_elements_reported": 7,
+      "initial_webarea_present": false,
+      "temporary_metadata_based_native_claim_corrected": true,
+      "later_fresh_observation_elements_reported": 113,
+      "later_actual_main_verified_before_smoke_actions": true,
+      "ready_at": "2026-10-24T05:26:54.895348+00:00",
+      "scope": "Initial incomplete AX frame observation failed; later fresh native main observation was required. Private raw AX history is retained, not published."
+    },
+    "installed_smoke": {
+      "separate_network_file_window": true,
+      "local_entry_visible": true,
+      "entered_local_folder_without_remote_connection": true,
+      "closed_only_file_window": true,
+      "main_window_preserved": true,
+      "no_transfer_actions": true,
+      "no_permission_actions": true
+    },
+    "scope": "Actual installed 1.0.5 Main→separate Network window→local entry→local folder→file-window close/main retained. No transfer or permission action. No managed-copy Wait/Stop, permission restart or actual updater acceptance."
+  },
+  "resolved_known_1_0_4_source_defects": [
+    {
+      "id": "MAC-PERMISSION-RESTART-ADMISSION",
+      "prior_release": "1.0.4",
+      "published_fix_release": "1.0.5",
+      "fix_source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
+      "status": "addressed in published source with unit/browser CI coverage; affected native scenario acceptance remains pending"
+    },
+    {
+      "id": "MAC-PERMISSION-GUIDE-RESET-DISPATCH",
+      "prior_release": "1.0.4",
+      "published_fix_release": "1.0.5",
+      "fix_source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
+      "status": "addressed in published source with unit/browser CI coverage; affected native scenario acceptance remains pending",
+      "resolution": "feature-removed-manual-guidance",
+      "resolution_detail": "The unreachable reset UI, native guide_reset handler and tccutil reset path were removed. Current-app manual re-registration and reveal guidance replace automated reset; the old reset command was not made reachable."
+    },
+    {
+      "id": "UPDATE-WAIT-STALE-CANCEL-ADMISSION",
+      "prior_release": "1.0.4",
+      "published_fix_release": "1.0.5",
+      "fix_source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
+      "status": "addressed in published source with unit/browser CI coverage; affected native scenario acceptance remains pending"
+    },
+    {
+      "id": "WINDOWS-USER-QUIT-DURING-UPDATE-INSTALL",
+      "prior_release": "1.0.4",
+      "published_fix_release": "1.0.5",
+      "fix_source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
+      "status": "addressed in published source with unit/browser CI coverage; affected native scenario acceptance remains pending"
+    }
+  ],
+  "source_fix_verification_scope": "Published1.0.5 addresses the four specifically recorded1.0.4 source defects: permission restart/admission guard; removal of the unreachable guide_reset UI/handler/tccutil path and replacement with current-app manual re-registration/reveal guidance; stale update Cancel admission; and Windows quit during update. Unit/browser CI coverage passed; no full affected native restart/update acceptance or global P1/P2 absence claim.",
+  "verification_gaps": [
+    "Actual permission-helper restart during managed transfer, manual current-app re-registration and native permission grant/relaunch, and the actual updater admission/installation/quit scenarios remain unverified. The removed guide_reset action is not a supported native test target. Source fixes and unit/browser CI do not certify the remaining native paths.",
+    "Mac actual4MiB managed-copy Wait/Stop approval remains unanswered after the earlier pre-dispatch Tacto policy refusal; no native Mac Wait/Stop credit.",
+    "Mac Dock/AppleEvent/logout, Finder promise queue, updater/remote-installer/Force and corresponding native lifetimes remain unverified.",
+    "All three native Explorer/OLE attempts failed before source drag mousedown; third-run layout JSON parsing failed with no complete layout/viewport receipt, although owned-window setup may have occurred. No OLE/virtual-file release acceptance. Physical user-PC input,150% scaling and assistive technology remain unverified.",
+    "iOS remains hard-blocked pending concrete new-device/process pasteboard isolation; disconnected phones and build-only XCTest scaffolding provide no physical phone, QR camera, Korean IME, clipboard/privacy or real LAN/HTTPS acceptance.",
+    "Older macOS native runtime including 12.0–12.2 remains unverified; minimum-version/weak-link probes do not certify older OS runtime. 12.3+ remains recommended.",
+    "Two anonymous remote Macs still run default-installed1.0.2 and0.9.24; signed/hash-checked1.0.5 candidates are staged only with matching designated requirements. Human idle-state information/close approval is pending because both old tags use predefined unguarded menu Quit. No remote installed-app/configuration/TCC change or completed remote rollout is claimed.",
+    "All seven verified persona scores remain null; 28 complete core journeys have not been certified at 9/10. No global claim that all P1/P2 defects are absent."
+  ],
+  "goal_status": "active",
+  "goal_achieved": false,
+  "privacy": "No personal names, raw install/profile/workspace paths, process IDs, creation ticks, profile fingerprints, credentials, pasteboard metadata/content, screenshots or raw accessibility trees are included.",
+  "historical_receipts": "Earlier failed checks, native failures, cleanup failures and release/score snapshots remain historical; this checkpoint does not retroactively change them.",
+  "amended_at": "2026-10-24T06:06:07.204633+00:00",
+  "remote_rollout": {
+    "status": "two remote Macs remain on older default-installed running apps; 1.0.5 candidates staged only; not a completed remote rollout",
+    "inventory_scope": "Two anonymous remote Mac installations from the bounded read-only inventory, not a complete fleet inventory. Facts relayed by the release owner; no remote action was performed by this documentation task.",
+    "anonymous_installations": [
+      {
+        "installed_running_version": "1.0.2",
+        "candidate_version": "1.0.5",
+        "candidate_staged_only": true,
+        "candidate_signature_and_hash_checked": true,
+        "designated_requirement_matches_installed_app": true,
+        "default_installed_app_replaced": false,
+        "old_running_app_closed": false
+      },
+      {
+        "installed_running_version": "0.9.24",
+        "candidate_version": "1.0.5",
+        "candidate_staged_only": true,
+        "candidate_signature_and_hash_checked": true,
+        "designated_requirement_matches_installed_app": true,
+        "default_installed_app_replaced": false,
+        "old_running_app_closed": false
+      }
+    ],
+    "required_human_information_or_approval": {
+      "status": "pending",
+      "reason": "Both older installed tags use predefined menu Quit without the current transfer quit guard. Confirm idle/no-transfer state and authorize closing the old apps before replacement; staging does not authorize that close.",
+      "old_app_quit_attempted": false
+    },
+    "remote_installed_app_changes": false,
+    "remote_configuration_changes": false,
+    "remote_tcc_changes": false,
+    "privacy": "No aliases, hostnames, paths, process IDs, staged hashes, profile metadata or credentials are included."
+  },
+  "native_windows_managed_quit": {
+    "evidence": "assessments/evidence/native-windows-quit-1.0.5.json",
+    "status": "root and independent177 APPROVE for actual managed Wait5/5 and Stop5/5",
+    "independent_review_request": "req_18e1605b8669d7f0_177",
+    "run_id": 40066106737,
+    "binary_scope": "Non-release CI candidate at v1.0.5 tag source; candidate SHA differs from the published exe. No physical/Explorer/Mac/updater/permission-restart/persona acceptance."
+  },
+  "native_explorer_diagnostic": {
+    "evidence": "assessments/evidence/native-windows-explorer-ole.json",
+    "pr": 128,
+    "source_review_and_ci": "Diagnostic-only PR128 merged5a8f; source176/178 approved; all four CI checks green, distinct from its failed native attempt.",
+    "run_id": 40067869121,
+    "status": "failed: Unexpected end of JSON input before source Drag command/SendInput; checks empty, layout/viewport absent; owned-window setup may have occurred; cleanup passed; no OLE acceptance",
+    "source_commit": "5a8f454e719d6df016c99c6a967453dbda9081cd",
+    "result_available": true
+  }
+}

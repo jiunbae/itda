@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "component": "native-windows-managed-copy-quit-1.0.5",
+  "recorded_at": "2026-10-24T05:34:32.660213+00:00",
+  "status": "root-and-independent-review-verified-managed-Wait-Stop-component-pass; no-full-persona-acceptance",
+  "run_id": 40066106737,
+  "run_url": "https://github.com/jiunbae/itda/actions/runs/40066106737",
+  "dispatch_ref": "v1.0.5",
+  "source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
+  "candidate_binary": {
+    "sha256": "6fd6bb4ab2942f4e7e482d6bbae4df5bd363d0f85f7e89272c20a2aced76a619",
+    "same_in_both_scenarios": true,
+    "file_version": "1.0.5.0",
+    "build_scope": "same-job non-release Windows CI build",
+    "published_executable_sha256": "88a4478d8f89acb884b955ac5bd7a59f0f0d057b64fd787d65598e367d5168dc",
+    "different_from_published_executable": true,
+    "acceptance_scope": "The tested app is not the public released exe. The exact tag/source matches, but same-source native regression evidence must not be presented as direct acceptance of the published binary."
+  },
+  "executed_source_whole_blob_proof": [
+    {
+      "file": "scripts/windows-native-quit-ci-e2e.mjs",
+      "git_lf_sha256": "a2bf08be4a30bbd900a3efa415bce381dcdf109e93b1952d84c1f5b4719f6cc5",
+      "executed_windows_crlf_sha256": "0776092d7c5efc12094aa81ad92e05070ce2c4588ca2694a13799e6d22b32924",
+      "transform": "LF-to-CRLF only; complete source blob matches"
+    },
+    {
+      "file": "scripts/windows-native-idle-control.ps1",
+      "git_lf_sha256": "af7ce07651f876c29dfa46c0c160b0b6b333633e2226d1638564a0431ef4166d",
+      "executed_windows_crlf_sha256": "515dde7f96deee930d6ed370e29696c660be4b5e1c85d0c2dcd4c2c6361148d9",
+      "transform": "LF-to-CRLF only; complete source blob matches"
+    },
+    {
+      "file": "scripts/fixtures/read-only-sftp-barrier.py",
+      "git_lf_sha256": "7c7068e0d519fdcf626f1651d5c8ef9360f403d1bd42cc4f02aad65aab459e85",
+      "executed_windows_crlf_sha256": "8bae94197397893b52034ca69e54fe76a9ea8375cef08be1ad2cf7722d7fb6da",
+      "transform": "LF-to-CRLF only; complete source blob matches"
+    }
+  ],
+  "source_association_scope": "All three executed driver/control/SFTP fixture sources match whole Git blobs after LF-to-CRLF checkout conversion only.",
+  "environment": {
+    "scope": "Owned hosted Windows CI native WebView2 and private fixture profile; programmatic native close/query plus in-app renderer actions, not physical input.",
+    "status_by_scenario": {
+      "wait": "eligible-for-idle-pilot",
+      "stop": "eligible-for-idle-pilot"
+    },
+    "display_acceptance": "Not a user-PC/150%/assistive-technology acceptance result."
+  },
+  "scenarios": {
+    "wait": {
+      "status": "passed",
+      "checks_passed": 5,
+      "checks": [
+        {
+          "check": "owned native WebView2 and isolated fixture profile; idle query permits exit without closing",
+          "result": "PASS"
+        },
+        {
+          "check": "actual managed SFTP copy held after source bytes and nonzero destination stage",
+          "result": "PASS",
+          "barrier_offset": 2097152,
+          "staging_bytes": 2097152
+        },
+        {
+          "check": "busy query returns 0 and shows guard; cancel preserves app and held real copy",
+          "result": "PASS"
+        },
+        {
+          "check": "main close waits for real copy commit then exits; complete destination hash matches",
+          "result": "PASS",
+          "bytes": 4194304,
+          "sha256": "2b07811057df887086f06a67edc6ebf911de8b6741156e7a2eb1416a4b8b1b2e"
+        },
+        {
+          "check": "generated source preserved",
+          "result": "PASS"
+        }
+      ],
+      "normal_exit_code": 0,
+      "forced_candidate": false,
+      "staging_barrier_bytes": 2097152,
+      "staging_bytes_observed": 2097152,
+      "generated_source_preserved": true,
+      "cleanup": {
+        "forced_candidate": false,
+        "remaining_owned_processes": 0,
+        "workspace_removed": true,
+        "startup_unchanged": true,
+        "sftp_workspace_removed": true,
+        "status": "passed"
+      },
+      "destination_commit": {
+        "bytes": 4194304,
+        "sha256": "2b07811057df887086f06a67edc6ebf911de8b6741156e7a2eb1416a4b8b1b2e",
+        "matches_independent_generated_pattern": true
+      }
+    },
+    "stop": {
+      "status": "passed",
+      "checks_passed": 5,
+      "checks": [
+        {
+          "check": "owned native WebView2 and isolated fixture profile; idle query permits exit without closing",
+          "result": "PASS"
+        },
+        {
+          "check": "actual managed SFTP copy held after source bytes and nonzero destination stage",
+          "result": "PASS",
+          "barrier_offset": 2097152,
+          "staging_bytes": 2097152
+        },
+        {
+          "check": "busy query returns 0 and shows guard; cancel preserves app and held real copy",
+          "result": "PASS"
+        },
+        {
+          "check": "main close stops held real copy; empty destination/staging after exit is the cleanup discriminator",
+          "result": "PASS",
+          "supporting_observations": "Held SSH transport aborted and no post-barrier source bytes; transport closure alone would also follow abrupt exit"
+        },
+        {
+          "check": "generated source preserved",
+          "result": "PASS"
+        }
+      ],
+      "normal_exit_code": 0,
+      "forced_candidate": false,
+      "staging_barrier_bytes": 2097152,
+      "staging_bytes_observed": 2097152,
+      "generated_source_preserved": true,
+      "cleanup": {
+        "forced_candidate": false,
+        "remaining_owned_processes": 0,
+        "workspace_removed": true,
+        "startup_unchanged": true,
+        "sftp_workspace_removed": true,
+        "status": "passed"
+      },
+      "cancellation_discriminator": {
+        "destination_empty_after_exit": true,
+        "staging_empty_after_exit": true,
+        "post_barrier_served_bytes": 0,
+        "supporting_only": "SSH transport closure and no later served bytes support the result, but do not prove cancellation by themselves; empty destination/staging after normal exit is the cleanup discriminator."
+      }
+    }
+  },
+  "root_verification": {
+    "status": "passed",
+    "both_scenarios_strictly_checked": true,
+    "normal_exit_cleanup_source_and_startup_preserved": true
+  },
+  "independent_review": {
+    "request_id": "req_18e1605b8669d7f0_177",
+    "review_reference": "177",
+    "status": "APPROVE",
+    "scope": "Independent raw-receipt review confirms actual managed Wait5/5 and Stop5/5, with independently checked own artifact copies, source and hashes. This remains bounded Windows managed-copy quit evidence from the distinct non-release CI candidate, not direct acceptance of the public executable, physical input, Explorer/OLE, Mac, updater, permission restart or a whole persona."
+  },
+  "limits": [
+    "Windows managed-copy Wait/Stop regression only. No physical mouse/keyboard, Explorer/OLE, Mac, actual updater, permission restart or full persona acceptance.",
+    "The candidate binary differs from the public release exe; source/tag matching does not erase that distinction.",
+    "No profile contents, credentials, private paths, process IDs, creation ticks, pasteboard metadata/content or raw screenshots/AX are published."
+  ],
+  "goal_achieved": false,
+  "amended_at": "2026-10-24T05:56:09.700748+00:00"
+}

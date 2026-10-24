@@ -1,0 +1,332 @@
+{
+  "schema_version": 1,
+  "component": "native-windows-explorer-ole",
+  "recorded_at": "2026-10-24T05:10:55.208123+00:00",
+  "status": "three-bounded-runs-failed; no-native-OLE-acceptance; first-cleanup-failed-and-later-cleanups-passed",
+  "release_context": {
+    "public_release_at_preparation": "1.0.4",
+    "future_checkpoint": "1.0.5",
+    "future_release_published_at_preparation": false,
+    "note": "This receipt records one earlier non-release CI candidate and a later source/compile-only harness correction. It is not a 1.0.5 release or native acceptance receipt."
+  },
+  "failed_run": {
+    "run_id": 40063806855,
+    "run_url": "https://github.com/jiunbae/itda/actions/runs/40063806855",
+    "run_attempt": 1,
+    "event": "workflow_dispatch",
+    "original_environment_recorded_at": "2026-10-24T04:53:02.5461588Z",
+    "dispatch_authorization": {
+      "expected_source_commit": "41d7d8cd9e01bd1204d87511cc06a30edc41d97b",
+      "actual_checkout_matches_expected": true,
+      "review_request": "req_18e15dc06ae54390_16a",
+      "requested_at": "2026-10-24T04:48:39.924987+00:00",
+      "attempts_authorized": 1,
+      "no_confirmation_approval": true,
+      "dispatch_command_exit": 0
+    },
+    "source_and_harness": {
+      "checkout": "41d7d8cd9e01bd1204d87511cc06a30edc41d97b",
+      "reviewed_harness_head": "0bec9484760a25bdd4b9f53bf1e7aa6a6a08bc82",
+      "executed_files_byte_identical_to_reviewed_head": true,
+      "byte_identical_executed_file_count": 10,
+      "source_blob_equality_scope": "The checkpoint compared all ten declared executed Git blobs between the reviewed harness head and the actual checkout; this is source identity evidence, not runtime acceptance.",
+      "candidate_binary_sha256": "5a67aed83f83d7232d068a7754e2e023bdf87d637d63c21d83e5226f472d4d87",
+      "controller_driver_source_sha256": "ff6d8a714746b08ff14b3f446fbf73ec779f30fb208f15417181d26fa8f9ca5c",
+      "native_driver_source_sha256": "a33a4f048c9d0c2d2465cfb761fddde150712046fa825a031b39ecb7cd2b7e49",
+      "sftp_fixture_source_sha256": "36e07cb00361a01607b6a754dc0826204007abecbc9b941698578081403c2eba",
+      "build": "same-job Windows non-release candidate"
+    },
+    "observed_prerequisites": {
+      "status": "eligible-for-owned-drop",
+      "runner_image": "win25-vs2026",
+      "runner_image_version": "20261021.278.1",
+      "session_id": 2,
+      "user_interactive": true,
+      "elevated_admin_token": true,
+      "runner_integrity": "High",
+      "explorer_integrity": "High",
+      "integrity_match": true,
+      "screen": {
+        "width": 1024,
+        "height": 768,
+        "system_dpi": 96,
+        "metric_space": "calling PowerShell DPI context; not certified physical pixels"
+      },
+      "pressed_input_count": 0,
+      "unmet_prerequisite_count": 0,
+      "acceptance_limit": "Eligibility in this hosted elevated Windows session is not proof of physical user-PC/150% layout, assistive technology, or successful Explorer drag."
+    },
+    "candidate_setup": {
+      "private_candidate_connected_to_owned_sftp_fixture": true,
+      "sftp_audit_event_types": [
+        "list"
+      ],
+      "sftp_list_event_count": 1,
+      "fixture_description": "Owned synthetic Korean NFD fixture; no personal document name or case identifier is published.",
+      "scope": "Fixture setup/listing was reached. Native drag, pointer/keyboard input and OLE acceptance were not reached."
+    },
+    "checks": [],
+    "layout_record_present": false,
+    "original_outcome": {
+      "status": "failed",
+      "failure_category": "Candidate identity changed",
+      "failure_phase": "candidate-window identity validation before any native drag or input",
+      "native_drag_or_input_reached": false,
+      "product_failure_established": false
+    },
+    "cleanup": {
+      "original_overall_status": "failed",
+      "overall_status_reclassified": false,
+      "controller": {
+        "exit_code": 1,
+        "signal": null
+      },
+      "app_component": {
+        "exit_code": 0,
+        "signal": null,
+        "forced_candidate": false,
+        "remaining_owned_app_processes": 0
+      },
+      "startup_unchanged": true,
+      "emergency_source_release_count": 0,
+      "unapproved_confirmation_count": 0,
+      "original_error_count": 2,
+      "reported_failure_categories": [
+        "controller exit code 1",
+        "SFTP fixture exit/cleanup failure"
+      ],
+      "sftp_wait_diagnosis": "The independent diagnosis identified a timeout when an exitCode-only waiter missed a signal-only SFTP child exit. This does not change the original overall cleanup failure into a pass.",
+      "acceptance_note": "Normal candidate-app exit, zero remaining owned app processes and unchanged startup are component facts only. The original controller and SFTP cleanup errors remain failures."
+    }
+  },
+  "independent_diagnosis": {
+    "review_reference": "16d",
+    "evidence_basis": "Independent diagnosis relayed by the release owner, distinct from the raw failed-run outcome.",
+    "candidate_identity": "Process.MainWindowHandle may change when the owned file window opens. Treating that value as immutable can reject a still-owned candidate window.",
+    "subprocess_exit": "A waiter that checks exitCode alone can miss a child that ended through signalCode and report a timeout.",
+    "classification": "Harness identity/waiter defects; this failed run does not establish a product OLE defect or native acceptance."
+  },
+  "harness_follow_up": {
+    "fix_commit": "34e1572fa0c4463a43a4ed06a58c941fc1f527d0",
+    "pr": 127,
+    "pr_url": "https://github.com/jiunbae/itda/pull/127",
+    "independent_code_review_reference": "170",
+    "code_review_status": "approved as reported by the release owner",
+    "compile_ci_run_id": 40064622255,
+    "compile_ci_url": "https://github.com/jiunbae/itda/actions/runs/40064622255",
+    "compile_ci_status": "passed as reported by the release owner",
+    "scope": "The corrected candidate pinning and signal-exit waiter reached bounded native setup/layout and cleanup in run40065218281. That run then failed attribution guarding before source drag mousedown; no OLE or virtual-file-release acceptance.",
+    "native_runtime_proof_after_fix": true,
+    "original_failed_run_superseded": false,
+    "native_runtime_proof_scope": "Limited candidate-window/setup and cleanup component evidence only; no native OLE/drop/release acceptance.",
+    "native_ole_acceptance_after_fix": false
+  },
+  "verification_gaps": [
+    "All three completed bounded attempts ended before source drag mousedown or OLE/drop/virtual-file release acceptance. The second had owned window moves and possible activation click; the third may have created/laid out owned windows before the JSON-read failure.",
+    "First-run overall cleanup failed; second- and third-run overall cleanup passed. These outcomes remain separate and are not rewritten.",
+    "PR128 source review and four green CI checks did not yield native OLE acceptance: diagnostic run40067869121 failed reading layout JSON. A suspected non-atomic receipt-publication race is under separate follow-up review17a/root work; no corrected runtime result is available.",
+    "Physical user-PC input,150% scaling/layout, assistive technology and full file journeys remain unverified."
+  ],
+  "goal_achieved": false,
+  "privacy": "Only sanitized public source/build identifiers, hashes and scoped outcomes are included. Personal names, raw paths, process IDs, creation ticks, document case IDs, credentials, key fingerprints, screenshots and accessibility trees are omitted.",
+  "initial_receipt_status": "failed-before-native-drag-or-input; original-overall-cleanup-failed; no-OLE-or-layout-acceptance",
+  "initial_receipt_harness_follow_up": {
+    "fix_commit": "34e1572fa0c4463a43a4ed06a58c941fc1f527d0",
+    "pr": 127,
+    "pr_url": "https://github.com/jiunbae/itda/pull/127",
+    "independent_code_review_reference": "170",
+    "code_review_status": "approved as reported by the release owner",
+    "compile_ci_run_id": 40064622255,
+    "compile_ci_url": "https://github.com/jiunbae/itda/actions/runs/40064622255",
+    "compile_ci_status": "passed as reported by the release owner",
+    "scope": "Source correction and compile CI only. No follow-up native runtime result is included in this checkpoint.",
+    "native_runtime_proof_after_fix": false,
+    "original_failed_run_superseded": false
+  },
+  "initial_receipt_verification_gaps": [
+    "No native Explorer/OLE drag was attempted or accepted in this run.",
+    "No layout check was produced; physical user-PC input, 150% scaling and assistive technology remain unverified.",
+    "The harness correction needs a separately authorized bounded runtime run; code review and compile CI do not replace it.",
+    "Original overall cleanup failed; later diagnosis does not retroactively certify cleanup.",
+    "No full persona journey or 9/10 score is established."
+  ],
+  "amended_at": "2026-10-24T06:06:07.204537+00:00",
+  "current_checkpoint_context": {
+    "public_release": "1.0.5",
+    "source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
+    "note": "The original release_context describes initial preparation at public 1.0.4 and is preserved as history."
+  },
+  "second_failed_run": {
+    "run_id": 40065218281,
+    "run_url": "https://github.com/jiunbae/itda/actions/runs/40065218281",
+    "event": "workflow_dispatch",
+    "run_attempt": 1,
+    "dispatch_authorization": {
+      "expected_source_commit": "faabec07422eefcf8b24c8df5bcbc2007f762773",
+      "actual_checkout_matches_expected": true,
+      "review_request": "req_18e15efae0a5bc28_171",
+      "requested_at": "2026-10-24T05:10:27.523529+00:00",
+      "attempts_authorized": 1,
+      "no_confirmation_approval": true,
+      "high_high_integrity_limit": true
+    },
+    "source_and_harness": {
+      "checkout": "faabec07422eefcf8b24c8df5bcbc2007f762773",
+      "reviewed_harness_head": "34e1572fa0c4463a43a4ed06a58c941fc1f527d0",
+      "executed_harness_files_byte_identical_to_reviewed_head": true,
+      "byte_identical_executed_harness_file_count": 12,
+      "candidate_binary_sha256": "3afb6fcda79fe3743064d13653830f306cb4e1fb001596fb25cb507efd78be05",
+      "controller_driver_source_sha256": "573c9e5a3ce6a7fb1c180b7759871dd11fbe350141a7ff0ea6f0bdb58b7d6b3a",
+      "native_driver_source_sha256": "d7b00b75014b4d927bf3849e817bd3dcb2f8096173d39cdc1b61b13436027f4e",
+      "sftp_fixture_source_sha256": "36e07cb00361a01607b6a754dc0826204007abecbc9b941698578081403c2eba",
+      "build": "same-job Windows non-release CI candidate, not the public exe"
+    },
+    "observed_prerequisites": {
+      "status": "eligible-for-owned-drop",
+      "scope": "Hosted elevated High/High integrity fixture session; not physical user-PC/150%/AT acceptance."
+    },
+    "candidate_setup": {
+      "owned_candidate_window_pinning_reached": true,
+      "private_candidate_sftp_list_reached": true,
+      "sftp_audit_event_types": [
+        "list"
+      ],
+      "layout_setup_record_present": true,
+      "viewport": {
+        "width": 466,
+        "height": 668,
+        "dpr": 1
+      },
+      "setup_record_count": 2,
+      "scope": "Prerequisite/input-preflight and owned-window layout setup only; no drop or virtual-file release checks."
+    },
+    "outcome": {
+      "status": "failed",
+      "failure_category": "Attribution.Interfered=true",
+      "attribution_interfered": true,
+      "failure_phase": "after owned window layout/moves, before source drag mousedown",
+      "owned_window_moves_occurred": true,
+      "activation_click": "possible; not excluded by this record",
+      "source_drag_mousedown_reached": false,
+      "ole_drop_or_virtual_file_release_acceptance": false,
+      "input_scope": "Some OS window moves and possible activation click occurred. This is not a zero-input attempt. The attribution flag is not proof that a human interfered, and is not itself a product OLE failure."
+    },
+    "cleanup": {
+      "original_overall_status": "passed",
+      "controller_exit_code": 0,
+      "app_exit_code": 0,
+      "forced_candidate": false,
+      "remaining_owned_app_processes": 0,
+      "startup_unchanged": true,
+      "owned_explorer_close_requested": true,
+      "owned_explorer_window_absence_confirmed": true,
+      "sftp_termination_requested": true,
+      "sftp_exit": {
+        "code": null,
+        "signal": "SIGTERM",
+        "exit_event_observed": true
+      },
+      "workspaces_removed": true,
+      "emergency_source_release_count": 0,
+      "unapproved_confirmation_count": 0,
+      "scope": "Second-run cleanup passed with signal-only child exit observed. It does not retroactively change first-run cleanup failure."
+    }
+  },
+  "additional_diagnostic": {
+    "pr": 128,
+    "pr_url": "https://github.com/jiunbae/itda/pull/128",
+    "scope": "Diagnostic-only harness change; not a product fix or OLE acceptance result.",
+    "reviewed_source_commit_prefix": "997",
+    "merge_commit_prefix": "5a8f",
+    "merge_status": "merged as reported by the release owner",
+    "independent_code_review_references": [
+      "176",
+      "178"
+    ],
+    "independent_code_review_status": "approved",
+    "ci_runs": [
+      40066870388,
+      40066870445
+    ],
+    "reported_total_green_checks": 4,
+    "ci_status": "all four checks passed as reported by the release owner",
+    "native_runtime": {
+      "run_id": 40067869121,
+      "run_url": "https://github.com/jiunbae/itda/actions/runs/40067869121",
+      "expected_source_prefix": "5a8f",
+      "status": "failed with Unexpected end of JSON input before source Drag command/SendInput; no OLE acceptance",
+      "result_available": true,
+      "acceptance_credit": false,
+      "evidence_key": "third_failed_run"
+    },
+    "actual_runtime_source_commit": "5a8f454e719d6df016c99c6a967453dbda9081cd"
+  },
+  "previous_local_diagnostic": {
+    "local_commit": "32ec0c4eca63ba44634eb059660be9887f1fc11f",
+    "status": "local diagnostic source only",
+    "native_runtime_executed": false
+  },
+  "third_failed_run": {
+    "run_id": 40067869121,
+    "run_url": "https://github.com/jiunbae/itda/actions/runs/40067869121",
+    "run_attempt": 1,
+    "source_and_harness": {
+      "checkout": "5a8f454e719d6df016c99c6a967453dbda9081cd",
+      "expected_source_prefix": "5a8f",
+      "actual_checkout_matches_expected_prefix": true,
+      "candidate_binary_sha256": "e87d9db42a19c8065b1b1945153a7214cfd8166738bc9c85473a6739f9773894",
+      "controller_driver_source_sha256": "573c9e5a3ce6a7fb1c180b7759871dd11fbe350141a7ff0ea6f0bdb58b7d6b3a",
+      "native_driver_source_sha256": "f5ccdfa68e54f42298745724ac1ec3a789cbde5030fa894d93d746bdc890d942",
+      "sftp_fixture_source_sha256": "36e07cb00361a01607b6a754dc0826204007abecbc9b941698578081403c2eba",
+      "build": "same-job Windows non-release CI candidate, not a public-executable acceptance result"
+    },
+    "checks": [],
+    "layout_record_present": false,
+    "viewport_record_present": false,
+    "candidate_setup": {
+      "private_candidate_sftp_list_reached": true,
+      "sftp_audit_event_types": [
+        "list"
+      ],
+      "sftp_list_event_count": 1,
+      "scope": "SFTP listing only. Owned window creation/layout may already have occurred, but no complete layout/viewport receipt or layout assertion was produced."
+    },
+    "outcome": {
+      "status": "failed",
+      "failure_category": "Unexpected end of JSON input",
+      "failure_phase": "layout receipt JSON read before source Drag command or its SendInput stage",
+      "source_drag_command_dispatched": false,
+      "drag_send_input_reached": false,
+      "owned_window_creation_or_layout_may_have_occurred": true,
+      "ole_drop_or_virtual_file_release_acceptance": false,
+      "product_failure_established": false,
+      "scope": "A harness receipt-read failure. Absence of a complete layout record does not prove that no native setup happened. No input, OLE or product acceptance is granted."
+    },
+    "cleanup": {
+      "original_overall_status": "passed",
+      "controller_exit_code": 0,
+      "app_exit_code": 0,
+      "forced_candidate": false,
+      "remaining_owned_app_processes": 0,
+      "startup_unchanged": true,
+      "owned_explorer_state": "closed",
+      "owned_explorer_window_absence_confirmed": true,
+      "sftp_termination_requested": true,
+      "sftp_exit": {
+        "code": null,
+        "signal": "SIGTERM",
+        "exit_event_observed": true
+      },
+      "workspaces_removed": true,
+      "emergency_source_release_count": 0,
+      "unapproved_confirmation_count": 0,
+      "scope": "Third-run cleanup passed. This does not change the first-run cleanup failure or constitute OLE acceptance."
+    },
+    "receipt_publication_inference": {
+      "status": "source inference; follow-up under review, not a corrected runtime result",
+      "summary": "Direct PowerShell Set-Content publication of layout.json can expose an empty or partial file between Node existence detection and JSON read. This is a suspected harness receipt-publication race, not a demonstrated product defect.",
+      "follow_up_review_reference": "17a",
+      "follow_up_scope": "Separate root-owned atomic receipt publication work; no fixed runtime proof is included."
+    }
+  }
+}
