@@ -1066,6 +1066,9 @@ fn run(cfg: &crate::tunnel::SshCfg, command: &str, input: &[u8]) -> io::Result<S
         if stderr.contains("Checksum verification failed") {
             return Err(error("내려받은 Itda 파일이 릴리스와 다릅니다 (체크섬 불일치). 잠시 뒤 다시 시도하세요"));
         }
+        if stderr.contains("itda-running-owner-unavailable") {
+            return Err(error("원격 Itda의 실행 계정을 확인하지 못했습니다. 원격 기기의 Itda 상태와 SSH 로그인 계정을 확인한 뒤 다시 시도해 주세요. 앱과 설정은 변경하지 않았습니다"));
+        }
         return Err(crate::tunnel::classify(&stderr));
     }
     write?;
@@ -1098,7 +1101,7 @@ $ErrorActionPreference='Stop'
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $owned=@(Get-CimInstance Win32_Process -Filter "Name='itda.exe'" | Where-Object {
  $owner=Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop
- if($owner.ReturnValue -ne 0 -or [string]::IsNullOrWhiteSpace($owner.Sid)){throw 'Could not determine running Itda ownership; remote app and settings were not changed'}
+ if($owner.ReturnValue -ne 0 -or [string]::IsNullOrWhiteSpace($owner.Sid)){throw 'itda-running-owner-unavailable'}
  $owner.Sid -eq $sid
 })
 $running=$owned.Count -gt 0
@@ -1432,7 +1435,7 @@ function Invoke-CimMethod {
             let output = result.unwrap();
             if denied {
                 assert!(!output.status.success(), "unreadable ownership must keep the existing fail-closed behavior");
-                assert!(String::from_utf8_lossy(&output.stderr).contains("Could not determine running Itda ownership"));
+                assert!(String::from_utf8_lossy(&output.stderr).contains("itda-running-owner-unavailable"));
             } else {
                 assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
                 let text = String::from_utf8(output.stdout).unwrap();
