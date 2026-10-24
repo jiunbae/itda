@@ -37,7 +37,7 @@
 
 ## 🍏 Mac용 Itda
 
-[릴리스](https://github.com/jiunbae/itda/releases/latest)에서 `Itda-macos-universal.zip`을 받으세요. 현재 배포본은 macOS 12.3 이상에서 사용하세요. Apple 실리콘과 Intel을 지원하며, macOS 12.0–12.2 호환성은 보완 중입니다.
+[릴리스](https://github.com/jiunbae/itda/releases/latest)에서 `Itda-macos-universal.zip`을 받으세요. 현재 배포본은 macOS 12.3 이상에서 사용하세요. Apple 실리콘과 Intel을 지원하며, macOS 12.0–12.2 실기기 검증은 아직 완료되지 않았습니다.
 
 1. 압축을 풀고 **Itda.app**을 응용 프로그램 폴더로 옮깁니다.
 2. **Itda.app**을 엽니다. 공식 Mac 릴리스는 Developer ID 서명과 Apple 공증을 거칩니다.
