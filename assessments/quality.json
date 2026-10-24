@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "assessment_id": "itda-quality-2026-10-23",
-  "status": "iteration-7-native-windows-managed-quit",
+  "status": "iteration-8-release-1.0.3-native-acceptance-pending",
   "goal": "Every persona scores at least 9/10 on verified core journeys, with no unresolved P1/P2 task blockers.",
   "baseline": {
     "commit": "521202025e7c5a984f089c1d1df77e846f63fd33",
@@ -747,6 +747,26 @@
         "Production app remains1.0.2; release and installed behavior pending; all verified persona scores remain null"
       ],
       "acceptance_note": "Windows managed-copy quit now has native candidate evidence. Historical offline user-PC prerequisite is no longer the blocker for this component. Every persona score stays null; full core journeys, production installation and the listed platform/input/native-export gaps remain unverified."
+    },
+    {
+      "id": 8,
+      "status": "in-progress",
+      "changes": [
+        {
+          "release": "1.0.3",
+          "source_commit": "d4fcb9afcfb191299923d5bca2e151e7700752ee",
+          "status": "published; final artifacts independently verified; local Mac reinstall and network file-window open + native close-button smoke passed",
+          "evidence": "assessments/evidence/release-1.0.3-checkpoint.json"
+        }
+      ],
+      "verification_gaps": [
+        "Mac actual managed-copy Wait/Stop choices: bounded user confirmation pending after Tacto policy refusal before dispatch; no test acceptance credit.",
+        "Mac Dock/AppleEvent/logout, Finder promise queue, updater/remote-installer/Force runtime acceptance remain unverified.",
+        "Windows user-PC Explorer physical OLE drag and 150% layout remain unverified; hosted native managed-copy proof does not replace them.",
+        "macOS 12.0–12.2 runtime remains unverified; 12.3+ recommended.",
+        "All seven verified persona scores remain null; 28 complete core journeys have not been certified at 9/10."
+      ],
+      "acceptance_note": "Supersedes earlier production-1.0.2/release-pending checkpoint notes only. Earlier native receipts remain historical and retain their exact candidate scope. Deployment and local smoke do not certify full persona journeys; all verified scores remain null."
     }
   ]
 }

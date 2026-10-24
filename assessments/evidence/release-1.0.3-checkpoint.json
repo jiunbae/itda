@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "component": "1.0.3-public-release-and-local-install",
+  "recorded_at": "2026-10-24T02:38:24.155308+00:00",
+  "status": "release-and-local-smoke-verified; full-quality-goal-incomplete",
+  "source_commit": "d4fcb9afcfb191299923d5bca2e151e7700752ee",
+  "tag": "v1.0.3",
+  "release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.3",
+  "published_at": "2026-10-24T02:37:04Z",
+  "final_ci": {
+    "run_id": 40052809299,
+    "event": "push",
+    "branch": "main",
+    "head_sha": "d4fcb9afcfb191299923d5bca2e151e7700752ee",
+    "checks": {
+      "macos": "success",
+      "build": "success",
+      "windows-file-ui": "success"
+    }
+  },
+  "independent_review": {
+    "peer": "quality-mode-review",
+    "request_id": "req_18e155a995ca1d48_154",
+    "decision": "APPROVE",
+    "scope": "final main artifacts independently downloaded; binary metadata/signature/notary/hash/source association; not native journey acceptance"
+  },
+  "public_download": {
+    "checked_at": "2026-10-24T02:37:20.844480+00:00",
+    "tag": "v1.0.3",
+    "release": "https://github.com/jiunbae/itda/releases/tag/v1.0.3",
+    "assets": [
+      {
+        "name": "Itda-macos-universal.zip",
+        "sha256": "ff638a8972f114871e2a5cf9390d0a84ceefc43b04feeff64e56a36dd177060e",
+        "bytes": 8762363,
+        "public_download_matches": true
+      },
+      {
+        "name": "itda.exe",
+        "sha256": "286ca0b4b894c09a6145d48048933472ca37c13c18500c9c70f02686048c958b",
+        "bytes": 7518208,
+        "public_download_matches": true
+      },
+      {
+        "name": "SHA256SUMS.txt",
+        "sha256": "dc52bc942951bbea98527c6087f94be5e52b589ad46a9aaa494e65eca22ebc91",
+        "bytes": 166,
+        "public_download_matches": true
+      }
+    ]
+  },
+  "mac_artifact": {
+    "bundle_id": "dev.jiun.itda",
+    "version": "1.0.3",
+    "architectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "team_id": "728FW73BS8",
+    "developer_id": true,
+    "hardened_runtime": true,
+    "codesign_deep_strict": "pass",
+    "gatekeeper_notarized": "pass",
+    "stapled_ticket": "pass",
+    "plist_minimum_system_version": "12.0",
+    "screen_capture_kit_weak_link_both_slices": true,
+    "older_os_runtime_acceptance": false
+  },
+  "windows_artifact": {
+    "architecture": "AMD64 PE32+ GUI",
+    "file_version": "1.0.3",
+    "product_version": "1.0.3",
+    "fixed_file_version": "1.0.3.0",
+    "icon_manifest_version_resources": "pass",
+    "dpi": "PerMonitorV2",
+    "execution_level": "asInvoker",
+    "authenticode_signed": false,
+    "note": "Unsigned like 1.0.2; this checkpoint makes no signing or physical Windows acceptance claim."
+  },
+  "local_mac_install": {
+    "version_before": "1.0.2",
+    "version_after": "1.0.3",
+    "path": "/Applications/Itda.app",
+    "fresh_process_from_installed_path": true,
+    "installed_executable_sha256": "231285c44c72a582f12c1aeeca9035aabca96e1429e9c5874fb41fbbf1e7757d",
+    "graceful_old_app_exit": true,
+    "forced_quit": false,
+    "designated_requirement_unchanged": true,
+    "permission_status_unchanged": true,
+    "permission_writes": false,
+    "hosts_accounts_settings_semantically_unchanged": true,
+    "main_window_visible": true,
+    "separate_network_file_window_opened": true,
+    "native_close_button_closed_file_window_only": true,
+    "main_window_preserved": true,
+    "quit_menu_inspected_only": true,
+    "physical_cmd_q_acceptance": false,
+    "close_menu_attempt": "Background native Close Window attempt timed out; observed two windows, foregrounded the network window, closed its native close button and independently observed the main window alone. No close-menu success claim."
+  },
+  "verification_gaps": [
+    "Mac actual managed-copy Wait/Stop choices: bounded user confirmation pending after Tacto policy refusal before dispatch; no test acceptance credit.",
+    "Mac Dock/AppleEvent/logout, Finder promise queue, updater/remote-installer/Force runtime acceptance remain unverified.",
+    "Windows user-PC Explorer physical OLE drag and 150% layout remain unverified; hosted native managed-copy proof does not replace them.",
+    "macOS 12.0–12.2 runtime remains unverified; 12.3+ recommended.",
+    "All seven verified persona scores remain null; 28 complete core journeys have not been certified at 9/10."
+  ],
+  "goal_achieved": false,
+  "privacy": "No profile values, fingerprints, account/host names, screenshots, credentials or raw accessibility trees are included.",
+  "selected_recent_prs": [
+    {
+      "pr": 116,
+      "scope": "isolated Mac native fixture and partial quit evidence; no native Wait/Stop acceptance"
+    },
+    {
+      "pr": 117,
+      "scope": "1.0.3 version and accurate older-macOS verification wording"
+    },
+    {
+      "pr": 118,
+      "scope": "Windows executable version resources and actual built-file CI assertion"
+    },
+    {
+      "pr": 119,
+      "scope": "same-user running portable app version probe and newer-version refusal; ownership and output validation"
+    }
+  ],
+  "selected_recent_prs_scope": "Selected recent PRs relevant to this checkpoint, not the complete release contents. Full release range: v1.0.2..v1.0.3."
+}
