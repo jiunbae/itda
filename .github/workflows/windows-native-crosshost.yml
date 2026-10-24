@@ -6,6 +6,7 @@ on:
       - '.github/workflows/windows-native-crosshost.yml'
       - 'scripts/windows-native-crosshost-*'
       - 'scripts/fixtures/windows-crosshost-driver.cs'
+      - 'scripts/fixtures/windows-crosshost-receipts.test.mjs'
       - 'scripts/fixtures/confined-sftp-crosshost*'
       - 'scripts/fixtures/read-only-sftp-drop.py'
       - 'scripts/fixtures/requirements-sftp.txt'
@@ -46,6 +47,8 @@ jobs:
         run: |
           node --check scripts/windows-native-crosshost-ci-e2e.mjs
           if ($LASTEXITCODE) { throw 'Node syntax failed' }
+          node --test scripts/fixtures/windows-crosshost-receipts.test.mjs
+          if ($LASTEXITCODE) { throw 'Pure cleanup/receipt regressions failed' }
           python -m py_compile scripts/fixtures/confined-sftp-crosshost.py scripts/fixtures/confined-sftp-crosshost-test.py
           if ($LASTEXITCODE) { throw 'Python syntax failed' }
           python scripts/fixtures/confined-sftp-crosshost-test.py
