@@ -58,7 +58,7 @@ try{
  await f.evaluate(()=>{
   window.nativeDragEvents=[];window.nativeDragRequests=[];window.nativeDragCancelRequests=[];
   const gesture=v=>typeof v==='string'&&/^[a-f0-9]{32}$/.test(v)?v:null;
-  const trace=v=>!v?null:{phase:['early_cancel','ole_returned','failed'].includes(v.phase)?v.phase:'invalid',entered_ole:typeof v.entered_ole==='boolean'?v.entered_ole:null,query_count:Number.isInteger(v.query_count)&&v.query_count>=0&&v.query_count<=10000?v.query_count:null,escape_seen:typeof v.escape_seen==='boolean'?v.escape_seen:null,cancelled:typeof v.cancelled==='boolean'?v.cancelled:null,focus_verified:typeof v.focus_verified==='boolean'?v.focus_verified:null};
+  const trace=v=>!v?null:{phase:['early_cancel','ole_returned','failed','rejected'].includes(v.phase)?v.phase:'invalid',entered_ole:typeof v.entered_ole==='boolean'?v.entered_ole:null,query_count:Number.isInteger(v.query_count)&&v.query_count>=0&&v.query_count<=10000?v.query_count:null,escape_seen:typeof v.escape_seen==='boolean'?v.escape_seen:null,cancelled:typeof v.cancelled==='boolean'?v.cancelled:null,focus_verified:typeof v.focus_verified==='boolean'?v.focus_verified:null,ole_drop_committed:typeof v.ole_drop_committed==='boolean'?v.ole_drop_committed:null,cancelled_after_commit:typeof v.cancelled_after_commit==='boolean'?v.cancelled_after_commit:null};
   const recv=ItdaFiles.message;ItdaFiles.message=function(m){if(m.type==='files_native_drag_end')nativeDragEvents.push({dropped:m.dropped,error:m.error,gesture:gesture(m.gesture),trace:trace(m.trace),unix_ms:Date.now()});return recv.call(this,m);};
   const originalSend=window.send;window.send=function(cmd,data){if(cmd==='files_native_drag')nativeDragRequests.push({unix_ms:Date.now(),count:data.items?.length,gesture:gesture(data.gesture)});if(cmd==='files_native_drag_cancel')nativeDragCancelRequests.push({unix_ms:Date.now(),gesture:gesture(data.gesture)});return originalSend(cmd,data);};
  });
@@ -88,6 +88,7 @@ try{
   assert(observation.events.length===1&&/^[a-f0-9]{32}$/.test(request.gesture||'')&&ended.gesture===request.gesture,'Native outcome did not match this one gesture');
   assert(trace?.phase==='ole_returned'&&trace.entered_ole===true&&trace.focus_verified===true&&Number.isInteger(trace.query_count)&&trace.query_count>0&&trace.query_count<=10000,'Actual focused OLE loop/query was not observed');
   assert(trace.escape_seen===(scenario==='cancel')&&trace.cancelled===(scenario==='cancel'),'Native Escape/cancellation state did not match this scenario');
+  assert(trace.ole_drop_committed===(scenario==='positive')&&trace.cancelled_after_commit===false,'OLE committed a cancelled drop or reported a late cancellation');
   if(scenario!=='positive'){
    const end=Date.now()+3000;do{assert(destination().length===0,'Negative control created files');await sleep(100);}while(Date.now()<end);
   }else{

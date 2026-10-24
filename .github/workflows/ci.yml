@@ -116,6 +116,8 @@ jobs:
           SCREENSHOT_DIR: test-artifacts/file-ui
       - name: Tabs on different devices
         run: node scripts/files-tabs-e2e.mjs
+      - name: Native file drag frontend lifecycle (handoff, Escape, stale terminals)
+        run: node scripts/files-native-drag-e2e.mjs
       - name: Background transfer UI (closed-window state, recovery and ordering)
         run: node scripts/files-background-e2e.mjs
       - name: Quit and update guard while transfers run
