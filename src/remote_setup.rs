@@ -1073,20 +1073,69 @@ fn run(cfg: &crate::tunnel::SshCfg, command: &str, input: &[u8]) -> io::Result<S
 }
 const MAC_PROBE: &str = r#"set -e
 [ "$(uname -s)" = Darwin ] || { echo 'itda-unsupported-platform'; exit 0; }
-v=""; for a in /Applications/Itda.app "$HOME/Applications/Itda.app"; do
- if [ -d "$a" ]; then v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$a/Contents/Info.plist" 2>/dev/null || true); break; fi
+version=""; versions=""
+read_version() {
+ local info="$1/Contents/Info.plist" v
+ [ -f "$info" ] || return 0
+ [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info" 2>/dev/null || true)" = dev.jiun.itda ] || return 0
+ v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info" 2>/dev/null || true)
+ # Only version text goes into JSON; never emit a process path or arbitrary plist text.
+ case "$v" in ""|*[!0-9A-Za-z.+-]*) return 0;; esac
+ [ -n "$version" ] || version="$v"
+ versions="${versions}${versions:+,}\"$v\""
+}
+for a in /Applications/Itda.app "$HOME/Applications/Itda.app"; do read_version "$a"; done
+r=false
+for pid in $(pgrep -u "$(id -u)" -x itda || true); do
+ r=true
+ exe=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+ case "$exe" in */Contents/MacOS/itda) read_version "${exe%/Contents/MacOS/itda}";; esac
 done
-r=false; pgrep -u "$(id -u)" -x itda >/dev/null 2>&1 && r=true
-printf '{"platform":"mac","version":"%s","running":%s}\n' "$v" "$r"
+printf '{"platform":"mac","version":"%s","versions":[%s],"running":%s}\n' "$version" "$versions" "$r"
 "#;
 const WIN_PROBE: &str = r#"
 $ErrorActionPreference='Stop'
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$running=@(Get-CimInstance Win32_Process -Filter "Name='itda.exe'" | Where-Object {(Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid).Sid -eq $sid}).Count -gt 0
+$owned=@(Get-CimInstance Win32_Process -Filter "Name='itda.exe'" | Where-Object {
+ # Other users' processes can deny this query. Only positively identified current-user
+ # processes belong to this per-user installation; do not block it on a foreign session.
+ try {
+  $owner=Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop
+  $owner.ReturnValue -eq 0 -and $owner.Sid -eq $sid
+ } catch {$false}
+})
+$running=$owned.Count -gt 0
 $exe=Join-Path $env:LOCALAPPDATA 'Programs\Itda\itda.exe'
-$version='';if(Test-Path -LiteralPath $exe){$version=[string](Get-Item -LiteralPath $exe).VersionInfo.ProductVersion}
-@{platform='windows';version=$version;running=$running}|ConvertTo-Json -Compress
+$paths=@($exe)+@($owned | ForEach-Object {$_.ExecutablePath} | Where-Object {$_})
+$version=''
+$versions=@(foreach($path in ($paths | Select-Object -Unique)) {
+ if(Test-Path -LiteralPath $path -PathType Leaf) {
+  $v=[string](Get-Item -LiteralPath $path -ErrorAction Stop).VersionInfo.ProductVersion
+  if($path -eq $exe){$version=$v}
+  if(-not [string]::IsNullOrWhiteSpace($v)){$v}
+ }
+})
+@{platform='windows';version=$version;versions=$versions;running=$running}|ConvertTo-Json -Compress
 "#;
+/// A newer portable app may be running outside the installer's destination. Keep the
+/// highest observed version so both preparation and the final pre-install recheck refuse
+/// a downgrade. Legacy probe replies without candidates still parse the same way.
+fn parse_probe(line: &str) -> Option<Remote> {
+    #[derive(Deserialize)]
+    struct Reply {
+        #[serde(flatten)]
+        remote: Remote,
+        #[serde(default)]
+        versions: Vec<String>,
+    }
+    let Reply { mut remote, versions } = serde_json::from_str::<Reply>(line).ok()?;
+    for version in versions {
+        if crate::update::newer(&version, &remote.version) {
+            remote.version = version;
+        }
+    }
+    Some(remote)
+}
 fn probe(cfg: &crate::tunnel::SshCfg) -> io::Result<Remote> {
     match run(cfg, "/bin/bash -s", MAC_PROBE.as_bytes()) {
         Ok(out) => {
@@ -1095,7 +1144,7 @@ fn probe(cfg: &crate::tunnel::SshCfg) -> io::Result<Remote> {
             }
             if let Some(r) = out
                 .lines()
-                .find_map(|line| serde_json::from_str::<Remote>(line).ok())
+                .find_map(parse_probe)
             {
                 return Ok(r);
             }
@@ -1105,7 +1154,7 @@ fn probe(cfg: &crate::tunnel::SshCfg) -> io::Result<Remote> {
     }
     let out = run(cfg, &ps(WIN_PROBE), &[])?;
     out.lines()
-        .find_map(|line| serde_json::from_str::<Remote>(line).ok())
+        .find_map(parse_probe)
         .ok_or_else(|| {
             error("원격 설치는 macOS와 Windows를 지원합니다. SSH와 운영체제를 확인하세요")
         })
@@ -1303,10 +1352,104 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn probe_keeps_the_newest_installed_or_running_version() {
+        let remote = parse_probe(r#"{"platform":"windows","version":"1.0.2","running":true,"versions":["1.9.9","1.10.0","1.0.3",""]}"#).unwrap();
+        assert_eq!(remote.version, "1.10.0");
+        assert!(crate::update::newer(&remote.version, "1.0.3"), "a newer portable app must reach the downgrade refusal");
+        let legacy = parse_probe(r#"{"platform":"mac","version":"1.0.2","running":false}"#).unwrap();
+        assert_eq!(legacy.version, "1.0.2");
+        let unknown = parse_probe(r#"{"platform":"windows","version":"","running":false,"versions":[]}"#).unwrap();
+        assert!(unknown.version.is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_probe_finds_a_running_portable_bundle() {
+        // A plain sleep executable, not Itda's GUI: no profile, clipboard, TCC or
+        // LaunchServices registration. The probe only reads plist/process metadata.
+        let root = std::env::temp_dir().join(format!("itda-portable-probe-{}", store::new_id()));
+        let app = root.join("Portable Itda.app");
+        let executable = app.join("Contents/MacOS/itda");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::copy("/bin/sleep", &executable).unwrap();
+        fs::write(app.join("Contents/Info.plist"), br#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.jiun.itda</string><key>CFBundleShortVersionString</key><string>99.98.97</string></dict></plist>"#).unwrap();
+        let mut child = std::process::Command::new(&executable).arg("30").spawn().unwrap();
+        let result = std::process::Command::new("/bin/bash").arg("-c").arg(MAC_PROBE).output();
+        // Terminate only this owned synthetic process, never a discovered Itda.
+        let _ = child.kill();
+        child.wait().unwrap();
+        fs::remove_dir_all(&root).unwrap();
+        let output = result.unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let remote = String::from_utf8(output.stdout).unwrap().lines().find_map(parse_probe).unwrap();
+        assert!(remote.running);
+        assert_eq!(remote.version, "99.98.97", "portable bundle was missed; default Apps copies must not hide it");
+        assert!(crate::update::newer(&remote.version, env!("CARGO_PKG_VERSION")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_probe_reads_portable_file_metadata_only_for_its_owner() {
+        // The process list/ownership is controlled in this child PowerShell only;
+        // ProductVersion is read from real generated PE resources, not mocked strings.
+        let fixture = r#"
+$ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
+$fixtureOwner=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$fixtureOther=if($fixtureOwner -eq 'S-1-5-18'){'S-1-5-19'}else{'S-1-5-18'}
+function New-VersionFixture($path,$type,$version) {
+ [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path))|Out-Null
+ # Windows PowerShell compiles an .exe with an entry point; this generated fixture is
+ # never executed. Only its real version resource is read below.
+ $source='using System.Reflection; [assembly:AssemblyFileVersion("'+$version+'.0")] [assembly:AssemblyInformationalVersion("'+$version+'")] public class '+$type+' { public static void Main() {} }'
+ Add-Type -TypeDefinition $source -OutputAssembly $path -OutputType ConsoleApplication
+}
+$installed=Join-Path $env:LOCALAPPDATA 'Programs\Itda\itda.exe'
+$portable=Join-Path $env:LOCALAPPDATA 'Portable folder\itda.exe'
+$foreign=Join-Path $env:LOCALAPPDATA 'Other user\itda.exe'
+New-VersionFixture $installed 'InstalledFixture' '1.0.2'
+New-VersionFixture $portable 'PortableFixture' '9.9.9'
+New-VersionFixture $foreign 'OtherFixture' '99.0.0'
+function Get-CimInstance {
+ param($ClassName,$Filter)
+ $rows=@([pscustomobject]@{ExecutablePath=$portable;FixtureSid=$fixtureOwner},
+   [pscustomobject]@{ExecutablePath=$foreign;FixtureSid=$fixtureOther})
+ if($fixtureDeny){$rows+=@([pscustomobject]@{ExecutablePath=$foreign;FixtureSid='denied'},[pscustomobject]@{ExecutablePath=$foreign;FixtureSid='exited'})}
+ $rows
+}
+function Invoke-CimMethod {
+ param($InputObject,$MethodName)
+ if($InputObject.FixtureSid -eq 'denied'){return @{ReturnValue=2;Sid=$fixtureOwner}}
+ if($InputObject.FixtureSid -eq 'exited'){throw 'fixture process exited'}
+ @{ReturnValue=0;Sid=$InputObject.FixtureSid}
+}
+"#;
+        for denied in [false, true] {
+            let root = std::env::temp_dir().join(format!("itda-portable-probe-{}", store::new_id()));
+            fs::create_dir_all(&root).unwrap();
+            let script = format!("$fixtureDeny=${denied}\n{fixture}\n{WIN_PROBE}");
+            let encoded = ps(&script);
+            let result = std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded.split_whitespace().last().unwrap()])
+                .env("LOCALAPPDATA", &root)
+                .output();
+            fs::remove_dir_all(&root).unwrap();
+            let output = result.unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            let text = String::from_utf8(output.stdout).unwrap();
+            let remote = text.lines().find_map(parse_probe).unwrap();
+            assert!(remote.running);
+            assert_eq!(remote.version, "9.9.9", "owned portable version must win, foreign/denied/exited processes must not");
+            assert!(crate::update::newer(&remote.version, env!("CARGO_PKG_VERSION")));
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_bootstrap_is_valid_powershell_without_executing_it() {
-        for command in [win_install("0.9.99", true, true), ps(WIN_VAULT_PROBE)] {
+        for command in [win_install("0.9.99", true, true), ps(WIN_VAULT_PROBE), ps(WIN_PROBE)] {
             let encoded = command.split_whitespace().last().unwrap();
             let mut child=std::process::Command::new("powershell.exe").args(["-NoProfile","-NonInteractive","-Command",r#"$s=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd()));$t=$null;$e=$null;[Management.Automation.Language.Parser]::ParseInput($s,[ref]$t,[ref]$e)|Out-Null;if($e.Count){$e|ForEach-Object {[Console]::Error.WriteLine($_.Message)};exit 1}"#]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
             child
