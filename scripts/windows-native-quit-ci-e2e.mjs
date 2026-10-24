@@ -12,7 +12,7 @@ const repo=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const scenario=process.env.ITDA_QUIT_SCENARIO;
 if(!['wait','stop'].includes(scenario))throw Error('ITDA_QUIT_SCENARIO must be wait or stop');
 const artifact=path.join(repo,'test-artifacts/native-quit-'+scenario),output=path.join(artifact,'result.json');fs.mkdirSync(artifact,{recursive:true});
-const report={status:'failed',scenario,scope:'Native Windows CI managed SFTP copy and owned main-window messages only; no real shutdown, physical input, Explorer OLE, user-machine, Mac or persona-score acceptance',checks:[],cleanup:{status:'not-started'}};
+const report={status:'failed',scenario,scope:'Native Windows CI managed SFTP copy using in-app Ctrl+C/Ctrl+V between tabs and owned main-window messages; no real shutdown, physical input, Explorer OLE, user-machine, Mac or persona-score acceptance',checks:[],cleanup:{status:'not-started'}};
 let root,child,identity,browser,ended,interrupted,originalStartup,exited=false,server,serverRoot,serverConfig;
 for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{interrupted=signal;});
 const assert=(ok,message)=>{if(!ok)throw Error(message);};
@@ -93,7 +93,7 @@ try{
  }else{
   await wait(()=>audit().some(e=>e.event==='read-aborted'&&e.offset===held.offset&&e.reason==='transport_closed'),'Stop quit did not abort the held SSH transport',10000);
   assert(!audit().some(e=>e.event==='read-bytes'&&e.path==='/payload.bin'&&e.offset>=held.offset)&&destination().length===0,'Stop quit advanced source reads or left destination/staging files');
-  report.checks.push({check:'main close stops held real copy; exit observed with aborted transport, no later source bytes and empty destination/staging',result:'PASS'});
+  report.checks.push({check:'main close stops held real copy; empty destination/staging after exit is the cleanup discriminator',result:'PASS',supporting_observations:'Held SSH transport aborted and no post-barrier source bytes; transport closure alone would also follow abrupt exit'});
  }
  assert(hash(path.join(serverRoot,'files/payload.bin'))===payload.sha256,'Generated source changed');report.checks.push({check:'generated source preserved',result:'PASS'});report.status='passed';
 }catch(error){report.error=serverConfig?.password?error.message.replaceAll(serverConfig.password,'[fixture password redacted]'):error.message;process.exitCode=1;}
