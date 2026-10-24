@@ -148,5 +148,6 @@
     "No active transfer, physical input, Explorer OLE, actual OS shutdown/logout, user-PC or Mac quit acceptance",
     "No production deployment or verified persona score"
   ],
-  "source_text_hash_interpretation": "Receipt driver/control hashes are raw Windows checkout bytes (CRLF). Independent review13f confirmed they match the committed files after LF-to-CRLF conversion; they are not normalized git-blob hashes."
+  "source_text_hash_interpretation": "Receipt driver/control hashes are raw Windows checkout bytes (CRLF). Independent review13f confirmed they match the committed files after LF-to-CRLF conversion; they are not normalized git-blob hashes.",
+  "source_revision_for_recorded_script_hashes": "64d22bcd4fffab24e3723cdfc0f7eb548d7b3bc4 (historical P1 run); not the later guard-integration driver whose scope text changed"
 }
