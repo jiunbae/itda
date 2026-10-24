@@ -18,7 +18,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 let root,child,identity,exited=false,browser,server,serverExit,serverRoot,config,controller,controllerExit,controllerState,startup,interrupted,childExit,launchError,controllerQuiesced=true;
 for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{interrupted=signal;});
 const ps=(file,args=[])=>execFileSync('pwsh',['-NoProfile','-NonInteractive','-File',path.join(repo,'scripts',file),...args],{encoding:'utf8',timeout:30000});
-const read=p=>JSON.parse(fs.readFileSync(p,'utf8').replace(/^\uFEFF/,''));
+const read=p=>{const bytes=fs.readFileSync(p);try{return JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/,''));}catch{throw Error(`Invalid JSON in ${path.basename(p)} (${bytes.length} bytes)`);}};
 const control=op=>JSON.parse(ps('windows-native-idle-control.ps1',['-Operation',op,'-Root',root,'-AppPid',String(exited?0:child?.pid||0),'-CreationTicks',identity?.creation_ticks||'','-Hwnd',identity?.hwnd||'0','-DebugPort',String(report.debug_port||0)]).replace(/^\uFEFF/,''));
 async function wait(test,message,ms=30000,observeInterrupt=true){const end=Date.now()+ms;while(Date.now()<end){assert(!observeInterrupt||!interrupted,'Interrupted '+interrupted);if(await test())return;await sleep(100);}throw Error(message);}
 function audit(){const file=serverRoot&&path.join(serverRoot,'audit.jsonl');if(!file||!fs.existsSync(file))return [];const t=fs.readFileSync(file,'utf8');return t.slice(0,t.lastIndexOf('\n')+1).split('\n').filter(Boolean).map(JSON.parse);}
