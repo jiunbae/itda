@@ -15,7 +15,7 @@
   if(m.app_path!==undefined)$('path').textContent=m.app_path||'';
   if(m.state!==undefined){const s=$('state');s.textContent=m.state||'';s.classList.toggle('error',!!m.error);}
   if(m.done){$('done-text').textContent=m.done;$('done').hidden=false;}
-  // Not granted after a while: open the "on but doesn't take" help with its reset button.
+  // Not granted after a while: show manual re-registration advice for this app.
   if(m.stale!==undefined)$('stale').open=!!m.stale;
  }};
  const app=$('app');
