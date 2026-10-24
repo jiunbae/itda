@@ -27,7 +27,6 @@
   },
   "observations": {
     "idle": {
-      "pid": 15323,
       "menu_path": [
         "Itda Native Quit",
         "Itda 종료"
@@ -37,7 +36,6 @@
       "tacto_result": "target_not_found during post-action observation because candidate exited; independently verified process exit0"
     },
     "held_copy": {
-      "candidate_pid": 19786,
       "source_bytes": 4194304,
       "barrier_offset": 2097152,
       "staging_bytes": 2097152,
