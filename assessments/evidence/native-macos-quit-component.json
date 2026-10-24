@@ -59,7 +59,8 @@
     "Initial menu path Itda failed not_started; actual private bundle display name Itda Native Quit verified via menu-state.",
     "Invalid first flow schema refused before action; corrected explicit per-step contract.",
     "Go-folder route was dispatched but Tacto has no typed host commit evidence for custom Itda UI; observed resulting dialog and canonical path independently; did not repeat uncertain action.",
-    "Native-copy confirmation was dispatched; actual SFTP audit and staging independently proved transfer; no typed host commit evidence claimed."
+    "Native-copy confirmation was dispatched; actual SFTP audit and staging independently proved transfer; no typed host commit evidence claimed.",
+    "After cleanup, source inspection identified a deterministic path-spelling mismatch in start(): Swift reported /var/folders while Python Path.resolve expected /private/var/folders for the same executable. The inspector already verified bundle path internally; future driver compares file identity with os.path.samefile. The original assertion emitted no phase, so do not claim exact failed-assert tracing."
   ],
   "cleanup": {
     "forced_candidate": false,
@@ -79,7 +80,7 @@
     "Initial native local navigation briefly displayed home-directory filenames; no user files edited, no such AX tree retained in this receipt.",
     "General clipboard contents were never read; only changeCount metadata. Unique test pasteboard used for native copy/paste.",
     "Raw scenario label wait names profile allocation only; final complete file followed manual fixture release plus idle menu quit, not the Wait button.",
-    "The failed launch-readiness assertions were driver prerequisites, followed by independently verified correct PID/path/bundle/window; no product crash."
+    "Driver launch assertions failed without a phase. Subsequent correct PID/bundle/window were independently checked. Source review also found Swift /var versus Python /private/var path-spelling mismatch; no product crash or exact failed-assert trace claimed."
   ],
   "verified_persona_scores_changed": false,
   "goal_complete": false
