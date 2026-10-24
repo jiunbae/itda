@@ -238,9 +238,9 @@ fn update_install() {
     // before anything is downloaded or replaced.
     request_quit(QuitReason::Update);
 }
-fn start_update_install() {
-    let Some(r) = UPDATE.lock().unwrap().clone() else { return update_check() };
-    if UPDATING.swap(true, std::sync::atomic::Ordering::SeqCst) { return; }
+fn start_update_install(r: crate::update::Release) {
+    // go_now reserved the updater's closed admission gate under QUIT_PENDING.
+    debug_assert!(UPDATING.load(std::sync::atomic::Ordering::SeqCst));
     std::thread::spawn(move || {
         let stage = |s: &str| post(Event::Page(json!({"type": "update", "stage": s})));
         match crate::update::install(&r, &stage) {
@@ -250,16 +250,14 @@ fn start_update_install() {
                 let ids: Vec<String> = home(|m| m.sessions.keys().cloned().collect());
                 for id in ids { stop_session(&id); }
                 std::thread::sleep(std::time::Duration::from_millis(400));
+                {
+                    let mut pending = QUIT_PENDING.lock().unwrap();
+                    commit_quit_locked(&mut pending);
+                }
                 plat::quit();
             }
             Err(e) => {
-                // Coordinate the worker's rollback with permission relaunch's
-                // reservation; it must never reopen admission after that commit.
-                {
-                    let _pending = QUIT_PENDING.lock().unwrap();
-                    UPDATING.store(false, std::sync::atomic::Ordering::SeqCst);
-                    crate::files::open_admissions();
-                }
+                update_install_failed();
                 post(Event::Page(json!({"type": "update", "error": e.to_string()})));
             }
         }
@@ -442,6 +440,29 @@ enum QuitPending { Waiting(QuitReason), Stopping(QuitReason) }
 /// The pending quit and its ticket: a wait or stop reports back with the ticket it was given,
 /// and a report for one cancelled or replaced since is ignored.
 static QUIT_PENDING: Mutex<Option<(u64, QuitPending)>> = Mutex::new(None);
+/// A final quit has committed: no worker/cancel may reopen transfer admission.
+static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// All callers hold QUIT_PENDING. These are the only production admission resumes.
+fn resume_admissions_locked(pending: &Option<(u64, QuitPending)>) {
+    if !UPDATING.load(std::sync::atomic::Ordering::SeqCst)
+        && !QUITTING.load(std::sync::atomic::Ordering::SeqCst)
+        && !matches!(pending, Some((_, QuitPending::Stopping(_)))) {
+        crate::files::open_admissions();
+    }
+}
+fn commit_quit_locked(pending: &mut Option<(u64, QuitPending)>) {
+    crate::files::close_admissions();
+    QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+    *pending = None;
+}
+fn update_install_failed() {
+    let pending = QUIT_PENDING.lock().unwrap();
+    UPDATING.store(false, std::sync::atomic::Ordering::SeqCst);
+    resume_admissions_locked(&pending);
+}
+fn update_busy() {
+    post(Event::Page(json!({"type":"toast","text":"업데이트를 적용하고 있어 Itda를 종료하거나 다시 열 수 없습니다. 완료될 때까지 기다려 주세요.","err":true})));
+}
 static QUIT_TICKETS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 fn pend(p: QuitPending) -> u64 {
     let t = QUIT_TICKETS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -460,9 +481,17 @@ pub fn request_quit_later(reason: QuitReason) {
 /// Quit now if nothing runs; otherwise ask (or, for the installer, stop and wait). True
 /// when Itda is ending now (the Mac quit Apple Event is answered "cancelled" otherwise).
 pub fn request_quit(reason: QuitReason) -> bool {
+    request_quit_with(reason, go_now)
+}
+fn request_quit_with(reason: QuitReason, go: impl FnOnce(QuitReason) -> bool) -> bool {
+    if UPDATING.load(std::sync::atomic::Ordering::SeqCst) {
+        update_busy();
+        return false;
+    }
+    if QUITTING.load(std::sync::atomic::Ordering::SeqCst) { return true; }
     let n = crate::files::active_jobs();
     match quit_step(reason, n) {
-        QuitStep::Now => go_now(reason),
+        QuitStep::Now => go(reason),
         QuitStep::StopThenQuit => {
             crate::log!("quit: the remote installer closes Itda; stopping {n} transfer(s)");
             stop_then(reason, QUIT_INSTALLER_WAIT);
@@ -486,14 +515,57 @@ fn reason_name(r: QuitReason) -> &'static str {
 }
 /// Nothing may start from here on; if something did start since the count, ask instead.
 fn go_now(reason: QuitReason) -> bool {
-    let n = crate::files::close_admissions();
-    if n > 0 {
-        crate::files::open_admissions();
-        if reason == QuitReason::Configuration { stop_then(reason, QUIT_INSTALLER_WAIT) } else { ask_quit(reason, n, false) }
+    let release = if reason == QuitReason::Update { UPDATE.lock().unwrap().clone() } else { None };
+    go_now_target(reason, release, update_check, start_update_install, plat::quit)
+}
+fn go_now_target<T>(reason: QuitReason, release: Option<T>, check: impl FnOnce(), install: impl FnOnce(T), quit: impl FnOnce()) -> bool {
+    if reason == QuitReason::Update && release.is_none() {
+        // The version can disappear while a transfer wait is draining. Do not
+        // reserve UPDATING without a concrete release or strand its Cancel bar.
+        let cancelled = {
+            let mut pending = QUIT_PENDING.lock().unwrap();
+            if UPDATING.load(std::sync::atomic::Ordering::SeqCst) { drop(pending); update_busy(); return false; }
+            if QUITTING.load(std::sync::atomic::Ordering::SeqCst) { return true; }
+            let own_wait = matches!(*pending, Some((_, QuitPending::Waiting(QuitReason::Update))));
+            let own_stop = matches!(*pending, Some((_, QuitPending::Stopping(QuitReason::Update))));
+            if own_wait || own_stop {
+                let was_open = crate::files::accepting();
+                *pending = None;
+                if was_open || own_stop { resume_admissions_locked(&pending); }
+            }
+            own_wait || own_stop
+        };
+        if cancelled { post(Event::Page(json!({"type":"quit_pending","count":0}))); }
+        check();
         return false;
     }
-    *QUIT_PENDING.lock().unwrap() = None;
-    if reason == QuitReason::Update { start_update_install() } else { plat::quit() }
+    go_now_with(reason, || { if let Some(release) = release { install(release); } }, quit)
+}
+fn go_now_with(reason: QuitReason, install: impl FnOnce(), quit: impl FnOnce()) -> bool {
+    let count = {
+        let mut pending = QUIT_PENDING.lock().unwrap();
+        if UPDATING.load(std::sync::atomic::Ordering::SeqCst) { drop(pending); update_busy(); return false; }
+        if QUITTING.load(std::sync::atomic::Ordering::SeqCst) { return true; }
+        let count = crate::files::close_admissions();
+        if count > 0 {
+            resume_admissions_locked(&pending);
+        } else {
+            *pending = None;
+            if reason == QuitReason::Update {
+                UPDATING.store(true, std::sync::atomic::Ordering::SeqCst);
+            } else {
+                QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        count
+    };
+    if count > 0 {
+        if reason == QuitReason::Configuration { stop_then(reason, QUIT_INSTALLER_WAIT) } else { ask_quit(reason, count, false) }
+        return false;
+    }
+    // Consuming a waiting intent must also remove its now-stale Cancel button.
+    post(Event::Page(json!({"type":"quit_pending","count":0})));
+    if reason == QuitReason::Update { install(); } else { quit(); }
     true
 }
 /// Permission relaunch is never a stop/force choice. Called only on the UI thread.
@@ -505,27 +577,28 @@ pub(crate) fn permission_restart(launch: impl FnOnce() -> Result<(), String>) ->
 }
 #[cfg(target_os = "macos")]
 pub(crate) fn permission_restart_closing() -> bool {
-    QUIT_PENDING.lock().unwrap().is_some() || UPDATING.load(std::sync::atomic::Ordering::SeqCst) || !crate::files::accepting()
+    QUIT_PENDING.lock().unwrap().is_some() || QUITTING.load(std::sync::atomic::Ordering::SeqCst) || UPDATING.load(std::sync::atomic::Ordering::SeqCst) || !crate::files::accepting()
 }
 #[cfg(any(target_os = "macos", test))]
 fn permission_restart_with(launch: impl FnOnce() -> Result<(), String>, quit: impl FnOnce()) -> Result<(), String> {
-    let pending = QUIT_PENDING.lock().unwrap();
-    if pending.is_some() || UPDATING.load(std::sync::atomic::Ordering::SeqCst) || !crate::files::accepting() {
+    let mut pending = QUIT_PENDING.lock().unwrap();
+    if pending.is_some() || QUITTING.load(std::sync::atomic::Ordering::SeqCst) || UPDATING.load(std::sync::atomic::Ordering::SeqCst) || !crate::files::accepting() {
         return Err("Itda의 종료 또는 업데이트가 진행 중입니다. 끝난 뒤 권한 적용을 다시 시도해 주세요.".into());
     }
     // Job admission and this close+recount share the registry lock. A transfer
     // accepted after an earlier UI count is included; later attempts are refused.
     let count = crate::files::close_admissions();
     if count > 0 {
-        crate::files::open_admissions();
+        resume_admissions_locked(&pending);
         return Err(format!("파일 전송 {count}개가 진행 중이라 Itda를 다시 열지 않았습니다. 전송이 끝난 뒤 다시 시도해 주세요."));
     }
     if let Err(error) = launch() {
         // Only this guard's open→closed reservation is rolled back. A prior
         // closed gate or quit intent was rejected above and remains untouched.
-        crate::files::open_admissions();
+        resume_admissions_locked(&pending);
         return Err(error);
     }
+    commit_quit_locked(&mut pending);
     drop(pending);
     quit();
     Ok(())
@@ -534,6 +607,8 @@ fn permission_restart_with(launch: impl FnOnce() -> Result<(), String>, quit: im
 /// The person's answer: wait for the transfers, stop them, force the quit (only after a stop
 /// that didn't finish, and never for an update), or keep Itda open.
 fn quit_choice(choice: &str, reason: QuitReason, ticket: u64) {
+    if QUITTING.load(std::sync::atomic::Ordering::SeqCst) { return; }
+    if UPDATING.load(std::sync::atomic::Ordering::SeqCst) && choice != "cancel" { update_busy(); return; }
     if choice != "force" { *FORCE_TICKET.lock().unwrap() = None; }
     match choice {
         "wait" => {
@@ -544,14 +619,20 @@ fn quit_choice(choice: &str, reason: QuitReason, ticket: u64) {
         "stop" => stop_then(reason, QUIT_STOP_WAIT),
         "force" if reason == QuitReason::User && FORCE_TICKET.lock().unwrap().take().is_some_and(|t| t == ticket) => {
             crate::log!("quit: forced with {} transfer(s) still ending", crate::files::active_jobs());
-            crate::files::close_admissions();
-            *QUIT_PENDING.lock().unwrap() = None;
+            {
+                let mut pending = QUIT_PENDING.lock().unwrap();
+                commit_quit_locked(&mut pending);
+            }
             plat::quit();
         }
         _ => {
-            let stopping = matches!(*QUIT_PENDING.lock().unwrap(), Some((_, QuitPending::Stopping(_))));
-            *QUIT_PENDING.lock().unwrap() = None;
-            crate::files::open_admissions();
+            let stopping = {
+                let mut pending = QUIT_PENDING.lock().unwrap();
+                let stopping = matches!(*pending, Some((_, QuitPending::Stopping(_))));
+                *pending = None;
+                resume_admissions_locked(&pending);
+                stopping
+            };
             post(Event::Page(json!({"type": "quit_pending", "count": 0, "cancelled": true, "stopped": stopping})));
         }
     }
@@ -570,8 +651,15 @@ fn watch_quit(ticket: u64) {
 /// Stop every transfer the normal way (nothing new starts meanwhile) and wait, bounded, for
 /// them to clean up. What comes next is decided when they did (or didn't).
 fn stop_then(reason: QuitReason, limit: std::time::Duration) {
-    let ticket = pend(QuitPending::Stopping(reason));
-    crate::files::close_admissions();
+    let ticket = {
+        let mut pending = QUIT_PENDING.lock().unwrap();
+        if UPDATING.load(std::sync::atomic::Ordering::SeqCst) { drop(pending); update_busy(); return; }
+        if QUITTING.load(std::sync::atomic::Ordering::SeqCst) { return; }
+        let ticket = QUIT_TICKETS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        *pending = Some((ticket, QuitPending::Stopping(reason)));
+        crate::files::close_admissions();
+        ticket
+    };
     crate::files::stop_jobs();
     std::thread::spawn(move || {
         let left = drain_jobs(limit, Some((reason, ticket)));
@@ -595,8 +683,11 @@ fn quit_drained(reason: QuitReason, _reported: usize, ticket: u64) {
         std::thread::spawn(move || watch_quit(ticket));
         return;
     }
-    *QUIT_PENDING.lock().unwrap() = None;
-    crate::files::open_admissions();
+    {
+        let mut pending = QUIT_PENDING.lock().unwrap();
+        *pending = None;
+        resume_admissions_locked(&pending);
+    }
     send(json!({"type": "quit_pending", "count": 0}));
     crate::log!("quit: {left} transfer(s) did not end in time; Itda stays open");
     if reason == QuitReason::Configuration {
@@ -1910,7 +2001,16 @@ mod quit_tests {
     fn clear() {
         QUEUE.lock().unwrap().retain(|e| !matches!(e, Event::QuitDrained(..)));
         *QUIT_PENDING.lock().unwrap() = None;
+        QUITTING.store(false, std::sync::atomic::Ordering::SeqCst);
+        UPDATING.store(false, std::sync::atomic::Ordering::SeqCst);
         crate::files::open_admissions();
+    }
+
+    fn assert_transfer_refused() {
+        let events = std::sync::Arc::new(Mutex::new(Vec::<Value>::new()));
+        let captured = events.clone();
+        crate::files::dispatch(json!({"op":"transfer","from":"local","to":"local","source":"/never-read","destination":"/never-write","names":["fixture"],"policy":"keep","window":"gate-closed"}), Host::default(), store::Login::default(), std::sync::Arc::new(move |v| captured.lock().unwrap().push(v)));
+        assert!(events.lock().unwrap().iter().any(|v| v["state"]=="failed" && v["error"]==crate::files::CLOSING), "late transfer was not explicitly refused");
     }
 
     #[test]
@@ -2066,7 +2166,81 @@ mod quit_tests {
             Ok(())
         }, || { assert!(!crate::files::accepting()); quit.set(quit.get()+1); }).unwrap();
         assert_eq!((launch.get(), quit.get()), (1, 1));
+        assert!(!crate::files::accepting() && QUITTING.load(std::sync::atomic::Ordering::SeqCst));
+        // Even a late updater failure cannot reopen the committed permission quit.
+        update_install_failed();
         assert!(!crate::files::accepting());
+        assert_transfer_refused();
+        clear();
+        // Consume the wait intent into a fake updater. Both ownership and removal
+        // of the stale Cancel bar occur before any install/quit callback.
+        pend(QuitPending::Waiting(QuitReason::Update));
+        let before = QUEUE.lock().unwrap().len();
+        let installed = std::cell::Cell::new(false);
+        assert!(go_now_with(QuitReason::Update, || installed.set(true), || panic!("quit instead of updating")));
+        assert!(installed.get() && UPDATING.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(QUIT_PENDING.lock().unwrap().is_none() && !crate::files::accepting());
+        assert!(QUEUE.lock().unwrap().iter().skip(before).any(|e| matches!(e, Event::Page(v) if v["type"]=="quit_pending" && v["count"]==0)), "consumed update left its Cancel bar visible");
+        quit_choice("cancel", QuitReason::Update, 0);
+        assert!(!crate::files::accepting(), "stale Cancel reopened updater-owned admission");
+        assert_transfer_refused();
+        assert!(!request_quit_with(QuitReason::User, |_| panic!("quit during in-process update")));
+        assert!(!request_quit_with(QuitReason::Configuration, |_| panic!("installer quit during update")));
+        assert!(!request_quit_with(QuitReason::Update, |_| panic!("second install during update")));
+        let in_flight = crate::files::test_job("fake-update-owned", "page");
+        quit_choice("stop", QuitReason::User, 0);
+        quit_choice("wait", QuitReason::User, 0);
+        assert!(!in_flight.stopped() && QUIT_PENDING.lock().unwrap().is_none(), "a stale choice interrupted the updater");
+        in_flight.finish();
+        assert!(!go_now_with(QuitReason::User, || {}, || panic!("go_now quit during update")));
+        update_install_failed();
+        assert!(!UPDATING.load(std::sync::atomic::Ordering::SeqCst) && crate::files::accepting());
+        clear();
+        // Failure cleanup must not steal a stop intent's gate.
+        let stopping = pend(QuitPending::Stopping(QuitReason::User));
+        crate::files::close_admissions();
+        UPDATING.store(true, std::sync::atomic::Ordering::SeqCst);
+        update_install_failed();
+        assert_eq!(*QUIT_PENDING.lock().unwrap(), Some((stopping, QuitPending::Stopping(QuitReason::User))));
+        assert!(!crate::files::accepting());
+        assert_transfer_refused();
+        clear();
+        // Conversely, a bounded stop cleanup cannot steal an updater's gate.
+        let stuck = crate::files::test_job("updater-stop-overlap", "page");
+        stop_then(QuitReason::User, std::time::Duration::from_millis(100));
+        let stop_ticket = ticket();
+        UPDATING.store(true, std::sync::atomic::Ordering::SeqCst);
+        quit_drained(QuitReason::User, 1, stop_ticket);
+        assert!(!crate::files::accepting());
+        assert_transfer_refused();
+        stuck.finish();
+        update_install_failed();
+        assert!(crate::files::accepting());
+        clear();
+        // Any final committed quit keeps its reservation across stale Cancel or
+        // a late update-error callback. No actual quit/update callback is used.
+        assert!(go_now_with(QuitReason::User, || {}, || quit.set(quit.get()+1)));
+        assert!(QUITTING.load(std::sync::atomic::Ordering::SeqCst));
+        UPDATING.store(true, std::sync::atomic::Ordering::SeqCst);
+        update_install_failed();
+        quit_choice("cancel", QuitReason::User, 0);
+        assert!(!crate::files::accepting());
+        assert_transfer_refused();
+        clear();
+        // A release removed during Wait never reserves a closed updater gate or
+        // launches a network/update/quit effect. The check itself is injected.
+        let checked = std::cell::Cell::new(0);
+        pend(QuitPending::Waiting(QuitReason::Update));
+        assert!(!go_now_target::<()>(QuitReason::Update, None, || checked.set(checked.get()+1), |_| panic!("installed a missing release"), || panic!("quit for a missing release")));
+        assert!(crate::files::accepting() && QUIT_PENDING.lock().unwrap().is_none());
+        assert!(!UPDATING.load(std::sync::atomic::Ordering::SeqCst) && checked.get()==1);
+        crate::files::close_admissions();
+        assert!(!go_now_target::<()>(QuitReason::Update, None, || checked.set(checked.get()+1), |_| panic!("installed no release"), || panic!("quit with someone else's gate")));
+        assert!(!crate::files::accepting(), "missing release reopened a pre-existing closed gate");
+        let other_stop = pend(QuitPending::Stopping(QuitReason::User));
+        assert!(!go_now_target::<()>(QuitReason::Update, None, || checked.set(checked.get()+1), |_| panic!("installed no release"), || panic!("quit over another stop")));
+        assert_eq!(*QUIT_PENDING.lock().unwrap(), Some((other_stop, QuitPending::Stopping(QuitReason::User))));
+        assert!(!crate::files::accepting() && checked.get()==3);
         clear();
     }
 }
