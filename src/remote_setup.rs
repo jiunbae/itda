@@ -188,6 +188,16 @@ pub fn snapshot(
     settings: &Settings,
     choice: &Selection,
 ) -> io::Result<Package> {
+    snapshot_with_origin(hosts, accounts, settings, choice, || origin(&store::dir()))
+}
+
+fn snapshot_with_origin(
+    hosts: &[Host],
+    accounts: &[Account],
+    settings: &Settings,
+    choice: &Selection,
+    source_origin: impl FnOnce() -> io::Result<String>,
+) -> io::Result<Package> {
     let selected: HashSet<_> = choice.host_ids.iter().collect();
     if selected.len() != choice.host_ids.len()
         || selected
@@ -256,7 +266,7 @@ pub fn snapshot(
     }
     Ok(Package {
         schema: SCHEMA,
-        origin: origin(&store::dir())?,
+        origin: source_origin()?,
         hosts: selected_hosts,
         accounts: selected_accounts,
         preferences: choice.settings.then(|| Preferences::from(settings)),
@@ -392,6 +402,15 @@ fn validate(p: &Package) -> io::Result<()> {
         SecretKind::Host | SecretKind::Hp | SecretKind::Files => host_ids.contains(secret.owner.as_str()),
     }) {
         return Err(error("공유할 암호의 계정 또는 연결이 선택되지 않았습니다"));
+    }
+    // Account bindings must be self-contained too. Never silently erase a
+    // missing host binding or resolve a file binding against destination data.
+    if p.hosts.iter().any(|h| !h.account.is_empty() && !account_ids.contains(h.account.as_str())) {
+        return Err(error("공유 설정에 연결에서 사용하는 계정이 없습니다"));
+    }
+    // "custom" selects a directly entered files.user, not a saved account ID.
+    if p.hosts.iter().any(|h| !h.files.account.is_empty() && h.files.account != "custom" && !account_ids.contains(h.files.account.as_str())) {
+        return Err(error("공유 설정에 파일 연결에서 사용하는 계정이 없습니다"));
     }
     let key_ids: HashSet<_> = p.keys.iter().map(|k| &k.account).collect();
     if key_ids.len() != p.keys.len()
@@ -1727,6 +1746,87 @@ function Invoke-CimMethod {
         assert_eq!(read_json::<Vec<Account>>(&dir.0, "accounts.json").unwrap().len(), 1);
     }
     #[test]
+    fn missing_account_bindings_fail_before_destination_reads_or_any_side_effect() {
+        for files_binding in [false,true] {
+            for destination_has_account in [false,true] {
+                let dir=Scratch::new();
+                for name in ["hosts.json","accounts.json","settings.json"] {write_raw(&dir,name,b"invalid existing fixture JSON\n");}
+                if destination_has_account {
+                    dir.write("accounts.json",&vec![Account {id:"missing-package-account".into(),user:"destination-only-user".into(),..Account::default()}]);
+                }
+                let before:Vec<_>=["hosts.json","accounts.json","settings.json"].map(|n|raw_state(&dir,n)).into();
+                let mut p=package();
+                let expected=if files_binding {
+                    p.hosts[0].files.account="missing-package-account".into();
+                    "공유 설정에 파일 연결에서 사용하는 계정이 없습니다"
+                }else{
+                    p.hosts[0].account="missing-package-account".into();
+                    "공유 설정에 연결에서 사용하는 계정이 없습니다"
+                };
+                // These valid owners would cause key/Vault mutations if validation
+                // were delayed until account remapping or configuration writes.
+                p.keys.push(Key {account:"source-account".into(),bytes:b"unused-generated-key-fixture".to_vec()});
+                p.secrets.push(Secret {kind:SecretKind::Account,owner:"source-account".into(),value:"unused-generated-secret-fixture".into()});
+                assert_eq!(apply(&dir.0,&p,&mut NoVault).unwrap_err().to_string(),expected);
+                let after:Vec<_>=["hosts.json","accounts.json","settings.json"].map(|n|raw_state(&dir,n)).into();
+                assert_eq!(after,before);
+                // No lock, backup/.next staging, imported key or other new entry.
+                assert_eq!(fs::read_dir(&dir.0).unwrap().count(),3);
+                for name in ["configuration.lock","configuration-backups","imported-keys"] {assert!(!dir.0.join(name).exists());}
+            }
+        }
+    }
+    #[test]
+    fn valid_empty_and_packaged_account_bindings_keep_their_import_semantics() {
+        let dir=Scratch::new();
+        write_raw(&dir,"accounts.json",b"unselected destination account bytes\n");
+        let before=raw_state(&dir,"accounts.json");
+        let mut p=package();p.preferences=None;p.accounts.clear();p.hosts[0].account.clear();
+        apply(&dir.0,&p,&mut NoVault).unwrap();
+        let hosts:Vec<Host>=read_json(&dir.0,"hosts.json").unwrap();
+        assert!(hosts[0].account.is_empty() && hosts[0].files.account.is_empty());
+        assert_eq!(raw_state(&dir,"accounts.json"),before);
+
+        let dir=Scratch::new();
+        let mut p=package();p.preferences=None;
+        p.accounts.push(Account {id:"file-account".into(),user:"packaged-file-user".into(),..Account::default()});
+        p.hosts[0].files.account="file-account".into();
+        dir.write("accounts.json",&vec![Account {id:"file-account".into(),user:"destination-only-user".into(),..Account::default()}]);
+        apply(&dir.0,&p,&mut NoVault).unwrap();
+        let hosts:Vec<Host>=read_json(&dir.0,"hosts.json").unwrap();
+        let accounts:Vec<Account>=read_json(&dir.0,"accounts.json").unwrap();
+        assert_eq!(hosts[0].account,mapped(&p.origin,"account","source-account"));
+        assert_eq!(hosts[0].files.account,mapped(&p.origin,"account","file-account"));
+        assert_eq!(accounts.iter().find(|a|a.id==hosts[0].files.account).unwrap().user,"packaged-file-user");
+        assert_eq!(accounts.iter().find(|a|a.id=="file-account").unwrap().user,"destination-only-user");
+    }
+    #[test]
+    fn custom_file_login_snapshot_import_preserves_user_and_separate_secret_routing() {
+        let mut selected=package();
+        selected.hosts[0].files.account="custom".into();
+        selected.hosts[0].files.user="generated-file-user".into();
+        selected.hosts[0].files.host="fictional.invalid".into();
+        let choice=Selection {host_ids:vec!["source-host".into()],..Selection::default()};
+        // No native credential-store/key reads, settings directory or source
+        // origin file: only the snapshot's origin provider is replaced.
+        let mut p=snapshot_with_origin(&selected.hosts,&selected.accounts,&Settings::default(),&choice,||Ok("generated-custom-source".into())).unwrap();
+        assert_eq!(p.accounts.len(),1);
+        assert_eq!(p.accounts[0].id,"source-account");
+        assert!(p.keys.is_empty() && p.secrets.is_empty());
+        assert_eq!(p.hosts[0].files.account,"custom");
+        p.secrets.push(Secret {kind:SecretKind::Files,owner:"source-host".into(),value:"generated-custom-files-secret".into()});
+        let dir=Scratch::new();let mut vault=FakeVault::default();
+        apply(&dir.0,&p,&mut vault).unwrap();
+        let hosts:Vec<Host>=read_json(&dir.0,"hosts.json").unwrap();
+        assert_eq!(hosts[0].files.account,"custom");
+        assert_eq!(hosts[0].files.user,"generated-file-user");
+        assert_eq!(hosts[0].account,mapped(&p.origin,"account","source-account"));
+        let expected=format!("files-{}-custom-generated-file-user",mapped(&p.origin,"host","source-host"));
+        assert_eq!(crate::files::password_key(&hosts[0]),expected);
+        assert_eq!(vault.data,HashMap::from([(expected,"generated-custom-files-secret".into())]));
+        assert_eq!(vault.calls,1);
+    }
+    #[test]
     fn preservation_host_only_leaves_unselected_bytes_modes_and_absence() {
         for variant in 0..3 {
             let dir = Scratch::new();
@@ -1737,7 +1837,7 @@ function Invoke-CimMethod {
             }
             let settings = raw_state(&dir, "settings.json");
             let accounts = raw_state(&dir, "accounts.json");
-            let mut p = package(); p.accounts.clear(); p.preferences = None;
+            let mut p = package(); p.accounts.clear(); p.hosts[0].account.clear(); p.preferences = None;
             let result = apply(&dir.0, &p, &mut NoVault).unwrap();
             assert_eq!(result["hosts"], 1);
             assert_eq!(raw_state(&dir, "settings.json"), settings);
@@ -1758,7 +1858,7 @@ function Invoke-CimMethod {
         write_raw(&dir, "accounts.json", b"invalid unselected accounts\n");
         write_raw(&dir, "settings.json", b"{ \"future-setting\":42 }\n");
         let before: Vec<_> = ["hosts.json", "accounts.json", "settings.json"].map(|n| raw_state(&dir, n)).into();
-        let mut p = package(); p.accounts.clear(); p.preferences = None;
+        let mut p = package(); p.accounts.clear(); p.hosts[0].account.clear(); p.preferences = None;
         p.secrets.push(Secret { kind: SecretKind::Host, owner: "source-host".into(), value: "generated-rollback-fixture".into() });
         let mut vault = FakeVault { fail_at: 1, ..Default::default() };
         assert!(apply(&dir.0, &p, &mut vault).is_err());
