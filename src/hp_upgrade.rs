@@ -61,6 +61,26 @@ const BUNDLE_ID: &str = "dev.jiun.itda";
 /// permission helper shows); older ones would reject the argument.
 const BACKGROUND: &str = r#"case "$(defaults read "$app/Contents/Info" CFBundleShortVersionString 2>/dev/null)" in 0.[0-8].*|0.9.[0-9]|0.9.1[0-9]|"") bg="" ;; *) bg="--args --background" ;; esac"#;
 
+/// Start Itda's high-performance sharing on a Mac where it is switched on but Itda isn't
+/// running (quit, or the Mac restarted): in the background, without a window. Changes nothing
+/// when sharing is off there or the screen belongs to another account.
+pub fn start_sharing(cfg: &SshCfg) -> io::Result<()> {
+    let port = if cfg.vnc_port == 0 { crate::host_mac_port() } else { cfg.vnc_port };
+    run(cfg, &format!(r#"
+set -e
+[ "$(id -un)" = "$(stat -f%Su /dev/console)" ] || {{ echo 'error=이 Mac 화면에 로그인한 계정이 아닙니다'; exit 3; }}
+[ -f "$HOME/Library/Application Support/Itda/hp-sharing" ] || {{ echo 'error=이 Mac에서 고성능 공유가 꺼져 있습니다'; exit 3; }}
+app=""
+for a in /Applications/Itda.app "$HOME/Applications/Itda.app"; do [ -d "$a" ] && {{ app=$a; break; }}; done
+[ -n "$app" ] || {{ echo 'error=Itda가 설치되어 있지 않습니다'; exit 5; }}
+pgrep -f "$app/Contents/MacOS/" >/dev/null && {{ echo 'error=Itda가 실행 중이지만 응답하지 않습니다'; exit 6; }}
+{BACKGROUND}
+open -g -j "$app" $bg
+for i in $(seq 1 40); do nc -z -w 1 127.0.0.1 {port} 2>/dev/null && exit 0; sleep 0.5; done
+echo 'error=Itda가 고성능 공유를 시작하지 못했습니다'; exit 6
+"#), None).map(|_| ())
+}
+
 /// Run `script` with bash on the Mac, returning stdout; with `upload`, the script is
 /// instead the remote command and `upload` is its stdin (e.g. `cat > file`).
 fn run(cfg: &SshCfg, script: &str, upload: Option<&mut dyn Read>) -> io::Result<String> {

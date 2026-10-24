@@ -331,6 +331,228 @@ impl Vault for NativeVault {
         store::set_password_checked(key, value)
     }
 }
+/// Over SSH a Mac's login keychain is locked to that session (macOS unlocks it per login
+/// session), so writing passwords fails. They go instead through a helper the same app runs
+/// in the person's desktop session (started with `open`), over a socket in a private folder.
+/// Each request carries an id its reply must echo; after any transport or framing failure the
+/// channel is poisoned: an outcome that can't be known is never taken as a later answer.
+#[cfg(target_os = "macos")]
+struct SessionVault {
+    app: PathBuf,
+    link: std::cell::RefCell<Option<std::os::unix::net::UnixStream>>,
+    dir: std::cell::RefCell<Option<PathBuf>>,
+    next: std::cell::Cell<u64>,
+    poisoned: std::cell::Cell<bool>,
+}
+#[cfg(target_os = "macos")]
+#[derive(Serialize)]
+struct VaultRequest<'a> {
+    id: u64,
+    op: &'a str,
+    key: &'a str,
+    value: Option<&'a str>,
+}
+#[cfg(target_os = "macos")]
+#[derive(Deserialize)]
+struct VaultReply {
+    id: u64,
+    ok: bool,
+    #[serde(default)]
+    value: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+/// One line (without its newline) read byte by byte into wiped memory: no reader buffer keeps
+/// a copy of a password.
+#[cfg(target_os = "macos")]
+fn read_line_secret(r: &mut impl Read) -> io::Result<Zeroizing<Vec<u8>>> {
+    let mut line = Zeroizing::new(Vec::new());
+    let mut b = [0u8; 1];
+    loop {
+        if r.read(&mut b)? == 0 {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "closed"));
+        }
+        if b[0] == b'\n' {
+            return Ok(line);
+        }
+        if line.len() > 64 * 1024 {
+            return Err(error("키체인 도우미의 응답이 너무 깁니다"));
+        }
+        line.push(b[0]);
+    }
+}
+#[cfg(target_os = "macos")]
+impl SessionVault {
+    fn new(app: PathBuf) -> SessionVault {
+        SessionVault { app, link: Default::default(), dir: Default::default(), next: std::cell::Cell::new(1), poisoned: Default::default() }
+    }
+    fn start(&self) -> io::Result<()> {
+        use std::os::unix::net::UnixListener;
+        let dir = store::dir().join(format!("vault-{}", &random_id()?[..16]));
+        private_dir(&dir)?;
+        *self.dir.borrow_mut() = Some(dir.clone());
+        let listener = UnixListener::bind(dir.join("s"))?;
+        listener.set_nonblocking(true)?;
+        // The helper is told this process's data root (an isolated profile included).
+        let base = store::override_base().unwrap_or_default();
+        let started = std::process::Command::new("/usr/bin/open")
+            .args(["-n", "-g", "-j"])
+            .arg(&self.app)
+            .args(["--args", "--vault-helper"])
+            .arg(&base)
+            .arg(dir.join("s"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if !started.success() {
+            return Err(error("이 Mac의 로그인 세션에서 키체인 도우미를 열지 못했습니다. 화면에 로그인한 계정인지 확인하세요"));
+        }
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let stream = loop {
+            match listener.accept() {
+                Ok((s, _)) => break s,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock && std::time::Instant::now() < until => std::thread::sleep(std::time::Duration::from_millis(100)),
+                Err(_) => return Err(error("키체인 도우미가 응답하지 않습니다. 원격 Mac 화면에 로그인되어 있는지 확인하세요")),
+            }
+        };
+        stream.set_nonblocking(false)?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
+        *self.link.borrow_mut() = Some(stream);
+        Ok(())
+    }
+    fn call(&self, op: &str, key: &str, value: Option<&str>) -> io::Result<Option<Zeroizing<String>>> {
+        if self.poisoned.get() {
+            return Err(error("키체인 도우미와의 연결이 끊겨 저장 결과를 확인할 수 없습니다"));
+        }
+        if self.link.borrow().is_none() {
+            if let Err(e) = self.start() {
+                self.poisoned.set(true);
+                return Err(e);
+            }
+        }
+        let id = self.next.get();
+        self.next.set(id + 1);
+        let outcome = (|| {
+            let mut link = self.link.borrow_mut();
+            let stream = link.as_mut().ok_or_else(|| error("closed"))?;
+            let mut line = Zeroizing::new(serde_json::to_vec(&VaultRequest { id, op, key, value })?);
+            line.push(b'\n');
+            stream.write_all(&line)?;
+            let reply = read_line_secret(stream)?;
+            let reply: VaultReply = serde_json::from_slice(&reply).map_err(|_| error("framing"))?;
+            if reply.id != id {
+                return Err(error("framing"));
+            }
+            Ok(reply)
+        })();
+        match outcome {
+            Ok(reply) if reply.ok => Ok(reply.value.map(Zeroizing::new)),
+            Ok(reply) => Err(error(reply.error.as_deref().unwrap_or("키체인에 저장하지 못했습니다"))),
+            Err(_) => {
+                // Unknown outcome: no further request may share or replace this channel.
+                self.poisoned.set(true);
+                self.link.take();
+                Err(error("키체인 도우미와의 연결이 끊겨 저장 결과를 확인할 수 없습니다"))
+            }
+        }
+    }
+}
+#[cfg(target_os = "macos")]
+impl Vault for SessionVault {
+    fn get(&self, key: &str) -> io::Result<Option<String>> {
+        Ok(self.call("get", key, None)?.map(|v| v.as_str().to_string()))
+    }
+    fn set(&mut self, key: &str, value: Option<&str>) -> io::Result<()> {
+        self.call("set", key, value).map(|_| ())
+    }
+}
+#[cfg(target_os = "macos")]
+impl Drop for SessionVault {
+    fn drop(&mut self) {
+        self.link.take(); // the helper leaves when the connection closes
+        if let Some(dir) = self.dir.take() {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+}
+
+/// The helper side, started by `open` in the desktop session with the provisioning data root
+/// (empty: the default one) and its socket. The socket must sit in a private `vault-` folder
+/// directly in that root; then it answers keychain requests until the connection closes.
+#[cfg(target_os = "macos")]
+fn vault_helper(base: &str, socket: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    // Before any store access: the isolated profile, if that's what provisioning used.
+    if !base.is_empty() {
+        std::env::set_var("ITDA_DATA_DIR", base);
+    }
+    let mine = unsafe { libc_getuid() };
+    let unsafe_path = || error("키체인 도우미의 경로가 안전하지 않습니다");
+    let dir = socket.parent().ok_or_else(unsafe_path)?;
+    let meta = fs::symlink_metadata(dir)?;
+    if meta.file_type().is_symlink() || !meta.is_dir() || meta.uid() != mine || meta.mode() & 0o077 != 0 {
+        return Err(unsafe_path());
+    }
+    let root = fs::canonicalize(store::dir())?;
+    let real = fs::canonicalize(dir)?;
+    if real.parent() != Some(root.as_path()) || !real.file_name().is_some_and(|n| n.to_string_lossy().starts_with("vault-")) {
+        return Err(unsafe_path());
+    }
+    let sock = fs::symlink_metadata(socket)?;
+    if !sock.file_type().is_socket() || sock.uid() != mine {
+        return Err(unsafe_path());
+    }
+    let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
+    serve_vault(&mut stream, &mut NativeVault)
+}
+
+/// Answer the provisioning side's requests with `vault` until it closes the connection.
+#[cfg(target_os = "macos")]
+fn serve_vault(stream: &mut (impl Read + Write), vault: &mut impl Vault) -> io::Result<()> {
+    #[derive(Deserialize)]
+    struct Request {
+        id: u64,
+        op: String,
+        key: String,
+        #[serde(default)]
+        value: Option<String>,
+    }
+    loop {
+        let line = match read_line_secret(stream) {
+            Ok(line) => line,
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        let request: Request = serde_json::from_slice(&line).map_err(|_| error("알 수 없는 요청"))?;
+        let value = request.value.map(Zeroizing::new);
+        let result = match request.op.as_str() {
+            "get" => vault.get(&request.key).map(|v| v.map(Zeroizing::new)),
+            "set" => vault.set(&request.key, value.as_deref().map(String::as_str)).map(|()| None),
+            _ => Err(error("알 수 없는 요청")),
+        };
+        #[derive(Serialize)]
+        struct Reply<'a> {
+            id: u64,
+            ok: bool,
+            value: Option<&'a str>,
+            error: Option<String>,
+        }
+        let reply = match &result {
+            Ok(v) => Reply { id: request.id, ok: true, value: v.as_deref().map(String::as_str), error: None },
+            Err(e) => Reply { id: request.id, ok: false, value: None, error: Some(e.to_string()) },
+        };
+        let mut out = Zeroizing::new(serde_json::to_vec(&reply)?);
+        out.push(b'\n');
+        stream.write_all(&out)?;
+    }
+}
+#[cfg(target_os = "macos")]
+extern "C" {
+    #[link_name = "getuid"]
+    fn libc_getuid() -> u32;
+}
+
 fn read_json<T: serde::de::DeserializeOwned + Default>(root: &Path, name: &str) -> io::Result<T> {
     match fs::read(root.join(name)) {
         Ok(bytes) => serde_json::from_slice(&bytes)
@@ -841,6 +1063,19 @@ fn provision(root: &Path, p: &Package, close: bool, launch: bool) -> io::Result<
     let config = idle_lock(root, close)?;
     // No mutation until the package, processes, and both locks have been checked.
     let app = install_staged()?;
+    // Over SSH on a Mac the keychain is reached through the desktop session (see SessionVault).
+    #[cfg(target_os = "macos")]
+    let mut result = if std::env::var_os("SSH_CONNECTION").is_some() {
+        apply_locked(root, p, &mut SessionVault::new(app.clone()))
+    } else {
+        apply_locked(root, p, &mut NativeVault)
+    }
+    .map_err(|e| {
+        error(&format!(
+            "앱 설치는 완료됐지만 설정 공유에 실패했습니다: {e}"
+        ))
+    })?;
+    #[cfg(not(target_os = "macos"))]
     let mut result = apply_locked(root, p, &mut NativeVault).map_err(|e| {
         error(&format!(
             "앱 설치는 완료됐지만 설정 공유에 실패했습니다: {e}"
@@ -884,6 +1119,14 @@ fn provision(root: &Path, p: &Package, close: bool, launch: bool) -> io::Result<
 /// Headless import before GUI/server/log initialization, including on Windows.
 pub fn import_mode() -> bool {
     let mode = std::env::args().nth(1).unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    if mode == "--vault-helper" {
+        let args: Vec<String> = std::env::args().collect();
+        if let Err(e) = vault_helper(args.get(2).map_or("", String::as_str), Path::new(args.get(3).map_or("", String::as_str))) {
+            eprintln!("vault helper: {e}");
+        }
+        return true;
+    }
     if mode != "--import-configuration" && mode != "--provision-configuration" {
         return false;
     }
@@ -2173,5 +2416,72 @@ function Invoke-CimMethod {
         });
         assert!(apply(&dir.0, &p, &mut FakeVault::default()).is_err());
         assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod session_vault_tests {
+    use super::*;
+    use std::os::unix::net::UnixStream;
+
+    #[derive(Default)]
+    struct Memory(HashMap<String, String>);
+    impl Vault for Memory {
+        fn get(&self, key: &str) -> io::Result<Option<String>> {
+            Ok(self.0.get(key).cloned())
+        }
+        fn set(&mut self, key: &str, value: Option<&str>) -> io::Result<()> {
+            if key == "refused" {
+                return Err(error("키체인이 거부했습니다"));
+            }
+            match value {
+                Some(v) => self.0.insert(key.into(), v.into()),
+                None => self.0.remove(key),
+            };
+            Ok(())
+        }
+    }
+    fn linked(peer: UnixStream) -> SessionVault {
+        let v = SessionVault::new(PathBuf::new());
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+        *v.link.borrow_mut() = Some(peer);
+        v
+    }
+
+    /// Set, read back, delete through the real helper loop; a refusal is an answer, not a
+    /// broken channel.
+    #[test]
+    fn helper_round_trip() {
+        let (a, mut b) = UnixStream::pair().unwrap();
+        let helper = std::thread::spawn(move || serve_vault(&mut b, &mut Memory::default()));
+        let mut v = linked(a);
+        v.set("k", Some("비밀 🔑")).unwrap();
+        assert_eq!(v.get("k").unwrap().as_deref(), Some("비밀 🔑"));
+        assert!(v.set("refused", Some("x")).is_err());
+        assert!(!v.poisoned.get());
+        v.set("k", None).unwrap();
+        assert_eq!(v.get("k").unwrap(), None);
+        drop(v);
+        helper.join().unwrap().unwrap();
+    }
+
+    /// A reply for another request, a cut-off reply or a closed helper poison the channel:
+    /// later requests (a rollback) fail instead of reading a stale answer.
+    #[test]
+    fn unknown_outcome_poisons() {
+        for reply in [&b"{\"id\":7,\"ok\":true}\n"[..], b"{\"id\":1,\"ok\"", b""] {
+            let (a, mut b) = UnixStream::pair().unwrap();
+            let reply = reply.to_vec();
+            let peer = std::thread::spawn(move || {
+                let _ = read_line_secret(&mut b);
+                b.write_all(&reply).unwrap();
+                drop(b);
+            });
+            let mut v = linked(a);
+            assert!(v.set("k", Some("x")).is_err());
+            peer.join().unwrap();
+            assert!(v.poisoned.get());
+            assert!(v.set("k", None).is_err(), "no request after an unknown outcome");
+        }
     }
 }
