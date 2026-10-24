@@ -21,6 +21,7 @@ public class ItdaQualityWindow {
  [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowTextLength(IntPtr h);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h,StringBuilder b,int size);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode,ExactSpelling=true)] static extern int GetWindowTextW(IntPtr h,StringBuilder b,int size);
  [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr value);
  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int w,int hh,uint flags);
  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out RECT r);
@@ -71,6 +72,15 @@ public class ItdaQualityWindow {
  static void Pump(int ms){DateTime end=DateTime.UtcNow.AddMilliseconds(ms);do{MSG m;while(PeekMessage(out m,IntPtr.Zero,0,0,1)){TranslateMessage(ref m);DispatchMessage(ref m);}Thread.Sleep(2);}while(DateTime.UtcNow<end);}
  public class DragInfo { public string Outcome,ReleasePoint,Error;public bool Interfered,EmergencyEscaped,EmergencyMayHaveOfferedSource;public uint InputBefore,InputAfter,IdleBefore,TickBefore;public string FocusRestore,CursorRestore;public uint PriorForegroundPid;public long StartedUnixMs,ReleaseUnixMs,FirstExplorerUnixMs;public uint[] GuardBefore,GuardAfter; }
  public class LayoutInfo { public long File,Explorer; public int OriginX,OriginY,TargetX,TargetY; public RECT Work,Source,Destination;public uint SourcePid,ExplorerPid,SourceIntegrity,ExplorerIntegrity;public int Session;public string SourceStartedTicks,ExplorerStartedTicks; }
+ // Read-only validation of the originally pinned home HWND. Process.MainWindowHandle
+ // may switch to the file window; it is not an identity for a specific window.
+ // The controller separately verifies canonical executable path and creation time.
+ public static void AssertHomeWindow(uint pid,long value) {
+  IntPtr h=new IntPtr(value);uint actual;
+  if(pid==0||h==IntPtr.Zero||!IsWindow(h)||GetWindowThreadProcessId(h,out actual)==0||actual!=pid)throw new Exception("Pinned home HWND PID changed");
+  StringBuilder cls=new StringBuilder(256),title=new StringBuilder(512);GetClassName(h,cls,cls.Capacity);GetWindowTextW(h,title,title.Capacity);
+  if(cls.ToString()!="itda_home"||!System.Text.RegularExpressions.Regex.IsMatch(title.ToString(),@"^Itda \(profile [0-9a-f]{16}\)$")||!IsWindowVisible(h))throw new Exception("Pinned home HWND class/title/visibility changed");
+ }
  public static LayoutInfo Layout(uint pid,long main,long explorer) {
   IntPtr old=SetThreadDpiAwarenessContext(new IntPtr(-4)); if(old==IntPtr.Zero)throw new Exception("PMv2 context unavailable");
   try {

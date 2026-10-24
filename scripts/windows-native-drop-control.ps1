@@ -8,15 +8,17 @@ $Root=$canonical.root
 Add-Type -Path "$PSScriptRoot/fixtures/windows-drop-driver.cs"
 $folder=Join-Path $Root 'drop-destination'
 if(-not (Test-Path -LiteralPath $folder -PathType Container) -or (Get-Item -LiteralPath $folder).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Invalid destination'}
-$explorer=$null;$layout=$null;$shell=$null
+$explorer=$null;$layout=$null;$shell=$null;$explorerCreationAttempted=$false
 function Own-App {
  $state=& pwsh -NoProfile -NonInteractive -File "$PSScriptRoot/windows-native-idle-control.ps1" -Operation inspect -Root $Root -AppPid $AppPid -CreationTicks $CreationTicks | ConvertFrom-Json
- if($LASTEXITCODE -or -not $state.alive -or $state.creation_ticks -ne $CreationTicks -or $state.hwnd -ne "$MainHwnd"){throw 'Candidate identity changed'}
+ if($LASTEXITCODE -or -not $state.alive -or $state.pid -ne $AppPid -or $state.creation_ticks -ne $CreationTicks -or $state.session_id -ne (Get-Process -Id $PID).SessionId){throw 'Candidate identity changed'}
+ [ItdaQualityWindow]::AssertHomeWindow($AppPid,$MainHwnd)
 }
 try {
  Own-App
  $shell=New-Object -ComObject Shell.Application
  # This creates normal ShellBag/view-state on the disposable runner only, explicitly in scope.
+ $explorerCreationAttempted=$true
  $shell.Explore($folder)
  $until=[DateTime]::UtcNow.AddSeconds(15)
  do{$matches=@($shell.Windows()|Where-Object{try{[IO.Path]::GetFullPath($_.Document.Folder.Self.Path) -eq $folder}catch{$false}});if($matches.Count -eq 1){$explorer=$matches[0];break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $until)
@@ -45,11 +47,17 @@ try {
  }
 } catch { @{error=$_.Exception.Message}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $Root 'controller-error.json') -Encoding utf8;exit 1 }
 finally {
- $closed=$false
+ $cleanup=@{explorer_creation_attempted=$explorerCreationAttempted;explorer_state='unconfirmed';explorer_close_requested=$false;no_owned_window_confirmed=$false}
  try {if($explorer -and [IO.Path]::GetFullPath($explorer.Document.Folder.Self.Path) -eq $folder){
-  $handle=[long]$explorer.HWND;$explorer.Quit();$until=[DateTime]::UtcNow.AddSeconds(10)
-  do{$remaining=@($shell.Windows()|Where-Object{try{[long]$_.HWND -eq $handle}catch{$false}});if(-not $remaining.Count){$closed=$true;break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $until)
+  $handle=[long]$explorer.HWND;$explorer.Quit();$cleanup.explorer_close_requested=$true;$until=[DateTime]::UtcNow.AddSeconds(10)
+  do{$remaining=@($shell.Windows()|Where-Object{try{[long]$_.HWND -eq $handle -or [IO.Path]::GetFullPath($_.Document.Folder.Self.Path) -eq $folder}catch{$false}});if(-not $remaining.Count){$cleanup.explorer_state='closed';$cleanup.no_owned_window_confirmed=$true;break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $until)
+ }else{
+  # Even when Own-App fails before Explore, record an actual read-only absence
+  # check. Do not close unpinned or ambiguous windows found during cleanup.
+  if(-not $shell){$shell=New-Object -ComObject Shell.Application}
+  $remaining=@($shell.Windows()|Where-Object{try{[IO.Path]::GetFullPath($_.Document.Folder.Self.Path) -eq $folder}catch{$false}})
+  if(-not $remaining.Count){$cleanup.explorer_state=if($explorerCreationAttempted){'not-present'}else{'not-created'};$cleanup.no_owned_window_confirmed=$true}
  }}
- catch {}
- @{explorer_close_requested=$closed}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $Root 'controller-cleanup.json') -Encoding utf8
+ catch {$cleanup.error=$_.Exception.Message}
+ $cleanup|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $Root 'controller-cleanup.json') -Encoding utf8
 }
