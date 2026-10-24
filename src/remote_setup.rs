@@ -218,13 +218,12 @@ pub fn snapshot(
     snapshot_with_origin(hosts, accounts, settings, choice, || origin(&store::dir()))
 }
 
-fn snapshot_with_origin(
+/// Pure selection/dependency validation, also used before any SSH probe.
+fn selected_profiles(
     hosts: &[Host],
     accounts: &[Account],
-    settings: &Settings,
     choice: &Selection,
-    source_origin: impl FnOnce() -> io::Result<String>,
-) -> io::Result<Package> {
+) -> io::Result<(Vec<Host>, Vec<Account>)> {
     let selected: HashSet<_> = choice.host_ids.iter().collect();
     if selected.len() != choice.host_ids.len()
         || selected
@@ -233,7 +232,7 @@ fn snapshot_with_origin(
     {
         return Err(error("공유할 연결을 다시 선택해 주세요"));
     }
-    let mut selected_hosts: Vec<_> = hosts
+    let selected_hosts: Vec<_> = hosts
         .iter()
         .filter(|h| selected.contains(&h.id))
         .cloned()
@@ -242,7 +241,7 @@ fn snapshot_with_origin(
         .iter()
         .flat_map(|h| [h.account.as_str(), h.files.account.as_str()])
         .collect();
-    let mut selected_accounts: Vec<_> = accounts
+    let selected_accounts: Vec<_> = accounts
         .iter()
         .filter(|a| references.contains(a.id.as_str()))
         .cloned()
@@ -253,6 +252,17 @@ fn snapshot_with_origin(
         &selected_hosts,
         &selected_accounts.iter().map(|a| a.id.as_str()).collect(),
     )?;
+    Ok((selected_hosts, selected_accounts))
+}
+
+fn snapshot_with_origin(
+    hosts: &[Host],
+    accounts: &[Account],
+    settings: &Settings,
+    choice: &Selection,
+    source_origin: impl FnOnce() -> io::Result<String>,
+) -> io::Result<Package> {
+    let (mut selected_hosts, mut selected_accounts) = selected_profiles(hosts, accounts, choice)?;
     let mut secrets = Vec::new();
     let mut keys = Vec::new();
     let mut add = |kind, owner: &str, key: &str| -> io::Result<()> {
@@ -1260,6 +1270,8 @@ pub fn prepare(
 ) -> io::Result<Value> {
     crate::tunnel::ssh_target(&cfg)?;
     let fingerprints = trusted_fingerprints(&cfg)?;
+    // Refuse stale local bindings without SSH, secret/key reads or origin writes.
+    drop(selected_profiles(&hosts, &accounts, &choice)?);
     progress("SSH 연결과 원격 기기를 확인하고 있어요…");
     let remote = probe(&cfg)?;
     if crate::update::newer(&remote.version, env!("CARGO_PKG_VERSION")) {
