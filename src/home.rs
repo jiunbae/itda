@@ -626,14 +626,15 @@ fn quit_choice(choice: &str, reason: QuitReason, ticket: u64) {
             plat::quit();
         }
         _ => {
-            let stopping = {
+            let (stopping, cancelled) = {
                 let mut pending = QUIT_PENDING.lock().unwrap();
                 let stopping = matches!(*pending, Some((_, QuitPending::Stopping(_))));
+                let cancelled = pending.is_some();
                 *pending = None;
                 resume_admissions_locked(&pending);
-                stopping
+                (stopping, cancelled)
             };
-            post(Event::Page(json!({"type": "quit_pending", "count": 0, "cancelled": true, "stopped": stopping})));
+            post(Event::Page(json!({"type": "quit_pending", "count": 0, "cancelled": cancelled, "stopped": stopping})));
         }
     }
 }
@@ -2183,6 +2184,7 @@ mod quit_tests {
         assert!(QUEUE.lock().unwrap().iter().skip(before).any(|e| matches!(e, Event::Page(v) if v["type"]=="quit_pending" && v["count"]==0)), "consumed update left its Cancel bar visible");
         quit_choice("cancel", QuitReason::Update, 0);
         assert!(!crate::files::accepting(), "stale Cancel reopened updater-owned admission");
+        assert!(matches!(QUEUE.lock().unwrap().last(), Some(Event::Page(v)) if v["type"]=="quit_pending" && v["count"]==0 && v["cancelled"]==false), "stale Cancel falsely claimed an active intent was cancelled");
         assert_transfer_refused();
         assert!(!request_quit_with(QuitReason::User, |_| panic!("quit during in-process update")));
         assert!(!request_quit_with(QuitReason::Configuration, |_| panic!("installer quit during update")));
