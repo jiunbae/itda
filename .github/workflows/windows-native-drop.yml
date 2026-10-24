@@ -1,0 +1,114 @@
+name: Windows native Explorer OLE drop
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-native-drop.yml'
+      - 'scripts/windows-native-drop-*.ps1'
+      - 'scripts/windows-native-drop-ci-e2e.mjs'
+      - 'scripts/fixtures/windows-drop-driver.cs'
+      - 'scripts/fixtures/read-only-sftp-drop.py'
+  workflow_dispatch:
+    inputs:
+      enable_owned_input:
+        description: 'Allow tagged OS input to this disposable job fixture windows only'
+        type: boolean
+        required: true
+        default: false
+      expected_source_sha:
+        description: 'Exact 40-character checkout SHA reviewed for this native input run'
+        type: string
+        required: true
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  compile-read-only:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Parse harness and compile native driver without calling its input methods
+        shell: pwsh
+        run: |
+          node --check scripts/windows-native-drop-ci-e2e.mjs
+          if ($LASTEXITCODE) { throw 'Node syntax check failed' }
+          python -m py_compile scripts/fixtures/read-only-sftp-drop.py
+          if ($LASTEXITCODE) { throw 'Python syntax check failed' }
+          foreach ($file in Get-ChildItem scripts/windows-native-drop-*.ps1) {
+            $tokens=$null; $errors=$null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($file.FullName,[ref]$tokens,[ref]$errors)
+            if ($errors.Count) { throw ($errors | Out-String) }
+          }
+          Add-Type -Path scripts/fixtures/windows-drop-driver.cs
+          # Compilation only: no Layout(), Drag(), shell creation, native input or app launch.
+      - name: Build candidate (no execution)
+        shell: pwsh
+        run: ./scripts/windows-release.ps1
+
+  owned-input:
+    if: github.event_name == 'workflow_dispatch' && inputs.enable_owned_input == true && inputs.expected_source_sha != ''
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin explicit reviewed source before build or native actions
+        shell: pwsh
+        env:
+          EXPECTED: ${{ inputs.expected_source_sha }}
+        run: |
+          if ($env:EXPECTED -notmatch '^[0-9a-f]{40}$' -or (git rev-parse HEAD) -cne $env:EXPECTED -or $env:GITHUB_SHA -cne $env:EXPECTED) { throw 'Expected source SHA must equal this dispatch checkout/event SHA' }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install isolated test clients
+        shell: pwsh
+        run: |
+          npm install --no-save --package-lock=false --ignore-scripts playwright@1.64.1
+          if ($LASTEXITCODE) { throw 'CDP client install failed' }
+          python -m pip install -r scripts/fixtures/requirements-sftp.txt
+          if ($LASTEXITCODE) { throw 'SFTP dependencies failed' }
+      - name: Same-job candidate build
+        shell: pwsh
+        run: ./scripts/windows-release.ps1
+      - name: One owned Explorer OLE functional proof
+        shell: pwsh
+        timeout-minutes: 6
+        env:
+          ITDA_ENABLE_OWNED_INPUT: 'true'
+          ITDA_EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        run: |
+          node scripts/windows-native-drop-ci-e2e.mjs
+          if ($LASTEXITCODE) { throw 'Native functional proof failed; inspect receipt' }
+      - name: Record narrow scope and prerequisite result
+        if: always()
+        shell: pwsh
+        run: |
+          @('### Disposable Windows Explorer OLE proof', 'Tagged injected input only to owned fixture windows; no user-PC, physical mouse, AT, 150% DPI, multi-monitor or persona-9 acceptance.', 'Normal Explorer ShellBag/view state on this disposable VM is in scope. No UAC/registry/display changes or shell elevation.', 'No payload-before-release assumption: inspect read timing and target consumption evidence.') | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          if (Test-Path test-artifacts/native-drop/result.json) {
+            $r=Get-Content test-artifacts/native-drop/result.json -Raw|ConvertFrom-Json
+            "Result: $($r.status); cleanup: $($r.cleanup.status)" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          } else { 'No result receipt: not verified.' | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-native-explorer-drop
+          path: |
+            test-artifacts/native-drop/
+            target/release/itda.exe
+          if-no-files-found: error
