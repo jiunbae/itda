@@ -45,6 +45,15 @@ try{
   const packets=()=>p.evaluate(()=>testPackets),mod=platform==='mac'?'Meta':'Control';
   const count=async(id,op)=>(await packets()).filter(x=>x.id===id&&x.op===op).length;
   await row('Alpha-A.txt').waitFor();
+  // Native file-manager actions follow the displayed side, including connected hosts.
+  await layer.locator('[data-action="more"]').click();
+  await p.getByRole('menuitem',{name:platform==='mac'?'Finder에서 열기':'탐색기에서 열기',exact:true}).click();
+  assert((await packets()).filter(x=>x.op==='finder').at(-1)?.id==='studio','Remote native action changed its device');
+  await layer.locator(platform==='mac'?'.files-current-places [data-side="local"]':'[data-network-sidebar] [data-bookmark="Documents"]').click();
+  await layer.locator('[data-action="more"]').click();
+  await p.getByRole('menuitem',{name:platform==='mac'?'Finder에서 보기':'탐색기에서 열기',exact:true}).click();
+  {const r=(await packets()).filter(x=>x.op==='reveal_folder').at(-1);assert(r?.id==='studio'&&r.side==='local'&&r.path===(platform==='mac'?'/local':'/local/Documents'),'Connected local action opened a remote location: '+JSON.stringify(r));}
+  await layer.locator('.files-sidebar [data-device="studio"]').first().click();await row('Alpha-A.txt').waitFor();
   // Copy happened before this window was created: state hydration survives opening its device.
   await layer.locator('.files-list').focus();await p.keyboard.press(`${mod}+v`);
   await p.locator('.files-prompt [data-choice="ok"]').click();

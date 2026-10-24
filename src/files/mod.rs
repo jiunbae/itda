@@ -761,6 +761,20 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                         Ok(json!({"mime":mime,"base64":crate::ws::base64(&bytes)}))
                     }
                 }
+                "reveal_folder" => {
+                    if v["side"] != "local" {
+                        return Err(error("이 컴퓨터의 폴더를 선택하세요"));
+                    }
+                    let p = local_folder(&get(&v, "path"))?;
+                    #[cfg(target_os = "macos")]
+                    {
+                        // Reveal packages in Finder; opening a .app directory would launch it.
+                        std::process::Command::new("/usr/bin/open").args(["-R", "--", &p]).spawn()?;
+                    }
+                    #[cfg(windows)]
+                    open_local(&p)?;
+                    Ok(json!({}))
+                }
                 "open" => {
                     let p = get(&v, "path");
                     if v["side"] == "local" {
@@ -1156,6 +1170,16 @@ pub fn open_native(address: &str) -> io::Result<()> {
     }
     Ok(())
 }
+fn local_folder(p: &str) -> io::Result<String> {
+    if p.is_empty() || p.chars().any(|c| c.is_control()) {
+        return Err(error("폴더 경로가 올바르지 않습니다"));
+    }
+    let p = canonical(p)?;
+    if !Path::new(&p).is_dir() {
+        return Err(error("폴더를 선택하세요"));
+    }
+    Ok(p)
+}
 /// Opening a local item is an explicit user action; Explorer always receives a path as a
 /// single argument rather than interpreting a remote item as a program.
 fn open_local(p: &str) -> io::Result<()> {
@@ -1271,6 +1295,22 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn reveal_accepts_real_folders_not_files_or_virtual_roots() {
+        let root = std::env::temp_dir().join(format!("itda-reveal-{}", crate::store::new_id()));
+        let package = root.join("Fixture.app");
+        std::fs::create_dir_all(&package).unwrap();
+        let file = root.join("must-not-open.exe");
+        let missing = root.join("missing");
+        std::fs::write(&file, b"generated test file").unwrap();
+        assert!(Path::new(&local_folder(package.to_str().unwrap()).unwrap()).ends_with("Fixture.app"));
+        for invalid in ["", "\n", file.to_str().unwrap(), missing.to_str().unwrap()] {
+            assert!(local_folder(invalid).is_err(), "accepted {invalid:?}");
+        }
+        assert_eq!(std::fs::read(&file).unwrap(), b"generated test file");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// A quit that closed admissions sees every transfer already in, and refuses later ones.
     #[test]
