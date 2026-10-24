@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "assessment_id": "itda-quality-2026-10-23",
-  "status": "iteration-9-1.0.4-published-local-smoke-verified-core-journeys-pending",
+  "status": "iteration-9-1.0.4-published-known-permission-helper-defects-and-native-acceptance-pending",
   "goal": "Every persona scores at least 9/10 on verified core journeys, with no unresolved P1/P2 task blockers.",
   "baseline": {
     "commit": "521202025e7c5a984f089c1d1df77e846f63fd33",
@@ -784,8 +784,8 @@
           "release": "1.0.4",
           "source_commit": "3d755e64b8fa32d6ca511e189e39afae57171734",
           "status": "published; public hashes and final main CI verified; installed Mac local-entry/window-close component smoke passed",
-          "verification": "Final main CI40059961386 all3success; public assets match verified candidate hashes; Developer ID notarized Mac; Windows unsigned per release-owner report; local profiles and access=true/screen=false permissions preserved.",
-          "embedded_ui_provenance": "Initial Windows strict-LF assertion failed; corrected and independently confirmed whole-blob proof allows only LF-to-CRLF conversion. Initial failure retained; no false all-green initial result.",
+          "verification": "Final main CI40059961386 all3success; public assets match verified candidate hashes; Developer ID notarized Mac; independent CI/public Windows PE inspection15f confirms no embedded Authenticode certificate table; local profiles and access=true/screen=false permissions preserved.",
+          "embedded_ui_provenance": "Initial Windows strict-LF assertion failed; corrected whole-blob proof160 independently confirms LF-to-CRLF conversion only. Initial failure retained; no false all-green initial result.",
           "evidence": "assessments/evidence/release-1.0.4-checkpoint.json"
         }
       ],
@@ -798,7 +798,44 @@
         "Older macOS native runtime remains unverified, including 12.0–12.2; artifact minimum-version/weak-link probes do not certify those systems. 12.3+ remains recommended.",
         "All seven verified persona scores remain null; 28 complete core journeys have not been certified at 9/10."
       ],
-      "acceptance_note": "1.0.4 is actually published and installed locally. This supersedes the latest release-pending note without changing historical evidence or any persona score. Local browsing/window-close smoke is component acceptance only; goal remains active and full 9/10 core-journey certification is unproven."
+      "acceptance_note": "1.0.4 is actually published and installed locally, but the permission-helper restart/admission bypass and unreachable guide_reset UI command are known open source-confirmed defects in that release. Native consequences remain unverified. Their separate fix/permission-helper-transfer-guard remediation is not shipped by this documentation checkpoint. Local browsing/window-close smoke is component acceptance only; all persona scores remain null and the active goal has not reached 9/10.",
+      "known_open_defects": [
+        {
+          "id": "MAC-PERMISSION-RESTART-ADMISSION",
+          "severity": "P1",
+          "release": "1.0.4",
+          "source_commit": "3d755e64b8fa32d6ca511e189e39afae57171734",
+          "status": "open in released 1.0.4; separate fix in progress; not fixed by this checkpoint",
+          "summary": "Permission-helper restart can exit Itda without the transfer admission/quit guard and interrupt active copies.",
+          "source_locations": [
+            "src/permissions_mac.rs:260",
+            "src/permissions_mac.rs:337",
+            "src/permissions_mac.rs:651",
+            "src/home_mac.rs:48",
+            "src/home_mac.rs:812"
+          ],
+          "source_evidence": "permission_restart calls restart_app directly. advance uses a non-atomic busy snapshot before restart_app, without closing transfer admissions. restart_app schedules the relaunch then calls super::quit; its final Wake::Quit exits the event loop without the guarded request_quit path.",
+          "verification_scope": "source-confirmed; native reproduction and actual transfer consequences unverified; no new permission/native action was performed by this checkpoint",
+          "remediation_branch": "fix/permission-helper-transfer-guard"
+        },
+        {
+          "id": "MAC-PERMISSION-GUIDE-RESET-DISPATCH",
+          "severity": "P2",
+          "release": "1.0.4",
+          "source_commit": "3d755e64b8fa32d6ca511e189e39afae57171734",
+          "status": "open in released 1.0.4; separate fix in progress; not fixed by this checkpoint",
+          "summary": "The permission guide reset button emits guide_reset, but its native IPC allowlist excludes that command, making the reset handler unreachable from the UI.",
+          "source_locations": [
+            "web/permission-guide.html:11",
+            "web/permission-guide.js:26",
+            "src/permissions_mac.rs:218",
+            "src/permissions_mac.rs:556"
+          ],
+          "source_evidence": "The guide UI sends guide_reset and a native handler exists, but the guide IPC forwarding allowlist admits only guide_ready, guide_reveal and guide_copy. The UI command therefore never reaches the reset handler.",
+          "verification_scope": "source-confirmed; native reset and TCC behavior unverified; no reset or permission change was performed",
+          "remediation_branch": "fix/permission-helper-transfer-guard"
+        }
+      ]
     }
   ],
   "current_release": {
@@ -806,7 +843,7 @@
     "source_commit": "3d755e64b8fa32d6ca511e189e39afae57171734",
     "tag": "v1.0.4",
     "release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.4",
-    "status": "published; final artifacts and installed Mac local-entry/window-close smoke verified; full native acceptance pending",
+    "status": "published; artifact/local-entry smoke verified; known permission-helper defects open and full native acceptance pending",
     "final_ci_run": 40059961386,
     "all_final_ci_checks": "success",
     "public_asset_sha256": {
@@ -817,6 +854,21 @@
     "evidence": "assessments/evidence/release-1.0.4-checkpoint.json",
     "goal_status": "active",
     "verified_persona_scores": "all seven null; no 9/10 certification",
-    "supersedes": "Earlier release-pending and deployed-version facts only; persona objects, rubric, history and native failed/cleaned receipts are unchanged."
+    "supersedes": "Earlier release-pending and deployed-version facts only; persona objects, rubric, history and native failed/cleaned receipts are unchanged.",
+    "known_open_defects": [
+      {
+        "id": "MAC-PERMISSION-RESTART-ADMISSION",
+        "severity": "P1",
+        "status": "open in released 1.0.4; separate fix in progress; not fixed by this checkpoint",
+        "remediation_branch": "fix/permission-helper-transfer-guard"
+      },
+      {
+        "id": "MAC-PERMISSION-GUIDE-RESET-DISPATCH",
+        "severity": "P2",
+        "status": "open in released 1.0.4; separate fix in progress; not fixed by this checkpoint",
+        "remediation_branch": "fix/permission-helper-transfer-guard"
+      }
+    ],
+    "quality_gate_reason": "Known source-confirmed permission-helper restart/admission bypass and unreachable guide_reset UI command remain open in released 1.0.4, in addition to the recorded native acceptance gaps. This checkpoint does not fix them or certify 9/10."
   }
 }
