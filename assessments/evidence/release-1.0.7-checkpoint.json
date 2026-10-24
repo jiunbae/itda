@@ -135,7 +135,8 @@
     {
       "reference": "1a4",
       "result": "APPROVE",
-      "scope": "Pre-execution review of bounded owned CLI cases."
+      "scope": "Pre-execution review of bounded owned CLI cases.",
+      "condition": "Only after the artifact verifier passed; this condition was satisfied before the seven-case execution."
     },
     {
       "reference": "1a5",
@@ -311,7 +312,8 @@
       "actual_version": "1.0.6",
       "actual_public_executable_sha256": "4b2e3bbe5639e7984348ab002e58d155c131293663a6d594892e04cd4acd33b4",
       "independent_review": "1a3 APPROVE",
-      "scope": "One actual public1.0.6 hosted High/High cross-host Copy with explicit confirmation, three NFC hashes and cleanup; no1.0.7 native execution."
+      "scope": "One actual public1.0.6 hosted High/High cross-host Copy with explicit confirmation, three NFC hashes and cleanup; no1.0.7 native execution.",
+      "frozen_receipt_note": "The standalone receipt records its initial pointer status; iteration12 added the quality link without changing the receipt bytes."
     },
     {
       "evidence": "assessments/evidence/native-windows-explorer-ole.json",
