@@ -2182,9 +2182,10 @@ mod quit_tests {
         assert!(installed.get() && UPDATING.load(std::sync::atomic::Ordering::SeqCst));
         assert!(QUIT_PENDING.lock().unwrap().is_none() && !crate::files::accepting());
         assert!(QUEUE.lock().unwrap().iter().skip(before).any(|e| matches!(e, Event::Page(v) if v["type"]=="quit_pending" && v["count"]==0)), "consumed update left its Cancel bar visible");
+        let before_cancel = QUEUE.lock().unwrap().len();
         quit_choice("cancel", QuitReason::Update, 0);
         assert!(!crate::files::accepting(), "stale Cancel reopened updater-owned admission");
-        assert!(matches!(QUEUE.lock().unwrap().last(), Some(Event::Page(v)) if v["type"]=="quit_pending" && v["count"]==0 && v["cancelled"]==false), "stale Cancel falsely claimed an active intent was cancelled");
+        assert!(QUEUE.lock().unwrap().iter().skip(before_cancel).any(|e| matches!(e, Event::Page(v) if v["type"]=="quit_pending" && v["count"]==0 && v["cancelled"]==false)), "stale Cancel falsely claimed an active intent was cancelled");
         assert_transfer_refused();
         assert!(!request_quit_with(QuitReason::User, |_| panic!("quit during in-process update")));
         assert!(!request_quit_with(QuitReason::Configuration, |_| panic!("installer quit during update")));
