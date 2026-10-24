@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "component": "published-windows-native-cross-host-file-copy",
+  "recorded_at": "2026-10-24T09:50:39.789247+00:00",
+  "status": "passed; bounded hosted High/High public1.0.6 component proof only",
+  "run": {
+    "id": 40082905339,
+    "attempt": 1,
+    "url": "https://github.com/jiunbae/itda/actions/runs/40082905339",
+    "event": "workflow_dispatch",
+    "authorized_attempts": 1,
+    "receipt_sha256": "75f8891eea4bd181ad688e56690d55a7cd48f96feb05e5b6d09899b57f47aff7"
+  },
+  "source_and_binary": {
+    "harness_commit": "78b07249603b1f5d5e569e9617f925010bdb4d44",
+    "app_release": "1.0.6",
+    "app_tag": "v1.0.6",
+    "app_source_commit": "26264572c3163fb63ee1bcfc64508d0f187bf72d",
+    "app_release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.6",
+    "app_published_at": "2026-10-24T08:13:58Z",
+    "actual_public_executable_sha256": "4b2e3bbe5639e7984348ab002e58d155c131293663a6d594892e04cd4acd33b4",
+    "public_checksum_file_sha256": "72b141466a396d3a671ebbbb4aa1b25989430d3ebbb5ce18932908100ec4ffb6",
+    "execution_origin": "Actual published unsigned Windows executable; not a same-job rebuilt candidate.",
+    "harness_source_verification": "Fourteen reviewed source blobs associated with the harness and public app source; Windows checkout LF-to-CRLF transforms accounted for. Source association is not signed build attestation."
+  },
+  "review": {
+    "one_attempt_authorization_reference": "1a2",
+    "independent_result_review": {
+      "reference": "1a3",
+      "request_id": "req_18e16e0118e284a8_1a3",
+      "result": "APPROVE",
+      "scope": "Independent read-only verification of an own artifact copy; bounded actual public1.0.6 cross-host proof."
+    }
+  },
+  "observed_environment": {
+    "platform": "hosted Windows CI",
+    "source_integrity_rid": 12288,
+    "destination_integrity_rid": 12288,
+    "integrity": "High/High",
+    "screen": {
+      "width": 1024,
+      "height": 768,
+      "dpi": 96
+    },
+    "source_and_destination": "Two distinct host/page/file-window bindings in one private app profile, with generated loopback-only SFTP fixtures."
+  },
+  "native_input": {
+    "method": "Tagged SendInput scoped to owned source/destination file windows; CDP prepares and observes fixture state rather than substituting the drag.",
+    "native_begin_count": 1,
+    "native_end_count": 1,
+    "ole_entered": true,
+    "ole_query_count": 54,
+    "ole_drop_committed": true,
+    "tagged_drag_mouse_echoes": 126,
+    "tagged_confirmation_mouse_echoes": 6,
+    "tagged_key_echoes": 0,
+    "unmatched_hook_count": 0,
+    "interference": false,
+    "emergency_release": false,
+    "confirmation": "One observed target Copy confirmation was explicitly clicked after the opaque native drop."
+  },
+  "routing_and_copy": {
+    "opaque_destination_drop_count": 1,
+    "filesystem_path_drop_count": 0,
+    "source_binding_verified": true,
+    "distinct_destination_binding_verified": true,
+    "destination_transfer_count": 1,
+    "unique_copy_job_count": 1,
+    "final_job_state": "completed",
+    "matching_drag_lease_release_count": 1,
+    "move_requested": false,
+    "before_confirmation": {
+      "destination_empty": true,
+      "transfer_count": 0,
+      "job_count": 0,
+      "data_read_bytes": 0,
+      "data_write_bytes": 0
+    },
+    "after_confirmation": {
+      "data_read_bytes": 2097612,
+      "data_write_bytes": 2097612,
+      "final_file_count": 3,
+      "final_folder_count": 1,
+      "destination_names_nfc": true,
+      "all_hashes_match": true
+    },
+    "file_hashes": [
+      {
+        "generic_type": "binary payload",
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      },
+      {
+        "generic_type": "nested text file",
+        "sha256": "258ba19a8919411a018dba28784b8bfc1b0355a00587e7fe678532a4f1a9414b"
+      },
+      {
+        "generic_type": "synthetic Korean PDF",
+        "sha256": "99f21978f69ca643db051efefb505d92a546d9f119bb232cd20a909bf5f60a35"
+      }
+    ],
+    "source_preservation": {
+      "snapshot_count": 4,
+      "source_names_nfd_retained": true,
+      "source_tree_and_file_hashes_unchanged": true
+    },
+    "timing_limit": "No data reads/writes before confirmation were observed in this run. This is not a universal laziness, protocol timing or performance guarantee."
+  },
+  "cleanup": {
+    "status": "passed",
+    "controller_exit": {
+      "code": 0,
+      "signal": null,
+      "observed": true
+    },
+    "app_exit": {
+      "code": 0,
+      "signal": null,
+      "observed": true
+    },
+    "forced_app_termination": false,
+    "remaining_owned_app_processes": 0,
+    "unapproved_prompts": 0,
+    "startup_unchanged": true,
+    "controller_finally": {
+      "confirmation_attempted": true,
+      "stop_received": true,
+      "drag_attempted": true,
+      "input_hooks_removed": true,
+      "quiescent": true,
+      "buttons_up": true
+    },
+    "resource_teardown_gate": {
+      "controller_quiescent": true,
+      "app_stopped": true,
+      "no_owned_app_processes": true,
+      "observations_persisted": true,
+      "fixture_processes_known": true
+    },
+    "fixture_termination": {
+      "fixture_count": 2,
+      "termination_requested": true,
+      "exit_events_observed": true,
+      "reported_signal": "SIGTERM",
+      "graceful_protocol_shutdown_claimed": false,
+      "note": "Windows process termination was observed; SIGTERM here is not evidence of a graceful server shutdown."
+    },
+    "owned_workspaces_removed": true
+  },
+  "limits": [
+    "One hosted High/High CI copy between generated loopback SFTP hosts and two native Itda windows; not physical user-PC/Medium-integrity/150% DPI/assistive-technology/multi-monitor proof.",
+    "No Mac, mobile, real production remote host, native cross-host move, conflict recovery, cancellation or complete persona journey acceptance.",
+    "The actual executed public binary is1.0.6; no1.0.7 binary or release acceptance is established by this receipt.",
+    "This separate cross-host result does not overwrite or reclassify any of the six earlier Explorer-target attempts, including their failures and original cleanup outcomes."
+  ],
+  "assessment_effect": {
+    "persona_scores_changed": false,
+    "all_seven_verified_scores_remain_null": true,
+    "goal_achieved": false,
+    "quality_pointer_updated": false
+  },
+  "privacy": "Sanitized allowlist only: no process/window identifiers, network endpoints, opaque tokens, source filenames, filesystem locations, credentials, raw production metadata, screenshots or accessibility trees."
+}

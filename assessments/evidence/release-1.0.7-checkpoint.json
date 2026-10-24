@@ -1,0 +1,347 @@
+{
+  "schema_version": 1,
+  "mac_artifact": {
+    "bundle_id": "dev.jiun.itda",
+    "bundle_version": "1.0.7",
+    "minimum_macos": "12.0",
+    "architectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "executable_sha256": "b818f4d610f93d614c1bd09a263ef443ba27382340dff508b846dd2821c7f647",
+    "team": "728FW73BS8",
+    "signature": "Developer ID Application, hardened runtime; deep strict verification passed",
+    "gatekeeper": "accepted Notarized Developer ID",
+    "stapled_ticket": "validated",
+    "capture_compatibility": {
+      "status": "passed",
+      "slices": [
+        {
+          "architecture": "x86_64",
+          "minimum_macos": "10.12",
+          "screen_capture_kit": "weak"
+        },
+        {
+          "architecture": "arm64",
+          "minimum_macos": "11.0",
+          "screen_capture_kit": "weak"
+        }
+      ]
+    }
+  },
+  "windows_artifact": {
+    "machine": "AMD64",
+    "subsystem": "Windows GUI",
+    "version_strings": {
+      "FileDescription": "Itda",
+      "FileVersion": "1.0.7",
+      "InternalName": "itda",
+      "OriginalFilename": "itda.exe",
+      "ProductName": "Itda",
+      "ProductVersion": "1.0.7"
+    },
+    "per_monitor_v2": true,
+    "requested_execution_levels": [
+      "asInvoker"
+    ],
+    "authenticode_signed": false
+  },
+  "embedded_ui_whole_blob_proof": [
+    {
+      "file": "web/files.js",
+      "lf_source_sha256": "359f5eb886acf088bfb8f55f64c64213a7fcb8258d75d59a531233afcec88cb8",
+      "windows_crlf_sha256": "8dc4567d71d0d25446441e2b85e870e2932013b51069900a8ef6df78cc51550b",
+      "mac_exact_lf_count": 2,
+      "windows_exact_crlf_count": 1,
+      "transform": "only LF-to-CRLF on Windows checkout"
+    },
+    {
+      "file": "web/permissions.js",
+      "lf_source_sha256": "0727d5c47ea58658dc8f1d54f5f6a7c399b15c09b76205dbba640a5c7bc5d976",
+      "windows_crlf_sha256": "4880a73657a4c6271f586228699dad130d588527671d7da33d7b35323a3c3548",
+      "mac_exact_lf_count": 2,
+      "windows_exact_crlf_count": 1,
+      "transform": "only LF-to-CRLF on Windows checkout"
+    }
+  ],
+  "local_mac": {
+    "installed_version": "1.0.5",
+    "status": "AX observation unavailable; manual close information/approval pending",
+    "observed_errors": [
+      "window_list_unavailable",
+      "app_accessibility_unresponsive"
+    ],
+    "ax_error_code": -25204,
+    "tacto_permission_health": "healthy as reported by release owner; no permission change",
+    "existing_sample": {
+      "duration_seconds": 3,
+      "observed_main_thread": "event wait",
+      "diagnosis": "No crash or deadlock established"
+    },
+    "force_or_native_close_performed_by_this_checkpoint": false,
+    "1.0.7_installed": false,
+    "metadata_observed_at": "2026-10-24T10:09Z",
+    "observation_scope": "Fresh read-only installed-bundle metadata only; no new UI/reinstall/quit. AX errors and sample are previous observations, not new native checks."
+  },
+  "remote_rollout": {
+    "anonymous_installed_versions": [
+      "1.0.2",
+      "0.9.24"
+    ],
+    "status": "unchanged older apps; idle/no-transfer and close answer pending",
+    "legacy_quit_guarded": false,
+    "close_install_or_launch_performed": false,
+    "all_remote_machines_updated": false,
+    "observation_scope": "Last-observed versions only; no fresh live SSH check. Verified1.0.5 staged only; no agent remote close/install/launch; actual idle/close answer pending."
+  },
+  "goal_status": "active",
+  "goal_achieved": false,
+  "component": "1.0.7-public-release-and-owned-import-evidence",
+  "recorded_at": "2026-10-24T10:15:22.752325+00:00",
+  "status": "public1.0.7-verified; local1.0.5-and-remote-rollout-pending; full-quality-goal-incomplete",
+  "source_commit": "659694b1ee8aa589e7cd3cdff4644aabc47aa1d2",
+  "tag": "v1.0.7",
+  "release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.7",
+  "published_at": "2026-10-24T10:07:40Z",
+  "latest_at_public_check": true,
+  "public_checked_at": "2026-10-24T10:09:37.899976+00:00",
+  "final_ci": {
+    "run_id": 40083369358,
+    "url": "https://github.com/jiunbae/itda/actions/runs/40083369358",
+    "checks": {
+      "build": "success",
+      "macos": "success",
+      "windows-file-ui": "success"
+    }
+  },
+  "public_asset_sha256": {
+    "Itda-macos-universal.zip": "c11cc844f9d781c347791f444e54b3ac8dd6a4298e6afdfbbdf5de0512d03acb",
+    "itda.exe": "b652708d94ba9942883048c5d4beac733cfbbfb55a3175c0a9ff6f2d1dfcb456",
+    "SHA256SUMS.txt": "40fbd1b8e35ff0e4ce50eed14a3eedd4e6fefd29ba0a8b3a12f923c34ad0dd8e"
+  },
+  "public_asset_bytes": {
+    "Itda-macos-universal.zip": 8770306,
+    "itda.exe": 7554560,
+    "SHA256SUMS.txt": 166
+  },
+  "public_download_scope": "Unauthenticated HTTPS curl -q, no auth/cookies/config; all3 hashes match independently reviewed CI and draft assets; manually associated source/CI/artifacts, not signed build attestation.",
+  "draft_asset_verification": {
+    "status": "passed",
+    "checked_at": "2026-10-24T10:02:58.750813+00:00",
+    "all_three_hashes_match_public_and_ci": true,
+    "execution_performed_by_draft_download_check": false
+  },
+  "independent_reviews": [
+    {
+      "reference": "1a4",
+      "result": "APPROVE",
+      "scope": "Pre-execution review of bounded owned CLI cases.",
+      "condition": "Only after the artifact verifier passed; this condition was satisfied before the seven-case execution."
+    },
+    {
+      "reference": "1a5",
+      "result": "REQUEST CHANGES",
+      "scope": "Artifacts, own CI/draft copies, signatures and bounded CLI evidence accepted; release wording required correction, then1a6 approved publication."
+    },
+    {
+      "reference": "1a6",
+      "request_id": "req_18e16f358fa082b8_1a6",
+      "result": "APPROVE PUBLICATION",
+      "scope": "Corrected final publication wording; no full native journey certification."
+    }
+  ],
+  "owned_cli_import_smoke": {
+    "status": "passed",
+    "version": "1.0.7",
+    "source_commit": "659694b1ee8aa589e7cd3cdff4644aabc47aa1d2",
+    "mode": "headless --import-configuration with generated ITDA_DATA_DIR only",
+    "cases": [
+      {
+        "case": "empty-valid",
+        "status": "passed",
+        "unchanged_sections": [
+          "hosts.json",
+          "accounts.json",
+          "settings.json"
+        ],
+        "reply": {
+          "accounts": 0,
+          "hosts": 0,
+          "keys": 0,
+          "ok": true,
+          "secrets": 0
+        },
+        "exit_code": 0,
+        "no_imported_keys": true
+      },
+      {
+        "case": "empty-invalid",
+        "status": "passed",
+        "unchanged_sections": [
+          "hosts.json",
+          "accounts.json",
+          "settings.json"
+        ],
+        "reply": {
+          "accounts": 0,
+          "hosts": 0,
+          "keys": 0,
+          "ok": true,
+          "secrets": 0
+        },
+        "exit_code": 0,
+        "no_imported_keys": true
+      },
+      {
+        "case": "empty-missing",
+        "status": "passed",
+        "unchanged_sections": [
+          "hosts.json",
+          "accounts.json",
+          "settings.json"
+        ],
+        "reply": {
+          "accounts": 0,
+          "hosts": 0,
+          "keys": 0,
+          "ok": true,
+          "secrets": 0
+        },
+        "exit_code": 0,
+        "no_imported_keys": true
+      },
+      {
+        "case": "host-only-corrupt-opt-outs",
+        "status": "passed",
+        "unchanged_sections": [
+          "accounts.json",
+          "settings.json"
+        ],
+        "reply": {
+          "accounts": 0,
+          "hosts": 1,
+          "keys": 0,
+          "ok": true,
+          "secrets": 0
+        },
+        "exit_code": 0,
+        "no_imported_keys": true
+      },
+      {
+        "case": "missing-host-account",
+        "status": "passed",
+        "unchanged_sections": [
+          "hosts.json",
+          "accounts.json",
+          "settings.json"
+        ],
+        "exit_code": 1,
+        "rejected_before_configuration_lock_backup_or_keys": true,
+        "no_imported_keys": true
+      },
+      {
+        "case": "missing-files-account",
+        "status": "passed",
+        "unchanged_sections": [
+          "hosts.json",
+          "accounts.json",
+          "settings.json"
+        ],
+        "exit_code": 1,
+        "rejected_before_configuration_lock_backup_or_keys": true,
+        "no_imported_keys": true
+      },
+      {
+        "case": "custom-files-login",
+        "status": "passed",
+        "unchanged_sections": [
+          "accounts.json",
+          "settings.json"
+        ],
+        "reply": {
+          "accounts": 0,
+          "hosts": 1,
+          "keys": 0,
+          "ok": true,
+          "secrets": 0
+        },
+        "exit_code": 0,
+        "no_imported_keys": true
+      }
+    ],
+    "cleanup": "Seven CLI processes exited as expected (five0, two deliberate1); all owned temporary profiles removed",
+    "limits": [
+      "Configuration import only; not remote provisioning/install/swap/startup or native GUI/permission/transfer acceptance.",
+      "No user profiles or selected secrets; no keychain-call instrumentation. Existing source/NoVault tests establish the no-secret path."
+    ],
+    "executable_sha256": "b818f4d610f93d614c1bd09a263ef443ba27382340dff508b846dd2821c7f647",
+    "executable_provenance": "Signed CI ZIP executable, public-zip-identical by exact ZIP SHA256 equality; no public-download execution-origin claim.",
+    "production_observations_published": false,
+    "additional_scope": "Missing host/files account references rejected before configuration lock/backups/key files; explicit custom file login preserved. No selected secrets/keys, real profile, GUI, install or remote provisioning acceptance."
+  },
+  "published_source_changes": [
+    {
+      "pr": 138,
+      "merge": "b66d0ac32e7403818e894f6703d3e1f7de66a38a",
+      "independent_review": "19c APPROVE",
+      "scope": "Selected host/files account references validated; custom file login preserved. Twenty-two focused source tests and Windows/Mac CI passed; seven owned signed-Mac CLI cases below."
+    },
+    {
+      "pr": 139,
+      "merge": "840b97b3d2089b99ecfd322ffd4fa1a26bee0f63",
+      "independent_review": "19f APPROVE",
+      "scope": "Paired English/Korean managed-transfer Wait/Stop/Cancel README guidance; screenshots retained after source audit."
+    },
+    {
+      "pr": 140,
+      "merge": "2a9cba9da9471fc4cb532f240160a6f73172c90c",
+      "independent_review": "1a0 APPROVE",
+      "scope": "Bounded cross-host harness; actual authorized native run tested public1.0.6, not1.0.7."
+    },
+    {
+      "pr": 141,
+      "merge": "659694b1ee8aa589e7cd3cdff4644aabc47aa1d2",
+      "independent_review": "1a1 APPROVE",
+      "scope": "Version1.0.7 release source."
+    }
+  ],
+  "prior_native_component_proofs": [
+    {
+      "evidence": "assessments/evidence/native-public-windows-crosshost-1.0.6.json",
+      "run_id": 40082905339,
+      "actual_version": "1.0.6",
+      "actual_public_executable_sha256": "4b2e3bbe5639e7984348ab002e58d155c131293663a6d594892e04cd4acd33b4",
+      "independent_review": "1a3 APPROVE",
+      "scope": "One actual public1.0.6 hosted High/High cross-host Copy with explicit confirmation, three NFC hashes and cleanup; no1.0.7 native execution.",
+      "frozen_receipt_note": "The standalone receipt records its initial pointer status; iteration12 added the quality link without changing the receipt bytes."
+    },
+    {
+      "evidence": "assessments/evidence/native-windows-explorer-ole.json",
+      "run_id": 40075056787,
+      "status": "passed; scoped actual cancel and positive Explorer consumption",
+      "candidate_binary_sha256": "af9c10ce4828b363c475be5766a37d51e5103b57b35be32241520eb0dbd447e5",
+      "public_executable_sha256": "4b2e3bbe5639e7984348ab002e58d155c131293663a6d594892e04cd4acd33b4",
+      "binary_identity_equal": false,
+      "scope": "Hosted High/High IL native Explorer IDataObject/IStream proof on generated loopbackSFTP files. Same release source, different CI executable from public candidate; no physical user-PC, 150%, AT, phone, Mac, cross-window Itda-host drag or persona9 acceptance.",
+      "actual_version": "1.0.6"
+    }
+  ],
+  "verification_gaps": [
+    "All seven persona scores and verified scores remain null. The fixed rubric and all 28 core journeys have not been certified at 9/10; no global P1/P2 absence claim.",
+    "Published1.0.7 is not installed locally. Fresh read-only bundle metadata still shows1.0.5. Previous AX errors(-25204), healthy Tacto permission report and three-second event-wait sample do not establish crash/deadlock; manual-close answer remains pending.",
+    "Two anonymous remote Macs were last observed on1.0.2 and0.9.24 with verified1.0.5 staged only; no fresh live SSH check. Explicit idle/no-transfer information and close approval remain pending because legacy Quit is unguarded. No remote close/install/launch/configuration/TCC change or completed fleet rollout is claimed.",
+    "Hosted native proofs apply to1.0.6 only: Explorer same-source CI candidate differs from public bytes; separate cross-host Copy used actual public1.0.6. Neither proves1.0.7 native behavior, Medium-integrity Windows, physical input,150% DPI, AT, multimonitor, cross-host conflict/move/cancel or full persona journeys.",
+    "Mac4MiB managed-copy Wait/Stop human approval remains unanswered after the earlier pre-dispatch policy refusal. No new Mac Wait/Stop action or acceptance.",
+    "Mac Finder promise queue, Dock/AppleEvent/logout, actual permission restart/manual re-registration and actual updater/remote-installer/Force lifetimes remain unverified.",
+    "iOS runtime remains blocked by unresolved per-device/process pasteboard isolation; build-only MobileSafari scaffolding is not phone, QR camera, Korean IME, clipboard/privacy or LAN/HTTPS proof.",
+    "Older macOS native runtime including12.0–12.2 remains unverified; weak linking and minimum-version metadata are static artifact facts only.12.3+ remains recommended.",
+    "Seven owned signed-Mac headless import cases are not selected-secret/key, real-profile, GUI, remote installation/application swap/startup/TCC acceptance. Selected JSON typed serialization still does not promise unknown-field preservation; unselected sections are preserved."
+  ],
+  "qa_guard_history": {
+    "initial_verifier_result": "Root file-existence assertion ran before the download completed; private first failure retained.",
+    "resolution": "Waited on the same existing download handles until exit0, then completed normal read-only artifact verification and extraction. The premature attempt performed no extraction or execution; no download restart or CI/native rerun occurred. Seven headless CLI cases ran once after verification passed.",
+    "application_failure_claimed": false
+  },
+  "history_policy": "All eleven prior iterations, six Explorer attempts including failed cleanup/observation loss, parser failures and rubric/personas remain unchanged. Public1.0.6 cross-host evidence remains separate from1.0.7 static/CLI proof.",
+  "privacy": "Sanitized allowlist only; no production metadata, personal/profile/install/workspace paths, source filenames, PIDs/HWNDs/endpoints/tokens, credentials, raw accessibility trees or screenshots. Published asset byte counts are public artifact sizes only."
+}
