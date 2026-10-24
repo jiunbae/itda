@@ -171,7 +171,8 @@ public class ItdaCrossHostWindow {
   if(source.StartTime.ToUniversalTime().Ticks.ToString()!=layout.SourceStartedTicks||target.StartTime.ToUniversalTime().Ticks.ToString()!=layout.TargetStartedTicks||source.SessionId!=layout.Session||target.SessionId!=layout.Session)throw new Exception("Fixture process identity changed");
   }finally{SetThreadDpiAwarenessContext(previous);}
  }
- public static bool ButtonsUp(){foreach(int key in new int[]{1,2,4,5,6,16,17,18,91,92})if((GetAsyncKeyState(key)&0x8000)!=0)return false;return true;}
+ // Include Escape: a partial emergency SendInput must never imply quiescence.
+ public static bool ButtonsUp(){foreach(int key in new int[]{1,2,4,5,6,16,17,18,27,91,92})if((GetAsyncKeyState(key)&0x8000)!=0)return false;return true;}
  public static uint[] ProbeIdle(){LASTINPUTINFO v=new LASTINPUTINFO();v.Size=(uint)Marshal.SizeOf(typeof(LASTINPUTINFO));if(!GetLastInputInfo(ref v))throw new Exception("Idle unknown");uint tick=unchecked((uint)Environment.TickCount);return new uint[]{v.Time,tick,unchecked(tick-v.Time)};}
  // One bounded scenario. No retries or payload downloads are initiated here.
  public static DragInfo Action(LayoutInfo layout,int x,int y,int targetX,int targetY,bool confirm){
@@ -197,7 +198,7 @@ public class ItdaCrossHostWindow {
    LASTINPUTINFO idle=new LASTINPUTINFO();idle.Size=(uint)Marshal.SizeOf(typeof(LASTINPUTINFO));
    if(!havePrior||!GetLastInputInfo(ref idle))throw new Exception("Console cursor/idle state unavailable");
    info.InputBefore=idle.Time;info.TickBefore=unchecked((uint)Environment.TickCount);info.IdleBefore=unchecked(info.TickBefore-idle.Time);if(info.IdleBefore>Int32.MaxValue||info.IdleBefore<5000)throw new Exception("Console has recent input; no injected drag attempted");
-   foreach(int key in new int[]{1,2,4,5,6,16,17,18,91,92})if((GetAsyncKeyState(key)&0x8000)!=0)throw new Exception("Input button/modifier already down");
+   foreach(int key in new int[]{1,2,4,5,6,16,17,18,27,91,92})if((GetAsyncKeyState(key)&0x8000)!=0)throw new Exception("Input button/modifier already down");
    priorForeground=GetForegroundWindow();GetWindowThreadProcessId(priorForeground,out priorPid);info.PriorForegroundPid=priorPid;
    // Monitor only attribution, never record key values or cursor data. Every
    // injected event is tagged; any other event invalidates this run.

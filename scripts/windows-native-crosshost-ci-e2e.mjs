@@ -24,7 +24,7 @@ export function safeFixturePath(value){
 // A stopped controller is insufficient: app exit AND read-only zero owned
 // app/WebView processes must both be proved before disconnecting dependencies.
 export function mayTeardownResources(state){
- return state.controllerQuiescent===true&&state.appStopped===true&&state.ownedAppProcessCount===0&&state.observationsPersisted===true;
+ return state.controllerQuiescent===true&&state.appStopped===true&&state.ownedAppProcessCount===0&&state.observationsPersisted===true&&state.fixtureProcessesKnown===true;
 }
 export function sanitizeWindowObservation(raw){
  const host=value=>choice(value,fixedHosts);
@@ -204,7 +204,9 @@ finally{
   // through to disconnect CDP, terminate fixture servers or remove their files.
   try{if(root){const raw=execFileSync('pwsh',['-NoProfile','-NonInteractive','-Command',"$ErrorActionPreference='Stop';$r=$env:ITDA_QA_OWNED_ROOT; @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {($_.ExecutablePath -eq (Join-Path $r 'itda.exe')) -or ($_.Name -eq 'msedgewebview2.exe' -and (-not $_.CommandLine -or $_.CommandLine.Contains($r+'\\',[StringComparison]::OrdinalIgnoreCase)))}).Count"],{encoding:'utf8',env:{...process.env,ITDA_QA_OWNED_ROOT:root},timeout:15000});assert(/^\d+$/.test(raw.trim()),'Owned-process absence probe invalid');ownedAppProcessCount=Number(raw.trim());report.cleanup.owned_app_process_count=ownedAppProcessCount;if(ownedAppProcessCount!==0)errors.push('Owned app/WebView process remains; no forced cleanup');}}catch(e){errors.push(e.message);}
  }
- const teardownState={controllerQuiescent,appStopped,ownedAppProcessCount,observationsPersisted};
+ const fixtureProcessesKnown=servers.every(s=>s.child&&s.exit&&Number.isInteger(s.child.pid)&&s.child.pid>0);
+ if(!fixtureProcessesKnown){report.cleanup.fixture_startup_incomplete=true;errors.push('Fixture startup ownership/exit observation unavailable; all resources retained');}
+ const teardownState={controllerQuiescent,appStopped,ownedAppProcessCount,observationsPersisted,fixtureProcessesKnown};
  report.cleanup.resource_teardown_gate=teardownState;
  if(mayTeardownResources(teardownState)){
   if(browser)await Promise.race([browser.close().catch(()=>{}),sleep(3000)]);

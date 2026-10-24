@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {mayTeardownResources,sanitizeWindowObservation,sanitizeTreeObservation,safeFixturePath} from '../windows-native-crosshost-ci-e2e.mjs';
 const sha=s=>createHash('sha256').update(s).digest('hex');
-const complete={controllerQuiescent:true,appStopped:true,ownedAppProcessCount:0,observationsPersisted:true};
+const complete={controllerQuiescent:true,appStopped:true,ownedAppProcessCount:0,observationsPersisted:true,fixtureProcessesKnown:true};
 test('controller completion alone cannot authorize dependency/resource teardown',()=>{
  assert.equal(mayTeardownResources(complete),true);
  for(const change of [
@@ -12,6 +12,7 @@ test('controller completion alone cannot authorize dependency/resource teardown'
   {ownedAppProcessCount:1},{ownedAppProcessCount:null},{ownedAppProcessCount:'0'}, // live WebView or failed/ambiguous probe
   {controllerQuiescent:false},{controllerQuiescent:undefined},
   {observationsPersisted:false},{observationsPersisted:undefined},
+  {fixtureProcessesKnown:false},{fixtureProcessesKnown:undefined}, // partial fixture startup has no safe stop/delete authority
  ])assert.equal(mayTeardownResources({...complete,...change}),false,JSON.stringify(change));
 });
 test('failure receipt retains useful route/job/prompt facts but hashes every opaque identity',()=>{
