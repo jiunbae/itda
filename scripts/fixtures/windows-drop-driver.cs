@@ -70,7 +70,50 @@ public class ItdaQualityWindow {
   finally{if(desktop!=IntPtr.Zero)CloseDesktop(desktop);if(data!=IntPtr.Zero)WTSFreeMemory(data);}
  }
  static void Pump(int ms){DateTime end=DateTime.UtcNow.AddMilliseconds(ms);do{MSG m;while(PeekMessage(out m,IntPtr.Zero,0,0,1)){TranslateMessage(ref m);DispatchMessage(ref m);}Thread.Sleep(2);}while(DateTime.UtcNow<end);}
- public class DragInfo { public string Outcome,ReleasePoint,Error;public bool Interfered,EmergencyEscaped,EmergencyMayHaveOfferedSource;public uint InputBefore,InputAfter,IdleBefore,TickBefore;public string FocusRestore,CursorRestore;public uint PriorForegroundPid;public long StartedUnixMs,ReleaseUnixMs,FirstExplorerUnixMs;public uint[] GuardBefore,GuardAfter; }
+ public enum HookKind { Mouse,Key }
+ public enum HookMessageClass { MouseMove,MouseButtonDown,MouseButtonUp,MouseWheel,OtherMouse,KeyDown,KeyUp,OtherKey }
+ public enum ActivationRoute { NotAttempted,ForegroundRequest,OwnedStatusBarFallback }
+ public class UnmatchedHookInfo {
+  public HookKind Hook;public HookMessageClass MessageClass;
+  public bool Injected,LowerILInjected,ExtraZero,ExtraEqual,ExtraLow32Equal,LastOwnTargetKnown,MousePointEqualLastOwnTarget;
+  public int MsSinceLastTaggedSendAttempt,TaggedSendAttemptCount;
+ }
+ public class DragInfo { public string Outcome,ReleasePoint,Error;public bool Interfered,EmergencyEscaped,EmergencyMayHaveOfferedSource;public uint InputBefore,InputAfter,IdleBefore,TickBefore;public string FocusRestore,CursorRestore;public uint PriorForegroundPid;public long StartedUnixMs,ReleaseUnixMs,FirstExplorerUnixMs;public uint[] GuardBefore,GuardAfter;
+  public ActivationRoute ActivationPath;public int TaggedEchoCount,TaggedSendAttemptCount,UnmatchedHookCount;public List<UnmatchedHookInfo> UnmatchedHooks=new List<UnmatchedHookInfo>();
+ }
+ // Diagnostic receipt only: no marker normalization or input acceptance changes.
+ // At most 8 coarse unmatched records, counts capped at 10000 and elapsed ms at
+ // 60000 (-1 before any tagged send). No VK, scan, cursor, message ID, flags word
+ // or raw extra-info value is retained. Targets stay private to this one Drag.
+ class Attribution {
+  readonly DragInfo info;readonly UIntPtr marker;bool sent,haveTarget;uint lastSendTick;POINT lastTarget;
+  public Attribution(DragInfo value,UIntPtr tag){info=value;marker=tag;}
+  public void BeforeSend(int count){sent=true;lastSendTick=unchecked((uint)Environment.TickCount);info.TaggedSendAttemptCount=Math.Min(10000,info.TaggedSendAttemptCount+count);}
+  public void OwnTarget(int x,int y){lastTarget=new POINT{X=x,Y=y};haveTarget=true;}
+  public bool SamePoint(POINT point){return haveTarget&&point.X==lastTarget.X&&point.Y==lastTarget.Y;}
+  static HookMessageClass Classify(HookKind hook,IntPtr message){
+   long m=message.ToInt64();
+   if(hook==HookKind.Key){if(m==0x100||m==0x104)return HookMessageClass.KeyDown;if(m==0x101||m==0x105)return HookMessageClass.KeyUp;return HookMessageClass.OtherKey;}
+   if(m==0x200)return HookMessageClass.MouseMove;
+   if(m==0x201||m==0x204||m==0x207||m==0x20b)return HookMessageClass.MouseButtonDown;
+   if(m==0x202||m==0x205||m==0x208||m==0x20c)return HookMessageClass.MouseButtonUp;
+   if(m==0x20a||m==0x20e)return HookMessageClass.MouseWheel;return HookMessageClass.OtherMouse;
+  }
+  public void Observe(HookKind hook,IntPtr message,uint flags,UIntPtr extra,bool samePoint){
+   if(extra==marker){info.TaggedEchoCount=Math.Min(10000,info.TaggedEchoCount+1);return;}
+   // Every unmatched event still invalidates the run, even after the record cap.
+   info.Interfered=true;info.UnmatchedHookCount=Math.Min(10000,info.UnmatchedHookCount+1);
+   if(info.UnmatchedHooks.Count>=8)return;
+   var record=new UnmatchedHookInfo();record.Hook=hook;record.MessageClass=Classify(hook,message);
+   // MSLLHOOKSTRUCT: INJECTED=0x1. KBDLLHOOKSTRUCT: INJECTED=0x10.
+   // Both use LOWER_IL_INJECTED=0x2. These flags diagnose; none waive failure.
+   record.Injected=(flags&(hook==HookKind.Mouse?0x1u:0x10u))!=0;record.LowerILInjected=(flags&0x2)!=0;
+   record.ExtraZero=extra==UIntPtr.Zero;record.ExtraEqual=extra==marker;record.ExtraLow32Equal=unchecked((uint)extra.ToUInt64())==unchecked((uint)marker.ToUInt64());
+   record.LastOwnTargetKnown=haveTarget;record.MousePointEqualLastOwnTarget=hook==HookKind.Mouse&&samePoint;
+   record.MsSinceLastTaggedSendAttempt=sent?(int)Math.Min(60000u,unchecked((uint)Environment.TickCount-lastSendTick)):-1;record.TaggedSendAttemptCount=info.TaggedSendAttemptCount;
+   info.UnmatchedHooks.Add(record);
+  }
+ }
  public class LayoutInfo { public long File,Explorer; public int OriginX,OriginY,TargetX,TargetY; public RECT Work,Source,Destination;public uint SourcePid,ExplorerPid,SourceIntegrity,ExplorerIntegrity;public int Session;public string SourceStartedTicks,ExplorerStartedTicks; }
  // Read-only validation of the originally pinned home HWND. Process.MainWindowHandle
  // may switch to the file window; it is not an identity for a specific window.
@@ -111,9 +154,9 @@ public class ItdaQualityWindow {
    LayoutInfo info=new LayoutInfo();info.File=file.ToInt64();info.Explorer=explorer;info.OriginX=origin.X;info.OriginY=origin.Y;info.TargetX=(view.Left+view.Right)/2;info.TargetY=(view.Top+view.Bottom)/2;info.SourcePid=filePid;info.ExplorerPid=explorerPid;info.SourceIntegrity=fi;info.ExplorerIntegrity=ei;info.Session=fp.SessionId;info.SourceStartedTicks=fp.StartTime.ToUniversalTime().Ticks.ToString();info.ExplorerStartedTicks=ep.StartTime.ToUniversalTime().Ticks.ToString();info.Work=mi.Work;info.Source=source;info.Destination=destination;return info;
   } finally {SetThreadDpiAwarenessContext(old);}
  }
- static void Mouse(uint flags,UIntPtr marker){INPUT i=new INPUT();i.Value.Mouse.Flags=flags;i.Value.Mouse.Extra=marker;if(SendInput(1,new INPUT[]{i},Marshal.SizeOf(typeof(INPUT)))!=1)throw new Exception("Mouse input rejected");}
- static void Move(int x,int y,UIntPtr marker,uint buttons=0){int left=GetSystemMetrics(76),top=GetSystemMetrics(77),w=GetSystemMetrics(78),h=GetSystemMetrics(79);if(w<2||h<2)throw new Exception("Virtual desktop unavailable");INPUT i=new INPUT();i.Value.Mouse.X=(int)((long)(x-left)*65535/(w-1));i.Value.Mouse.Y=(int)((long)(y-top)*65535/(h-1));i.Value.Mouse.Flags=0xc001|buttons;i.Value.Mouse.Extra=marker;if(SendInput(1,new INPUT[]{i},Marshal.SizeOf(typeof(INPUT)))!=1)throw new Exception("Move input rejected");}
- static void Escape(UIntPtr marker){INPUT a=new INPUT();a.Type=1;a.Value.Key.Key=0x1b;a.Value.Key.Extra=marker;INPUT b=a;b.Value.Key.Flags=2;if(SendInput(2,new INPUT[]{a,b},Marshal.SizeOf(typeof(INPUT)))!=2)throw new Exception("Cancel input rejected");}
+ static void Mouse(uint flags,UIntPtr marker,Attribution attribution){INPUT i=new INPUT();i.Value.Mouse.Flags=flags;i.Value.Mouse.Extra=marker;attribution.BeforeSend(1);if(SendInput(1,new INPUT[]{i},Marshal.SizeOf(typeof(INPUT)))!=1)throw new Exception("Mouse input rejected");}
+ static void Move(int x,int y,UIntPtr marker,Attribution attribution,uint buttons=0){int left=GetSystemMetrics(76),top=GetSystemMetrics(77),w=GetSystemMetrics(78),h=GetSystemMetrics(79);if(w<2||h<2)throw new Exception("Virtual desktop unavailable");INPUT i=new INPUT();i.Value.Mouse.X=(int)((long)(x-left)*65535/(w-1));i.Value.Mouse.Y=(int)((long)(y-top)*65535/(h-1));i.Value.Mouse.Flags=0xc001|buttons;i.Value.Mouse.Extra=marker;attribution.OwnTarget(x,y);attribution.BeforeSend(1);if(SendInput(1,new INPUT[]{i},Marshal.SizeOf(typeof(INPUT)))!=1)throw new Exception("Move input rejected");}
+ static void Escape(UIntPtr marker,Attribution attribution){INPUT a=new INPUT();a.Type=1;a.Value.Key.Key=0x1b;a.Value.Key.Extra=marker;INPUT b=a;b.Value.Key.Flags=2;attribution.BeforeSend(2);if(SendInput(2,new INPUT[]{a,b},Marshal.SizeOf(typeof(INPUT)))!=2)throw new Exception("Cancel input rejected");}
  // Activate only the requested fixture source (or restore a previously saved
  // window), without typing/clicking on the old foreground window.
  static void ActivateWindow(IntPtr target){
@@ -135,7 +178,7 @@ public class ItdaQualityWindow {
   if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true"||Environment.GetEnvironmentVariable("ITDA_ENABLE_OWNED_INPUT")!="true"||!System.Text.RegularExpressions.Regex.IsMatch(Environment.GetEnvironmentVariable("ITDA_EXPECTED_SOURCE_SHA")??"","^[0-9a-f]{40}$")||Environment.GetEnvironmentVariable("ITDA_EXPECTED_SOURCE_SHA")!=Environment.GetEnvironmentVariable("GITHUB_SHA"))throw new Exception("Native input gate is closed");
   DragInfo info=new DragInfo();info.StartedUnixMs=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();IntPtr old=SetThreadDpiAwarenessContext(new IntPtr(-4));if(old==IntPtr.Zero)throw new Exception("PMv2 context unavailable");
   bool down=false;POINT prior;bool havePrior=GetCursorPos(out prior);IntPtr file=new IntPtr(source),explorer=new IntPtr(destination),mouseHook=IntPtr.Zero,keyHook=IntPtr.Zero,priorForeground=IntPtr.Zero;uint priorPid=0;
-  UIntPtr marker=new UIntPtr((ulong)DateTime.UtcNow.Ticks);HookProc mouse=null,keyboard=null;
+  UIntPtr marker=new UIntPtr((ulong)DateTime.UtcNow.Ticks);var attribution=new Attribution(info,marker);HookProc mouse=null,keyboard=null;
   try{
    AssertOwners(layout);AssertDesktop();
    LASTINPUTINFO idle=new LASTINPUTINFO();idle.Size=(uint)Marshal.SizeOf(typeof(LASTINPUTINFO));
@@ -145,52 +188,52 @@ public class ItdaQualityWindow {
    priorForeground=GetForegroundWindow();GetWindowThreadProcessId(priorForeground,out priorPid);info.PriorForegroundPid=priorPid;
    // Monitor only attribution, never record key values or cursor data. Every
    // injected event is tagged; any other event invalidates this run.
-   mouse=(code,w,l)=>{if(code>=0&&((MOUSEHOOK)Marshal.PtrToStructure(l,typeof(MOUSEHOOK))).Extra!=marker)info.Interfered=true;return CallNextHookEx(IntPtr.Zero,code,w,l);};
-   keyboard=(code,w,l)=>{if(code>=0&&((KEYHOOK)Marshal.PtrToStructure(l,typeof(KEYHOOK))).Extra!=marker)info.Interfered=true;return CallNextHookEx(IntPtr.Zero,code,w,l);};
+   mouse=(code,w,l)=>{if(code>=0){var value=(MOUSEHOOK)Marshal.PtrToStructure(l,typeof(MOUSEHOOK));attribution.Observe(HookKind.Mouse,w,value.Flags,value.Extra,attribution.SamePoint(value.P));}return CallNextHookEx(IntPtr.Zero,code,w,l);};
+   keyboard=(code,w,l)=>{if(code>=0){var value=(KEYHOOK)Marshal.PtrToStructure(l,typeof(KEYHOOK));attribution.Observe(HookKind.Key,w,value.Flags,value.Extra,false);}return CallNextHookEx(IntPtr.Zero,code,w,l);};
    mouseHook=SetWindowsHookEx(14,mouse,GetModuleHandle(null),0);keyHook=SetWindowsHookEx(13,keyboard,GetModuleHandle(null),0);
    if(mouseHook==IntPtr.Zero||keyHook==IntPtr.Zero)throw new Exception("Input attribution hooks unavailable");
    // The desktop is idle and attribution is active. Raise only our two test
    // windows, then focus the source; never send raw input to the old foreground.
    if(!SetWindowPos(file,IntPtr.Zero,0,0,0,0,0x13))throw new Exception("Owned source could not be raised");
-   try{ActivateWindow(file);}catch{}
+   info.ActivationPath=ActivationRoute.ForegroundRequest;try{ActivateWindow(file);}catch{}
    if(GetForegroundWindow()!=file){
-    RECT bounds;if(!GetWindowRect(file,out bounds))throw new Exception("Owned source geometry unavailable");
+    info.ActivationPath=ActivationRoute.OwnedStatusBarFallback;RECT bounds;if(!GetWindowRect(file,out bounds))throw new Exception("Owned source geometry unavailable");
     // Owned blank status-bar space, never a foreign foreground window or title-bar button.
     int ax=bounds.Right-32,ay=bounds.Bottom-18;AssertOwners(layout);AssertDesktop();
     if(GetAncestor(WindowFromPoint(new POINT{X=ax,Y=ay}),2)!=file)throw new Exception("Activation point is not owned");
-    Move(ax,ay,marker);Pump(30);if(info.Interfered)throw new Exception("External input during activation");
+    Move(ax,ay,marker,attribution);Pump(30);if(info.Interfered)throw new Exception("External input during activation");
     if(GetAncestor(WindowFromPoint(new POINT{X=ax,Y=ay}),2)!=file)throw new Exception("Activation point changed");
-    Mouse(2,marker);down=true;Mouse(4,marker);down=false;Pump(80);
+    Mouse(2,marker,attribution);down=true;Mouse(4,marker,attribution);down=false;Pump(80);
     if(GetForegroundWindow()!=file)throw new Exception("Owned source activation refused");
    }
    if(!SetWindowPos(explorer,IntPtr.Zero,0,0,0,0,0x13))throw new Exception("Owned Explorer could not be raised");
    Pump(50);if(info.Interfered)throw new Exception("External console input during focus");
    if(GetAncestor(WindowFromPoint(new POINT{X=x,Y=y}),2)!=file||GetAncestor(WindowFromPoint(new POINT{X=targetX,Y=targetY}),2)!=explorer)throw new Exception("Drop coordinates do not belong to owned windows");
-   Move(x,y,marker);Pump(80);if(info.Interfered||GetForegroundWindow()!=file)throw new Exception("Input/focus changed before mouse down");Move(x,y,marker,2);down=true;
+   Move(x,y,marker,attribution);Pump(80);if(info.Interfered||GetForegroundWindow()!=file)throw new Exception("Input/focus changed before mouse down");Move(x,y,marker,attribution,2);down=true;
    for(int i=1;i<=120;i++){
     int nx=x+(targetX-x)*i/120,ny=y+(targetY-y)*i/120;
     AssertOwners(layout);IntPtr hit=GetAncestor(WindowFromPoint(new POINT{X=nx,Y=ny}),2);
     if(hit!=file&&hit!=explorer)throw new Exception("Drag path left owned windows");
     if(GetForegroundWindow()!=file&&GetForegroundWindow()!=explorer)throw new Exception("Foreground left owned windows");
-    if(hit==explorer&&info.FirstExplorerUnixMs==0)info.FirstExplorerUnixMs=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();AssertDesktop();Move(nx,ny,marker);Pump(12);if(info.Interfered)throw new Exception("External console input detected");
+    if(hit==explorer&&info.FirstExplorerUnixMs==0)info.FirstExplorerUnixMs=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();AssertDesktop();Move(nx,ny,marker,attribution);Pump(12);if(info.Interfered)throw new Exception("External console input detected");
    }
    Pump(500);if(info.Interfered)throw new Exception("External console input detected");
    if(GetAncestor(WindowFromPoint(new POINT{X=targetX,Y=targetY}),2)!=explorer)throw new Exception("Drop target changed");
-   if(cancel){Escape(marker);Pump(100);}
+   if(cancel){Escape(marker,attribution);Pump(100);}
 
    if(info.Interfered||(GetForegroundWindow()!=file&&GetForegroundWindow()!=explorer))throw new Exception("Input/focus changed before release");
-   AssertOwners(layout);AssertDesktop();info.ReleaseUnixMs=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();Move(targetX,targetY,marker,4);down=false;Pump(50);info.ReleasePoint=cancel?"cancel":"target";info.Outcome=cancel?"cancelled-input":"drop-input";
+   AssertOwners(layout);AssertDesktop();info.ReleaseUnixMs=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();Move(targetX,targetY,marker,attribution,4);down=false;Pump(50);info.ReleasePoint=cancel?"cancel":"target";info.Outcome=cancel?"cancelled-input":"drop-input";
   }catch(Exception e){info.Error=e.Message;}
   finally{
    if(down){
     // No key to a foreign foreground, and no abort commit to Explorer.
-    try{AssertOwners(layout);AssertDesktop();IntPtr fg=GetForegroundWindow();if(fg==file||fg==explorer){Escape(marker);info.EmergencyEscaped=true;Pump(80);}
+    try{AssertOwners(layout);AssertDesktop();IntPtr fg=GetForegroundWindow();if(fg==file||fg==explorer){Escape(marker,attribution);info.EmergencyEscaped=true;Pump(80);}
      if(GetAncestor(WindowFromPoint(new POINT{X=x,Y=y}),2)!=file)throw new Exception("No owned emergency release point");
-     Move(x,y,marker);Mouse(4,marker);down=false;info.EmergencyMayHaveOfferedSource=!info.EmergencyEscaped;info.ReleasePoint="emergency-source";
+     Move(x,y,marker,attribution);Mouse(4,marker,attribution);down=false;info.EmergencyMayHaveOfferedSource=!info.EmergencyEscaped;info.ReleasePoint="emergency-source";
     }catch{info.ReleasePoint="emergency-release-failed";}
    }
    LASTINPUTINFO after=new LASTINPUTINFO();after.Size=(uint)Marshal.SizeOf(typeof(LASTINPUTINFO));if(GetLastInputInfo(ref after))info.InputAfter=after.Time;
-   if(havePrior&&!info.Interfered){try{AssertOwners(layout);AssertDesktop();IntPtr hit=GetAncestor(WindowFromPoint(prior),2);if(hit==file||hit==explorer){Move(prior.X,prior.Y,marker);Pump(20);info.CursorRestore="restored-owned";}else info.CursorRestore="skipped-nonowned-prior-point";}catch{info.CursorRestore="failed";}}
+   if(havePrior&&!info.Interfered){try{AssertOwners(layout);AssertDesktop();IntPtr hit=GetAncestor(WindowFromPoint(prior),2);if(hit==file||hit==explorer){Move(prior.X,prior.Y,marker,attribution);Pump(20);info.CursorRestore="restored-owned";}else info.CursorRestore="skipped-nonowned-prior-point";}catch{info.CursorRestore="failed";}}
    if(mouseHook!=IntPtr.Zero)UnhookWindowsHookEx(mouseHook);if(keyHook!=IntPtr.Zero)UnhookWindowsHookEx(keyHook);GC.KeepAlive(mouse);GC.KeepAlive(keyboard);
    IntPtr foreground=GetForegroundWindow();
    if(!info.Interfered&&(foreground==file||foreground==explorer)&&priorForeground!=IntPtr.Zero&&IsWindow(priorForeground)){uint actual;GetWindowThreadProcessId(priorForeground,out actual);if(actual==priorPid&&IsWindowVisible(priorForeground)){try{ActivateWindow(priorForeground);info.FocusRestore="restored";}catch{info.FocusRestore="failed";}}else info.FocusRestore="prior-window-gone";}
