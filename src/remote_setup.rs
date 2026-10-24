@@ -383,6 +383,16 @@ fn validate(p: &Package) -> io::Result<()> {
             return Err(error("공유 설정에 중복되거나 빈 식별자가 있습니다"));
         }
     }
+    // Secrets must belong to a section actually selected in this package. Check
+    // before key/backup/configuration writes or any native credential-store call.
+    let account_ids: HashSet<_> = p.accounts.iter().map(|a| a.id.as_str()).collect();
+    let host_ids: HashSet<_> = p.hosts.iter().map(|h| h.id.as_str()).collect();
+    if p.secrets.iter().any(|secret| !match secret.kind {
+        SecretKind::Account | SecretKind::KeyPass => account_ids.contains(secret.owner.as_str()),
+        SecretKind::Host | SecretKind::Hp | SecretKind::Files => host_ids.contains(secret.owner.as_str()),
+    }) {
+        return Err(error("공유할 암호의 계정 또는 연결이 선택되지 않았습니다"));
+    }
     let key_ids: HashSet<_> = p.keys.iter().map(|k| &k.account).collect();
     if key_ids.len() != p.keys.len()
         || p.keys.iter().map(|k| k.bytes.len() as u64).sum::<u64>() > MAX_PACKAGE / 4
@@ -402,9 +412,18 @@ fn apply(root: &Path, p: &Package, vault: &mut dyn Vault) -> io::Result<Value> {
     apply_locked(root, p, vault)
 }
 fn apply_locked(root: &Path, p: &Package, vault: &mut dyn Vault) -> io::Result<Value> {
-    let mut hosts: Vec<Host> = read_json(root, "hosts.json")?;
-    let mut accounts: Vec<Account> = read_json(root, "accounts.json")?;
-    let mut settings: Settings = read_json(root, "settings.json")?;
+    // Validation and the caller's configuration/installation locks still apply.
+    // An app-only selection must not parse/rewrite destination configuration:
+    // typed round-trips would discard fields this version does not understand.
+    let outcome = || json!({"ok":true,"hosts":p.hosts.len(),"accounts":p.accounts.len(),"secrets":p.secrets.len(),"keys":p.keys.len()});
+    if p.hosts.is_empty() && p.accounts.is_empty() && p.preferences.is_none() && p.secrets.is_empty() && p.keys.is_empty() {
+        return Ok(outcome());
+    }
+    let change_hosts = !p.hosts.is_empty();
+    let change_accounts = !p.accounts.is_empty();
+    let mut hosts: Vec<Host> = if change_hosts { read_json(root, "hosts.json")? } else { Vec::new() };
+    let mut accounts: Vec<Account> = if change_accounts { read_json(root, "accounts.json")? } else { Vec::new() };
+    let mut settings: Settings = if p.preferences.is_some() { read_json(root, "settings.json")? } else { Settings::default() };
     let account_ids: HashMap<_, _> = p
         .accounts
         .iter()
@@ -468,11 +487,13 @@ fn apply_locked(root: &Path, p: &Package, vault: &mut dyn Vault) -> io::Result<V
         if let Some(prefs) = &p.preferences {
             prefs.apply(&mut settings);
         }
-        let changes = [
-            ("accounts.json", serde_json::to_vec_pretty(&accounts)?),
-            ("hosts.json", serde_json::to_vec_pretty(&hosts)?),
-            ("settings.json", serde_json::to_vec_pretty(&settings)?),
-        ];
+        // Opt-outs are byte-preserving, including unknown fields, permissions,
+        // missing files and even invalid JSON. Only selected sections take part
+        // in the existing backup/commit/rollback transaction.
+        let mut changes = Vec::new();
+        if change_accounts { changes.push(("accounts.json", serde_json::to_vec_pretty(&accounts)?)); }
+        if change_hosts { changes.push(("hosts.json", serde_json::to_vec_pretty(&hosts)?)); }
+        if p.preferences.is_some() { changes.push(("settings.json", serde_json::to_vec_pretty(&settings)?)); }
         let backup = root.join("configuration-backups").join(format!(
             "{}-{}",
             store::now(),
@@ -550,9 +571,7 @@ fn apply_locked(root: &Path, p: &Package, vault: &mut dyn Vault) -> io::Result<V
             committed_any = false;
             return Err(e);
         }
-        Ok(
-            json!({"ok":true,"hosts":p.hosts.len(),"accounts":p.accounts.len(),"secrets":p.secrets.len(),"keys":p.keys.len()}),
-        )
+        Ok(outcome())
     })();
     if result.is_err() && !committed_any {
         for path in created_keys {
@@ -1615,6 +1634,174 @@ function Invoke-CimMethod {
             keys: vec![],
         }
     }
+    fn empty_package() -> Package {
+        Package { schema: SCHEMA, origin: "app-only-test".into(), hosts: vec![], accounts: vec![], preferences: None, secrets: vec![], keys: vec![] }
+    }
+    struct NoVault;
+    impl Vault for NoVault {
+        fn get(&self, _: &str) -> io::Result<Option<String>> { panic!("unselected vault was read") }
+        fn set(&mut self, _: &str, _: Option<&str>) -> io::Result<()> { panic!("unselected vault was written") }
+    }
+    fn raw_state(dir: &Scratch, name: &str) -> (Option<Vec<u8>>, Option<bool>, Option<u32>) {
+        let path = dir.0.join(name);
+        let metadata = fs::metadata(&path).ok();
+        #[cfg(unix)]
+        let mode = { use std::os::unix::fs::PermissionsExt; metadata.as_ref().map(|m| m.permissions().mode()) };
+        #[cfg(not(unix))]
+        let mode = None;
+        (fs::read(path).ok(), metadata.map(|m| m.permissions().readonly()), mode)
+    }
+    fn write_raw(dir: &Scratch, name: &str, bytes: &[u8]) {
+        fs::write(dir.0.join(name), bytes).unwrap();
+        #[cfg(unix)]
+        { use std::os::unix::fs::PermissionsExt; fs::set_permissions(dir.0.join(name), fs::Permissions::from_mode(0o640)).unwrap(); }
+    }
+    #[test]
+    fn preservation_empty_package_never_reads_or_rewrites_configuration() {
+        for invalid in [false, true] {
+            let dir = Scratch::new();
+            for name in ["hosts.json", "accounts.json", "settings.json"] {
+                let valid: &[u8] = match name {
+                    "hosts.json" => b"[ { \"id\":\"local\", \"future-field\": {\"keep\":42} } ]\n",
+                    "accounts.json" => b"[ { \"id\":\"local\", \"future-field\": {\"keep\":42} } ]\n",
+                    _ => b"{ \"theme\":\"light\", \"future-field\": {\"keep\":42} }\n",
+                };
+                write_raw(&dir, name, if invalid { b"not JSON\0\n" } else { valid });
+            }
+            let before: Vec<_> = ["hosts.json", "accounts.json", "settings.json"].map(|n| raw_state(&dir, n)).into();
+            assert_eq!(apply(&dir.0, &empty_package(), &mut NoVault).unwrap(), json!({"ok":true,"hosts":0,"accounts":0,"secrets":0,"keys":0}));
+            let after: Vec<_> = ["hosts.json", "accounts.json", "settings.json"].map(|n| raw_state(&dir, n)).into();
+            assert_eq!(after, before);
+            assert!(!dir.0.join("configuration-backups").exists());
+            assert!(!dir.0.join("imported-keys").exists());
+        }
+        let dir = Scratch::new();
+        apply(&dir.0, &empty_package(), &mut NoVault).unwrap();
+        for name in ["hosts.json", "accounts.json", "settings.json", "configuration-backups"] { assert!(!dir.0.join(name).exists(), "no-op created {name}"); }
+        // No-op is still behind validation and the real configuration lock.
+        let mut invalid = empty_package(); invalid.schema = SCHEMA + 1;
+        assert!(apply(&dir.0, &invalid, &mut NoVault).is_err());
+        invalid.schema = SCHEMA; invalid.origin.clear();
+        assert!(apply(&dir.0, &invalid, &mut NoVault).is_err());
+        let _live = lock_at(&dir.0).unwrap();
+        assert!(apply(&dir.0, &empty_package(), &mut NoVault).is_err());
+    }
+    #[test]
+    fn preservation_secret_owners_are_validated_before_any_side_effect() {
+        for remove_section in [true, false] {
+            for case in 0..5 {
+                let dir = Scratch::new();
+                // Even selected malformed JSON must not be read before validation.
+                for name in ["hosts.json", "accounts.json", "settings.json"] { write_raw(&dir, name, b"invalid existing fixture JSON\n"); }
+                let before: Vec<_> = ["hosts.json", "accounts.json", "settings.json"].map(|n| raw_state(&dir, n)).into();
+                let mut p = package();
+                let account = case < 2;
+                if remove_section { if account { p.accounts.clear(); } else { p.hosts.clear(); } }
+                if !p.accounts.is_empty() { p.keys.push(Key { account: "source-account".into(), bytes: b"generated-unused-key-fixture".to_vec() }); }
+                let kind = match case { 0 => SecretKind::Account, 1 => SecretKind::KeyPass, 2 => SecretKind::Host, 3 => SecretKind::Hp, _ => SecretKind::Files };
+                let owner = if !remove_section { "not-selected" } else if account { "source-account" } else { "source-host" };
+                p.secrets.push(Secret { kind, owner: owner.into(), value: "generated-invalid-owner-fixture".into() });
+                let error = apply(&dir.0, &p, &mut NoVault).unwrap_err();
+                assert!(error.to_string().contains("암호의 계정 또는 연결"), "configuration was parsed before secret dependency validation: {error}");
+                let after: Vec<_> = ["hosts.json", "accounts.json", "settings.json"].map(|n| raw_state(&dir, n)).into();
+                assert_eq!(after, before);
+                assert!(!dir.0.join("configuration.lock").exists());
+                assert!(!dir.0.join("configuration-backups").exists());
+                assert!(!dir.0.join("imported-keys").exists());
+                assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 3);
+            }
+        }
+    }
+    #[test]
+    fn preservation_valid_selected_secret_dependencies_still_import() {
+        let dir = Scratch::new();
+        let mut p = package();
+        for (kind, owner) in [(SecretKind::Account, "source-account"), (SecretKind::KeyPass, "source-account"), (SecretKind::Host, "source-host"), (SecretKind::Hp, "source-host"), (SecretKind::Files, "source-host")] {
+            p.secrets.push(Secret { kind, owner: owner.into(), value: "generated-selected-secret-fixture".into() });
+        }
+        let mut vault = FakeVault::default();
+        let result = apply(&dir.0, &p, &mut vault).unwrap();
+        assert_eq!(result["secrets"], 5);
+        assert_eq!(vault.calls, 5);
+        assert_eq!(read_json::<Vec<Host>>(&dir.0, "hosts.json").unwrap().len(), 1);
+        assert_eq!(read_json::<Vec<Account>>(&dir.0, "accounts.json").unwrap().len(), 1);
+    }
+    #[test]
+    fn preservation_host_only_leaves_unselected_bytes_modes_and_absence() {
+        for variant in 0..3 {
+            let dir = Scratch::new();
+            write_raw(&dir, "hosts.json", br#"[{"id":"existing","host":"retained.example"}]"#);
+            if variant != 2 {
+                write_raw(&dir, "settings.json", if variant == 0 { b"{ \"theme\":\"light\", \"future\":{\"keep\":true} }\n" } else { b"invalid settings JSON\n" });
+                write_raw(&dir, "accounts.json", if variant == 0 { b"[ { \"id\":\"existing\", \"future\":17 } ]\n" } else { b"invalid accounts JSON\n" });
+            }
+            let settings = raw_state(&dir, "settings.json");
+            let accounts = raw_state(&dir, "accounts.json");
+            let mut p = package(); p.accounts.clear(); p.preferences = None;
+            let result = apply(&dir.0, &p, &mut NoVault).unwrap();
+            assert_eq!(result["hosts"], 1);
+            assert_eq!(raw_state(&dir, "settings.json"), settings);
+            assert_eq!(raw_state(&dir, "accounts.json"), accounts);
+            let hosts: Vec<Host> = read_json(&dir.0, "hosts.json").unwrap();
+            assert_eq!(hosts.len(), 2);
+            assert!(hosts.iter().any(|h| h.id == mapped(&p.origin, "host", "source-host") && h.host == "mac.example"));
+            let backups = fs::read_dir(dir.0.join("configuration-backups")).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+            assert_eq!(backups.len(), 1);
+            let names: Vec<_> = fs::read_dir(backups[0].path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+            assert_eq!(names, [std::ffi::OsString::from("hosts.json")]);
+        }
+    }
+    #[test]
+    fn preservation_selected_rollback_does_not_touch_opted_out_configs() {
+        let dir = Scratch::new();
+        write_raw(&dir, "hosts.json", br#"[{"id":"local","host":"retained.example"}]"#);
+        write_raw(&dir, "accounts.json", b"invalid unselected accounts\n");
+        write_raw(&dir, "settings.json", b"{ \"future-setting\":42 }\n");
+        let before: Vec<_> = ["hosts.json", "accounts.json", "settings.json"].map(|n| raw_state(&dir, n)).into();
+        let mut p = package(); p.accounts.clear(); p.preferences = None;
+        p.secrets.push(Secret { kind: SecretKind::Host, owner: "source-host".into(), value: "generated-rollback-fixture".into() });
+        let mut vault = FakeVault { fail_at: 1, ..Default::default() };
+        assert!(apply(&dir.0, &p, &mut vault).is_err());
+        assert!(vault.data.is_empty() && vault.calls == 2, "selected secret was not rolled back");
+        let after: Vec<_> = ["hosts.json", "accounts.json", "settings.json"].map(|n| raw_state(&dir, n)).into();
+        assert_eq!(after, before);
+        let backup = fs::read_dir(dir.0.join("configuration-backups")).unwrap().next().unwrap().unwrap().path();
+        assert!(!backup.join("accounts.json").exists() && !backup.join("settings.json").exists());
+        assert!(!backup.join("accounts.json.next").exists() && !backup.join("settings.json.next").exists());
+    }
+    #[test]
+    fn preservation_preferences_only_applies_real_preferences_without_other_writes() {
+        let dir = Scratch::new();
+        write_raw(&dir, "hosts.json", b"unknown/corrupt unselected hosts\n");
+        write_raw(&dir, "settings.json", br#"{"theme":"light","web":{"on":true,"port":9123},"announce":false}"#);
+        let hosts = raw_state(&dir, "hosts.json");
+        let accounts = raw_state(&dir, "accounts.json");
+        let mut p = empty_package();
+        let mut prefs = Settings::default(); prefs.theme = "dark".into(); prefs.zoom = 125;
+        p.preferences = Some(Preferences::from(&prefs));
+        apply(&dir.0, &p, &mut NoVault).unwrap();
+        let actual: Settings = read_json(&dir.0, "settings.json").unwrap();
+        assert_eq!(actual.theme, "dark"); assert_eq!(actual.zoom, 125);
+        assert!(actual.web.on && actual.web.port == 9123 && !actual.announce);
+        assert_eq!(raw_state(&dir, "hosts.json"), hosts);
+        assert_eq!(raw_state(&dir, "accounts.json"), accounts);
+        let backup = fs::read_dir(dir.0.join("configuration-backups")).unwrap().next().unwrap().unwrap().path();
+        let names: Vec<_> = fs::read_dir(backup).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, [std::ffi::OsString::from("settings.json")]);
+    }
+    #[test]
+    fn preservation_accounts_only_does_not_parse_unselected_host_or_settings() {
+        let dir = Scratch::new();
+        write_raw(&dir, "hosts.json", b"invalid hosts\n");
+        write_raw(&dir, "settings.json", b"{ \"future-setting\":42 }\n");
+        let hosts = raw_state(&dir, "hosts.json"); let settings = raw_state(&dir, "settings.json");
+        let mut p = package(); p.hosts.clear(); p.preferences = None;
+        apply(&dir.0, &p, &mut NoVault).unwrap();
+        let accounts: Vec<Account> = read_json(&dir.0, "accounts.json").unwrap();
+        assert_eq!(accounts.len(), 1); assert_eq!(accounts[0].user, "shared-user");
+        assert_eq!(raw_state(&dir, "hosts.json"), hosts); assert_eq!(raw_state(&dir, "settings.json"), settings);
+    }
+
     #[test]
     fn confirmation_identities_follow_packaged_accounts_without_secrets() {
         let mut p = package();
