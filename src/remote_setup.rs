@@ -1095,6 +1095,7 @@ printf '{"platform":"mac","version":"%s","versions":[%s],"running":%s}\n' "$vers
 "#;
 const WIN_PROBE: &str = r#"
 $ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $owned=@(Get-CimInstance Win32_Process -Filter "Name='itda.exe'" | Where-Object {
  # Other users' processes can deny this query. Only positively identified current-user
@@ -1400,8 +1401,10 @@ $fixtureOwner=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $fixtureOther=if($fixtureOwner -eq 'S-1-5-18'){'S-1-5-19'}else{'S-1-5-18'}
 function New-VersionFixture($path,$type,$version) {
  [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path))|Out-Null
- $source='using System.Reflection; [assembly:AssemblyFileVersion("'+$version+'.0")] [assembly:AssemblyInformationalVersion("'+$version+'")] public class '+$type+' {}'
- Add-Type -TypeDefinition $source -OutputAssembly $path -OutputType Library
+ # Windows PowerShell compiles an .exe with an entry point; this generated fixture is
+ # never executed. Only its real version resource is read below.
+ $source='using System.Reflection; [assembly:AssemblyFileVersion("'+$version+'.0")] [assembly:AssemblyInformationalVersion("'+$version+'")] public class '+$type+' { public static void Main() {} }'
+ Add-Type -TypeDefinition $source -OutputAssembly $path -OutputType ConsoleApplication
 }
 $installed=Join-Path $env:LOCALAPPDATA 'Programs\Itda\itda.exe'
 $portable=Join-Path $env:LOCALAPPDATA 'Portable folder\itda.exe'
