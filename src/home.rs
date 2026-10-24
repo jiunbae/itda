@@ -173,8 +173,17 @@ fn started() {
             apply_share(&sh);
         }
     }
-    announce();
-    start_discovery();
+    // A native UI fixture must not discover real peers or request local-network
+    // permission. Require both an explicit opt-in and a separate data directory;
+    // setting the test flag alone must not disable discovery in a normal profile.
+    let fixture_without_discovery = store::override_base().is_some()
+        && std::env::var("ITDA_NATIVE_TEST_NO_DISCOVERY").as_deref() == Ok("1");
+    if !fixture_without_discovery {
+        announce();
+        start_discovery();
+    } else {
+        crate::log!("native fixture: automatic discovery disabled for isolated profile");
+    }
     start_update_checks();
     // Again each launch: the entry names this exe, which may have moved. (Only while the entry
     // is there: one removed in Windows' settings stays removed. On macOS the item follows the app.)
