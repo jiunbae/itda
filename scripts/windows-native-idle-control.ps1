@@ -1,6 +1,6 @@
 # Only controls the pilot's copied executable / private WebView2 profile.
 param(
-    [Parameter(Mandatory)][ValidateSet('startup', 'inspect', 'query-end', 'close', 'cleanup')][string]$Operation,
+    [Parameter(Mandatory)][ValidateSet('workspace', 'startup', 'inspect', 'query-end', 'close', 'cleanup')][string]$Operation,
     [Parameter(Mandatory)][string]$Root,
     [int]$AppPid = 0,
     [string]$CreationTicks = '',
@@ -8,24 +8,28 @@ param(
     [int]$DebugPort = 0
 )
 $ErrorActionPreference = 'Stop'
-$ownedRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\')
-$temporaryParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
-if ([IO.Path]::GetDirectoryName($ownedRoot) -ne $temporaryParent -or
-    [IO.Path]::GetFileName($ownedRoot) -notmatch '^itda-native-idle-[a-zA-Z0-9-]+$' -or
-    ((Get-Item -LiteralPath $ownedRoot).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-    throw 'Pilot workspace ownership mismatch'
-}
-if ($Operation -eq 'startup') {
-    $value = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name Itda -ErrorAction SilentlyContinue).Itda
-    $hash = if ($null -ne $value) { [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes([string]$value))).ToLowerInvariant() } else { $null }
-    [ordered]@{ exists = ($null -ne $value); value_sha256 = $hash } | ConvertTo-Json -Compress
-    exit 0
-}
 Add-Type -TypeDefinition @'
 using System;
 using System.Text;
 using System.Runtime.InteropServices;
 public static class ItdaIdleWindow {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
+    static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
+    static extern uint GetFinalPathNameByHandleW(Microsoft.Win32.SafeHandles.SafeFileHandle h, StringBuilder name, uint count, uint flags);
+    public static string CanonicalPath(string name) {
+        // Attributes-only open with shared read/write/delete; BACKUP_SEMANTICS permits
+        // directories. This resolves 8.3/long spellings without relaxing ownership checks.
+        using (var h=CreateFileW(name,0,7,IntPtr.Zero,3,0x02000000,IntPtr.Zero)) {
+            if (h.IsInvalid) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            var s=new StringBuilder(32768);
+            var count=GetFinalPathNameByHandleW(h,s,(uint)s.Capacity,0);
+            if (count==0 || count>=s.Capacity) throw new InvalidOperationException("Cannot normalize owned path");
+            var value=s.ToString();
+            if (value.StartsWith(@"\\?\UNC\",StringComparison.OrdinalIgnoreCase)) return @"\\"+value.Substring(8);
+            return value.StartsWith(@"\\?\",StringComparison.Ordinal) ? value.Substring(4) : value;
+        }
+    }
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
     [DllImport("user32.dll", SetLastError=true)] static extern IntPtr SendMessageTimeoutW(IntPtr h, uint m, UIntPtr w, IntPtr l, uint f, uint ms, out UIntPtr value);
@@ -54,10 +58,27 @@ public static class ItdaIdleWindow {
     }
 }
 '@
+$givenRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+if ([IO.Path]::GetFileName($givenRoot) -notmatch '^itda-native-idle-[a-zA-Z0-9-]+$' -or
+    ((Get-Item -LiteralPath $givenRoot).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw 'Pilot workspace ownership mismatch'
+}
+$ownedRoot = [ItdaIdleWindow]::CanonicalPath($givenRoot).TrimEnd('\')
+$temporaryParent = [ItdaIdleWindow]::CanonicalPath([IO.Path]::GetTempPath()).TrimEnd('\')
+if ([IO.Path]::GetDirectoryName($ownedRoot) -ne $temporaryParent) { throw 'Pilot workspace parent mismatch' }
+if ($Operation -eq 'workspace') { [ordered]@{ root = $ownedRoot } | ConvertTo-Json -Compress; exit 0 }
+if ($Operation -eq 'startup') {
+    $value = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name Itda -ErrorAction SilentlyContinue).Itda
+    $hash = if ($null -ne $value) { [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes([string]$value))).ToLowerInvariant() } else { $null }
+    [ordered]@{ exists = ($null -ne $value); value_sha256 = $hash } | ConvertTo-Json -Compress
+    exit 0
+}
 $exe = Join-Path $ownedRoot 'itda.exe'
 $app = if ($AppPid -gt 0) { Get-Process -Id $AppPid -ErrorAction SilentlyContinue } else { $null }
 if ($app) {
-    if ($app.Path -ne $exe) { throw 'Candidate PID executable path changed' }
+    $actualExe = [ItdaIdleWindow]::CanonicalPath($app.Path)
+    $expectedExe = [ItdaIdleWindow]::CanonicalPath($exe)
+    if ($actualExe -ne $expectedExe) { throw "Candidate PID executable path changed (actual=$actualExe; expected=$expectedExe)" }
     $actualTicks = $app.StartTime.ToUniversalTime().Ticks.ToString()
     if ($CreationTicks -and $actualTicks -ne $CreationTicks) { throw 'Candidate PID creation time changed' }
 }

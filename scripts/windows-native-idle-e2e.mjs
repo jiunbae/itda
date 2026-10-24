@@ -28,6 +28,7 @@ try{
  report.provenance.rustc=execFileSync('rustc',['--version'],{encoding:'utf8'}).trim();
  report.environment=preflight;
  root=fs.mkdtempSync(path.join(os.tmpdir(),'itda-native-idle-'));
+ report.workspace_spelling={requested:root};root=control('workspace').root;report.workspace_spelling.canonical=root;
  const data=path.join(root,'data/Itda');fs.mkdirSync(data,{recursive:true});
  for(const name of ['hosts.json','accounts.json'])fs.writeFileSync(path.join(data,name),'[]');
  fs.writeFileSync(path.join(data,'settings.json'),JSON.stringify({onboarded:true,theme:'light',tray:false,notify:false,announce:false,auto_update:false,thumbnails:false,web:{on:false},share:{on:false},hp:{on:false}}));
@@ -41,6 +42,7 @@ try{
  await wait(()=>{
   assert(child.pid&&child.exitCode===null&&child.signalCode===null,'Candidate exited before readiness');
   const state=control('inspect');assert(state.alive,'Candidate process disappeared');
+  report.last_native_state=state;
   if(identity)assert(identity.creation_ticks===state.creation_ticks,'Candidate PID was reused');
   identity=state;
   if(state.hwnd==='0'||!state.visible||!state.private_udf||!state.webview_pids.length||!state.listeners.length)return false;
@@ -81,7 +83,10 @@ finally{
    assert(startupUnchanged!==false,'Startup registration changed during pilot');
   }
  }catch(error){cleanupError=error;report.cleanup={...report.cleanup,status:'failed',error:error.message};process.exitCode=1;}
- if(browser)await browser.close().catch(()=>{});
+ if(browser){let timer;try{await Promise.race([browser.close().catch(()=>{}),new Promise(r=>{timer=setTimeout(r,3000);})]);}finally{clearTimeout(timer);}}
+ // Failed ownership checks must not keep this driver alive on inherited pipe handles.
+ // An unverified child is not killed: failed cleanup remains explicit in the receipt.
+ child?.stdout?.destroy();child?.stderr?.destroy();child?.unref();
  if(interrupted){report.status='interrupted';report.signal=interrupted;process.exitCode=1;}
  if(cleanupError)report.status='failed';
  fs.writeFileSync(output,JSON.stringify(report,null,2));console.log(JSON.stringify({status:report.status,checks:report.checks.length,cleanup:report.cleanup.status,receipt:output}));
