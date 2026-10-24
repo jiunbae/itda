@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "assessment_id": "itda-quality-2026-10-23",
-  "status": "iteration-8-release-1.0.3-native-acceptance-pending",
+  "status": "iteration-8-mac-local-entry-fixed-1.0.4-release-pending",
   "goal": "Every persona scores at least 9/10 on verified core journeys, with no unresolved P1/P2 task blockers.",
   "baseline": {
     "commit": "521202025e7c5a984f089c1d1df77e846f63fd33",
@@ -757,6 +757,14 @@
           "source_commit": "d4fcb9afcfb191299923d5bca2e151e7700752ee",
           "status": "published; final artifacts independently verified; local Mac reinstall and network file-window open + native close-button smoke passed",
           "evidence": "assessments/evidence/release-1.0.3-checkpoint.json"
+        },
+        {
+          "pr": 121,
+          "head": "eac43fa64314de76fb6394a9bdcb9529c8cd9d5e",
+          "merge_commit": "d0f89d868285633f12e8fca1dc7c8fbb7e3701e3",
+          "status": "merged; no-device Mac local-entry fix, context-correct file-manager dispatch; bounded native local-browsing component observed; 1.0.4 release pending",
+          "verification": "Independent code APPROVE15a, all3CI40056727967 PASS, Chromium/WebKit network and tabs regressions; native local entry/four views/nested columns/text+PNG/tabs component assertions. Supervisor failure and gaps retained.",
+          "evidence": "assessments/evidence/native-macos-local-browser.json"
         }
       ],
       "verification_gaps": [
