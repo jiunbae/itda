@@ -954,7 +954,7 @@
           "scope": "cross-host harness",
           "source_commit": "7335c7cf1d3545988a71b55166171501d229408c",
           "status": "six-file source scaffold only; no runtime evidence",
-          "independent_audit": "197 REQUEST CHANGES: incorrect twelve-hex stage regex, emergency COPY release and cleanup; root follow-up b0823c9 not natively executed, further fixes in progress."
+          "independent_audit": "197 REQUEST CHANGES: staging allowlist rejected the actual twelve-hex filenames, emergency COPY release and cleanup; root follow-up b0823c9 not natively executed, further fixes in progress."
         }
       ],
       "verification_gaps": [
