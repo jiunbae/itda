@@ -1,0 +1,62 @@
+{
+  "status": "prerequisites available on this observed CI machine; not app acceptance",
+  "run": 40040854867,
+  "run_url": "https://github.com/jiunbae/itda/actions/runs/40040854867",
+  "artifact_id": 12538144998,
+  "artifact_name": "windows-native-prerequisites",
+  "downloaded_receipt_sha256": "dd6df9ef6f451f5262325794cf4572f692edb9fbbe0079d811c6633018143fd9",
+  "receipt": {
+    "schema_version": 1,
+    "recorded_at": "2026-10-23T23:39:14.4202085Z",
+    "status": "eligible-for-idle-pilot",
+    "scope": "Windows CI native-test prerequisites only; no app launch or user-journey acceptance",
+    "source": {
+      "checkout": "fd9cc35bcdd111c97629805a60a90b4813e8edd0",
+      "pr_head": "feb655fa9507c836ba50d1f15d28cdd44715af3f",
+      "run_id": "40040854867",
+      "run_attempt": "1",
+      "runner_image": "win25-vs2026",
+      "runner_image_version": "20261021.278.1"
+    },
+    "checks": {
+      "session": {
+        "id": 2,
+        "user_interactive": true,
+        "connect_state": 0
+      },
+      "desktop": {
+        "input": "Default",
+        "thread": "Default",
+        "window_station": "WinSta0",
+        "open_input_error": null
+      },
+      "screen": {
+        "width": 1024,
+        "height": 768,
+        "system_dpi": 96,
+        "thread_awareness": 0,
+        "metric_space": "Calling PowerShell DPI context; not certified physical pixels"
+      },
+      "elevated_admin_token": true,
+      "webview2_runtime": [
+        {
+          "hive": "LocalMachine",
+          "view": "Registry32",
+          "version": "155.0.4283.62"
+        }
+      ]
+    },
+    "unmet": [],
+    "references": [
+      "https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution",
+      "https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openinputdesktop",
+      "https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/ne-wtsapi32-wts_connectstate_class"
+    ]
+  },
+  "next_acceptance": "Fresh same-job preflight followed by isolated real-app idle pilot; no reuse of this receipt to launch on another machine",
+  "limits": [
+    "No Itda process, native HWND or WebView2 application was launched in this probe",
+    "No transfers, user-machine/physical-input, OS-shutdown or persona9/10 verification",
+    "Caller-DPI context metrics and elevated admin token differ from earlier150%/Limited-task user-machine evidence"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "status": "failed before native-window acceptance; harness repair pending",
+  "run": 40041932217,
+  "head": "980352f5357ac428d6d7e9b3102e5ddee154d169",
+  "checkout": "b60703d749b4c7724fa21fb3c8fbce36aca9c3b4",
+  "binary_sha256": "e7a9575c136d4b7102ef410ab2d05ebfbac60aa9daa8f5308d366b258542d2f4",
+  "downloaded_binary_matches_receipt": true,
+  "native_checks_passed": 0,
+  "cleanup": "failed ownership verification; no successful cleanup credit",
+  "observed_error": "Candidate PID executable path changed, for inspect and cleanup",
+  "requested_workspace_form": "C:/Users/RUNNER~1/... (8.3 short profile path)",
+  "diagnosis_limit": "The original process.Path value was not captured; short/long path mismatch is the supported hypothesis, not a captured exact string comparison. No product quit defect was established.",
+  "after_failure": "Result was written at23:57:03Z, but driver stayed live until the step timeout at00:00:06Z; referenced child/pipes are consistent with that lifetime. The unverified PID was not killed by the helper.",
+  "repair": "Normalize workspace and executable paths through attributes-only file handles; keep private-parent/leaf/reparse/PID/path/creation/HWND checks. Record canonical spelling and readiness state. Disconnect/destroy owned driver handles after failure while keeping cleanup failure explicit.",
+  "limits": [
+    "No idle WM_QUERYENDSESSION or WM_CLOSE result",
+    "No PR102 quit-guard or transfer acceptance",
+    "Ephemeral CI runner only; no user installation, production release or persona score"
+  ]
+}
