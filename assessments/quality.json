@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "assessment_id": "itda-quality-2026-10-23",
-  "status": "iteration-9-1.0.4-published-known-permission-helper-and-update-defects-and-native-acceptance-pending",
+  "status": "iteration-10-1.0.5-published-local-smoke-and-bounded-managed-quit-verified-full-native-acceptance-pending",
   "goal": "Every persona scores at least 9/10 on verified core journeys, with no unresolved P1/P2 task blockers.",
   "baseline": {
     "commit": "521202025e7c5a984f089c1d1df77e846f63fd33",
@@ -870,51 +870,72 @@
           "remediation_branch": "fix/permission-helper-transfer-guard"
         }
       ]
+    },
+    {
+      "id": 10,
+      "status": "in-progress",
+      "changes": [
+        {
+          "release": "1.0.5",
+          "source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
+          "status": "public latest tag and local reinstall verified; four specifically recorded 1.0.4 source defects addressed with unit/browser CI coverage",
+          "final_ci_run": 40065021161,
+          "independent_artifact_review": "req_18e15f4242ac9940_172",
+          "evidence": "assessments/evidence/release-1.0.5-checkpoint.json",
+          "acceptance_scope": "Actual local native entry/window-close smoke only. Initial draft-newline and AX-readiness failures retained. Affected native permission restart and actual updater paths remain unverified; no global P1/P2 absence claim."
+        },
+        {
+          "run_id": 40065218281,
+          "status": "second native OLE attempt failed attribution guard after owned moves/possible activation click, before source drag mousedown; cleanup passed",
+          "evidence": "assessments/evidence/native-windows-explorer-ole.json",
+          "acceptance_scope": "Setup/layout and cleanup component facts only; first-run cleanup failure preserved, no OLE/drop/release acceptance; diagnostic32ec local and unrun."
+        },
+        {
+          "run_id": 40066106737,
+          "source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
+          "status": "root strict verification PASS for actual Windows managed Wait5/5 and Stop5/5; independent raw-receipt review177 pending",
+          "evidence": "assessments/evidence/native-windows-quit-1.0.5.json",
+          "acceptance_scope": "Non-release CI candidate at tag source; different executable hash from public binary. No physical/Explorer/Mac/actual updater/permission-restart/persona9 credit."
+        }
+      ],
+      "verification_gaps": [
+        "Actual permission-helper restart during managed transfer, guide_reset/native permission changes, and the actual updater admission/installation/quit scenarios remain unverified. Source fixes and unit/browser CI do not certify those native paths.",
+        "Mac actual managed-copy Wait/Stop approval remains unanswered after the earlier pre-dispatch Tacto policy refusal; no native Mac Wait/Stop credit.",
+        "Mac Dock/AppleEvent/logout, Finder promise queue, updater/remote-installer/Force and corresponding native lifetimes remain unverified.",
+        "Windows Explorer/OLE attempts ended before source drag mousedown; no OLE/virtual-file release acceptance. Physical user-PC input, 150% scaling and assistive technology remain unverified.",
+        "iOS remains hard-blocked pending concrete new-device/process pasteboard isolation; disconnected phones and build-only XCTest scaffolding provide no physical phone, QR camera, Korean IME, clipboard/privacy or real LAN/HTTPS acceptance.",
+        "Older macOS native runtime including 12.0–12.2 remains unverified; minimum-version/weak-link probes do not certify older OS runtime. 12.3+ remains recommended.",
+        "All seven verified persona scores remain null; 28 complete core journeys have not been certified at 9/10. No global claim that all P1/P2 defects are absent."
+      ],
+      "acceptance_note": "Public 1.0.5 and local native smoke are real; the managed-copy quit regression is limited same-source CI candidate evidence. Earlier failures and old release snapshots remain intact. Seven verified persona scores stay null, the goal remains active, and full 9/10 core journeys are not certified."
     }
   ],
   "current_release": {
-    "version": "1.0.4",
-    "source_commit": "3d755e64b8fa32d6ca511e189e39afae57171734",
-    "tag": "v1.0.4",
-    "release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.4",
-    "status": "published; artifact/local-entry smoke verified; known permission-helper/update defects open and full native acceptance pending",
-    "final_ci_run": 40059961386,
+    "version": "1.0.5",
+    "source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
+    "tag": "v1.0.5",
+    "release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.5",
+    "published_at": "2026-10-24T05:22:32Z",
+    "status": "published latest; final artifacts and local entry/window-close smoke verified; bounded managed-quit CI candidate evidence; broader native acceptance pending",
+    "final_ci_run": 40065021161,
     "all_final_ci_checks": "success",
     "public_asset_sha256": {
-      "Itda-macos-universal.zip": "6d6714c0e3ba4e582fca94ab90737a30567d4112e0eee9c5af9483080288a6b3",
-      "itda.exe": "26e160f8d40fc25eb52f3b5137057c73c36615d064a1a28c7ea79be6785098ee",
-      "SHA256SUMS.txt": "7c02ff9d9932e529563d4d205a342bd6844ed9065dfc5a4cc3face9f989d1cf9"
+      "Itda-macos-universal.zip": "b09c2c2fffd12d14f217e1bc4a7b09cf8531df6322d6c17b913c10582659a325",
+      "itda.exe": "88a4478d8f89acb884b955ac5bd7a59f0f0d057b64fd787d65598e367d5168dc",
+      "SHA256SUMS.txt": "3a7f363b8d59ae6dd4e0830b7b849fabf2ea5a59711ae9e99b7e17a771b0463f"
     },
-    "evidence": "assessments/evidence/release-1.0.4-checkpoint.json",
+    "evidence": "assessments/evidence/release-1.0.5-checkpoint.json",
+    "resolved_prior_release_defect_ids": [
+      "MAC-PERMISSION-RESTART-ADMISSION",
+      "MAC-PERMISSION-GUIDE-RESET-DISPATCH",
+      "UPDATE-WAIT-STALE-CANCEL-ADMISSION",
+      "WINDOWS-USER-QUIT-DURING-UPDATE-INSTALL"
+    ],
+    "defect_scope_note": "The four specifically recorded 1.0.4 source defects are addressed by published1.0.5 with unit/browser coverage. This does not establish global absence of P1/P2 defects or affected native runtime acceptance.",
+    "native_managed_quit_regression_evidence": "assessments/evidence/native-windows-quit-1.0.5.json",
+    "native_ole_evidence": "assessments/evidence/native-windows-explorer-ole.json",
     "goal_status": "active",
     "verified_persona_scores": "all seven null; no 9/10 certification",
-    "supersedes": "Earlier release-pending and deployed-version facts only; persona objects, rubric, history and native failed/cleaned receipts are unchanged.",
-    "known_open_defects": [
-      {
-        "id": "MAC-PERMISSION-RESTART-ADMISSION",
-        "severity": "P1",
-        "status": "open in released 1.0.4; separate fix in progress; not fixed by this checkpoint",
-        "remediation_branch": "fix/permission-helper-transfer-guard"
-      },
-      {
-        "id": "MAC-PERMISSION-GUIDE-RESET-DISPATCH",
-        "severity": "P2",
-        "status": "open in released 1.0.4; separate fix in progress; not fixed by this checkpoint",
-        "remediation_branch": "fix/permission-helper-transfer-guard"
-      },
-      {
-        "id": "UPDATE-WAIT-STALE-CANCEL-ADMISSION",
-        "severity": "P2",
-        "status": "open in released 1.0.4; separate follow-up fix in progress; not fixed by this checkpoint",
-        "remediation_branch": "fix/permission-helper-transfer-guard"
-      },
-      {
-        "id": "WINDOWS-USER-QUIT-DURING-UPDATE-INSTALL",
-        "severity": "P2",
-        "status": "open in released 1.0.4; separate follow-up fix in progress; not fixed by this checkpoint",
-        "remediation_branch": "fix/permission-helper-transfer-guard"
-      }
-    ],
-    "quality_gate_reason": "Four known source-confirmed defects remain open in released 1.0.4: permission-helper restart/admission bypass, unreachable guide_reset UI command, stale update Wait/Cancel reopening admissions, and Windows user quit during in-process update installation. Recorded native acceptance gaps also remain. This checkpoint does not fix these defects or certify 9/10."
+    "supersedes": "Current public version/local install facts only; all persona objects, rubric and previous iterations/failed-cleaned receipts remain historical and unchanged."
   }
 }

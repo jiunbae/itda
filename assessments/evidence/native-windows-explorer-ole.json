@@ -2,7 +2,7 @@
   "schema_version": 1,
   "component": "native-windows-explorer-ole",
   "recorded_at": "2026-10-24T05:10:55.208123+00:00",
-  "status": "failed-before-native-drag-or-input; original-overall-cleanup-failed; no-OLE-or-layout-acceptance",
+  "status": "two-bounded-runs-failed; no-native-OLE-acceptance; first-cleanup-failed-and-second-cleanup-passed",
   "release_context": {
     "public_release_at_preparation": "1.0.4",
     "future_checkpoint": "1.0.5",
@@ -115,17 +115,126 @@
     "compile_ci_run_id": 40064622255,
     "compile_ci_url": "https://github.com/jiunbae/itda/actions/runs/40064622255",
     "compile_ci_status": "passed as reported by the release owner",
+    "scope": "The corrected candidate pinning and signal-exit waiter reached bounded native setup/layout and cleanup in run40065218281. That run then failed attribution guarding before source drag mousedown; no OLE or virtual-file-release acceptance.",
+    "native_runtime_proof_after_fix": true,
+    "original_failed_run_superseded": false,
+    "native_runtime_proof_scope": "Limited candidate-window/setup and cleanup component evidence only; no native OLE/drop/release acceptance.",
+    "native_ole_acceptance_after_fix": false
+  },
+  "verification_gaps": [
+    "Neither bounded attempt reached source drag mousedown or OLE/drop/virtual-file release acceptance. The second attempt did include owned window moves and possible activation click.",
+    "First-run overall cleanup failed; second-run overall cleanup passed. These outcomes are distinct and neither is rewritten.",
+    "Attribution interference needs further diagnosis; the local32ec diagnostic has not run.",
+    "Physical user-PC input, 150% scaling/layout, assistive technology and full file journeys remain unverified."
+  ],
+  "goal_achieved": false,
+  "privacy": "Only sanitized public source/build identifiers, hashes and scoped outcomes are included. Personal names, raw paths, process IDs, creation ticks, document case IDs, credentials, key fingerprints, screenshots and accessibility trees are omitted.",
+  "initial_receipt_status": "failed-before-native-drag-or-input; original-overall-cleanup-failed; no-OLE-or-layout-acceptance",
+  "initial_receipt_harness_follow_up": {
+    "fix_commit": "34e1572fa0c4463a43a4ed06a58c941fc1f527d0",
+    "pr": 127,
+    "pr_url": "https://github.com/jiunbae/itda/pull/127",
+    "independent_code_review_reference": "170",
+    "code_review_status": "approved as reported by the release owner",
+    "compile_ci_run_id": 40064622255,
+    "compile_ci_url": "https://github.com/jiunbae/itda/actions/runs/40064622255",
+    "compile_ci_status": "passed as reported by the release owner",
     "scope": "Source correction and compile CI only. No follow-up native runtime result is included in this checkpoint.",
     "native_runtime_proof_after_fix": false,
     "original_failed_run_superseded": false
   },
-  "verification_gaps": [
+  "initial_receipt_verification_gaps": [
     "No native Explorer/OLE drag was attempted or accepted in this run.",
     "No layout check was produced; physical user-PC input, 150% scaling and assistive technology remain unverified.",
     "The harness correction needs a separately authorized bounded runtime run; code review and compile CI do not replace it.",
     "Original overall cleanup failed; later diagnosis does not retroactively certify cleanup.",
     "No full persona journey or 9/10 score is established."
   ],
-  "goal_achieved": false,
-  "privacy": "Only sanitized public source/build identifiers, hashes and scoped outcomes are included. Personal names, raw paths, process IDs, creation ticks, document case IDs, credentials, key fingerprints, screenshots and accessibility trees are omitted."
+  "amended_at": "2026-10-24T05:39:49.202680+00:00",
+  "current_checkpoint_context": {
+    "public_release": "1.0.5",
+    "source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
+    "note": "The original release_context describes initial preparation at public 1.0.4 and is preserved as history."
+  },
+  "second_failed_run": {
+    "run_id": 40065218281,
+    "run_url": "https://github.com/jiunbae/itda/actions/runs/40065218281",
+    "event": "workflow_dispatch",
+    "run_attempt": 1,
+    "dispatch_authorization": {
+      "expected_source_commit": "faabec07422eefcf8b24c8df5bcbc2007f762773",
+      "actual_checkout_matches_expected": true,
+      "review_request": "req_18e15efae0a5bc28_171",
+      "requested_at": "2026-10-24T05:10:27.523529+00:00",
+      "attempts_authorized": 1,
+      "no_confirmation_approval": true,
+      "high_high_integrity_limit": true
+    },
+    "source_and_harness": {
+      "checkout": "faabec07422eefcf8b24c8df5bcbc2007f762773",
+      "reviewed_harness_head": "34e1572fa0c4463a43a4ed06a58c941fc1f527d0",
+      "executed_harness_files_byte_identical_to_reviewed_head": true,
+      "byte_identical_executed_harness_file_count": 12,
+      "candidate_binary_sha256": "3afb6fcda79fe3743064d13653830f306cb4e1fb001596fb25cb507efd78be05",
+      "controller_driver_source_sha256": "573c9e5a3ce6a7fb1c180b7759871dd11fbe350141a7ff0ea6f0bdb58b7d6b3a",
+      "native_driver_source_sha256": "d7b00b75014b4d927bf3849e817bd3dcb2f8096173d39cdc1b61b13436027f4e",
+      "sftp_fixture_source_sha256": "36e07cb00361a01607b6a754dc0826204007abecbc9b941698578081403c2eba",
+      "build": "same-job Windows non-release CI candidate, not the public exe"
+    },
+    "observed_prerequisites": {
+      "status": "eligible-for-owned-drop",
+      "scope": "Hosted elevated High/High integrity fixture session; not physical user-PC/150%/AT acceptance."
+    },
+    "candidate_setup": {
+      "owned_candidate_window_pinning_reached": true,
+      "private_candidate_sftp_list_reached": true,
+      "sftp_audit_event_types": [
+        "list"
+      ],
+      "layout_setup_record_present": true,
+      "viewport": {
+        "width": 466,
+        "height": 668,
+        "dpr": 1
+      },
+      "setup_record_count": 2,
+      "scope": "Prerequisite/input-preflight and owned-window layout setup only; no drop or virtual-file release checks."
+    },
+    "outcome": {
+      "status": "failed",
+      "failure_category": "Attribution.Interfered=true",
+      "attribution_interfered": true,
+      "failure_phase": "after owned window layout/moves, before source drag mousedown",
+      "owned_window_moves_occurred": true,
+      "activation_click": "possible; not excluded by this record",
+      "source_drag_mousedown_reached": false,
+      "ole_drop_or_virtual_file_release_acceptance": false,
+      "input_scope": "Some OS window moves and possible activation click occurred. This is not a zero-input attempt. The attribution flag is not proof that a human interfered, and is not itself a product OLE failure."
+    },
+    "cleanup": {
+      "original_overall_status": "passed",
+      "controller_exit_code": 0,
+      "app_exit_code": 0,
+      "forced_candidate": false,
+      "remaining_owned_app_processes": 0,
+      "startup_unchanged": true,
+      "owned_explorer_close_requested": true,
+      "owned_explorer_window_absence_confirmed": true,
+      "sftp_termination_requested": true,
+      "sftp_exit": {
+        "code": null,
+        "signal": "SIGTERM",
+        "exit_event_observed": true
+      },
+      "workspaces_removed": true,
+      "emergency_source_release_count": 0,
+      "unapproved_confirmation_count": 0,
+      "scope": "Second-run cleanup passed with signal-only child exit observed. It does not retroactively change first-run cleanup failure."
+    }
+  },
+  "additional_diagnostic": {
+    "local_commit": "32ec0c4eca63ba44634eb059660be9887f1fc11f",
+    "status": "local diagnostic source only",
+    "native_runtime_executed": false
+  }
 }
