@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "component": "native-macos-local-browser",
+  "recorded_at": "2026-10-24T03:31:54.859424+00:00",
+  "status": "partial native acceptance; listed component checks observed; no overall automated-run PASS",
+  "source_commit": "eac43fa64314de76fb6394a9bdcb9529c8cd9d5e",
+  "source_pr": 121,
+  "merge_commit": "d0f89d868285633f12e8fca1dc7c8fbb7e3701e3",
+  "candidate_package_version": "1.0.3",
+  "candidate_version_note": "Private ad-hoc eac43fa candidate, after the public 1.0.3 tag. This is not an acceptance run on the public 1.0.3 binary or a 1.0.4 release artifact.",
+  "platform": {
+    "os": "macOS",
+    "version": "27.0.1",
+    "architecture": "arm64",
+    "private_bundle_id": "dev.jiun.itda.nativelocal.4efc7685e8ae4a6da0464594d6a5dc05",
+    "signature": "ad-hoc; not release signing/notarization proof"
+  },
+  "build_provenance": {
+    "source_commit": "eac43fa64314de76fb6394a9bdcb9529c8cd9d5e",
+    "source_status_before_and_after": "clean",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "--target",
+      "aarch64-apple-darwin"
+    ],
+    "shared_cargo_target_cache": true,
+    "source_hashes": {
+      "web/files.js": "92764241f6028a6e2360c7eaee6663cfd1872179e9ae76a547fbe496daf8057d",
+      "src/files/mod.rs": "fd90430925e89713cc4d814f89250e38324b23819b37b6e307d5c29f095c1e15"
+    },
+    "exact_current_files_js_embedded": true,
+    "build_binary_sha256_before_signing": "bd14a7643617631148bb55bcf4bf1d2f197f7c2d4433a53749c0cd4549ce265b",
+    "candidate_binary_sha256_after_signing": "94f468e56028d209542ebe4c81332a0c5c927e0670cb88b49e3f591d88ea854d",
+    "driver_sha256": "ece32fb1b887b0f1cce3f06a256969310a7d9fd46db6f7d57896a42011166269",
+    "independent_provenance_review": "quality-mode-review req_18e1584b32da2e18_15b independently checked binary hash, clean source HEAD, full embedded files.js and build log; target-cache owner is not source provenance"
+  },
+  "method": "Operator-authored signed Tacto flows with native AX observations, explicit postconditions, tab-view captures and independent filesystem/child-process assertions. These are component observations, not a portable CI end-to-end test.",
+  "fixture": {
+    "location": "unique generated directory inside the isolated test worktree; private profile/bundle under temporary directory",
+    "files": {
+      "sample.png": "27fd7ed1626e05c355af6afe74e08968228e926cb340c937fd166ef59aac49c4",
+      "readme.txt": "ea1fea439e68c417e4c05ad3d0c382949ba83a53020c0585ba83791879bee2bc",
+      "Projects/2026/plan.txt": "3cf7c87a3ae7b7219b57c2948aeea57824fc78218649288d18e3bb91e8fc61ec"
+    },
+    "source_files_unchanged": true,
+    "no_user_documents_modified": true,
+    "no_sftp_or_transfer_jobs": true,
+    "driver_temporary_copy": "The driver also generated an identical copy under its private temporary workspace; that copy was not navigated. The native UI used the worktree copy. All three hashes matched and stayed unchanged in both copies before cleanup."
+  },
+  "checks": [
+    {
+      "case": "fresh-no-device-local-entry",
+      "passed": true,
+      "evidence": "native network/local AX snapshots; no saved devices"
+    },
+    {
+      "case": "nested-columns-retained",
+      "passed": true,
+      "evidence": "Projects and 2026 path postconditions; columns checkbox remains1; plan.txt shown"
+    },
+    {
+      "case": "four-native-views",
+      "passed": true,
+      "evidence": "grid/list/columns/gallery checkbox state snapshots; native table/list controls"
+    },
+    {
+      "case": "real-local-text-and-png-preview",
+      "passed": true,
+      "evidence": "generated EN+Korean text body; sample.png AXImage + visible fit control; no pixel-comparison claim"
+    },
+    {
+      "case": "independent-local-tabs",
+      "passed": true,
+      "evidence": "Tacto captures first_tab_gallery1, second_tab_columns1 plus distinct path postconditions"
+    },
+    {
+      "case": "generated-sources-preserved",
+      "passed": true,
+      "evidence": "all three worktree fixture hashes match original generated source hashes"
+    },
+    {
+      "case": "automation-scope-limits",
+      "status": "partial",
+      "evidence": "Goto dialog contract mismatch not_started; no transfer/copy/delete/WaitStop/physical hotkeys/Finder reveal/AT acceptance; unsupported supervisor {} command rejected and retained as harness failure"
+    },
+    {
+      "case": "file-window-close-and-idle-menu-quit",
+      "passed": true,
+      "evidence": "Independent AX main-only snapshot after file close; native menu state enabled; menu dispatch then child exit0, no force; tool post-observe target_not_found accurately retained"
+    },
+    {
+      "case": "owned-worktree-fixture-cleanup",
+      "passed": true,
+      "evidence": "All three hashes unchanged before deleting only unique owned fixture; private generated root cleanup follows"
+    }
+  ],
+  "tab_captures": {
+    "first_tab_gallery": "1",
+    "second_tab_columns": "1"
+  },
+  "cleanup": {
+    "candidate_exit_code": 0,
+    "forced_candidate": false,
+    "file_window_closed_main_preserved": true,
+    "idle_native_menu_quit": true,
+    "generated_files_unchanged_before_removal": true,
+    "owned_worktree_fixture_removed": true,
+    "owned_private_profile_and_bundle_removed": true,
+    "launchservices_unregister_exit": 0,
+    "owned_uuid_caches_removed": 2,
+    "general_clipboard_change_count_unchanged": true,
+    "clipboard_contents_inspected": false,
+    "production_app_or_profile_changed": false,
+    "tcc_reset_or_grants": false,
+    "production_profile_semantic_equality_checked": {
+      "hosts.json": true,
+      "accounts.json": true,
+      "settings.json": true
+    },
+    "production_executable_hash_unchanged": true
+  },
+  "retained_harness_failures": {
+    "supervisor_status": "failed-cleaned",
+    "supervisor_failure": [
+      {
+        "command": "{}",
+        "error": "Unsupported native fixture control command",
+        "type": "ValueError"
+      }
+    ],
+    "explanation": "An unsupported {} supervisor command was rejected without an app action. Its failure latch was retained; normal exit and cleanup do not turn the supervisor run into a PASS. The native component checks above were separately asserted from observations and files.",
+    "other_attempts": [
+      "Tacto activate could not resolve the temporary bundle as installed; no activation was dispatched. Native AX controls remained reachable; explicit prepare_window plus a fresh observation was used for input readiness.",
+      "Go-to-folder menu action had contract_effect_mismatch (write_persistent), effect not_started; it was not retried or credited. Generated folders were reached through ordinary observed column entries.",
+      "A text-field pointer attempt was refused before input while a popup was open. close_menu timed out; the still-open popup was observed, then ordinary Network/local navigation closed it.",
+      "Initial search set_value was dispatched without a receiving value. The empty field was observed; explicit preparation and focus preceded one idempotent retry, which then verified the requested value.",
+      "Window Main capture was unavailable; it was not used as proof of AppKit key state.",
+      "After the quit menu dispatch, Tacto could no longer observe the target. The supervised child exited0 independently, so no second quit was attempted."
+    ]
+  },
+  "limits": [
+    "No physical Cmd-T/Cmd-Q/keyboard, pixel comparison, screen-reader speech or visual Finder-parity certification.",
+    "Native Finder reveal, Go-to-folder dialog, remote transports, copy/move/conflict/retry, transfer Wait/Stop and native exports are not proven by this run.",
+    "Discovery/private-pasteboard fixture flags were enabled in an isolated profile; no inference about real permission grants or discovery acceptance.",
+    "No Windows, phone or macOS12.0–12.2 runtime acceptance.",
+    "All seven verified persona scores remain null; no full journey or9/10 certification."
+  ],
+  "goal_achieved": false,
+  "privacy": "No user file names, profile values/fingerprints, credentials, clipboard contents, home paths, screenshots or raw AX traces are included."
+}
