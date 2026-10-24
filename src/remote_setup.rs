@@ -406,7 +406,9 @@ impl SessionVault {
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
         let task = format!("Itda-{}", dir.file_name().unwrap_or_default().to_string_lossy());
-        let run = format!("\"{}\" --vault-helper {port} \"{}\"", self.app.display(), dir.display());
+        // The data root goes along (an isolated profile included; empty: the default one).
+        let base = store::override_base().unwrap_or_default();
+        let run = format!("\"{}\" --vault-helper {port} \"{}\" \"{}\"", self.app.display(), base.display(), dir.display());
         if run.len() > 261 {
             return Err(error("Itda 설치 경로가 너무 길어 비밀번호 도우미를 시작하지 못했습니다"));
         }
@@ -423,7 +425,9 @@ impl SessionVault {
         struct Task<'a>(&'a dyn Fn(&[&str]) -> bool, &'a str);
         impl Drop for Task<'_> {
             fn drop(&mut self) {
-                (self.0)(&["/Delete", "/F", "/TN", self.1]);
+                if !(self.0)(&["/Delete", "/F", "/TN", self.1]) {
+                    crate::log!("remote setup: couldn't delete the one-time task {}", self.1);
+                }
             }
         }
         if !task_ok(&["/Create", "/F", "/TN", &task, "/SC", "ONCE", "/ST", "00:00", "/IT", "/RL", "LIMITED", "/TR", &run]) {
@@ -433,20 +437,27 @@ impl SessionVault {
         if !task_ok(&["/Run", "/TN", &task]) {
             return Err(error("비밀번호 도우미를 시작하지 못했습니다. 원격 PC에 이 계정으로 로그인되어 있는지 확인하세요"));
         }
+        // Any local program could connect: only the one that shows the token is kept, others
+        // are dropped and waiting goes on until the deadline.
         let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        let mut stream = loop {
+        let stream = loop {
             match listener.accept() {
-                Ok((s, _)) => break s,
+                Ok((mut s, _)) => {
+                    let proven = s.set_nonblocking(false).is_ok()
+                        && s.set_read_timeout(Some(std::time::Duration::from_secs(2))).is_ok()
+                        && read_line_secret(&mut s).is_ok_and(|proof| proof.as_slice() == token.as_bytes());
+                    if proven {
+                        break s;
+                    }
+                }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock && std::time::Instant::now() < until => std::thread::sleep(std::time::Duration::from_millis(100)),
                 Err(_) => return Err(error("비밀번호 도우미가 응답하지 않습니다. 원격 PC에 이 계정으로 로그인되어 있는지 확인하세요")),
             }
+            if std::time::Instant::now() >= until {
+                return Err(error("비밀번호 도우미가 응답하지 않습니다. 원격 PC에 이 계정으로 로그인되어 있는지 확인하세요"));
+            }
         };
         stream.set_nonblocking(false)?;
-        stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
-        let proof = read_line_secret(&mut stream)?;
-        if proof.as_slice() != token.as_bytes() {
-            return Err(error("비밀번호 도우미를 확인하지 못했습니다"));
-        }
         stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
         *self.link.borrow_mut() = Some(Box::new(stream));
         Ok(())
@@ -550,7 +561,9 @@ impl Drop for SessionVault {
 fn vault_helper(base: &str, socket: &Path) -> io::Result<()> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     // Before any store access: the isolated profile, if that's what provisioning used.
-    if !base.is_empty() {
+    if base.is_empty() {
+        std::env::remove_var("ITDA_DATA_DIR");
+    } else {
         std::env::set_var("ITDA_DATA_DIR", base);
     }
     let mine = unsafe { libc_getuid() };
@@ -576,7 +589,13 @@ fn vault_helper(base: &str, socket: &Path) -> io::Result<()> {
 /// The Windows helper, run by the one-time task in the desktop session: the folder must be a
 /// `vault-` folder directly in this account's data folder; it sends the token found there.
 #[cfg(windows)]
-fn vault_helper(port: &str, dir: &Path) -> io::Result<()> {
+fn vault_helper(port: &str, base: &str, dir: &Path) -> io::Result<()> {
+    // Before any store access: the profile provisioning used (empty: the default one).
+    if base.is_empty() {
+        std::env::remove_var("ITDA_DATA_DIR");
+    } else {
+        std::env::set_var("ITDA_DATA_DIR", base);
+    }
     let unsafe_path = || error("비밀번호 도우미의 경로가 안전하지 않습니다");
     let port: u16 = port.parse().map_err(|_| unsafe_path())?;
     let root = fs::canonicalize(store::dir())?;
@@ -986,11 +1005,19 @@ fn other_app_running() -> io::Result<bool> {
     {
         let script = format!(
             r#"$ProgressPreference='SilentlyContinue';$me={};$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-# Another account's Itda can't be asked for its owner (access denied): it isn't ours, skip it.
-# Without WMI access, a process whose path this account may read is its own.
-try{{$n=@(Get-CimInstance Win32_Process -Filter "Name='itda.exe'" -ErrorAction Stop|Where-Object{{$_.ProcessId -ne $me -and $(try{{(Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $sid}}catch{{$false}})}}).Count}}
-catch{{$n=@(Get-Process -Name itda -ErrorAction SilentlyContinue|Where-Object{{$_.Id -ne $me -and $_.Path}}).Count}}
-[Console]::Write($n)"#,
+# Each Itda's owner from its access token: ours, another account's, or unknown (no access).
+Add-Type -TypeDefinition @'
+using System;using System.Runtime.InteropServices;
+public static class ItdaOwner {{
+[DllImport("kernel32",SetLastError=true)] static extern IntPtr OpenProcess(uint a,bool i,uint p);
+[DllImport("advapi32",SetLastError=true)] static extern bool OpenProcessToken(IntPtr h,uint a,out IntPtr t);
+[DllImport("kernel32")] static extern bool CloseHandle(IntPtr h);
+public static string Sid(uint pid){{IntPtr p=OpenProcess(0x1000,false,pid);if(p==IntPtr.Zero)return null;try{{IntPtr t;if(!OpenProcessToken(p,8,out t))return null;try{{using(var id=new System.Security.Principal.WindowsIdentity(t)){{return id.User.Value;}}}}finally{{CloseHandle(t);}}}}finally{{CloseHandle(p);}}}}
+}}
+'@
+$own=0;$unknown=0
+foreach($p in @(Get-Process -Name itda -ErrorAction SilentlyContinue)){{if($p.Id -eq $me){{continue}};$s=$null;try{{$s=[ItdaOwner]::Sid([uint32]$p.Id)}}catch{{}};if($null -eq $s){{$unknown++}}elseif($s -eq $sid){{$own++}}}}
+[Console]::Write("$own $unknown")"#,
             std::process::id()
         );
         let bytes: Vec<_> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
@@ -1005,11 +1032,23 @@ catch{{$n=@(Get-Process -Name itda -ErrorAction SilentlyContinue|Where-Object{{$
         if !out.status.success() {
             return Err(error("실행 중인 앱을 확인하지 못했습니다"));
         }
-        let count = String::from_utf8_lossy(&out.stdout)
-            .trim()
-            .parse::<u32>()
-            .map_err(|_| error("실행 중인 앱 응답이 올바르지 않습니다"))?;
-        Ok(count > 0)
+        running_from(&String::from_utf8_lossy(&out.stdout))
+    }
+}
+
+/// `"<ours> <unknown>"` from the Windows check: another account's Itda doesn't count, one whose
+/// owner can't be read is refused rather than taken as someone else's.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn running_from(counts: &str) -> io::Result<bool> {
+    let bad = || error("실행 중인 앱 응답이 올바르지 않습니다");
+    let mut n = counts.split_whitespace().map(|v| v.parse::<u32>());
+    let (own, unknown) = (n.next().ok_or_else(bad)?.map_err(|_| bad())?, n.next().ok_or_else(bad)?.map_err(|_| bad())?);
+    if own > 0 {
+        Ok(true)
+    } else if unknown > 0 {
+        Err(error("이 계정의 것인지 확인할 수 없는 Itda가 실행 중입니다. 원격 PC에서 Itda를 종료한 뒤 다시 시도하세요"))
+    } else {
+        Ok(false)
     }
 }
 
@@ -1212,7 +1251,7 @@ pub fn import_mode() -> bool {
     #[cfg(windows)]
     if mode == "--vault-helper" {
         let args: Vec<String> = std::env::args().collect();
-        if let Err(e) = vault_helper(args.get(2).map_or("", String::as_str), Path::new(args.get(3).map_or("", String::as_str))) {
+        if let Err(e) = vault_helper(args.get(2).map_or("", String::as_str), args.get(3).map_or("", String::as_str), Path::new(args.get(4).map_or("", String::as_str))) {
             eprintln!("vault helper: {e}");
         }
         return true;
@@ -2610,5 +2649,18 @@ mod windows_vault_live {
         assert_eq!(v.get(&key).unwrap().as_deref(), Some("비밀 🔑"));
         v.set(&key, None).unwrap();
         assert_eq!(v.get(&key).unwrap(), None);
+    }
+}
+
+#[cfg(test)]
+mod running_tests {
+    /// Ours counts, another account's doesn't, an unreadable owner refuses.
+    #[test]
+    fn windows_running_counts() {
+        assert!(super::running_from("1 0").unwrap());
+        assert!(super::running_from("2 1").unwrap());
+        assert!(!super::running_from("0 0").unwrap());
+        assert!(super::running_from("0 1").is_err());
+        assert!(super::running_from("x").is_err());
     }
 }
