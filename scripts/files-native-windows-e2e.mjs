@@ -25,7 +25,7 @@ const quote=s=>"'"+s.replaceAll("'","''")+"'";
 try {
  remote=JSON.parse(powershell(`$ErrorActionPreference='Stop';$d=Join-Path $env:TEMP '${tag}';New-Item -ItemType Directory -Path $d|Out-Null;[pscustomobject]@{path=$d;user=$env:USERNAME}|ConvertTo-Json -Compress`));
  const source=path.join(root,'source');fs.mkdirSync(source);
- const name='정보공개 결정통지서(접수번호_17780155).pdf'.normalize('NFD'),bytes=Buffer.from('%PDF-1.4\nItda disposable Unicode fixture '+uuid+'\n%%EOF\n');fs.writeFileSync(path.join(source,name),bytes);
+ const name='정보공개 결정통지서(접수번호_00000000).pdf'.normalize('NFD'),bytes=Buffer.from('%PDF-1.4\nItda disposable Unicode fixture '+uuid+'\n%%EOF\n');fs.writeFileSync(path.join(source,name),bytes);
  const data=path.join(root,'data','Itda');fs.mkdirSync(data,{recursive:true});
  const options={method:'sftp',host:sshHost,port:sshPort,user:sshUser||remote.user,path:remote.path.replaceAll('\\','/'),engine:'sftp'};
  fs.writeFileSync(path.join(data,'hosts.json'),JSON.stringify([{id:'quality-native',name:'Disposable Windows fixture',host:sshHost,os:'windows',user:sshUser||remote.user,files:options}]));

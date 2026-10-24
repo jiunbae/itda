@@ -9,7 +9,7 @@ workspace = pathlib.Path(options.workspace) if options.workspace else pathlib.Pa
 if workspace.parent.resolve()!=pathlib.Path(tempfile.gettempdir()).resolve() or not workspace.name.startswith('itda-quality-sftp-') or not workspace.is_dir() or list(workspace.iterdir()): raise ValueError('Expected own empty fixture workspace')
 os.chmod(workspace, 0o700)
 root = workspace / 'files'; root.mkdir()
-name = unicodedata.normalize('NFD', '정보공개 결정통지서(접수번호_17780155).pdf')
+name = unicodedata.normalize('NFD', '정보공개 결정통지서(접수번호_00000000).pdf')
 # A small valid synthetic PDF; no user document content.
 objects = [b'<< /Type /Catalog /Pages 2 0 R >>', b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>', b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R >>', b'<< /Length 0 >>\nstream\n\nendstream']
 pdf = bytearray(b'%PDF-1.4\n'); offsets = [0]
