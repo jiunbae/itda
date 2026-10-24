@@ -1096,7 +1096,11 @@ printf '{"platform":"mac","version":"%s","versions":[%s],"running":%s}\n' "$vers
 const WIN_PROBE: &str = r#"
 $ErrorActionPreference='Stop'
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$owned=@(Get-CimInstance Win32_Process -Filter "Name='itda.exe'" | Where-Object {(Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid).Sid -eq $sid})
+$owned=@(Get-CimInstance Win32_Process -Filter "Name='itda.exe'" | Where-Object {
+ $owner=Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop
+ if($owner.ReturnValue -ne 0 -or [string]::IsNullOrWhiteSpace($owner.Sid)){throw 'Could not determine running Itda ownership; remote app and settings were not changed'}
+ $owner.Sid -eq $sid
+})
 $running=$owned.Count -gt 0
 $exe=Join-Path $env:LOCALAPPDATA 'Programs\Itda\itda.exe'
 $paths=@($exe)+@($owned | ForEach-Object {$_.ExecutablePath} | Where-Object {$_})
@@ -1411,8 +1415,8 @@ function Get-CimInstance {
 }
 function Invoke-CimMethod {
  param($InputObject,$MethodName)
- if($InputObject.FixtureSid -eq 'denied'){throw 'fixture owner unavailable'}
- @{Sid=$InputObject.FixtureSid}
+ if($InputObject.FixtureSid -eq 'denied'){return @{ReturnValue=2;Sid=''}}
+ @{ReturnValue=0;Sid=$InputObject.FixtureSid}
 }
 "#;
         for denied in [false, true] {
@@ -1428,7 +1432,7 @@ function Invoke-CimMethod {
             let output = result.unwrap();
             if denied {
                 assert!(!output.status.success(), "unreadable ownership must keep the existing fail-closed behavior");
-                assert!(String::from_utf8_lossy(&output.stderr).contains("fixture owner unavailable"));
+                assert!(String::from_utf8_lossy(&output.stderr).contains("Could not determine running Itda ownership"));
             } else {
                 assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
                 let text = String::from_utf8(output.stdout).unwrap();
