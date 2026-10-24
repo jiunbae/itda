@@ -1,0 +1,30 @@
+name: ItdaMobileSafariQA
+options:
+  deploymentTarget:
+    iOS: "27.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SDKROOT: iphonesimulator
+    SUPPORTED_PLATFORMS: iphonesimulator
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    GENERATE_INFOPLIST_FILE: YES
+    TARGETED_DEVICE_FAMILY: "1,2"
+targets:
+  ItdaMobileSafariQA:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [Tests]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.jiun.itda.mobile-safari-qa
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+schemes:
+  ItdaMobileSafariQA:
+    build:
+      targets:
+        ItdaMobileSafariQA: [test]
+    test:
+      targets: [ItdaMobileSafariQA]
+      parallelizable: false
