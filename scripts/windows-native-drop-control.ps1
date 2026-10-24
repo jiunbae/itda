@@ -40,7 +40,7 @@ try {
     $result.GuardBefore=$before;$result.GuardAfter=[ItdaQualityWindow]::ProbeIdle()
     $reply=@{request=$c.request;result=$result}
    }catch{$reply=@{request=$c.request;error=$_.Exception.Message}}
-   $reply|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $Root 'reply.tmp') -Encoding utf8
+   $reply|ConvertTo-Json -Depth 10 -EnumsAsStrings|Set-Content -LiteralPath (Join-Path $Root 'reply.tmp') -Encoding utf8
    Move-Item -LiteralPath (Join-Path $Root 'reply.tmp') -Destination (Join-Path $Root 'reply.json') -Force
   }
   Start-Sleep -Milliseconds 50
