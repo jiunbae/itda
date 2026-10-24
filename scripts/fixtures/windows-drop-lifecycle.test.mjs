@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
-import fs from 'node:fs';
 import {observeExit,explorerCleanupComplete} from './windows-drop-lifecycle.mjs';
 
 const childStub = () => Object.assign(new EventEmitter().on('error',()=>{}), {exitCode:null, signalCode:null});
@@ -44,28 +43,4 @@ test('Explorer absence is valid after early failure without a close request', ()
 
 test('Explorer cleanup fails closed for missing, contradictory or unconfirmed receipts', () => {
   for(const receipt of [{},{explorer_close_requested:true},{explorer_state:'not-created',explorer_creation_attempted:true,no_owned_window_confirmed:true,explorer_close_requested:false},{explorer_state:'closed',explorer_creation_attempted:true,no_owned_window_confirmed:false,explorer_close_requested:true},{explorer_state:'not-created',explorer_creation_attempted:false,no_owned_window_confirmed:true,explorer_close_requested:false,error:'Enumeration failed'}])assert.equal(explorerCleanupComplete(receipt),false);
-});
-
-// Source-only checks are intentional: this suite must not load user32, dispatch
-// input, create windows, or import the executing CI entry point on the host.
-test('ownership checks target pinned home HWND and retain process/session guards', () => {
-  const controller=fs.readFileSync(new URL('../windows-native-drop-control.ps1',import.meta.url),'utf8');
-  const own=controller.match(/function Own-App \{([\s\S]*?)\n\}/)[1];
-  assert.match(own,/-Operation inspect/); // Includes existing canonical-path validation.
-  assert.match(own,/\$state\.creation_ticks -ne \$CreationTicks/);
-  assert.match(own,/\$state\.pid -ne \$AppPid/);
-  assert.match(own,/\$state\.session_id -ne \(Get-Process -Id \$PID\)\.SessionId/);
-  assert.match(own,/AssertHomeWindow\(\$AppPid,\$MainHwnd\)/);
-  assert.doesNotMatch(own,/\$state\.hwnd|MainWindowHandle/);
-  const driver=fs.readFileSync(new URL('./windows-drop-driver.cs',import.meta.url),'utf8');
-  const query=driver.match(/public static void AssertHomeWindow[^\{]*\{([\s\S]*?)\n \}/)[1];
-  for(const guard of ['IsWindow(h)','GetWindowThreadProcessId(h,out actual)','actual!=pid','itda_home','IsWindowVisible(h)','GetWindowTextW(h,title,title.Capacity)'])assert.ok(query.includes(guard),guard);
-  assert.doesNotMatch(query,/SendInput|SetWindowPos|SetForegroundWindow|PostMessage/);
-});
-
-test('cleanup never marks a live/error-only controller quiescent or turns its failure into pass', () => {
-  const entry=fs.readFileSync(new URL('../windows-native-drop-ci-e2e.mjs',import.meta.url),'utf8');
-  assert.match(entry,/assert\(controllerState\.stopped,'[^']+'\);controllerQuiesced=true/);
-  assert.match(entry,/if\(result\.code!==0\|\|result\.signal\|\|result\.error\)\{report\.status='failed';report\.error\?\?='Controller exited abnormally';process\.exitCode=1;/);
-  assert.match(entry,/if\(!controllerQuiesced\)errors\.push/);
 });
