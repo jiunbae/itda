@@ -96,6 +96,8 @@ File browsing is independent of screen sharing. Closing a window leaves its ongo
 
 When records remain after closing a file window, **전송 (Transfers)** appears in the main window's sidebar to show progress and outcomes or cancel ongoing work. For a failed or cancelled transfer, **파일 창에서 다시 시도** opens that device's file window; choose **다시 시도…** in its transfer list, then review the remaining items and destination before sending them again. Retry lists are not retained when more than 1,000 items were selected at once; select the files again in that case. These transfer records do not survive an app restart.
 
+Quitting or updating Itda during a file-browser copy or move offers three choices: **wait until transfers finish**, **stop and quit/update**, or **cancel quitting/updating**. Stop waits for transfer cleanup; if cleanup cannot finish, Itda stays open and asks again. Completed moves are not rolled back. Cancelling a pending quit keeps Itda open but does not restart transfers already stopped.
+
 The macOS file window exports real file URLs for Finder's clipboard. Wait for **파일 복사 준비 완료** before pasting remote files; stale HTML is cleared while they are prepared. Staged copies stay under `…/Itda/file-exports` so the clipboard remains usable after quitting. In-window dragging keeps folder/tab transfers; dragging outside hands off to native file promises and downloads only after Finder accepts the drop. External drags copy without deleting remote originals. This applies to the file browser, independently of a Finder running inside a remote screen session.
 
 **macOS**
