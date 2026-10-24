@@ -166,6 +166,12 @@
         "scripts/files-native-windows-quit-e2e.mjs"
       ],
       "scope": "Runner/provenance prepared; zero native quit results because Windows SSH was offline before launch."
+    },
+    "native-windows-managed-quit": {
+      "paths": [
+        "assessments/evidence/native-windows-managed-quit.json"
+      ],
+      "scope": "Actual native CI managed SFTP copy; bounded owned messages, staging/hash/cleanup proof; broader limits retained"
     }
   },
   "persona_journeys": [
@@ -506,5 +512,19 @@
     "merge": "590d9926ba8891e1b7e376d6bee3c9048d84fc01",
     "evidence": "assessments/evidence/site-refresh-deployed-2026-10-24.json",
     "result": "40 published layouts and25/25 PNG hashes PASS; app deployment/native persona acceptance still incomplete"
+  },
+  "subsequent_native_windows_quit_checkpoint": {
+    "pr": 102,
+    "merge": "3311e90ac929f5343c3f309a16931e5e88da3450",
+    "evidence": "assessments/evidence/native-windows-managed-quit.json",
+    "component": "managed Windows SFTP quit/cancel/wait/stop verified on CI candidate",
+    "scope_note": "Updates the older snapshot's unmerged/native-pending guard statement for this component only. Full28-journey audit remains incomplete; no persona9/10 score or deployed-app claim.",
+    "remaining": [
+      "Hosted Windows Server CI VM, elevated token and100% scaling; not the user PC/150% layout acceptance",
+      "Only managed SFTP copy started with in-app Ctrl+C/Ctrl+V between tabs; no physical input, Explorer/OLE or virtual-file-stream quit proof",
+      "Synthetic WM_QUERYENDSESSION and own WM_CLOSE only; no actual OS shutdown/logout/WM_ENDSESSION or tray click",
+      "No native Mac Cmd-Q/AppleEvent/Finder-queue, updater/installer or timeout/Force runtime acceptance",
+      "Production app remains1.0.2; release and installed behavior pending; all verified persona scores remain null"
+    ]
   }
 }
