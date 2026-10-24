@@ -989,8 +989,22 @@ impl std::error::Error for HpSetup {}
 pub(crate) fn open_hp(host: &store::Host, login: &store::Login, ssh_pass: &str) -> io::Result<(Arc<Tunnel>, rfb::Raw)> {
     let setup = |why| io::Error::new(io::ErrorKind::NotFound, HpSetup(why));
     let pass = store::get_password(&crate::hp_upgrade::password_key(&host.id)).ok_or_else(|| setup("이 기기에 고성능 공유 암호가 없습니다"))?;
-    let t = Tunnel::open(crate::hp_upgrade::ssh_cfg_with(host, login, ssh_pass.to_string()))?;
-    let raw = rfb::open(&t.addr()?, &Creds { user: String::new(), pass }).map_err(|e| match e.kind() {
+    let cfg = crate::hp_upgrade::ssh_cfg_with(host, login, ssh_pass.to_string());
+    let t = Tunnel::open(cfg.clone())?;
+    let quiet = |e: &io::Error| matches!(e.kind(), io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted);
+    let mut raw = rfb::open(&t.addr()?, &Creds { user: String::new(), pass: pass.clone() });
+    // Nothing answering: Itda may just not be running there (quit, or the Mac restarted). If
+    // sharing is on for that Mac, start it in the background and try once more.
+    if raw.as_ref().is_err_and(quiet) {
+        match crate::hp_upgrade::start_sharing(&cfg) {
+            Ok(()) => {
+                crate::log!("high-performance sharing on {}: started Itda there", host.host);
+                raw = rfb::open(&t.addr()?, &Creds { user: String::new(), pass });
+            }
+            Err(e) => crate::log!("high-performance sharing on {}: couldn't start Itda there: {e}", host.host),
+        }
+    }
+    let raw = raw.map_err(|e| match e.kind() {
         // Nothing answering behind the tunnel: sharing isn't on, or Itda isn't running there.
         io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted => setup("원격 Mac의 Itda 고성능 공유에 연결하지 못했습니다"),
         // The password it has changed (e.g. Itda was reinstalled there).

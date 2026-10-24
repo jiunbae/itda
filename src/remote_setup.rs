@@ -331,6 +331,125 @@ impl Vault for NativeVault {
         store::set_password_checked(key, value)
     }
 }
+/// Over SSH a Mac's login keychain is locked to that session (macOS unlocks it per login
+/// session), so writing passwords fails. They go instead through a helper the same app runs
+/// in the person's desktop session (started with `open`), over a socket in a private folder.
+#[cfg(target_os = "macos")]
+struct SessionVault {
+    app: PathBuf,
+    link: std::cell::RefCell<Option<(io::BufReader<std::os::unix::net::UnixStream>, std::os::unix::net::UnixStream)>>,
+    dir: std::cell::RefCell<Option<PathBuf>>,
+}
+#[cfg(target_os = "macos")]
+impl SessionVault {
+    fn new(app: PathBuf) -> SessionVault {
+        SessionVault { app, link: Default::default(), dir: Default::default() }
+    }
+    fn start(&self) -> io::Result<()> {
+        use std::os::unix::net::UnixListener;
+        let dir = store::dir().join(format!("vault-{}", &random_id()?[..16]));
+        private_dir(&dir)?;
+        *self.dir.borrow_mut() = Some(dir.clone());
+        let listener = UnixListener::bind(dir.join("s"))?;
+        listener.set_nonblocking(true)?;
+        let started = std::process::Command::new("/usr/bin/open")
+            .args(["-n", "-g", "-j"])
+            .arg(&self.app)
+            .args(["--args", "--vault-helper"])
+            .arg(dir.join("s"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if !started.success() {
+            return Err(error("이 Mac의 로그인 세션에서 키체인 도우미를 열지 못했습니다. 화면에 로그인한 계정인지 확인하세요"));
+        }
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let stream = loop {
+            match listener.accept() {
+                Ok((s, _)) => break s,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock && std::time::Instant::now() < until => std::thread::sleep(std::time::Duration::from_millis(100)),
+                Err(_) => return Err(error("키체인 도우미가 응답하지 않습니다. 원격 Mac 화면에 로그인되어 있는지 확인하세요")),
+            }
+        };
+        stream.set_nonblocking(false)?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
+        *self.link.borrow_mut() = Some((io::BufReader::new(stream.try_clone()?), stream));
+        Ok(())
+    }
+    fn call(&self, request: Value) -> io::Result<Value> {
+        use io::BufRead;
+        if self.link.borrow().is_none() {
+            self.start()?;
+        }
+        let mut link = self.link.borrow_mut();
+        let (reader, writer) = link.as_mut().unwrap();
+        let mut line = Zeroizing::new(serde_json::to_vec(&request)?);
+        line.push(b'\n');
+        writer.write_all(&line)?;
+        let mut reply = Zeroizing::new(String::new());
+        reader.read_line(&mut reply)?;
+        let v: Value = serde_json::from_str(&reply).map_err(|_| error("키체인 도우미가 응답하지 않습니다"))?;
+        if v["ok"] == true {
+            Ok(v)
+        } else {
+            Err(error(v["error"].as_str().unwrap_or("키체인에 저장하지 못했습니다")))
+        }
+    }
+}
+#[cfg(target_os = "macos")]
+impl Vault for SessionVault {
+    fn get(&self, key: &str) -> io::Result<Option<String>> {
+        let v = self.call(json!({"op":"get","key":key}))?;
+        Ok(v["value"].as_str().map(str::to_string))
+    }
+    fn set(&mut self, key: &str, value: Option<&str>) -> io::Result<()> {
+        self.call(json!({"op":"set","key":key,"value":value})).map(|_| ())
+    }
+}
+#[cfg(target_os = "macos")]
+impl Drop for SessionVault {
+    fn drop(&mut self) {
+        self.link.take(); // the helper leaves when the connection closes
+        if let Some(dir) = self.dir.take() {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+}
+
+/// The helper side: started by `open` in the desktop session, it answers keychain requests
+/// from the socket given (which must be in a private folder of Itda's data folder), then exits.
+#[cfg(target_os = "macos")]
+fn vault_helper(socket: &Path) -> io::Result<()> {
+    use io::BufRead;
+    use std::os::unix::fs::MetadataExt;
+    let dir = socket.parent().ok_or_else(|| error("잘못된 경로"))?;
+    let meta = fs::symlink_metadata(dir)?;
+    let mine = unsafe { libc_getuid() };
+    if !dir.starts_with(store::dir()) || meta.file_type().is_symlink() || meta.uid() != mine || meta.mode() & 0o077 != 0 {
+        return Err(error("키체인 도우미의 경로가 안전하지 않습니다"));
+    }
+    let stream = std::os::unix::net::UnixStream::connect(socket)?;
+    let mut writer = stream.try_clone()?;
+    for line in io::BufReader::new(stream).lines() {
+        let line = Zeroizing::new(line?);
+        let reply = match serde_json::from_str::<Value>(&line) {
+            Ok(v) if v["op"] == "get" => store::get_password_checked(v["key"].as_str().unwrap_or_default()).map(|value| json!({"ok":true,"value":value})),
+            Ok(v) if v["op"] == "set" => store::set_password_checked(v["key"].as_str().unwrap_or_default(), v["value"].as_str()).map(|()| json!({"ok":true})),
+            _ => Err(error("알 수 없는 요청")),
+        };
+        let mut out = Zeroizing::new(serde_json::to_vec(&reply.unwrap_or_else(|e| json!({"ok":false,"error":e.to_string()})))?);
+        out.push(b'\n');
+        writer.write_all(&out)?;
+    }
+    Ok(())
+}
+#[cfg(target_os = "macos")]
+extern "C" {
+    #[link_name = "getuid"]
+    fn libc_getuid() -> u32;
+}
+
 fn read_json<T: serde::de::DeserializeOwned + Default>(root: &Path, name: &str) -> io::Result<T> {
     match fs::read(root.join(name)) {
         Ok(bytes) => serde_json::from_slice(&bytes)
@@ -841,6 +960,19 @@ fn provision(root: &Path, p: &Package, close: bool, launch: bool) -> io::Result<
     let config = idle_lock(root, close)?;
     // No mutation until the package, processes, and both locks have been checked.
     let app = install_staged()?;
+    // Over SSH on a Mac the keychain is reached through the desktop session (see SessionVault).
+    #[cfg(target_os = "macos")]
+    let mut result = if std::env::var_os("SSH_CONNECTION").is_some() {
+        apply_locked(root, p, &mut SessionVault::new(app.clone()))
+    } else {
+        apply_locked(root, p, &mut NativeVault)
+    }
+    .map_err(|e| {
+        error(&format!(
+            "앱 설치는 완료됐지만 설정 공유에 실패했습니다: {e}"
+        ))
+    })?;
+    #[cfg(not(target_os = "macos"))]
     let mut result = apply_locked(root, p, &mut NativeVault).map_err(|e| {
         error(&format!(
             "앱 설치는 완료됐지만 설정 공유에 실패했습니다: {e}"
@@ -884,6 +1016,13 @@ fn provision(root: &Path, p: &Package, close: bool, launch: bool) -> io::Result<
 /// Headless import before GUI/server/log initialization, including on Windows.
 pub fn import_mode() -> bool {
     let mode = std::env::args().nth(1).unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    if mode == "--vault-helper" {
+        if let Err(e) = vault_helper(Path::new(&std::env::args().nth(2).unwrap_or_default())) {
+            eprintln!("vault helper: {e}");
+        }
+        return true;
+    }
     if mode != "--import-configuration" && mode != "--provision-configuration" {
         return false;
     }
