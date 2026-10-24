@@ -184,15 +184,64 @@
   "source_fix_verification_scope": "Published 1.0.5 addresses the four specifically recorded 1.0.4 source defects: permission restart/admission guard, guide_reset forwarding, stale update Cancel admission, and Windows quit during update. Unit/browser CI coverage passed; no full affected native restart/update acceptance or global P1/P2 absence claim.",
   "verification_gaps": [
     "Actual permission-helper restart during managed transfer, guide_reset/native permission changes, and the actual updater admission/installation/quit scenarios remain unverified. Source fixes and unit/browser CI do not certify those native paths.",
-    "Mac actual managed-copy Wait/Stop approval remains unanswered after the earlier pre-dispatch Tacto policy refusal; no native Mac Wait/Stop credit.",
+    "Mac actual4MiB managed-copy Wait/Stop approval remains unanswered after the earlier pre-dispatch Tacto policy refusal; no native Mac Wait/Stop credit.",
     "Mac Dock/AppleEvent/logout, Finder promise queue, updater/remote-installer/Force and corresponding native lifetimes remain unverified.",
     "Windows Explorer/OLE attempts ended before source drag mousedown; no OLE/virtual-file release acceptance. Physical user-PC input, 150% scaling and assistive technology remain unverified.",
     "iOS remains hard-blocked pending concrete new-device/process pasteboard isolation; disconnected phones and build-only XCTest scaffolding provide no physical phone, QR camera, Korean IME, clipboard/privacy or real LAN/HTTPS acceptance.",
     "Older macOS native runtime including 12.0–12.2 remains unverified; minimum-version/weak-link probes do not certify older OS runtime. 12.3+ remains recommended.",
+    "Two anonymous remote Macs still run default-installed1.0.2 and0.9.24; signed/hash-checked1.0.5 candidates are staged only with matching designated requirements. Human idle-state information/close approval is pending because both old tags use predefined unguarded menu Quit. No remote installed-app/configuration/TCC change or completed remote rollout is claimed.",
     "All seven verified persona scores remain null; 28 complete core journeys have not been certified at 9/10. No global claim that all P1/P2 defects are absent."
   ],
   "goal_status": "active",
   "goal_achieved": false,
   "privacy": "No personal names, raw install/profile/workspace paths, process IDs, creation ticks, profile fingerprints, credentials, pasteboard metadata/content, screenshots or raw accessibility trees are included.",
-  "historical_receipts": "Earlier failed checks, native failures, cleanup failures and release/score snapshots remain historical; this checkpoint does not retroactively change them."
+  "historical_receipts": "Earlier failed checks, native failures, cleanup failures and release/score snapshots remain historical; this checkpoint does not retroactively change them.",
+  "amended_at": "2026-10-24T05:56:09.700860+00:00",
+  "remote_rollout": {
+    "status": "two remote Macs remain on older default-installed running apps; 1.0.5 candidates staged only; not a completed remote rollout",
+    "inventory_scope": "Two anonymous remote Mac installations from the bounded read-only inventory, not a complete fleet inventory. Facts relayed by the release owner; no remote action was performed by this documentation task.",
+    "anonymous_installations": [
+      {
+        "installed_running_version": "1.0.2",
+        "candidate_version": "1.0.5",
+        "candidate_staged_only": true,
+        "candidate_signature_and_hash_checked": true,
+        "designated_requirement_matches_installed_app": true,
+        "default_installed_app_replaced": false,
+        "old_running_app_closed": false
+      },
+      {
+        "installed_running_version": "0.9.24",
+        "candidate_version": "1.0.5",
+        "candidate_staged_only": true,
+        "candidate_signature_and_hash_checked": true,
+        "designated_requirement_matches_installed_app": true,
+        "default_installed_app_replaced": false,
+        "old_running_app_closed": false
+      }
+    ],
+    "required_human_information_or_approval": {
+      "status": "pending",
+      "reason": "Both older installed tags use predefined menu Quit without the current transfer quit guard. Confirm idle/no-transfer state and authorize closing the old apps before replacement; staging does not authorize that close.",
+      "old_app_quit_attempted": false
+    },
+    "remote_installed_app_changes": false,
+    "remote_configuration_changes": false,
+    "remote_tcc_changes": false,
+    "privacy": "No aliases, hostnames, paths, process IDs, staged hashes, profile metadata or credentials are included."
+  },
+  "native_windows_managed_quit": {
+    "evidence": "assessments/evidence/native-windows-quit-1.0.5.json",
+    "status": "root and independent177 APPROVE for actual managed Wait5/5 and Stop5/5",
+    "independent_review_request": "req_18e1605b8669d7f0_177",
+    "run_id": 40066106737,
+    "binary_scope": "Non-release CI candidate at v1.0.5 tag source; candidate SHA differs from the published exe. No physical/Explorer/Mac/updater/permission-restart/persona acceptance."
+  },
+  "native_explorer_diagnostic": {
+    "evidence": "assessments/evidence/native-windows-explorer-ole.json",
+    "pr": 128,
+    "source_review_and_ci": "merged5a8f; source176/178 approved; all four CI checks green",
+    "run_id": 40067869121,
+    "status": "in-progress, no result receipt; no OLE acceptance"
+  }
 }

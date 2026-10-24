@@ -2,7 +2,7 @@
   "schema_version": 1,
   "component": "native-windows-managed-copy-quit-1.0.5",
   "recorded_at": "2026-10-24T05:34:32.660213+00:00",
-  "status": "root-verified-managed-Wait-Stop-component-pass; independent-receipt-review-pending; no-full-persona-acceptance",
+  "status": "root-and-independent-review-verified-managed-Wait-Stop-component-pass; no-full-persona-acceptance",
   "run_id": 40066106737,
   "run_url": "https://github.com/jiunbae/itda/actions/runs/40066106737",
   "dispatch_ref": "v1.0.5",
@@ -149,14 +149,16 @@
     "normal_exit_cleanup_source_and_startup_preserved": true
   },
   "independent_review": {
+    "request_id": "req_18e1605b8669d7f0_177",
     "review_reference": "177",
-    "status": "pending raw-receipt review",
-    "no_approval_claim_yet": true
+    "status": "APPROVE",
+    "scope": "Independent raw-receipt review confirms actual managed Wait5/5 and Stop5/5, with independently checked own artifact copies, source and hashes. This remains bounded Windows managed-copy quit evidence from the distinct non-release CI candidate, not direct acceptance of the public executable, physical input, Explorer/OLE, Mac, updater, permission restart or a whole persona."
   },
   "limits": [
     "Windows managed-copy Wait/Stop regression only. No physical mouse/keyboard, Explorer/OLE, Mac, actual updater, permission restart or full persona acceptance.",
     "The candidate binary differs from the public release exe; source/tag matching does not erase that distinction.",
     "No profile contents, credentials, private paths, process IDs, creation ticks, pasteboard metadata/content or raw screenshots/AX are published."
   ],
-  "goal_achieved": false
+  "goal_achieved": false,
+  "amended_at": "2026-10-24T05:56:09.700748+00:00"
 }

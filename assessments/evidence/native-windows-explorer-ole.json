@@ -2,7 +2,7 @@
   "schema_version": 1,
   "component": "native-windows-explorer-ole",
   "recorded_at": "2026-10-24T05:10:55.208123+00:00",
-  "status": "two-bounded-runs-failed; no-native-OLE-acceptance; first-cleanup-failed-and-second-cleanup-passed",
+  "status": "two-bounded-runs-failed; further-diagnostic-in-progress-without-result; no-native-OLE-acceptance; first-cleanup-failed-and-second-cleanup-passed",
   "release_context": {
     "public_release_at_preparation": "1.0.4",
     "future_checkpoint": "1.0.5",
@@ -122,9 +122,9 @@
     "native_ole_acceptance_after_fix": false
   },
   "verification_gaps": [
-    "Neither bounded attempt reached source drag mousedown or OLE/drop/virtual-file release acceptance. The second attempt did include owned window moves and possible activation click.",
+    "Neither completed bounded attempt reached source drag mousedown or OLE/drop/virtual-file release acceptance. The second attempt did include owned window moves and possible activation click.",
     "First-run overall cleanup failed; second-run overall cleanup passed. These outcomes are distinct and neither is rewritten.",
-    "Attribution interference needs further diagnosis; the local32ec diagnostic has not run.",
+    "Diagnostic-only PR128 is merged with code review176/178 and four green CI checks; new diagnostic run40067869121 at5a8f is in progress with no result supplied. No runtime acceptance is granted.",
     "Physical user-PC input, 150% scaling/layout, assistive technology and full file journeys remain unverified."
   ],
   "goal_achieved": false,
@@ -150,7 +150,7 @@
     "Original overall cleanup failed; later diagnosis does not retroactively certify cleanup.",
     "No full persona journey or 9/10 score is established."
   ],
-  "amended_at": "2026-10-24T05:39:49.202680+00:00",
+  "amended_at": "2026-10-24T05:56:09.700855+00:00",
   "current_checkpoint_context": {
     "public_release": "1.0.5",
     "source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
@@ -233,6 +233,33 @@
     }
   },
   "additional_diagnostic": {
+    "pr": 128,
+    "pr_url": "https://github.com/jiunbae/itda/pull/128",
+    "scope": "Diagnostic-only harness change; not a product fix or OLE acceptance result.",
+    "reviewed_source_commit_prefix": "997",
+    "merge_commit_prefix": "5a8f",
+    "merge_status": "merged as reported by the release owner",
+    "independent_code_review_references": [
+      "176",
+      "178"
+    ],
+    "independent_code_review_status": "approved",
+    "ci_runs": [
+      40066870388,
+      40066870445
+    ],
+    "reported_total_green_checks": 4,
+    "ci_status": "all four checks passed as reported by the release owner",
+    "native_runtime": {
+      "run_id": 40067869121,
+      "run_url": "https://github.com/jiunbae/itda/actions/runs/40067869121",
+      "expected_source_prefix": "5a8f",
+      "status": "in-progress as reported; no result receipt supplied",
+      "result_available": false,
+      "acceptance_credit": false
+    }
+  },
+  "previous_local_diagnostic": {
     "local_commit": "32ec0c4eca63ba44634eb059660be9887f1fc11f",
     "status": "local diagnostic source only",
     "native_runtime_executed": false
