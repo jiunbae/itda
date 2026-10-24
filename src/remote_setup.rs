@@ -182,6 +182,33 @@ fn source_key(path: &str) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn validate_account_bindings(hosts: &[Host], account_ids: &HashSet<&str>) -> io::Result<()> {
+    for host in hosts {
+        let name = if !host.name.is_empty() {
+            host.name.as_str()
+        } else if !host.host.is_empty() {
+            host.host.as_str()
+        } else {
+            "이름 없는 연결"
+        };
+        if !host.account.is_empty() && !account_ids.contains(host.account.as_str()) {
+            return Err(error(&format!(
+                "‘{name}’의 연결 계정을 찾을 수 없습니다. 연결을 편집해 계정을 다시 선택한 뒤 공유해 주세요."
+            )));
+        }
+        // Empty inherits the device login; custom uses the entered files.user.
+        if !host.files.account.is_empty()
+            && host.files.account != "custom"
+            && !account_ids.contains(host.files.account.as_str())
+        {
+            return Err(error(&format!(
+                "‘{name}’의 파일 연결 계정을 찾을 수 없습니다. 파일 열기에서 계정을 다시 선택한 뒤 공유해 주세요."
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub fn snapshot(
     hosts: &[Host],
     accounts: &[Account],
@@ -220,6 +247,12 @@ fn snapshot_with_origin(
         .filter(|a| references.contains(a.id.as_str()))
         .cloned()
         .collect();
+    // Deleted saved accounts can leave a file binding at rest. Refuse that
+    // selected source before touching secrets, key files or the origin file.
+    validate_account_bindings(
+        &selected_hosts,
+        &selected_accounts.iter().map(|a| a.id.as_str()).collect(),
+    )?;
     let mut secrets = Vec::new();
     let mut keys = Vec::new();
     let mut add = |kind, owner: &str, key: &str| -> io::Result<()> {
@@ -403,15 +436,7 @@ fn validate(p: &Package) -> io::Result<()> {
     }) {
         return Err(error("공유할 암호의 계정 또는 연결이 선택되지 않았습니다"));
     }
-    // Account bindings must be self-contained too. Never silently erase a
-    // missing host binding or resolve a file binding against destination data.
-    if p.hosts.iter().any(|h| !h.account.is_empty() && !account_ids.contains(h.account.as_str())) {
-        return Err(error("공유 설정에 연결에서 사용하는 계정이 없습니다"));
-    }
-    // "custom" selects a directly entered files.user, not a saved account ID.
-    if p.hosts.iter().any(|h| !h.files.account.is_empty() && h.files.account != "custom" && !account_ids.contains(h.files.account.as_str())) {
-        return Err(error("공유 설정에 파일 연결에서 사용하는 계정이 없습니다"));
-    }
+    validate_account_bindings(&p.hosts, &account_ids)?;
     let key_ids: HashSet<_> = p.keys.iter().map(|k| &k.account).collect();
     if key_ids.len() != p.keys.len()
         || p.keys.iter().map(|k| k.bytes.len() as u64).sum::<u64>() > MAX_PACKAGE / 4
@@ -1242,6 +1267,7 @@ pub fn prepare(
     }
     progress("선택한 설정을 준비하고 있어요…");
     let package = snapshot(&hosts, &accounts, &settings, &choice)?;
+    validate(&package)?;
     if remote.platform == "windows" && !package.secrets.is_empty() {
         check_remote_vault(&cfg)?;
     }
@@ -1758,10 +1784,10 @@ function Invoke-CimMethod {
                 let mut p=package();
                 let expected=if files_binding {
                     p.hosts[0].files.account="missing-package-account".into();
-                    "공유 설정에 파일 연결에서 사용하는 계정이 없습니다"
+                    "‘Shared Mac’의 파일 연결 계정을 찾을 수 없습니다. 파일 열기에서 계정을 다시 선택한 뒤 공유해 주세요."
                 }else{
                     p.hosts[0].account="missing-package-account".into();
-                    "공유 설정에 연결에서 사용하는 계정이 없습니다"
+                    "‘Shared Mac’의 연결 계정을 찾을 수 없습니다. 연결을 편집해 계정을 다시 선택한 뒤 공유해 주세요."
                 };
                 // These valid owners would cause key/Vault mutations if validation
                 // were delayed until account remapping or configuration writes.
@@ -1825,6 +1851,44 @@ function Invoke-CimMethod {
         assert_eq!(crate::files::password_key(&hosts[0]),expected);
         assert_eq!(vault.data,HashMap::from([(expected,"generated-custom-files-secret".into())]));
         assert_eq!(vault.calls,1);
+    }
+    #[test]
+    fn snapshot_missing_source_account_fails_before_origin_and_keeps_binding() {
+        for file_binding in [false, true] {
+            let mut source = package();
+            source.hosts[0].name = "<b>공유 & 연결</b>".into();
+            if file_binding {
+                source.hosts[0].files.account = "deleted-account".into();
+            } else {
+                source.hosts[0].account = "deleted-account".into();
+            }
+            let choice = Selection {
+                host_ids: vec!["source-host".into()],
+                passwords: false,
+                private_keys: false,
+                ..Selection::default()
+            };
+            let error = snapshot_with_origin(
+                &source.hosts,
+                &source.accounts,
+                &Settings::default(),
+                &choice,
+                || panic!("invalid source reached the origin provider"),
+            )
+            .err()
+            .expect("a missing source account must not produce a package")
+            .to_string();
+            assert!(error.contains("<b>공유 & 연결</b>"));
+            assert!(error.contains("계정을 다시 선택"));
+            if file_binding {
+                assert!(error.contains("파일 열기에서"));
+                assert_eq!(source.hosts[0].files.account, "deleted-account");
+            } else {
+                assert!(error.contains("연결을 편집해"));
+                assert_eq!(source.hosts[0].account, "deleted-account");
+            }
+            assert_eq!(source.accounts[0].id, "source-account");
+        }
     }
     #[test]
     fn preservation_host_only_leaves_unselected_bytes_modes_and_absence() {
