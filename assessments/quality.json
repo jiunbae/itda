@@ -755,7 +755,7 @@
         {
           "release": "1.0.3",
           "source_commit": "d4fcb9afcfb191299923d5bca2e151e7700752ee",
-          "status": "published; final artifacts independently verified; local Mac reinstall and bounded file-window smoke passed",
+          "status": "published; final artifacts independently verified; local Mac reinstall and network file-window open + native close-button smoke passed",
           "evidence": "assessments/evidence/release-1.0.3-checkpoint.json"
         }
       ],

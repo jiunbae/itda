@@ -97,7 +97,16 @@
     "physical_cmd_q_acceptance": false,
     "close_menu_attempt": "Background native Close Window attempt timed out; observed two windows, foregrounded the network window, closed its native close button and independently observed the main window alone. No close-menu success claim."
   },
-  "included_fixes": [
+  "verification_gaps": [
+    "Mac actual managed-copy Wait/Stop choices: bounded user confirmation pending after Tacto policy refusal before dispatch; no test acceptance credit.",
+    "Mac Dock/AppleEvent/logout, Finder promise queue, updater/remote-installer/Force runtime acceptance remain unverified.",
+    "Windows user-PC Explorer physical OLE drag and 150% layout remain unverified; hosted native managed-copy proof does not replace them.",
+    "macOS 12.0–12.2 runtime remains unverified; 12.3+ recommended.",
+    "All seven verified persona scores remain null; 28 complete core journeys have not been certified at 9/10."
+  ],
+  "goal_achieved": false,
+  "privacy": "No profile values, fingerprints, account/host names, screenshots, credentials or raw accessibility trees are included.",
+  "selected_recent_prs": [
     {
       "pr": 116,
       "scope": "isolated Mac native fixture and partial quit evidence; no native Wait/Stop acceptance"
@@ -115,13 +124,5 @@
       "scope": "same-user running portable app version probe and newer-version refusal; ownership and output validation"
     }
   ],
-  "verification_gaps": [
-    "Mac actual managed-copy Wait/Stop choices: bounded user confirmation pending after Tacto policy refusal before dispatch; no test acceptance credit.",
-    "Mac Dock/AppleEvent/logout, Finder promise queue, updater/remote-installer/Force runtime acceptance remain unverified.",
-    "Windows user-PC Explorer physical OLE drag and 150% layout remain unverified; hosted native managed-copy proof does not replace them.",
-    "macOS 12.0–12.2 runtime remains unverified; 12.3+ recommended.",
-    "All seven verified persona scores remain null; 28 complete core journeys have not been certified at 9/10."
-  ],
-  "goal_achieved": false,
-  "privacy": "No profile values, fingerprints, account/host names, screenshots, credentials or raw accessibility trees are included."
+  "selected_recent_prs_scope": "Selected recent PRs relevant to this checkpoint, not the complete release contents. Full release range: v1.0.2..v1.0.3."
 }
