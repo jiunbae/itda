@@ -17,7 +17,8 @@ bash scripts/mobile-native/build-only.sh
 
 The command prints its `/tmp/itda-mobile-native-build.*` artifact directory. The
 generated Xcode project, DerivedData and build result bundle stay there. It rejects
-arguments. Do not change it to `test`/`test-without-building` or choose an existing
+arguments and records SHA-256 hashes of the byte-compared source copies in
+`copied-source.sha256`. Do not change it to `test`/`test-without-building` or choose an existing
 device. A successful compile proves only that the scaffold builds.
 
 ## Runtime prerequisites that are not satisfied
@@ -61,9 +62,9 @@ the MobileSafari runner still needs a future runtime verification.
 | Case | Native action | Receiving proof | Does not establish |
 | --- | --- | --- | --- |
 | PIN error and recovery | Tap PIN, assert visible software keyboard, tap unique observed digit keys, tap submit, correct the PIN | Error/list AX state, screenshots, fixture HTTP status sequence | Rust gateway authentication or actual device credentials |
-| PIN lockout | Five wrong PINs arm the fixture lock; next request gets 429; wait for the ordinary UI countdown, then correct PIN | Disabled submit and countdown; no requests during countdown; successful fixture login | Real gateway rate limiting or network-source isolation |
+| PIN lockout | Five wrong PINs arm the fixture lock; next request gets 429; wait for the ordinary UI countdown, then correct PIN | Exact `401×5 → 429 → 200` receiver sequence, disabled submit/countdown and no requests during countdown | Real gateway rate limiting or network-source isolation |
 | Session expiry | Expire the fictional cookie through token-protected test control, tap refresh, sign in again | Explanation visible, repeat PIN entry and list proof | Production cookie lifetime or browser behavior across OS process death |
-| Touch and keyboard | Identify the actual magenta fixture framebuffer in a native screenshot, tap its center; open keyboard and tap observed ASCII `a` key | RFB pointer down/release near framebuffer center and `a` key down/up; JSON attachments paired with native captures | Physical finger UX, Korean IME, real remote OS input or real VNC account login |
+| Touch and keyboard | Identify the actual magenta fixture framebuffer in a native screenshot, tap a chosen non-central point; open keyboard and tap observed ASCII `a` key | Original peer ID retained; ordered adjacent down→up at identical coordinates within 4 framebuffer pixels of the chosen point, plus ordered `a` down→up on that peer; JSON attachments paired with native captures | Physical finger UX, Korean IME, real remote OS input or real VNC account login |
 | Context observation | Open separate diagnostic page | Native screenshot/AX text containing origin, `isSecureContext` and Clipboard API availability | Clipboard permission/operation, real LAN HTTP or trusted HTTPS |
 
 Tests attach screenshots, native accessibility trees and bounded receiver JSON to
@@ -79,6 +80,17 @@ The URL/selector/screenshot assumptions are unverified until authorized runtime.
 receiver from `scripts/monitors-e2e.mjs`. It excludes the benchmark/burst/fragment
 campaign and does not exercise multi-monitor hardware. The product's `web/` assets
 are served unchanged from an explicit allowlist.
+
+The fixture PIN sequence was source-reviewed against `src/gateway.rs`: failures 1–5
+return 401; failure 5 arms `MAX_FAILS=5`/`LOCKOUT=60s`; an attempt while locked returns
+429 before checking its PIN; a correct PIN after expiry returns 200. Each native
+submit asserts exactly one appended status, the recovery case asserts `[401,200]`
+then `[401,200,200]` after session expiry, and the lockout case asserts the full
+sequence above. These are assertions in an unrun scaffold, not a gateway test pass.
+
+The static fixture allowlist includes the service-worker shell's `icon-512.png`,
+mapped to existing `assets/itda-512.png`. Both that asset and the production gateway's
+`GET /icon-512.png` handler exist; only the scaffold's earlier mapping was missing.
 
 ## Clipboard and pasteboard audit
 

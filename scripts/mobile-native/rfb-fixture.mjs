@@ -2,7 +2,9 @@
 // No remote connections, clipboard frames, animation, load, or benchmark loop.
 import { createHash } from 'node:crypto';
 
-const WIDTH = 640, HEIGHT = 480, MAX_WIRE = 2 * 1024 * 1024;
+export const FRAMEBUFFER = Object.freeze({ width: 640, height: 480 });
+const { width: WIDTH, height: HEIGHT } = FRAMEBUFFER;
+const MAX_WIRE = 2 * 1024 * 1024;
 const u16 = n => { const b = Buffer.alloc(2); b.writeUInt16BE(n); return b; };
 const u32 = n => { const b = Buffer.alloc(4); b.writeUInt32BE(n >>> 0); return b; };
 function frame(data, opcode = 2) {
@@ -25,7 +27,7 @@ export function acceptRfb(req, socket, head, state) {
   if (typeof key !== 'string' || req.headers.upgrade?.toLowerCase() !== 'websocket') return socket.destroy();
   const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
   socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\nSec-WebSocket-Protocol: binary\r\n\r\n');
-  const peer = { pointer: [], keys: [], resizes: 0, cutTextMessages: 0, errors: [], closed: false };
+  const peer = { id: state.peers.length + 1, pointer: [], keys: [], resizes: 0, cutTextMessages: 0, errors: [], closed: false };
   state.peers.push(peer);
   const send = bytes => socket.write(frame(bytes));
   send(Buffer.from('RFB 003.008\n'));

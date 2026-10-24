@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { acceptRfb } from './rfb-fixture.mjs';
+import { acceptRfb, FRAMEBUFFER } from './rfb-fixture.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const HOST = { id: 'native-ios-fixture', label: 'QA 화면', name: 'QA 화면', host: 'fictional.invalid', os: 'windows', kind: 'vnc', has_pw: true, account: '',
@@ -14,7 +14,7 @@ const HOST = { id: 'native-ios-fixture', label: 'QA 화면', name: 'QA 화면', 
 const assets = new Map([
   ['/', 'web/viewer/index.html'], ['/index.html', 'web/viewer/index.html'],
   ...['viewer.js', 'viewer.css', 'novnc.min.js', 'monitors.js', 'interaction.js', 'manifest.webmanifest', 'sw.js'].map(n => ['/' + n, 'web/viewer/' + n]),
-  ['/icon.svg', 'assets/itda.svg'], ['/icon-192.png', 'assets/itda-192.png'],
+  ['/icon.svg', 'assets/itda.svg'], ['/icon-192.png', 'assets/itda-192.png'], ['/icon-512.png', 'assets/itda-512.png'],
   ['/hp-setup.js', 'web/hp-setup.js'], ['/hp-setup.css', 'web/hp-setup.css'],
 ]);
 const json = (res, status, body, headers = {}) => {
@@ -34,7 +34,7 @@ export function createUnstartedFixture() {
   const authed = req => state.session && (req.headers.cookie || '').split(';').some(v => v.trim() === 'qa_session=' + state.session);
   const record = status => { if (state.loginStatuses.length < 128) state.loginStatuses.push(status); return status; };
   const snapshot = () => ({ schema: 1, scope: 'Fictional gateway and RFB receiver, not Rust gateway or real VNC authentication',
-    wrong: state.wrong, locked: Date.now() < state.lockedUntil, loginStatuses: [...state.loginStatuses], peers: state.peers,
+    wrong: state.wrong, locked: Date.now() < state.lockedUntil, loginStatuses: [...state.loginStatuses], peers: state.peers, framebuffer: FRAMEBUFFER,
     clipboard: { emitted: false, hostOption: false, cutTextMessages: state.peers.reduce((n, p) => n + p.cutTextMessages, 0) } });
   const server = http.createServer(async (req, res) => {
     try {

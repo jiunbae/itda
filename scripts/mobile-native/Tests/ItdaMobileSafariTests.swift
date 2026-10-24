@@ -88,7 +88,7 @@ final class ItdaMobileSafariTests: XCTestCase {
         matches.firstMatch.tap()
     }
 
-    private func enterPIN(_ value: String, safari: XCUIApplication) async throws {
+    private func enterPIN(_ value: String, expectedStatus: Int, safari: XCUIApplication) async throws {
         let before = (try await control("stats"))["loginStatuses"] as? [Int] ?? []
         let pin = safari.webViews.secureTextFields["PIN"]
         XCTAssertTrue(pin.waitForExistence(timeout: 5)); pin.tap()
@@ -104,7 +104,10 @@ final class ItdaMobileSafariTests: XCTestCase {
         // guidance text alone is not proof that this submission was processed.
         for _ in 0..<50 {
             let after = (try await control("stats"))["loginStatuses"] as? [Int] ?? []
-            if after.count == before.count + 1 { return }
+            if after.count > before.count {
+                XCTAssertEqual(after, before + [expectedStatus], "A native submit must produce exactly the expected new HTTP status, without extra attempts")
+                return
+            }
             try await Task.sleep(for: .milliseconds(100))
         }
         XCTFail("Native submit produced no new fixture HTTP response")
@@ -117,21 +120,25 @@ final class ItdaMobileSafariTests: XCTestCase {
     func testPINErrorRecoveryAndExpiredSession() async throws {
         _ = try await control("reset", method: "POST")
         let safari = try browser()
-        try await enterPIN("111111", safari: safari)
+        try await enterPIN("111111", expectedStatus: 401, safari: safari)
         XCTAssertTrue(visibleText("PIN이 맞지 않습니다", safari: safari))
         XCTAssertTrue(visibleText("공유 페이지", safari: safari), "Wrong PIN must offer the recovery location")
         evidence("wrong-PIN-recovery", safari: safari)
-        try await enterPIN("123456", safari: safari)
+        try await enterPIN("123456", expectedStatus: 200, safari: safari)
         XCTAssertTrue(safari.webViews.buttons["QA 화면 열기"].waitForExistence(timeout: 5))
-        try receiverEvidence("PIN-recovery", stats: await control("stats"))
+        let recovered = try await control("stats")
+        XCTAssertEqual(recovered["loginStatuses"] as? [Int], [401, 200])
+        try receiverEvidence("PIN-recovery", stats: recovered)
         _ = try await control("expire", method: "POST")
         safari.webViews.buttons["새로 고침"].tap()
         XCTAssertTrue(visibleText("PIN", safari: safari))
         XCTAssertTrue(visibleText("다시", safari: safari), "Expired session must explain why sign-in is needed")
         evidence("expired-session", safari: safari)
-        try await enterPIN("123456", safari: safari)
+        try await enterPIN("123456", expectedStatus: 200, safari: safari)
         XCTAssertTrue(safari.webViews.buttons["QA 화면 열기"].waitForExistence(timeout: 5))
-        try receiverEvidence("expired-session-recovery", stats: await control("stats"))
+        let signedInAgain = try await control("stats")
+        XCTAssertEqual(signedInAgain["loginStatuses"] as? [Int], [401, 200, 200])
+        try receiverEvidence("expired-session-recovery", stats: signedInAgain)
     }
 
     func testPINLockoutWaitAndRecovery() async throws {
@@ -139,28 +146,37 @@ final class ItdaMobileSafariTests: XCTestCase {
         let safari = try browser()
         // Five failures arm the fixture lock; the next attempt gets 429,
         // matching src/gateway.rs. No clock override or production lockout change.
-        for _ in 0..<6 {
-            try await enterPIN("111111", safari: safari)
+        for attempt in 0..<6 {
+            try await enterPIN("111111", expectedStatus: attempt < 5 ? 401 : 429, safari: safari)
             XCTAssertTrue(visibleText("PIN", safari: safari))
         }
         XCTAssertTrue(visibleText("초 뒤", safari: safari))
         XCTAssertFalse(safari.webViews.buttons["들어가기"].isEnabled)
         evidence("PIN-locked", safari: safari)
         let before = try await control("stats")
+        let lockedSequence = [401, 401, 401, 401, 401, 429]
+        XCTAssertEqual(before["loginStatuses"] as? [Int], lockedSequence)
         let ready = NSPredicate(format: "enabled == true")
         let wait = XCTNSPredicateExpectation(predicate: ready, object: safari.webViews.buttons["들어가기"])
         await fulfillment(of: [wait], timeout: 65)
         let after = try await control("stats")
         XCTAssertEqual(before["loginStatuses"] as? [Int], after["loginStatuses"] as? [Int], "Countdown must not retry PINs in the background")
-        try await enterPIN("123456", safari: safari)
+        try await enterPIN("123456", expectedStatus: 200, safari: safari)
         XCTAssertTrue(safari.webViews.buttons["QA 화면 열기"].waitForExistence(timeout: 5))
-        try receiverEvidence("PIN-lockout-recovery", stats: await control("stats"))
+        let recovered = try await control("stats")
+        XCTAssertEqual(recovered["loginStatuses"] as? [Int], lockedSequence + [200])
+        try receiverEvidence("PIN-lockout-recovery", stats: recovered)
     }
 
     /// Locate fixture pixels before a native touch, rather than assuming a canvas
     /// position behind Safari chrome. If screenshots/AX coordinates do not agree,
     /// this fails closed and records the screen for a later reviewed adjustment.
-    private func fixtureCenter(_ safari: XCUIApplication) throws -> CGPoint {
+    private struct TouchTarget {
+        let screen: CGPoint
+        let framebuffer: CGPoint
+    }
+
+    private func fixtureTarget(_ safari: XCUIApplication, framebufferSize: CGSize) throws -> TouchTarget {
         let image = XCUIScreen.main.screenshot().image
         guard let cg = image.cgImage,
               abs(image.size.width - safari.frame.width) < 1,
@@ -189,33 +205,49 @@ final class ItdaMobileSafariTests: XCTestCase {
               Double(count) > Double((maxX - minX + 1) * (maxY - minY + 1)) * 0.97 else {
             throw NSError(domain: "ItdaMobileQA", code: 6, userInfo: [NSLocalizedDescriptionKey: "The actual fictional framebuffer is not visibly identifiable; no touch sent"])
         }
-        return CGPoint(x: Double(minX + maxX) / 2 / Double(w) * image.size.width,
-                       y: Double(minY + maxY) / 2 / Double(h) * image.size.height)
+        // A non-central point makes an offset/axis error observable. The same
+        // chosen fractions determine the native tap and its expected RFB pixel.
+        let fx = 0.61, fy = 0.43
+        return TouchTarget(
+            screen: CGPoint(x: (Double(minX) + Double(maxX - minX) * fx) / Double(w) * image.size.width,
+                            y: (Double(minY) + Double(maxY - minY) * fy) / Double(h) * image.size.height),
+            framebuffer: CGPoint(x: (framebufferSize.width - 1) * fx, y: (framebufferSize.height - 1) * fy))
     }
 
-    private func waitForFixtureCenter(_ safari: XCUIApplication) async throws -> CGPoint {
+    private func waitForFixtureTarget(_ safari: XCUIApplication, framebufferSize: CGSize) async throws -> TouchTarget {
         // Toolbar creation can precede the first framebuffer. Wait for actual
         // receiving pixels rather than tapping a loading overlay or fixed delay.
         for _ in 0..<20 {
-            if let point = try? fixtureCenter(safari) { return point }
+            if let target = try? fixtureTarget(safari, framebufferSize: framebufferSize) { return target }
             try await Task.sleep(for: .milliseconds(250))
         }
         evidence("BLOCKED-framebuffer-not-identifiable", safari: safari)
-        return try fixtureCenter(safari)
+        return try fixtureTarget(safari, framebufferSize: framebufferSize)
     }
 
     func testNativeTouchAndSoftwareKeyHaveReceiverEvidence() async throws {
         _ = try await control("reset", method: "POST")
         let safari = try browser()
-        try await enterPIN("123456", safari: safari)
+        try await enterPIN("123456", expectedStatus: 200, safari: safari)
         let open = safari.webViews.buttons["QA 화면 열기"]
         XCTAssertTrue(open.waitForExistence(timeout: 5)); open.tap()
         XCTAssertTrue(safari.webViews.buttons["키보드"].waitForExistence(timeout: 10))
         evidence("connected-fictional-frame", safari: safari)
-        let point = try await waitForFixtureCenter(safari)
         let before = try await control("stats")
-        let oldPointerCount = (before["peers"] as? [[String: Any]])?.reduce(0) { $0 + (($1["pointer"] as? [[String: Any]])?.count ?? 0) } ?? 0
-        safari.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: point.x, dy: point.y)).tap()
+        let beforePeers = before["peers"] as? [[String: Any]] ?? []
+        guard beforePeers.count == 1, let peerID = beforePeers[0]["id"] as? Int,
+              let geometry = before["framebuffer"] as? [String: Int],
+              let width = geometry["width"], let height = geometry["height"], width > 0, height > 0 else {
+            throw NSError(domain: "ItdaMobileQA", code: 7, userInfo: [NSLocalizedDescriptionKey: "One identified receiver and its framebuffer geometry are required before input"])
+        }
+        let target = try await waitForFixtureTarget(safari, framebufferSize: CGSize(width: width, height: height))
+        let oldPointerCount = (beforePeers[0]["pointer"] as? [[String: Any]])?.count ?? 0
+        let oldKeyCount = (beforePeers[0]["keys"] as? [[String: Any]])?.count ?? 0
+        let selection: [String: Any] = ["peer": peerID, "nativePoint": [target.screen.x, target.screen.y],
+                                        "expectedFramebufferPoint": [target.framebuffer.x, target.framebuffer.y], "roundingTolerancePixels": 4]
+        let selectionAttachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: selection, options: [.sortedKeys]), uniformTypeIdentifier: "public.json")
+        selectionAttachment.name = "selected-native-and-framebuffer-point"; selectionAttachment.lifetime = .keepAlways; add(selectionAttachment)
+        safari.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: target.screen.x, dy: target.screen.y)).tap()
         safari.webViews.buttons["키보드"].tap()
         let keys = try keyboard(safari)
         evidence("remote-software-keyboard", safari: safari)
@@ -224,18 +256,32 @@ final class ItdaMobileSafariTests: XCTestCase {
         var stats: [String: Any] = [:]
         for _ in 0..<30 {
             stats = try await control("stats")
-            let events = (stats["peers"] as? [[String: Any]] ?? []).flatMap { $0["keys"] as? [[String: Any]] ?? [] }
+            let peer = (stats["peers"] as? [[String: Any]] ?? []).first { ($0["id"] as? Int) == peerID }
+            let events = Array((peer?["keys"] as? [[String: Any]] ?? []).dropFirst(oldKeyCount))
             if events.contains(where: { ($0["key"] as? Int) == 97 && ($0["down"] as? Bool) == false }) { break }
             try await Task.sleep(for: .milliseconds(100))
         }
         let peers = stats["peers"] as? [[String: Any]] ?? []
-        let pointer = peers.flatMap { $0["pointer"] as? [[String: Any]] ?? [] }
+        XCTAssertEqual(peers.count, beforePeers.count, "A reconnect must not substitute a different receiver")
+        guard let peer = peers.first(where: { ($0["id"] as? Int) == peerID }) else {
+            throw NSError(domain: "ItdaMobileQA", code: 8, userInfo: [NSLocalizedDescriptionKey: "Original input receiver disappeared"])
+        }
+        let pointer = peer["pointer"] as? [[String: Any]] ?? []
         let fresh = Array(pointer.dropFirst(oldPointerCount))
-        XCTAssertTrue(fresh.contains { ($0["mask"] as? Int) == 1 && abs(($0["x"] as? Int ?? -1000) - 320) < 20 && abs(($0["y"] as? Int ?? -1000) - 240) < 20 })
-        XCTAssertTrue(fresh.contains { ($0["mask"] as? Int) == 0 }, "Touch must release the remote button")
-        let events = peers.flatMap { $0["keys"] as? [[String: Any]] ?? [] }
-        XCTAssertTrue(events.contains { ($0["key"] as? Int) == 97 && ($0["down"] as? Bool) == true })
-        XCTAssertTrue(events.contains { ($0["key"] as? Int) == 97 && ($0["down"] as? Bool) == false })
+        let orderedTouch = (0..<max(0, fresh.count - 1)).contains { i in
+            let down = fresh[i], up = fresh[i + 1]
+            guard (down["mask"] as? Int) == 1, (up["mask"] as? Int) == 0,
+                  let dx = down["x"] as? Int, let dy = down["y"] as? Int,
+                  let ux = up["x"] as? Int, let uy = up["y"] as? Int else { return false }
+            return dx == ux && dy == uy && abs(Double(dx) - target.framebuffer.x) <= 4 && abs(Double(dy) - target.framebuffer.y) <= 4
+        }
+        XCTAssertTrue(orderedTouch, "The same peer must receive an adjacent down→up coordinate pair at the selected framebuffer point")
+        let events = Array((peer["keys"] as? [[String: Any]] ?? []).dropFirst(oldKeyCount))
+        let orderedKey = (0..<max(0, events.count - 1)).contains { i in
+            (events[i]["key"] as? Int) == 97 && (events[i]["down"] as? Bool) == true &&
+            (events[i + 1]["key"] as? Int) == 97 && (events[i + 1]["down"] as? Bool) == false
+        }
+        XCTAssertTrue(orderedKey, "The original peer must receive ASCII a down→up in order")
         try receiverEvidence("native-touch-and-ASCII-key", stats: stats)
         // This is not a physical tap, Korean IME, or real VNC-account test.
     }
