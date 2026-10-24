@@ -1,0 +1,109 @@
+name: Released Windows native Itda cross-host copy
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-native-crosshost.yml'
+      - 'scripts/windows-native-crosshost-*'
+      - 'scripts/fixtures/windows-crosshost-driver.cs'
+      - 'scripts/fixtures/windows-crosshost-receipts.test.mjs'
+      - 'scripts/fixtures/confined-sftp-crosshost*'
+      - 'scripts/fixtures/read-only-sftp-drop.py'
+      - 'scripts/fixtures/requirements-sftp.txt'
+      - 'scripts/fixtures/windows-drop-lifecycle.mjs'
+      - 'scripts/windows-native-idle-control.ps1'
+      - 'scripts/windows-native-preflight.ps1'
+      - 'scripts/windows-native-drop-preflight.ps1'
+  workflow_dispatch:
+    inputs:
+      enable_owned_input:
+        description: 'NEW scope: one tagged native drag and one exact fixture Copy confirmation on disposable CI only'
+        type: boolean
+        required: true
+        default: false
+      expected_source_sha:
+        description: 'Exact reviewed HARNESS checkout/event SHA (not release source SHA)'
+        type: string
+        required: true
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  compile-only:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Syntax, confinement and compile only (no server/app/native methods)
+        shell: pwsh
+        run: |
+          node --check scripts/windows-native-crosshost-ci-e2e.mjs
+          if ($LASTEXITCODE) { throw 'Node syntax failed' }
+          node --test scripts/fixtures/windows-crosshost-receipts.test.mjs
+          if ($LASTEXITCODE) { throw 'Pure cleanup/receipt regressions failed' }
+          python -m py_compile scripts/fixtures/confined-sftp-crosshost.py scripts/fixtures/confined-sftp-crosshost-test.py
+          if ($LASTEXITCODE) { throw 'Python syntax failed' }
+          python scripts/fixtures/confined-sftp-crosshost-test.py
+          if ($LASTEXITCODE) { throw 'Generated-temp confinement tests failed' }
+          $tokens=$null; $errors=$null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'scripts/windows-native-crosshost-control.ps1'),[ref]$tokens,[ref]$errors)
+          if ($errors.Count) { throw ($errors | Out-String) }
+          Add-Type -Path scripts/fixtures/windows-crosshost-driver.cs
+          # No Layout(), Action(), server, app, shell, clipboard or native input.
+
+  owned-input:
+    needs: compile-only
+    if: github.event_name == 'workflow_dispatch' && inputs.enable_owned_input == true && inputs.expected_source_sha != ''
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin explicitly reviewed harness before any native operations
+        shell: pwsh
+        env:
+          EXPECTED: ${{ inputs.expected_source_sha }}
+        run: |
+          if ($env:EXPECTED -notmatch '^[a-f0-9]{40}$' -or (git rev-parse HEAD) -cne $env:EXPECTED -or $env:GITHUB_SHA -cne $env:EXPECTED) { throw 'Harness checkout/event SHA mismatch' }
+          # Public release v1.0.6 source262/exe4b2 is pinned and independently
+          # checked by the harness. NO Rust build or candidate substitution.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install isolated fixture clients
+        shell: pwsh
+        run: |
+          npm install --no-save --package-lock=false --ignore-scripts playwright@1.64.1
+          if ($LASTEXITCODE) { throw 'CDP client dependencies failed' }
+          python -m pip install -r scripts/fixtures/requirements-sftp.txt
+          if ($LASTEXITCODE) { throw 'SFTP fixture dependencies failed' }
+      - name: One released-binary native cross-host copy
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          ITDA_ENABLE_OWNED_INPUT: 'true'
+          ITDA_EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        run: |
+          node scripts/windows-native-crosshost-ci-e2e.mjs
+          if ($LASTEXITCODE) { throw 'Native not verified; inspect strict outcome and cleanup receipts' }
+      - name: Narrow acceptance scope
+        if: always()
+        shell: pwsh
+        run: |
+          @('Actual public v1.0.6 exe SHA256 4b2e3bbe5639e7984348ab002e58d155c131293663a6d594892e04cd4acd33b4; no rebuild.', 'One private-profile process, two fixture hosts/windows, generated read-only source and confined writable destination.', 'Tagged guarded native OLE plus only the exact fixture target Copy confirmation. Unknown/emergency-source prompts are never approved.', 'Disposable CI only; no physical PC, 150% DPI, AT, Mac, real LAN or persona-9 credit. No clipboard/UAC/default-profile changes.') | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-native-crosshost-private-receipts
+          path: test-artifacts/native-crosshost/
+          if-no-files-found: error
