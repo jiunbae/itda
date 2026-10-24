@@ -51,6 +51,35 @@ fn emitter() -> files::Emit {
     Arc::new(emit)
 }
 
+thread_local! {
+    static TEST_PASTEBOARD: RefCell<Option<Retained<NSPasteboard>>> = const { RefCell::new(None) };
+}
+/// Preserve the person's clipboard during a deliberately isolated native UI test.
+/// All copy/finish/paste call sites must use the same board, including changeCount.
+fn clipboard_board() -> Retained<NSPasteboard> {
+    if crate::store::override_base().is_some()
+        && std::env::var("ITDA_NATIVE_TEST_PRIVATE_PASTEBOARD").as_deref() == Ok("1")
+    {
+        TEST_PASTEBOARD.with(|slot| slot.borrow_mut().get_or_insert_with(|| {
+            let board = NSPasteboard::pasteboardWithUniqueName();
+            crate::log!("native fixture: private pasteboard {}", board.name());
+            board
+        }).clone())
+    } else {
+        NSPasteboard::generalPasteboard()
+    }
+}
+/// Only the test's unique board exists here; never clear the general pasteboard.
+pub fn release_test_pasteboard() {
+    TEST_PASTEBOARD.with(|slot| {
+        if let Some(board) = slot.borrow_mut().take() {
+            board.clearContents();
+            // Public AppKit API, omitted from the generated bindings (oneway void).
+            unsafe { let _: () = msg_send![&*board, releaseGlobally]; }
+        }
+    });
+}
+
 pub fn copy(v: Value) {
     let id = files::scoped_id(v["id"].as_str().unwrap_or(""), &v["window"]);
     let seq = v["seq"].clone();
@@ -63,7 +92,7 @@ pub fn copy(v: Value) {
             return;
         }
     };
-    let pb = NSPasteboard::generalPasteboard();
+    let pb = clipboard_board();
     // Clear stale HTML immediately, so Finder cannot create a .textClipping while a
     // remote selection is being downloaded. Never put a textual path on the board.
     let count = pb.clearContents();
@@ -88,7 +117,7 @@ pub fn finish_copy(v: &mut Value) {
     if v["ok"] != true {
         return;
     }
-    let pb = NSPasteboard::generalPasteboard();
+    let pb = clipboard_board();
     if !CLIP.with(|c| c.get() == (v["serial"].as_u64().unwrap_or(0), pb.changeCount())) {
         v["ok"] = json!(false);
         v["error"] = json!("다른 내용을 복사해 Finder용 파일 준비를 취소했습니다");
@@ -113,7 +142,7 @@ pub fn finish_copy(v: &mut Value) {
     }
 }
 pub fn paste(v: Value) {
-    let pb = NSPasteboard::generalPasteboard();
+    let pb = clipboard_board();
     let internal = v["stamp"].as_i64() == Some(pb.changeCount() as i64);
     let mut paths = Vec::new();
     if !internal {

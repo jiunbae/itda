@@ -5,7 +5,12 @@ No product acceptance credit by itself; this is private transfer lifecycle infra
 """
 import argparse, base64, hashlib, hmac, json, os, pathlib, posixpath, secrets, signal, socket, stat, tempfile, threading, time, unicodedata
 import paramiko
-args=argparse.ArgumentParser();args.add_argument('--workspace');options=args.parse_args()
+args=argparse.ArgumentParser();args.add_argument('--workspace');args.add_argument('--client-public-key', help='Optional generated fixture public key; disables password auth');options=args.parse_args()
+client_public_key = None
+if options.client_public_key:
+    fields = pathlib.Path(options.client_public_key).read_text(encoding='utf8').split()
+    if len(fields) < 2 or fields[0] != 'ssh-ed25519': raise ValueError('Expected a generated Ed25519 fixture public key')
+    client_public_key = base64.b64decode(fields[1], validate=True)
 workspace = pathlib.Path(options.workspace) if options.workspace else pathlib.Path(tempfile.mkdtemp(prefix='itda-quality-sftp-'))
 if workspace.parent.resolve()!=pathlib.Path(tempfile.gettempdir()).resolve() or not workspace.name.startswith('itda-quality-sftp-') or not workspace.is_dir() or list(workspace.iterdir()): raise ValueError('Expected own empty fixture workspace')
 os.chmod(workspace, 0o700)
@@ -30,8 +35,10 @@ def audit(event, **fields):
         with (workspace / 'audit.jsonl').open('a') as f: f.write(json.dumps({'event':event, **fields}, ensure_ascii=False) + '\n')
 class Auth(paramiko.ServerInterface):
     def check_auth_password(self, username, supplied):
-        return paramiko.AUTH_SUCCESSFUL if hmac.compare_digest(username, user) and hmac.compare_digest(supplied, password) else paramiko.AUTH_FAILED
-    def get_allowed_auths(self, username): return 'password'
+        return paramiko.AUTH_SUCCESSFUL if client_public_key is None and hmac.compare_digest(username, user) and hmac.compare_digest(supplied, password) else paramiko.AUTH_FAILED
+    def check_auth_publickey(self, username, supplied):
+        return paramiko.AUTH_SUCCESSFUL if client_public_key is not None and hmac.compare_digest(username, user) and supplied.get_name() == 'ssh-ed25519' and hmac.compare_digest(supplied.asbytes(), client_public_key) else paramiko.AUTH_FAILED
+    def get_allowed_auths(self, username): return 'publickey' if client_public_key is not None else 'password'
     def check_channel_request(self, kind, chanid):
         return paramiko.OPEN_SUCCEEDED if kind == 'session' else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 class Handle(paramiko.SFTPHandle):
