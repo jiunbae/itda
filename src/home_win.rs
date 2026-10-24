@@ -206,10 +206,47 @@ pub fn run(quick: Option<String>) {
 
 /// Files dragged past the file browser's edge go on as a native drag to Explorer.
 pub(super) fn native_file_drag(v: Value) {
+    let source=v["_native_source"].as_i64().unwrap_or(0) as isize;
+    let window=v["source_window"].as_str().unwrap_or("");
+    let page=v["window"].as_str().unwrap_or("");
+    // Copy identities out: neither a RefCell nor a registry lock crosses OLE.
+    if FILE_PANES.with(|p|p.borrow().get(window).map(|(h,_)|*h))!=Some(source) || FILE_PAGES.with(|p|p.borrow().get(window).cloned()).as_deref()!=Some(page) { return; }
+    let gesture=crate::files_win::gesture::registry().lock().unwrap().claim(source,window,page,v["gesture"].as_str().unwrap_or(""),v["sequence"].as_u64().unwrap_or(0));
+    let Some(gesture)=gesture else {return};
+    struct Retire(isize,std::sync::Arc<crate::files_win::gesture::Gesture>);
+    impl Drop for Retire {fn drop(&mut self){crate::files_win::gesture::registry().lock().unwrap().finish(self.0,&self.1);}}
+    let _retire=Retire(source,gesture.clone());
     let id = crate::files::scoped_id(v["id"].as_str().unwrap_or(""), &v["window"]);
-    if let Err(e) = crate::files_win::drag(&v, |m| super::post(Event::Page(m))) {
-        super::post(Event::Page(json!({"type":"files_native_drag_end","id":id,"error":e})));
+    if let Err(e) = crate::files_win::drag(&v, |m| super::post(Event::Page(m)),gesture.clone(),source) {
+        super::post(Event::Page(json!({"type":"files_native_drag_end","id":id,"gesture":gesture.nonce,"error":e,"trace":crate::files_win::drag_trace(&gesture,"failed")})));
     }
+}
+
+/// Only this native window's callback can bind a page and admit/cancel its
+/// gesture. Cancellation updates the shared latch immediately, not behind the
+/// queued begin that will enter a modal OLE loop after the callback returns.
+fn native_drag_ipc(source: isize, native_window: Option<&str>, v: &mut Value) -> bool {
+    let cmd=v["cmd"].as_str().unwrap_or("");
+    if !["files_window_context","files_native_drag","files_native_drag_cancel"].contains(&cmd){return false;}
+    let Some(window)=native_window else {return true};
+    if FILE_PANES.with(|p|p.borrow().get(window).map(|(h,_)|*h))!=Some(source){return true;}
+    if cmd=="files_window_context" {
+        if v["window"]!=window{return true;}
+        return !crate::files_win::gesture::registry().lock().unwrap().bind(source,window,v["page"].as_str().unwrap_or(""));
+    }
+    if v["source_window"]!=window{return true;}
+    let mut registry=crate::files_win::gesture::registry().lock().unwrap();
+    let (page,nonce,sequence)=(v["window"].as_str().unwrap_or(""),v["gesture"].as_str().unwrap_or(""),v["sequence"].as_u64().unwrap_or(0));
+    if cmd=="files_native_drag_cancel" {registry.cancel(source,window,page,nonce,sequence);return true;}
+    if registry.active_matches(source,window,page,nonce,sequence){return true;}
+    if registry.begin(source,window,page,nonce,sequence).is_none(){
+        drop(registry);
+        let id=crate::files::scoped_id(v["id"].as_str().unwrap_or(""),&v["window"]);
+        super::post(Event::Page(json!({"type":"files_native_drag_end","id":id,"gesture":v["gesture"],"error":"끌어 놓을 파일 창을 다시 확인하세요","trace":{"phase":"rejected","entered_ole":false,"query_count":0,"first_query":false,"cancelled":true,"escape_seen":false,"focus_verified":false}})));
+        return true;
+    }
+    v["_native_source"]=json!(source);
+    false
 }
 
 fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&str>, file_path: Option<&str>) -> wry::Result<WebView> {
@@ -228,6 +265,7 @@ fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&s
     }
     let drop_id = file_window.map(str::to_string);
     let native_drop_id = drop_id.clone();
+    let ipc_window=drop_id.clone();let ipc_source=h as isize;
     let view = WebViewBuilder::new_with_web_context(&mut ctx)
         .with_additional_browser_args(args)
         .with_custom_protocol("itda".into(), |_id, req| {
@@ -243,10 +281,11 @@ fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&s
             }
             true
         })
-        .with_ipc_handler(|req| {
+        .with_ipc_handler(move |req| {
             let body = req.into_body();
             match serde_json::from_str::<Value>(&body) {
-                Ok(v) => {
+                Ok(mut v) => {
+                    if native_drag_ipc(ipc_source,ipc_window.as_deref(),&mut v){return;}
                     // Handle after this callback returns: WebView2 must not be re-entered from here.
                     QUEUE.lock().unwrap().push(Event::Session("__ipc".into(), v));
                     wake();
@@ -254,9 +293,10 @@ fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&s
                 Err(e) => crate::log!("ipc: bad message {e}"),
             }
         })
-        .with_navigation_handler(|url| {
+        .with_navigation_handler(move |url| {
             // External links open in the browser, never inside the app.
             if url.starts_with("http://itda.localhost/") || url.starts_with("itda://") {
+                crate::files_win::gesture::registry().lock().unwrap().remove(ipc_source);
                 return true;
             }
             if url.starts_with("https://") {
@@ -666,6 +706,9 @@ unsafe fn tray_menu(h: HWND) {
 // ---------------------------------------------------------------- window
 
 unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if (m==WM_KEYDOWN || m==WM_SYSKEYDOWN) && wp==0x1b {
+        crate::files_win::gesture::registry().lock().unwrap().cancel_window(h as isize);
+    }
     // File windows draw their own title bar: no system caption, the other edges as usual.
     if m == WM_NCCALCSIZE && wp != 0 && chromeless(h) {
         let p = &mut *(lp as *mut NCCALCSIZE_PARAMS);
@@ -782,6 +825,7 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
             }
         }
         WM_DESTROY => {
+            crate::files_win::gesture::registry().lock().unwrap().remove(h as isize);
             crate::files_win::forget_drop(h as isize);
             if h != hwnd() {
                 let id = FILE_PANES.with(|p| p.borrow().iter().find(|(_, (wh, _))| *wh == h as isize).map(|(id, _)| id.clone()));

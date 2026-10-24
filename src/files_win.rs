@@ -26,13 +26,69 @@ use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL};
 use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
+#[path = "files/drag_cancel.rs"]
+pub(crate) mod gesture;
+
+pub(crate) fn drag_trace(g: &gesture::Gesture, phase: &str) -> Value {
+    json!({"phase":phase,"entered_ole":g.entered_ole.load(std::sync::atomic::Ordering::SeqCst),
+        "query_count":g.queries.load(std::sync::atomic::Ordering::SeqCst),"first_query":g.queries.load(std::sync::atomic::Ordering::SeqCst)>0,
+        "escape_seen":g.escape_seen.load(std::sync::atomic::Ordering::SeqCst),"cancelled":g.cancelled(),
+        "focus_verified":g.focus_verified.load(std::sync::atomic::Ordering::SeqCst)})
+}
+
+fn primary_down() -> bool {
+    use windows_sys::Win32::UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*};
+    unsafe { GetAsyncKeyState(if GetSystemMetrics(SM_SWAPBUTTON) != 0 { VK_RBUTTON } else { VK_LBUTTON } as i32) < 0 }
+}
+fn escape_down() -> bool { unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x1b) < 0 } }
+
+struct SourceFocus { source: isize, saved: isize }
+impl SourceFocus {
+    fn verified(&self) -> bool {
+        use windows_sys::Win32::UI::{Input::KeyboardAndMouse::GetFocus, WindowsAndMessaging::*};
+        unsafe { let h=self.source as windows_sys::Win32::Foundation::HWND; IsWindow(h)!=0 && GetFocus()==h && GetAncestor(GetForegroundWindow(),GA_ROOT)==h }
+    }
+    fn take(source: isize) -> Result<Self, String> {
+        use windows_sys::Win32::{System::Threading::*, UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*}};
+        unsafe {
+            let h=source as windows_sys::Win32::Foundation::HWND;
+            let mut pid=0;
+            if IsWindow(h)==0 || GetWindowThreadProcessId(h,&mut pid)!=GetCurrentThreadId() || pid!=GetCurrentProcessId() || GetAncestor(GetForegroundWindow(),GA_ROOT)!=h {
+                return Err("파일 창의 입력 위치가 바뀌었습니다. 다시 끌어 놓아 주세요".into());
+            }
+            let saved=GetFocus();
+            let guard=Self {source,saved:saved as isize};
+            SetFocus(h);
+            if GetFocus()!=h || GetAncestor(GetForegroundWindow(),GA_ROOT)!=h { return Err("파일 창으로 입력을 전달할 수 없습니다".into()); }
+            Ok(guard)
+        }
+    }
+}
+impl Drop for SourceFocus {
+    fn drop(&mut self) {
+        use windows_sys::Win32::UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*};
+        unsafe {
+            let h=self.source as windows_sys::Win32::Foundation::HWND;
+            let saved=self.saved as windows_sys::Win32::Foundation::HWND;
+            if gesture::restore_focus(IsWindow(h)!=0 && GetAncestor(GetForegroundWindow(),GA_ROOT)==h,
+                GetFocus()==h, !saved.is_null() && IsWindow(saved)!=0 && GetAncestor(saved,GA_ROOT)==h) { SetFocus(saved); }
+        }
+    }
+}
 
 /// Start the drag (the mouse button is still down: the page hands over at its edge). The
 /// outcome is posted as files_native_drag_end; Err: it couldn't start.
-pub fn drag(v: &Value, post: fn(Value)) -> Result<(), String> {
+pub fn drag(v: &Value, post: fn(Value), gesture: Arc<gesture::Gesture>, source_hwnd: isize) -> Result<(), String> {
+    let id = crate::files::scoped_id(v["id"].as_str().unwrap_or(""), &v["window"]);
+    let cancelled = || post(json!({"type":"files_native_drag_end","id":id,"gesture":gesture.nonce,"dropped":false,"trace":drag_trace(&gesture,"early_cancel")}));
+    if !gesture.admit(primary_down(),escape_down()) { cancelled(); return Ok(()); }
+    // The renderer owns a different keyboard input path. Focus our own native
+    // window before preparation, without activating or attaching a foreign queue.
+    let focus=SourceFocus::take(source_hwnd)?;
+    gesture.focus_verified.store(true,std::sync::atomic::Ordering::SeqCst);
+    if !gesture.admit(primary_down(),escape_down()) { cancelled(); return Ok(()); }
     ole()?;
     let files = export::selection(v).map_err(|e| e.to_string())?;
-    let id = crate::files::scoped_id(v["id"].as_str().unwrap_or(""), &v["window"]);
     let token = crate::files::drag::begin(v, &files).map_err(|e|e.to_string())?;
     // The guard also clears cancelled/failed drags. An accepted destination retains
     // its lease only until its confirmation dialog starts or cancels the transfer.
@@ -40,20 +96,40 @@ pub fn drag(v: &Value, post: fn(Value)) -> Result<(), String> {
     impl Drop for Finish { fn drop(&mut self) { crate::files::drag::finish(&self.0); } }
     let _finish = Finish(token.clone());
     let mut remote_source = None;
+    let mut remote_failure = None;
     let data: IDataObject = if files.iter().all(|f| !f.remote) { tagged_local(local(&files)?,&token) } else {
-        let (data, source)=remote(files, post)?;
+        let (data, source, failure)=remote(files, post)?;
         set_marker(&data,&token).map_err(|e|{source.end_batch();e.to_string()})?;
         remote_source=Some(source);
+        remote_failure=Some(failure);
         data
     };
+    if !gesture.admit(primary_down(),escape_down()) {
+        if let Some(source)=&remote_source { source.stop(); source.end_batch(); }
+        cancelled(); return Ok(());
+    }
+    if !focus.verified() {
+        gesture.cancel();
+        if let Some(source)=&remote_source { source.stop(); source.end_batch(); }
+        return Err("파일 창의 입력 위치가 바뀌었습니다. 다시 끌어 놓아 주세요".into());
+    }
     let mut effect = DROPEFFECT_NONE;
-    let hr = unsafe { DoDragDrop(&data, &IDropSource::from(Source), DROPEFFECT_COPY, &mut effect) };
-    // Over now, unless Explorer goes on copying in the background (EndOperation ends it).
-    if let Some(source) = &remote_source { source.drop_done(); }
+    gesture.entered_ole.store(true,std::sync::atomic::Ordering::SeqCst);
+    let hr = unsafe { DoDragDrop(&data, &IDropSource::from(Source {gesture:gesture.clone()}), DROPEFFECT_COPY, &mut effect) };
+    // A cancelled/failed drag must stop any early target reads, even if a
+    // receiver already negotiated asynchronous extraction. Only an actual
+    // accepted drop may keep its batch until EndOperation.
+    if let Some(source) = &remote_source {
+        if hr != DRAGDROP_S_DROP || gesture.cancelled() { source.stop(); source.end_batch(); }
+        else { source.drop_done(); }
+    }
+    // Rendering errors are reported once, at this gesture's terminal event;
+    // an early data-object error must not re-enable the renderer during OLE.
+    if let Some(error)=remote_failure.and_then(|e| {let error=e.lock().unwrap().clone();error}) { return Err(error); }
     if hr.is_err() {
         return Err(format!("끌어 놓기를 시작할 수 없습니다 ({})", windows::core::Error::from(hr)));
     }
-    post(json!({"type":"files_native_drag_end","id":id,"dropped":hr == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE}));
+    post(json!({"type":"files_native_drag_end","id":id,"gesture":gesture.nonce,"dropped":hr == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE,"trace":drag_trace(&gesture,"ole_returned")}));
     Ok(())
 }
 
@@ -93,12 +169,13 @@ fn local(files: &[export::File]) -> Result<IDataObject, String> {
 
 // ---------------------------------------------------------------- remote files
 
-fn remote(files: Vec<export::File>, post: fn(Value)) -> Result<(IDataObject, Arc<vdrag::Remote>), String> {
+fn remote(files: Vec<export::File>, post: fn(Value)) -> Result<(IDataObject, Arc<vdrag::Remote>, Arc<Mutex<Option<String>>>), String> {
     let source = vdrag::Remote::of(&files).map_err(|e| e.to_string())?;
     let id = files[0].id.clone();
     let kept = source.clone();
-    let data = in_mta(move || Virtual::new(files, source, id, post).into()).map_err(|e| { kept.end_batch(); e.to_string() })?;
-    Ok((data, kept))
+    let failure=Arc::new(Mutex::new(None));let failed=failure.clone();
+    let data = in_mta(move || {let mut v=Virtual::new(files, source, id, post);v.failure=failed;v.into()}).map_err(|e| { kept.end_batch(); e.to_string() })?;
+    Ok((data, kept, failure))
 }
 
 /// Make a data object in the multithreaded apartment and hand it to this thread as a proxy.
@@ -157,8 +234,7 @@ struct Virtual {
     source: Arc<vdrag::Remote>,
     /// The file list, made when the receiver first asks (listing a folder can take a while).
     plan: Mutex<Option<Result<Vec<vdrag::Item>, String>>>,
-    id: String,
-    post: fn(Value),
+    failure: Arc<Mutex<Option<String>>>,
     group: u16,
     contents: u16,
     preferred: u16,
@@ -168,13 +244,12 @@ struct Virtual {
 }
 
 impl Virtual {
-    fn new(files: Vec<export::File>, source: Arc<vdrag::Remote>, id: String, post: fn(Value)) -> Virtual {
+    fn new(files: Vec<export::File>, source: Arc<vdrag::Remote>, _id: String, _post: fn(Value)) -> Virtual {
         Virtual {
             files,
             source,
             plan: Mutex::new(None),
-            id,
-            post,
+            failure: Arc::new(Mutex::new(None)),
             group: format("FileGroupDescriptorW"),
             contents: format("FileContents"),
             preferred: format("Preferred DropEffect"),
@@ -189,7 +264,7 @@ impl Virtual {
         if g.is_none() {
             let r = self.source.plan(&self.files).map_err(|e| e.to_string());
             if let Err(e) = &r {
-                (self.post)(json!({"type":"files_native_drag_end","id":self.id,"error":e}));
+                *self.failure.lock().unwrap()=Some(e.clone());
             }
             *g = Some(r);
         }
@@ -479,16 +554,14 @@ impl IStream_Impl for Stream_Impl {
 // ---------------------------------------------------------------- drag source
 
 #[implement(IDropSource)]
-struct Source;
+struct Source { gesture: Arc<gesture::Gesture> }
 
 impl IDropSource_Impl for Source_Impl {
     fn QueryContinueDrag(&self, escape: BOOL, keys: MODIFIERKEYS_FLAGS) -> HRESULT {
-        if escape.as_bool() {
-            DRAGDROP_S_CANCEL
-        } else if keys.0 & MK_LBUTTON.0 == 0 {
-            DRAGDROP_S_DROP
-        } else {
-            S_OK
+        match self.gesture.decide(escape.as_bool() || escape_down(), keys.0 & MK_LBUTTON.0 != 0) {
+            gesture::Decision::Cancel => DRAGDROP_S_CANCEL,
+            gesture::Decision::Drop => DRAGDROP_S_DROP,
+            gesture::Decision::Continue => S_OK,
         }
     }
     fn GiveFeedback(&self, _: DROPEFFECT) -> HRESULT {

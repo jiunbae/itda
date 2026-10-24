@@ -14,6 +14,9 @@
   // (crypto.randomUUID needs a secure context; the web viewer can be plain HTTP on a LAN.)
   const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
   const pageToken = randomId();
+  // Windows keeps this gesture until its native terminal event, even after the
+  // DOM drag is cleared at the edge. A quick Escape must survive queued IPC.
+  let nativeGesturePending = null, nativeSequence = 0;
   let pendingFolder = null, tabSwitch = null, pendingDeviceDrop = null;
   let localRsyncAvailable = false;
   let host,
@@ -1803,6 +1806,14 @@
   }
 
   function key(e) {
+    if (!MAC && nativeGesturePending && e.key === "Escape") {
+      e.preventDefault(); e.stopImmediatePropagation();
+      if (!nativeGesturePending.cancelled) {
+        nativeGesturePending.cancelled = true;
+        send("files_native_drag_cancel", {source_window:fileWindow(),window:pageToken,gesture:nativeGesturePending.gesture,sequence:nativeGesturePending.sequence});
+      }
+      clearDrag(); return;
+    }
     if ((MAC ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "n" && (layer || S.page === "files") && !document.querySelector(".files-prompt,.files-menu") && !topModal()) {
       e.preventDefault(); e.stopImmediatePropagation();
       const device = layer ? null : e.target.closest("[data-device]");
@@ -2016,6 +2027,7 @@
     }
   }
   function pointerDown(e) {
+    if (!MAC && nativeGesturePending) return;
     if (networkMode) return;
     if (e.button !== 0) return;
     const item = e.target.closest("[data-index]"),
@@ -2057,7 +2069,9 @@
       const d=drag,items=d.items;
       try{d.capture.releasePointerCapture(d.pointer);}catch{}
       clearDrag(); suppressClick=true; setTimeout(()=>{suppressClick=false;},0);
-      send("files_native_drag",{id:d.host,window:pageToken,side:d.side,path:d.path,items});
+      const pending = !MAC ? {gesture:randomId(),sequence:++nativeSequence,cancelled:false} : null;
+      if (pending) nativeGesturePending = pending;
+      send("files_native_drag",{id:d.host,window:pageToken,side:d.side,path:d.path,items,...(pending ? {source_window:fileWindow(),gesture:pending.gesture,sequence:pending.sequence} : {})});
       return;
     }
     if (drag.live) {
@@ -2169,7 +2183,13 @@
       if (layer && !networkMode) status();
       return true;
     }
-    if (m.type === "files_native_drag_end") { if(m.id===host?.id){clearDrag();if(m.error)fail(m.error);}return true; }
+    if (m.type === "files_native_drag_end") {
+      if (!MAC) {
+        if (!nativeGesturePending || m.gesture !== nativeGesturePending.gesture) return true;
+        nativeGesturePending = null;
+      }
+      if(m.id===host?.id){clearDrag();if(m.error)fail(m.error);}return true;
+    }
     if (m.type === "files_native_paste") {
       if(m.id!==host?.id)return true;
       if(m.internal && clipboard)act("paste-internal");
