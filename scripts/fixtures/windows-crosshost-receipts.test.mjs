@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mayTeardownResources,sanitizeWindowObservation,sanitizeTreeObservation,safeFixturePath} from '../windows-native-crosshost-ci-e2e.mjs';
+import {mayTeardownResources,sanitizeWindowObservation,sanitizeTreeObservation,safeFixturePath,parseCopyPrompt,nonChoiceHeadingPoint,sanitizeBinding,sanitizeDiagnostic,sanitizeNativeReply} from '../windows-native-crosshost-ci-e2e.mjs';
 const sha=s=>createHash('sha256').update(s).digest('hex');
 const complete={controllerQuiescent:true,appStopped:true,ownedAppProcessCount:0,observationsPersisted:true,fixtureProcessesKnown:true};
 test('controller completion alone cannot authorize dependency/resource teardown',()=>{
@@ -32,7 +32,7 @@ test('failure receipt retains useful route/job/prompt facts but hashes every opa
  assert.equal(clean.prompt_count,1);assert.equal(clean.prompts[0].title,'파일 복사');assert.equal(clean.dialog_count,1);
 });
 test('unknown names, paths and stage nonces remain diagnosable without publishing them',()=>{
- const token='e'.repeat(32),stage='/.itda-'+token+'.partial',privatePath='C:/Users/private-name/secret.txt';
+ const token='e'.repeat(12),stage='/.itda-'+token+'.partial',privatePath='C:/Users/private-name/secret.txt';
  const entries=sanitizeTreeObservation([{path:'payload.bin',dir:false,sha256:sha('data'),password:'never'}, {path:stage,dir:false,sha256:sha('partial')},{path:privatePath,link:true,secret:'never'}]);
  assert.equal(entries[0].path.value,'payload.bin');assert.equal(entries[0].sha256,sha('data'));
  assert.equal(entries[1].path.kind,'stage');assert.equal(entries[1].path.sha256,sha(stage));assert.equal(entries[2].path.kind,'unexpected');assert.equal(entries[2].link,true);
@@ -43,4 +43,26 @@ test('unknown names, paths and stage nonces remain diagnosable without publishin
 test('unavailable final windows and empty fixtures are recorded explicitly',()=>{
  const clean=sanitizeWindowObservation({closed:true,unavailable:true});assert.equal(clean.closed,true);assert.equal(clean.unavailable,true);assert.equal(clean.prompt_count,null);
  assert.deepEqual(sanitizeTreeObservation([]),[]);
+});
+
+test('actual prompt route/count are parsed without substituting fixture literals',()=>{
+ assert.deepEqual(parseCopyPrompt({route_hint:'QA source: / → QA destination: /',selection:'3개 항목'}),{source:'/',destination:'/',names_count:3});
+ assert.deepEqual(parseCopyPrompt({route_hint:'QA source: /other → QA destination: /wrong',selection:'4개 항목'}),{source:'/other',destination:'/wrong',names_count:4});
+ for(const hint of ['QA destination: / → QA source: /','QA source: /','unknown: / → QA destination: /'])assert.equal(parseCopyPrompt({route_hint:hint,selection:'3개 항목'}).source,null);
+ assert.equal(parseCopyPrompt({route_hint:'QA source: / → QA destination: /',selection:'3'}).names_count,null);
+});
+test('emergency heading must be a valid disjoint non-Copy rectangle',()=>{
+ const button={x:100,y:500,width:80,height:30},heading={x:20,y:100,width:200,height:40};
+ assert.deepEqual(nonChoiceHeadingPoint(button,heading),{x:120,y:120});
+ assert.equal(nonChoiceHeadingPoint(button,button),null);assert.equal(nonChoiceHeadingPoint(button,{...heading,height:0}),null);
+ assert.equal(nonChoiceHeadingPoint(button,{...heading,y:510}),null);assert.equal(nonChoiceHeadingPoint(button,{...heading,x:NaN}),null);
+});
+test('binding, cleanup errors and native failure replies use explicit allowlists',()=>{
+ const token='f'.repeat(32),password='should-never-be-published';
+ const binding=sanitizeBinding([{host:'crosshost-source',title:'QA source — 파일',window:token,page:token,hwnd:42,password}]);
+ const diagnostic=sanitizeDiagnostic('Cleanup failed '+password+' '+token);
+ const failed=sanitizeNativeReply({request:token,error:password,config:{password},result:{Error:password,ReleasePoint:'emergency-release-failed',Interfered:true,TaggedMouseEchoCount:4,password,RawExtra:token,UnmatchedHooks:[{Hook:'Mouse',MessageClass:'MouseMove',ExtraEqual:false,RawExtra:token,password}]}});
+ const text=JSON.stringify({binding,diagnostic,failed});for(const value of [token,password,'RawExtra','config'])assert.equal(text.includes(value),false);
+ assert.equal(binding[0].page_sha256,sha(token));assert.equal(failed.result.Interfered,true);assert.equal(failed.result.TaggedMouseEchoCount,4);assert.equal(failed.result.ReleasePoint,'emergency-release-failed');
+ assert.equal(safeFixturePath('/.itda-'+'a'.repeat(16)+'.partial').kind,'unexpected');
 });

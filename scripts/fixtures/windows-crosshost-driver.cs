@@ -175,7 +175,7 @@ public class ItdaCrossHostWindow {
  public static bool ButtonsUp(){foreach(int key in new int[]{1,2,4,5,6,16,17,18,27,91,92})if((GetAsyncKeyState(key)&0x8000)!=0)return false;return true;}
  public static uint[] ProbeIdle(){LASTINPUTINFO v=new LASTINPUTINFO();v.Size=(uint)Marshal.SizeOf(typeof(LASTINPUTINFO));if(!GetLastInputInfo(ref v))throw new Exception("Idle unknown");uint tick=unchecked((uint)Environment.TickCount);return new uint[]{v.Time,tick,unchecked(tick-v.Time)};}
  // One bounded scenario. No retries or payload downloads are initiated here.
- public static DragInfo Action(LayoutInfo layout,int x,int y,int targetX,int targetY,bool confirm){
+ public static DragInfo Action(LayoutInfo layout,int x,int y,int targetX,int targetY,bool confirm,int safeX,int safeY){
   long source=confirm?layout.Target:layout.File,destination=layout.Target;
   if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true"||Environment.GetEnvironmentVariable("ITDA_ENABLE_OWNED_INPUT")!="true"||!System.Text.RegularExpressions.Regex.IsMatch(Environment.GetEnvironmentVariable("ITDA_EXPECTED_SOURCE_SHA")??"","^[0-9a-f]{40}$")||Environment.GetEnvironmentVariable("ITDA_EXPECTED_SOURCE_SHA")!=Environment.GetEnvironmentVariable("GITHUB_SHA"))throw new Exception("Native input gate is closed");
   // Run 40069501377 observed low32 equality without full equality; this does not
@@ -211,6 +211,7 @@ public class ItdaCrossHostWindow {
    if(!SetWindowPos(file,IntPtr.Zero,0,0,0,0,0x13))throw new Exception("Owned source could not be raised");
    info.ActivationPath=ActivationRoute.ForegroundRequest;try{ActivateWindow(file);}catch{}
    if(GetForegroundWindow()!=file){
+    if(confirm)throw new Exception("Confirmation foreground unavailable; no activation click fallback");
     info.ActivationPath=ActivationRoute.OwnedStatusBarFallback;RECT bounds;if(!GetWindowRect(file,out bounds))throw new Exception("Owned source geometry unavailable");
     // Owned blank status-bar space, never a foreign foreground window or title-bar button.
     int ax=bounds.Right-32,ay=bounds.Bottom-18;AssertOwners(layout);AssertDesktop();
@@ -227,7 +228,10 @@ public class ItdaCrossHostWindow {
    int sourceEchoBefore=info.TaggedMouseEchoCount;Move(x,y,marker,attribution);Pump(80);if(info.Interfered||GetForegroundWindow()!=file)throw new Exception("Input/focus changed before mouse down");
    if(info.TaggedMouseEchoCount<=sourceEchoBefore)throw new Exception("Tagged source mouse echo absent; no drag mouse down attempted");
    if(confirm){
-    // Only a controller-validated target confirmation point, never keyboard Enter.
+    // Every guard runs before down; the heading is an observed non-choice
+    // emergency point. No error path may release over the Copy button.
+    AssertOwners(layout);AssertDesktop();
+    if(info.Interfered||GetForegroundWindow()!=target||GetAncestor(WindowFromPoint(new POINT{X=x,Y=y}),2)!=target||GetAncestor(WindowFromPoint(new POINT{X=safeX,Y=safeY}),2)!=target||safeX==x&&safeY==y)throw new Exception("Confirmation pre-down ownership/input/heading changed");
     Move(x,y,marker,attribution,2);down=true;Pump(30);
     AssertOwners(layout);AssertDesktop();if(info.Interfered||GetForegroundWindow()!=target||GetAncestor(WindowFromPoint(new POINT{X=x,Y=y}),2)!=target)throw new Exception("Confirmation ownership/input changed");
     info.ReleaseUnixMs=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();Move(x,y,marker,attribution,4);down=false;Pump(80);info.ReleasePoint="confirmation";info.Outcome="confirmed-input";return info;
@@ -248,18 +252,31 @@ public class ItdaCrossHostWindow {
   }catch(Exception e){info.Error=e.Message;}
   finally{
    if(down){
-    // No key to a foreign foreground, and no abort commit to Target.
-    try{AssertOwners(layout);AssertDesktop();IntPtr fg=GetForegroundWindow();if(fg==file||fg==target){Escape(marker,attribution);info.EmergencyEscaped=true;Pump(80);}
-     if(GetAncestor(WindowFromPoint(new POINT{X=x,Y=y}),2)!=file)throw new Exception("No owned emergency release point");
-     Move(x,y,marker,attribution);Mouse(4,marker,attribution);down=false;info.EmergencyMayHaveOfferedSource=!info.EmergencyEscaped;info.ReleasePoint=confirm?"emergency-target":"emergency-source";
-    }catch{info.ReleasePoint="emergency-release-failed";}
+    if(confirm){
+     // No Escape: it could dismiss the heading we observed. Never release at
+     // the Copy point. External input or failed ownership leaves down held,
+     // so ButtonsUp fails and every dependency/workspace remains retained.
+     try{AssertOwners(layout);AssertDesktop();
+      if(info.Interfered||GetAncestor(WindowFromPoint(new POINT{X=safeX,Y=safeY}),2)!=target||safeX==x&&safeY==y)throw new Exception("No provable non-choice emergency point");
+      Move(safeX,safeY,marker,attribution);Pump(30);AssertOwners(layout);AssertDesktop();
+      if(info.Interfered||GetAncestor(WindowFromPoint(new POINT{X=safeX,Y=safeY}),2)!=target)throw new Exception("Emergency heading ownership changed");
+      Move(safeX,safeY,marker,attribution,4);down=false;info.ReleasePoint="emergency-heading";
+     }catch{info.ReleasePoint="emergency-release-failed";}
+    }else{
+     // Native drag abort only: Escape then release in its owned source.
+     try{AssertOwners(layout);AssertDesktop();IntPtr fg=GetForegroundWindow();if(fg==file||fg==target){Escape(marker,attribution);info.EmergencyEscaped=true;Pump(80);}
+      if(GetAncestor(WindowFromPoint(new POINT{X=x,Y=y}),2)!=file)throw new Exception("No owned emergency release point");
+      Move(x,y,marker,attribution);Mouse(4,marker,attribution);down=false;info.EmergencyMayHaveOfferedSource=!info.EmergencyEscaped;info.ReleasePoint="emergency-source";
+     }catch{info.ReleasePoint="emergency-release-failed";}
+    }
    }
+
    LASTINPUTINFO after=new LASTINPUTINFO();after.Size=(uint)Marshal.SizeOf(typeof(LASTINPUTINFO));if(GetLastInputInfo(ref after))info.InputAfter=after.Time;
-   if(havePrior&&!info.Interfered){try{AssertOwners(layout);AssertDesktop();IntPtr hit=GetAncestor(WindowFromPoint(prior),2);if(hit==file||hit==target){Move(prior.X,prior.Y,marker,attribution);Pump(20);info.CursorRestore="restored-owned";}else info.CursorRestore="skipped-nonowned-prior-point";}catch{info.CursorRestore="failed";}}
+   if(havePrior&&!info.Interfered&&!down){try{AssertOwners(layout);AssertDesktop();IntPtr hit=GetAncestor(WindowFromPoint(prior),2);if(hit==file||hit==target){Move(prior.X,prior.Y,marker,attribution);Pump(20);info.CursorRestore="restored-owned";}else info.CursorRestore="skipped-nonowned-prior-point";}catch{info.CursorRestore="failed";}}
    if(mouseHook!=IntPtr.Zero)UnhookWindowsHookEx(mouseHook);if(keyHook!=IntPtr.Zero)UnhookWindowsHookEx(keyHook);GC.KeepAlive(mouse);GC.KeepAlive(keyboard);
    IntPtr foreground=GetForegroundWindow();
-   if(!info.Interfered&&(foreground==file||foreground==target)&&(priorForeground==new IntPtr(layout.File)||priorForeground==new IntPtr(layout.Target))&&IsWindow(priorForeground)){uint actual;GetWindowThreadProcessId(priorForeground,out actual);if(actual==priorPid&&IsWindowVisible(priorForeground)){try{ActivateWindow(priorForeground);info.FocusRestore="restored";}catch{info.FocusRestore="failed";}}else info.FocusRestore="prior-window-gone";}
-   else info.FocusRestore=info.Interfered?"interfered-focus-left-unchanged":"not-restored-foreground-changed";
+   if(!down&&!info.Interfered&&(foreground==file||foreground==target)&&(priorForeground==new IntPtr(layout.File)||priorForeground==new IntPtr(layout.Target))&&IsWindow(priorForeground)){uint actual;GetWindowThreadProcessId(priorForeground,out actual);if(actual==priorPid&&IsWindowVisible(priorForeground)){try{ActivateWindow(priorForeground);info.FocusRestore="restored";}catch{info.FocusRestore="failed";}}else info.FocusRestore="prior-window-gone";}
+   else info.FocusRestore=down?"button-held-resources-retained":info.Interfered?"interfered-focus-left-unchanged":"not-restored-foreground-changed";
    SetThreadDpiAwarenessContext(old);
   }
   return info;

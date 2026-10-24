@@ -6,7 +6,8 @@ import errno, hmac, json, os, pathlib, re, secrets, signal, socket, stat, tempfi
 PDF = '정보공개 결정통지서(접수번호_00000000).pdf'
 FOLDER = '테스트 폴더'
 FILES = {PDF, 'payload.bin', FOLDER + '/메모.txt'}
-STAGE = re.compile(r'\.itda-[a-f0-9]{16,64}\.partial\Z')
+# Pinned v1.0.6 store::new_id(): six random bytes, exactly twelve hex digits.
+STAGE = re.compile(r'\.itda-[a-f0-9]{12}\.partial\Z')
 MAX_FILE = 2 * 1024 * 1024
 
 class Confined:
@@ -26,7 +27,7 @@ class Confined:
         if value in ('', '.', '/'): parts = []
         else:
             parts = value.removeprefix('/').split('/')
-            if any(p in ('', '.', '..') or p.endswith((' ', '.')) for p in parts): raise PermissionError('Invalid path component')
+            if any(p in ('', '.', '..') or p.endswith((' ', '.')) or re.fullmatch(r'(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?',p,re.IGNORECASE) for p in parts): raise PermissionError('Invalid path component')
         self._plain(self.root)
         current = self.root
         for part in parts:

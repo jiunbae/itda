@@ -60,6 +60,7 @@ jobs:
           # No Layout(), Action(), server, app, shell, clipboard or native input.
 
   owned-input:
+    needs: compile-only
     if: github.event_name == 'workflow_dispatch' && inputs.enable_owned_input == true && inputs.expected_source_sha != ''
     runs-on: windows-latest
     timeout-minutes: 15

@@ -19,7 +19,7 @@ const allowedPaths=new Set(fixturePaths.flatMap(p=>[p,p.normalize('NFD'),p.start
 export function safeFixturePath(value){
  if(typeof value!=='string')return {kind:'absent'};
  if(allowedPaths.has(value))return {kind:'fixture',value};
- return {kind:/^\/?(?:테스트 폴더\/|테스트 폴더\/)?\.itda-[a-f0-9]{16,64}\.partial$/.test(value)?'stage':'unexpected',sha256:digest(value)};
+ return {kind:/^\/?(?:테스트 폴더\/|테스트 폴더\/)?\.itda-[a-f0-9]{12}\.partial$/.test(value)?'stage':'unexpected',sha256:digest(value)};
 }
 // A stopped controller is insufficient: app exit AND read-only zero owned
 // app/WebView processes must both be proved before disconnecting dependencies.
@@ -49,6 +49,35 @@ export function sanitizeTreeObservation(entries){
  return entries.map(v=>({path:safeFixturePath(v.path),dir:v.dir===true,link:v.link===true,sha256:/^[a-f0-9]{64}$/.test(v.sha256||'')?v.sha256:null}));
 }
 
+export function parseCopyPrompt(raw){
+ const route=/^QA source: (.+) → QA destination: (.+)$/.exec(raw?.route_hint||'');
+ const selection=/^(\d+)개 항목$/.exec(raw?.selection||'');
+ return {source:route?.[1]??null,destination:route?.[2]??null,names_count:selection?count(Number(selection[1])):null};
+}
+export function nonChoiceHeadingPoint(button,heading){
+ const valid=r=>r&&['x','y','width','height'].every(k=>Number.isFinite(r[k]))&&r.width>0&&r.height>0;
+ if(!valid(button)||!valid(heading))return null;
+ if(!(heading.x+heading.width<=button.x||button.x+button.width<=heading.x||heading.y+heading.height<=button.y||button.y+button.height<=heading.y))return null;
+ return {x:heading.x+heading.width/2,y:heading.y+heading.height/2};
+}
+export function sanitizeDiagnostic(value){
+ if(!value)return null;
+ const known=['App normal close timeout; no force termination','Owned app/WebView process remains; no forced cleanup','App normal exit not proven','Final observation persistence failed','Startup registration changed','Final prompt state unavailable','Controller cleanup/button release unconfirmed','Controller exit abnormal','Fixture startup ownership/exit observation unavailable; all resources retained','App/WebView exit, input quiescence or evidence persistence unconfirmed: CDP, SFTP and all workspaces retained'];
+ return {message:choice(String(value),known),sha256:digest(String(value))};
+}
+export function sanitizeBinding(values){
+ return values.slice(0,3).map(m=>({host:choice(m?.host,fixedHosts),title:choice(m?.title,['Itda','QA source — 파일','QA destination — 파일']),native_window_sha256:digest(m?.window),page_sha256:digest(m?.page),hwnd:count(m?.hwnd)}));
+}
+export function sanitizeNativeReply(raw){
+ const r=raw?.result||{},native={};
+ for(const key of ['Interfered','EmergencyEscaped','EmergencyMayHaveOfferedSource','ConfirmationAction'])native[key]=r[key]===true;
+ for(const key of ['TaggedEchoCount','TaggedMouseEchoCount','TaggedKeyEchoCount','TaggedSendAttemptCount','UnmatchedHookCount','IdleBefore','InputBefore','InputAfter','TickBefore','StartedUnixMs','ReleaseUnixMs','FirstTargetUnixMs'])native[key]=count(r[key]);
+ native.Outcome=choice(r.Outcome,['confirmed-input','drop-input']);native.ReleasePoint=choice(r.ReleasePoint,['confirmation','target','emergency-heading','emergency-source','emergency-release-failed']);
+ native.ActivationPath=choice(r.ActivationPath,['NotAttempted','ForegroundRequest','OwnedStatusBarFallback']);native.Error=sanitizeDiagnostic(r.Error);
+ native.UnmatchedHooks=Array.isArray(r.UnmatchedHooks)?r.UnmatchedHooks.slice(0,8).map(v=>({Hook:choice(v.Hook,['Mouse','Key']),MessageClass:choice(v.MessageClass,['MouseMove','MouseButtonDown','MouseButtonUp','MouseWheel','OtherMouse','KeyDown','KeyUp','OtherKey']),Injected:v.Injected===true,LowerILInjected:v.LowerILInjected===true,ExtraZero:v.ExtraZero===true,ExtraEqual:v.ExtraEqual===true,ExtraLow32Equal:v.ExtraLow32Equal===true,ExtraHigh32Zero:v.ExtraHigh32Zero===true,LastOwnTargetKnown:v.LastOwnTargetKnown===true,MousePointEqualLastOwnTarget:v.MousePointEqualLastOwnTarget===true,MsSinceLastTaggedSendAttempt:count(v.MsSinceLastTaggedSendAttempt),TaggedSendAttemptCount:count(v.TaggedSendAttemptCount)})):[];
+ return {request_sha256:digest(raw?.request),error:sanitizeDiagnostic(raw?.error),result:native};
+}
+
 async function main(){
 let chromium;
 const repo=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -59,7 +88,7 @@ const SUMSHA='72b141466a396d3a671ebbbb4aa1b25989430d3ebbb5ce18932908100ec4ffb6';
 const assert=(v,m)=>{if(!v)throw Error(m);}, sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const hash=p=>createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 const samePath=(a,b)=>a.toLowerCase()===b.toLowerCase();
-function ownedTemp(dir,prefix){assert(!fs.lstatSync(dir).isSymbolicLink()&&samePath(fs.realpathSync(dir),dir)&&samePath(path.dirname(dir),fs.realpathSync(os.tmpdir()))&&path.basename(dir).startsWith(prefix),'Temporary workspace ownership changed');}
+function ownedTemp(dir,prefix){assert(!fs.lstatSync(dir).isSymbolicLink()&&samePath(fs.realpathSync.native(dir),dir)&&samePath(path.dirname(dir),fs.realpathSync.native(os.tmpdir()))&&path.basename(dir).startsWith(prefix),'Temporary workspace ownership changed');}
 const read=p=>JSON.parse(fs.readFileSync(p,'utf8').replace(/^\uFEFF/,''));
 const report={status:'failed',scope:'Actual published 1.0.6 binary: disposable Windows tagged native Itda file-window A to different-host file-window B copy; not physical PC, 150% DPI, AT, multi-monitor, Mac or persona-9 acceptance',checks:[],cleanup:{}};
 let root,app,identity,appExit,browser,controller,controllerExit,controllerQuiescent=true,startup,interrupted;
@@ -90,7 +119,7 @@ async function captureObservations(phase){
 }
 function fresh(name){const p=path.join(out,`preflight-${name}.json`);try{ps('windows-native-drop-preflight.ps1',['-Receipt',p]);}catch(e){if(!fs.existsSync(p))throw e;}const r=read(p),age=Date.now()-Date.parse(r.recorded_at);assert(r.status!=='probe-error','Prerequisite probe error');assert(r.source.checkout===report.provenance.harness_checkout&&r.source.run_id===process.env.GITHUB_RUN_ID&&r.source.run_attempt===process.env.GITHUB_RUN_ATTEMPT&&age>=0&&age<120000,'Stale/foreign prerequisites');assert(r.status==='eligible-for-owned-drop','prerequisite-unavailable: '+name);return r;}
 async function fixture(script){
- const s={root:fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'itda-quality-sftp-')))};servers.push(s);
+ const s={root:fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'itda-quality-sftp-')))};servers.push(s);
  s.child=spawn('python',[path.join(repo,'scripts/fixtures',script),'--workspace',s.root],{env:{...process.env,PYTHONUTF8:'1'},stdio:['ignore','pipe','pipe']});s.child.stderr.on('data',()=>{});s.exit=observeExit(s.child);
  const manifest=await new Promise((resolve,reject)=>{let t='';const timer=setTimeout(()=>reject(Error('Fixture readiness timeout')),20000);s.child.once('error',e=>{clearTimeout(timer);reject(e);});s.child.once('exit',()=>{clearTimeout(timer);reject(Error('Fixture exited before readiness'));});s.child.stdout.on('data',b=>{t+=b;if(t.includes('\n')){clearTimeout(timer);resolve(t.split('\n')[0].trim());}});});
  assert(path.resolve(manifest)===path.join(s.root,'connection.json'),'Manifest escaped owned workspace');s.config=read(manifest);
@@ -131,7 +160,7 @@ try{
  const listener=net.createServer();await new Promise(r=>listener.listen(0,'127.0.0.1',r));report.debug_port=listener.address().port;await new Promise(r=>listener.close(r));
  app=spawn(path.join(root,'itda.exe'),[],{env:{...process.env,ITDA_DATA_DIR:path.join(root,'data'),ITDA_DEBUG_PORT:String(report.debug_port)},stdio:['ignore','pipe','pipe']});app.stdout.on('data',()=>{});app.stderr.on('data',()=>{});appExit=observeExit(app);let appError;app.once('error',e=>{appError=e;});
  await wait(()=>{assert(!appError&&!appExit.stopped,'Published candidate failed/exited');const s=control('inspect');if(identity)assert(identity.creation_ticks===s.creation_ticks,'Candidate PID reused');identity=s;if(!s.alive||s.hwnd==='0'||!s.visible||!s.private_udf||!s.webview_pids.length||!s.listeners.length)return false;assert(s.session_id===report.environment.checks.session.id&&s.window_class==='itda_home'&&/^Itda \(profile [a-f0-9]{16}\)$/.test(s.window_title),'Wrong isolated main window');assert(s.listeners.every(v=>['127.0.0.1','::1'].includes(v.LocalAddress)&&[app.pid,...s.webview_pids].includes(v.OwningProcess)),'CDP not owned/loopback');return true;},'Private WebView2 readiness',60000);
- browser=await chromium.connectOverCDP(`http://127.0.0.1:${report.debug_port}`);const context=browser.contexts()[0],main=context.pages()[0];assert(context.pages().length===1,'Unexpected initial browser pages');observedPages.push({role:'main',page:main});await main.waitForFunction(()=>typeof S!=='undefined'&&S.hosts.length===2);
+ browser=await chromium.connectOverCDP(`http://127.0.0.1:${report.debug_port}`);const context=browser.contexts()[0],main=context.pages()[0];assert(context.pages().length===1,'Unexpected initial browser pages');observedPages.push({role:'main',page:main});await main.waitForFunction(()=>typeof S!=='undefined'&&S.hosts.length===2);const mainMapping=await main.evaluate(()=>({host:window.ITDA_FILE_HOST||null,window:window.ITDA_FILE_WINDOW||null,page:ItdaFiles.windowToken,title:document.title}));
  const pages=[];
  for(const h of hosts){const next=context.waitForEvent('page');await main.evaluate(id=>ItdaFiles.launch(S.hosts.find(h=>h.id===id),true),h.id);const p=await next;pages.push(p);observedPages.push({role:h.id==='crosshost-source'?'source':'destination',page:p});await p.locator('.files-setup').waitFor();
   await p.evaluate(()=>{window.qa={connected:false,remote_path:null,begins:[],ends:[],drops:[],transfers:[],jobs:[],releases:[]};const recv=ItdaFiles.message;ItdaFiles.message=function(m){if(m.type==='files_result'&&m.op==='connect'&&m.window===ItdaFiles.windowToken&&m.ok){qa.connected=true;qa.remote_path=m.data.path;}if(m.type==='files_native_drag_end'&&m.window===ItdaFiles.windowToken)qa.ends.push(m);if(m.type==='files_drop'&&m.window===ITDA_FILE_WINDOW)qa.drops.push(m);if(m.type==='files_job'&&m.window===ItdaFiles.windowToken)qa.jobs.push(m);return recv.call(this,m);};const original=window.send;window.send=function(cmd,data){if(cmd==='files_native_drag')qa.begins.push(data);if(cmd==='files'&&data.op==='transfer')qa.transfers.push(data);if(cmd==='files_drag_release')qa.releases.push(data);return original(cmd,data);};});
@@ -144,10 +173,10 @@ try{
  binding={source_host:mapping[0].host,target_host:mapping[1].host,source_window:mapping[0].window,target_window:mapping[1].window,source_page:mapping[0].page,target_page:mapping[1].page};
  await captureObservations('connected-before-native-controller');
  controller=spawn('pwsh',['-NoProfile','-NonInteractive','-File',path.join(repo,'scripts/windows-native-crosshost-control.ps1'),'-Root',root,'-AppPid',String(app.pid),'-CreationTicks',identity.creation_ticks,'-MainHwnd',identity.hwnd],{env:process.env,stdio:['ignore','pipe','pipe']});controller.stdout.on('data',()=>{});controller.stderr.on('data',()=>{});controller.once('error',e=>{controllerSpawnError=e.message;});controllerExit=observeExit(controller);controllerQuiescent=false;
- const controllerError=()=>{assert(!controllerSpawnError,'Controller start failed: '+controllerSpawnError);const p=path.join(root,'controller-error.json');if(fs.existsSync(p)){const r=path.join(root,'reply.json');if(fs.existsSync(r))report.failed_native_reply=read(r);throw Error(read(p).error);}};
- await wait(()=>{controllerError();return fs.existsSync(path.join(root,'layout.json'));},'Two-window layout missing');const layout=read(path.join(root,'layout.json'));report.layout=layout;report.binding=mapping.map((m,i)=>({...m,hwnd:i===0?layout.File:layout.Target}));
+ const controllerError=()=>{assert(!controllerSpawnError,'Controller start failed: '+controllerSpawnError);const p=path.join(root,'controller-error.json');if(fs.existsSync(p)){const r=path.join(root,'reply.json');if(fs.existsSync(r))report.failed_native_reply=sanitizeNativeReply(read(r));throw Error(read(p).error);}};
+ await wait(()=>{controllerError();return fs.existsSync(path.join(root,'layout.json'));},'Two-window layout missing');const layout=read(path.join(root,'layout.json'));report.layout=layout;report.binding=sanitizeBinding(mapping.map((m,i)=>({...m,hwnd:i===0?layout.File:layout.Target})));
  assert(layout.SourceTitle===mapping[0].title&&layout.TargetTitle===mapping[1].title&&layout.SourcePid===app.pid&&layout.TargetPid===app.pid&&layout.File!==layout.Target&&layout.SourceIntegrity===layout.TargetIntegrity&&layout.Session===identity.session_id,'Native mapping/IL/session mismatch');
- const command=async value=>{const request=randomUUID();fs.writeFileSync(path.join(root,'command.tmp'),JSON.stringify({...value,binding,request}));fs.renameSync(path.join(root,'command.tmp'),path.join(root,'command.json'));let reply;await wait(()=>{controllerError();const p=path.join(root,'reply.json');if(!fs.existsSync(p))return false;reply=read(p);return reply.request===request;},'Native command timed out',20000);assert(!reply.error,reply.error);return reply.result;};
+ const command=async value=>{const request=randomUUID();fs.writeFileSync(path.join(root,'command.tmp'),JSON.stringify({...value,binding,request}));fs.renameSync(path.join(root,'command.tmp'),path.join(root,'command.json'));let reply;await wait(()=>{controllerError();const p=path.join(root,'reply.json');if(!fs.existsSync(p))return false;reply=read(p);return reply.request===request;},'Native command timed out',20000);if(reply.error)report.failed_native_reply=sanitizeNativeReply(reply);assert(!reply.error,reply.error);return reply.result;};
  await source.evaluate(()=>{const l=document.querySelector('[data-pane=remote] .files-list');l.querySelector('[data-index]').dispatchEvent(new MouseEvent('click',{bubbles:true}));l.focus();l.dispatchEvent(new KeyboardEvent('keydown',{key:'a',ctrlKey:true,bubbles:true,cancelable:true}));});
  assert(await source.locator('[data-pane=remote] [data-index].selected').count()===3,'Exactly three selected top-level items required');
  const from=await source.locator('[data-pane=remote] [data-index]').first().boundingBox(),to=await target.locator('[data-pane=remote] .files-list').boundingBox();assert(from&&to,'Source/target list geometry absent');
@@ -161,17 +190,19 @@ try{
  assert(state[0].drops.length===0&&state[1].drops.length===1&&drop.window===binding.target_window&&/^[a-f0-9]{32}$/.test(drop.origin?.drag||'')&&drop.origin.id===binding.source_host&&drop.origin.window===binding.source_page&&drop.origin.side==='remote'&&drop.origin.path==='/'&&drop.origin.names.length===3&&JSON.stringify([...drop.origin.names].sort())===JSON.stringify(begin.items.map(i=>i.name).sort())&&!drop.paths,'Not a genuine private marker drop on target B');
  assert((await Promise.all(context.pages().map(p=>p.locator('.files-prompt').count()))).reduce((x,y)=>x+y,0)===1,'Unexpected/emergency-source prompt; never approve');
  assert(state.every(v=>v.transfers.length===0)&&tree(path.join(b.root,'files')).length===0,'Transfer/write started before explicit confirmation');
- const prompt=await target.evaluate(()=>{const p=document.querySelector('.files-prompt');return {count:document.querySelectorAll('.files-prompt').length,title:p?.querySelector('h2')?.textContent,button:p?.querySelector('[data-choice=ok]')?.textContent,policy:p?.querySelector('[name=policy]')?.value,text:p?.textContent};});
+ const prompt=await target.evaluate(()=>{const p=document.querySelector('.files-prompt');return {count:document.querySelectorAll('.files-prompt').length,title:p?.querySelector('h2')?.textContent,button:p?.querySelector('[data-choice=ok]')?.textContent,policy:p?.querySelector('[name=policy]')?.value,text:p?.textContent,selection:p?.querySelector('.body > p > b')?.textContent,route_hint:p?.querySelector('.body > p.hint')?.textContent};});
  assert(prompt.title==='파일 복사'&&prompt.button==='복사'&&prompt.policy==='keep'&&prompt.text.includes('QA source')&&prompt.text.includes('QA destination')&&prompt.text.includes('3개 항목'),'Wrong target copy prompt');
- const button=await target.locator('.files-prompt [data-choice=ok]').boundingBox();assert(button,'Confirmation geometry absent');
+ const parsedPrompt=parseCopyPrompt(prompt);assert(parsedPrompt.names_count===drop.origin.names.length&&parsedPrompt.source===drop.origin.path&&parsedPrompt.destination===(await target.evaluate(()=>qa.remote_path)),'Observed prompt route/count mismatch');
+ const button=await target.locator('.files-prompt [data-choice=ok]').boundingBox(),heading=await target.locator('.files-prompt h2').boundingBox(),safePoint=nonChoiceHeadingPoint(button,heading);assert(safePoint,'Non-choice heading geometry absent/overlaps Copy');
  await sleep(5500);fresh('confirm');
  // Recheck the identical bound prompt immediately before allowing one native click.
  assert(await target.locator('.files-prompt').textContent()===prompt.text&&await source.locator('.files-prompt').count()===0&&await main.locator('.files-prompt').count()===0&&(await target.evaluate(()=>qa.remote_path))==='/','Prompt changed before confirmation');
- const live=await Promise.all(pages.map(p=>p.evaluate(()=>({host:ITDA_FILE_HOST,window:ITDA_FILE_WINDOW,page:ItdaFiles.windowToken,jobs:qa.jobs.length}))));
- assert(live.every((m,i)=>m.host===mapping[i].host&&m.window===mapping[i].window&&m.page===mapping[i].page)&&live[1].jobs===0,'Live file identity changed or target job already exists');
- assert((await Promise.all(context.pages().map(p=>p.locator('.files-prompt').count()))).reduce((a,b)=>a+b,0)===1,'Unexpected prompt before Copy');
- const currentButton=await target.locator('.files-prompt [data-choice=ok]').boundingBox();assert(JSON.stringify(currentButton)===JSON.stringify(button),'Confirmation geometry changed');
- report.checks.push({check:'one expected target Copy confirmation attribution',input:await command({op:'confirm',x:Math.round(layout.TargetOriginX+(button.x+button.width/2)*tdpr),y:Math.round(layout.TargetOriginY+(button.y+button.height/2)*tdpr),prompt:{count:1,other_prompts:0,title:prompt.title,button:prompt.button,policy:prompt.policy,names_count:3,source:'/',destination:'/',origin:{id:drop.origin.id,window:drop.origin.window,side:drop.origin.side,path:drop.origin.path,names:drop.origin.names,token_sha256:createHash('sha256').update(drop.origin.drag).digest('hex')}}})});
+ const live=await Promise.all([main,...pages].map(p=>p.evaluate(()=>({host:window.ITDA_FILE_HOST||null,window:window.ITDA_FILE_WINDOW||null,page:ItdaFiles.windowToken,title:document.title,jobs:window.qa?.jobs?.length??null,transfers:window.qa?.transfers?.length??null,remote_path:window.qa?.remote_path}))));
+ const expectedIdentities=[mainMapping,...mapping];assert(context.pages().length===3&&live.every((m,i)=>['host','window','page','title'].every(k=>m[k]===expectedIdentities[i][k]))&&live[2].jobs===0&&live[2].transfers===0,'Live three-window identity/title changed or target already active');
+ const promptCounts=await Promise.all(context.pages().map(p=>p.locator('.files-prompt').count()));assert(promptCounts.reduce((a,b)=>a+b,0)===1,'Unexpected prompt before Copy');
+ const currentButton=await target.locator('.files-prompt [data-choice=ok]').boundingBox(),currentHeading=await target.locator('.files-prompt h2').boundingBox();assert(JSON.stringify(currentButton)===JSON.stringify(button)&&JSON.stringify(currentHeading)===JSON.stringify(heading),'Confirmation geometry changed');
+ assert(await target.evaluate(p=>{const e=document.elementFromPoint(p.x,p.y);return !!e?.closest('.files-prompt h2')&&!e.closest('[data-choice]');},safePoint),'Heading is not a live non-choice hit point');
+ report.checks.push({check:'one expected target Copy confirmation attribution',input:await command({op:'confirm',x:Math.round(layout.TargetOriginX+(button.x+button.width/2)*tdpr),y:Math.round(layout.TargetOriginY+(button.y+button.height/2)*tdpr),safe_x:Math.round(layout.TargetOriginX+safePoint.x*tdpr),safe_y:Math.round(layout.TargetOriginY+safePoint.y*tdpr),safe_bounds:{left:Math.round(layout.TargetOriginX+heading.x*tdpr),right:Math.round(layout.TargetOriginX+(heading.x+heading.width)*tdpr),top:Math.round(layout.TargetOriginY+heading.y*tdpr),bottom:Math.round(layout.TargetOriginY+(heading.y+heading.height)*tdpr)},prompt:{count:prompt.count,other_prompts:promptCounts.reduce((a,b)=>a+b,0)-prompt.count,title:prompt.title,button:prompt.button,policy:prompt.policy,names_count:parsedPrompt.names_count,source:parsedPrompt.source,destination:live[2].remote_path,route_destination:parsedPrompt.destination,origin:{id:drop.origin.id,window:drop.origin.window,side:drop.origin.side,path:drop.origin.path,names:drop.origin.names,token_sha256:createHash('sha256').update(drop.origin.drag).digest('hex')}}})});
  const expected=sourceBefore.map(v=>({...v,path:v.path.normalize('NFC')})).sort((a,b)=>a.path.localeCompare(b.path));
  await wait(async()=>{const q=await target.evaluate(()=>qa);assert(!q.jobs.some(j=>j.state==='failed'||j.state==='cancelled'),'Transfer failed/cancelled');return q.jobs.some(j=>j.state==='completed')&&JSON.stringify(tree(path.join(b.root,'files')))===JSON.stringify(expected);},'Completed job/NFC/exact destination tree/hash mismatch',60000);
  await captureObservations('after-copy-before-outcome-assertions');
@@ -220,7 +251,8 @@ finally{
   for(const s of servers){try{report[s===servers[0]?'source_audit':'destination_audit']=audit(s);}catch{errors.push('Retained fixture audit unavailable');}}
  }
  for(const child of [app,controller]){child?.stdout?.destroy();child?.stderr?.destroy();child?.unref();}
- report.cleanup.status=errors.length?'failed':'passed';if(errors.length){report.original_outcome=original;report.cleanup.errors=errors;report.status='failed';process.exitCode=1;}if(interrupted){report.status='interrupted';process.exitCode=1;}
+ report.cleanup.status=errors.length?'failed':'passed';if(errors.length){report.original_outcome=original;report.cleanup.errors=errors.map(sanitizeDiagnostic);report.status='failed';process.exitCode=1;}if(interrupted){report.status='interrupted';process.exitCode=1;}
+ if(report.error)report.error=sanitizeDiagnostic(report.error);if(report.original_outcome?.error)report.original_outcome.error=sanitizeDiagnostic(report.original_outcome.error);
  fs.mkdirSync(out,{recursive:true});fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({status:report.status,cleanup:report.cleanup.status}));
 }
 

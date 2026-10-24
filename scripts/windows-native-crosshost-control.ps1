@@ -37,16 +37,17 @@ try {
     if($c.binding.source_host -cne 'crosshost-source' -or $c.binding.target_host -cne 'crosshost-destination' -or -not $c.binding.source_page -or -not $c.binding.target_page -or $c.binding.source_page -ceq $c.binding.target_page -or -not $c.binding.source_window -or -not $c.binding.target_window -or $c.binding.source_window -ceq $c.binding.target_window){throw 'Fixture host/page/native-window mapping absent'}
     if($c.op -eq 'drag'){
      if($dragAttempted){throw 'No native drag retries'};$dragAttempted=$true;$binding=$c.binding
-     $result=[ItdaCrossHostWindow]::Action($layout,[int]$c.x,[int]$c.y,[int]$c.target_x,[int]$c.target_y,$false)
+     $result=[ItdaCrossHostWindow]::Action($layout,[int]$c.x,[int]$c.y,[int]$c.target_x,[int]$c.target_y,$false,0,0)
      if($result.Error -or $result.Interfered -or $result.ReleasePoint -cne 'target'){throw ('Native drag failed: '+$result.Error)}
     }elseif($c.op -eq 'confirm'){
      if(-not $dragAttempted -or $confirmAttempted){throw 'One confirmation only after successful drag'};$confirmAttempted=$true
      if((ConvertTo-Json -Compress $binding) -cne (ConvertTo-Json -Compress $c.binding)){throw 'Fixture mapping changed'}
-     if($c.prompt.count -ne 1 -or $c.prompt.other_prompts -ne 0 -or $c.prompt.title -cne '파일 복사' -or $c.prompt.button -cne '복사' -or $c.prompt.policy -cne 'keep' -or $c.prompt.names_count -ne 3 -or $c.prompt.source -cne '/' -or $c.prompt.destination -cne '/'){throw 'Unexpected confirmation; never approve'}
+     if($c.prompt.count -ne 1 -or $c.prompt.other_prompts -ne 0 -or $c.prompt.title -cne '파일 복사' -or $c.prompt.button -cne '복사' -or $c.prompt.policy -cne 'keep' -or $c.prompt.names_count -ne 3 -or $c.prompt.source -cne '/' -or $c.prompt.destination -cne '/' -or $c.prompt.route_destination -cne $c.prompt.destination){throw 'Unexpected confirmation; never approve'}
      if($c.prompt.origin.id -cne $binding.source_host -or $c.prompt.origin.window -cne $binding.source_page -or $c.prompt.origin.side -cne 'remote' -or $c.prompt.origin.path -cne '/' -or $c.prompt.origin.token_sha256 -cnotmatch '^[a-f0-9]{64}$' -or @($c.prompt.origin.names).Count -ne 3){throw 'Observed native origin binding mismatch'}
      $expected=@('payload.bin','정보공개 결정통지서(접수번호_00000000).pdf'.Normalize([Text.NormalizationForm]::FormD),'테스트 폴더'.Normalize([Text.NormalizationForm]::FormD))
      foreach($name in $expected){if(-not ($c.prompt.origin.names -ccontains $name)){throw 'Unexpected generated selection'}}
-     $result=[ItdaCrossHostWindow]::Action($layout,[int]$c.x,[int]$c.y,[int]$c.x,[int]$c.y,$true)
+     if($c.safe_bounds.left -ge $c.safe_bounds.right -or $c.safe_bounds.top -ge $c.safe_bounds.bottom -or $c.safe_x -le $c.safe_bounds.left -or $c.safe_x -ge $c.safe_bounds.right -or $c.safe_y -le $c.safe_bounds.top -or $c.safe_y -ge $c.safe_bounds.bottom -or ($c.x -ge $c.safe_bounds.left -and $c.x -le $c.safe_bounds.right -and $c.y -ge $c.safe_bounds.top -and $c.y -le $c.safe_bounds.bottom)){throw 'Non-choice emergency heading geometry invalid'}
+     $result=[ItdaCrossHostWindow]::Action($layout,[int]$c.x,[int]$c.y,[int]$c.x,[int]$c.y,$true,[int]$c.safe_x,[int]$c.safe_y)
      if($result.Error -or $result.Interfered -or $result.ReleasePoint -cne 'confirmation'){throw ('Confirmation failed: '+$result.Error)}
     }else{throw 'Unknown owned command'}
     Publish 'reply.json' @{request=$c.request;result=$result}
