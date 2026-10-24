@@ -1,0 +1,86 @@
+{
+  "recorded_at": "2026-10-24",
+  "status": "component-partial-not-persona-acceptance",
+  "scope": "Private native macOS app; real generated loopback SFTP, signed Tacto helper AX/menu actions; production app untouched",
+  "source_commit": "0b60b4bc7b597e68ece1e6c6f9e086f90dfb166b",
+  "build_binary_sha256_before_private_bundle_signing": "71fad3a699f6c001161d1cfa3875d455026803edea3298dc545d5b7db59c67ed",
+  "actual_signed_candidate_hash": null,
+  "provenance_limits": [
+    "Actual private ad hoc signed candidate hash was not recorded after codesign; the recorded build binary hash is pre-signing only. Path/bundle/PID identity and controlled copy source were independently checked.",
+    "Direct-launch readiness initially asserted before candidate finished launch; subsequent Tacto observation and native identity probe showed healthy UI. No product crash claimed.",
+    "No typed host commit receipt from Tacto for custom persistent actions; root independently inspected SFTP audit, staging and final hashes."
+  ],
+  "private_bundle_id": "dev.jiun.itda.nativequit.c009b5724290439eaf618e20f29fe460",
+  "macos": "27.0.1",
+  "signature": "ad hoc private candidate, not released",
+  "fixture_auth_smoke": {
+    "default_password_mode": "PASS, SFTP payload stat4194304",
+    "opt_in_ed25519_publickey_mode": "PASS, SFTP payload stat4194304; password rejected"
+  },
+  "native_results": {
+    "native_idle_menu_quit": "PASS",
+    "native_busy_quit_dialog": "PASS, count1 while actual SFTP copy held at2MiB with2MiB stage",
+    "native_cancel_quit": "PASS, app+held copy stayed alive",
+    "native_wait_while_held": "NOT VERIFIED; tool refused before action, both copy attempts were later released manually and completed before idle menu quit",
+    "native_stop_while_held": "NOT VERIFIED; tool required delete confirmation before action",
+    "scenario_label_warning": "The raw scenario value wait names the allocated profile/destination only. It is NOT evidence that the Wait button was executed."
+  },
+  "observations": {
+    "idle": {
+      "pid": 15323,
+      "menu_path": [
+        "Itda Native Quit",
+        "Itda 종료"
+      ],
+      "normal_exit": 0,
+      "general_change_count_before_after": 1943,
+      "tacto_result": "target_not_found during post-action observation because candidate exited; independently verified process exit0"
+    },
+    "held_copy": {
+      "candidate_pid": 19786,
+      "source_bytes": 4194304,
+      "barrier_offset": 2097152,
+      "staging_bytes": 2097152,
+      "visible_quit_guard_count": 1,
+      "cancel_preserved_app_and_held_copy": true,
+      "repeat_held_copy_also_observed": true,
+      "general_clipboard_change_count_before_after": 1943
+    },
+    "completed_after_manual_release": {
+      "bytes": 4194304,
+      "sha256": "2b07811057df887086f06a67edc6ebf911de8b6741156e7a2eb1416a4b8b1b2e",
+      "source_unchanged": true,
+      "exit_code_after_idle_menu_quit": 0,
+      "wait_button_not_executed": true
+    }
+  },
+  "harness_corrections": [
+    "start() readiness asserted before private direct-launch candidate was AX observed; later identity/path/bundle/finished_launching and window were independently verified; no product crash.",
+    "Initial menu path Itda failed not_started; actual private bundle display name Itda Native Quit verified via menu-state.",
+    "Invalid first flow schema refused before action; corrected explicit per-step contract.",
+    "Go-folder route was dispatched but Tacto has no typed host commit evidence for custom Itda UI; observed resulting dialog and canonical path independently; did not repeat uncertain action.",
+    "Native-copy confirmation was dispatched; actual SFTP audit and staging independently proved transfer; no typed host commit evidence claimed."
+  ],
+  "cleanup": {
+    "forced_candidate": false,
+    "server_exit": 0,
+    "launchservices_unregister_exit": 0,
+    "general_count_after": 1943,
+    "owned_workspaces_removed": true,
+    "unique_bundle_cache_paths_removed": [
+      "Library/WebKit/dev.jiun.itda.nativequit.c009b5724290439eaf618e20f29fe460",
+      "Library/Caches/dev.jiun.itda.nativequit.c009b5724290439eaf618e20f29fe460"
+    ],
+    "general_clipboard_change_count_after_cleanup": 1943
+  },
+  "limits": [
+    "No Wait/Stop-while-held acceptance: automatic tool authorization refused both actions before dispatch; a bounded explicit user question is pending.",
+    "No physical CmdQ key-equivalent, Dock/AppleEvent/logout, Finder file promises, updater/installer/Force, old macOS, Windows, deployment or persona-score acceptance.",
+    "Initial native local navigation briefly displayed home-directory filenames; no user files edited, no such AX tree retained in this receipt.",
+    "General clipboard contents were never read; only changeCount metadata. Unique test pasteboard used for native copy/paste.",
+    "Raw scenario label wait names profile allocation only; final complete file followed manual fixture release plus idle menu quit, not the Wait button.",
+    "The failed launch-readiness assertions were driver prerequisites, followed by independently verified correct PID/path/bundle/window; no product crash."
+  ],
+  "verified_persona_scores_changed": false,
+  "goal_complete": false
+}
