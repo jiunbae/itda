@@ -15,7 +15,7 @@ const report={status:'failed',scope:'One hosted-CI Explorer IDataObject/IStream 
 const assert=(v,m)=>{if(!v)throw Error(m);};
 const hash=p=>createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-let root,child,identity,exited=false,browser,server,serverExit,serverRoot,config,controller,controllerExit,controllerState,startup,interrupted,childExit,launchError,controllerQuiesced=true;
+let root,child,identity,exited=false,browser,filePage,server,serverExit,serverRoot,config,controller,controllerExit,controllerState,startup,interrupted,childExit,launchError,controllerQuiesced=true;
 for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{interrupted=signal;});
 const ps=(file,args=[])=>execFileSync('pwsh',['-NoProfile','-NonInteractive','-File',path.join(repo,'scripts',file),...args],{encoding:'utf8',timeout:30000});
 const read=p=>{const bytes=fs.readFileSync(p);try{return JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/,''));}catch{throw Error(`Invalid JSON in ${path.basename(p)} (${bytes.length} bytes)`);}};
@@ -51,7 +51,7 @@ try{
  report.native_identity={pid:identity.pid,creation_ticks:identity.creation_ticks,hwnd:identity.hwnd,session_id:identity.session_id};
  browser=await chromium.connectOverCDP(`http://127.0.0.1:${report.debug_port}`);const context=browser.contexts()[0],page=context.pages()[0];
  await page.waitForFunction(id=>typeof S!=='undefined'&&S.hosts.length===1&&S.hosts[0].id===id,fixtureId);
- const newPage=context.waitForEvent('page');await page.evaluate(()=>document.querySelector('[data-page=files]').click());const f=await newPage;await f.locator('.files-layer').waitFor();
+ const newPage=context.waitForEvent('page');await page.evaluate(()=>document.querySelector('[data-page=files]').click());const f=await newPage;filePage=f;await f.locator('.files-layer').waitFor();
  await f.evaluate(id=>document.querySelector(`[data-device="${id}"]`).click(),fixtureId);await f.locator('.files-setup').waitFor();
  await f.evaluate(c=>{const q=s=>document.querySelector('.files-setup '+s);q('[name=account]').value='custom';q('[name=account]').dispatchEvent(new Event('change',{bubbles:true}));q('[name=user]').value=c.user;q('[name=password]').value=c.password;q('[name=save_password]').checked=false;q('[data-connect]').click();},{user:config.user,password:config.password});
  await f.waitForFunction(()=>document.querySelectorAll('[data-pane=remote] [data-index]').length===3,undefined,{timeout:45000});
@@ -74,6 +74,9 @@ try{
   const before=audit().length,input=await command({op:'drag',scenario,...point});
   report.checks.push({check:`${scenario} input attribution`,input});assert(!input.Error&&!input.Interfered&&input.ReleaseUnixMs&&input.ReleasePoint===({cancel:'cancel',positive:'target'}[scenario]),'Input aborted/interfered; no retry');
   await f.waitForFunction(()=>nativeDragEvents.length>0,undefined,{timeout:15000});const observation=await f.evaluate(()=>({requests:nativeDragRequests,events:nativeDragEvents}));
+  // Preserve what happened before judging it. A wrong outcome must not erase the
+  // native result, destination or read timing that distinguishes its cause.
+  (report.observations??=[]).push({scenario,observation,destination:destination(),reads:audit().slice(before)});
   assert(observation.requests.length===1&&observation.requests[0].count===3,'Did not observe exactly one real files_native_drag');assert(observation.events.every(e=>!e.error),'Native OLE reported error');assert(observation.events.some(e=>e.dropped===(scenario==='positive')),'Wrong DoDragDrop outcome');
   if(scenario!=='positive'){
    const end=Date.now()+3000;do{assert(destination().length===0,'Negative control created files');await sleep(100);}while(Date.now()<end);
@@ -100,6 +103,17 @@ finally{
    if(result.code!==0||result.signal||result.error){report.status='failed';report.error??='Controller exited abnormally';process.exitCode=1;}
    const p=path.join(root,'controller-cleanup.json');assert(fs.existsSync(p),'Controller cleanup receipt absent');report.cleanup.explorer=read(p);assert(explorerCleanupComplete(report.cleanup.explorer),'Owned Explorer absence was not confirmed');}
  }catch(e){errors.push(e.message);}
+ // Observation only, after native input has quiesced and before closing the app
+ // or removing owned fixtures. Never approve a prompt or initiate a transfer.
+ if(controllerQuiesced&&root){
+  try{report.final_destination=destination();}catch(e){report.final_destination_error=e.message;}
+  if(filePage&&!filePage.isClosed()){
+   try{report.final_native_observation=await Promise.race([filePage.evaluate(()=>({requests:window.nativeDragRequests??[],events:window.nativeDragEvents??[]})),sleep(1500).then(()=>{throw Error('Final native observation timed out');})]);}catch(e){report.final_native_observation_error=e.message;}
+  }
+  if(config&&serverRoot){
+   try{report.generated_sources=config.files.map(file=>{const base=path.join(serverRoot,'files'),source=path.resolve(base,file.path.slice(1));assert(source.startsWith(base+path.sep),'Generated source escaped fixture');return {path:file.path,expected_sha256:file.sha256,actual_sha256:hash(source)};});}catch(e){report.generated_sources_error=e.message;}
+  }
+ }
  // A source-window emergency release can be accepted by Itda's own DropTarget.
  // Observe any resulting confirmation; never click/approve it. Closing the owned
  // app through WM_CLOSE disposes unapproved DOM prompts without starting the copy.
