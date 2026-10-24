@@ -9,6 +9,18 @@ Add-Type -Path "$PSScriptRoot/fixtures/windows-drop-driver.cs"
 $folder=Join-Path $Root 'drop-destination'
 if(-not (Test-Path -LiteralPath $folder -PathType Container) -or (Get-Item -LiteralPath $folder).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Invalid destination'}
 $explorer=$null;$layout=$null;$shell=$null;$explorerCreationAttempted=$false
+function Publish-Receipt {
+ param([ValidateSet('layout.json','controller-error.json','reply.json','controller-cleanup.json')][string]$Name,[object]$Value,[int]$Depth=10)
+ # Serialize before touching disk. Publish only a closed, complete UTF-8 file
+ # through a same-directory rename; the strict reader never retries partial JSON.
+ $json=ConvertTo-Json -InputObject $Value -Depth $Depth -EnumsAsStrings
+ $destination=Join-Path $Root $Name
+ $temporary=Join-Path $Root ('.'+$Name+'.'+[Guid]::NewGuid().ToString('N')+'.tmp')
+ try {
+  [IO.File]::WriteAllText($temporary,$json,[Text.UTF8Encoding]::new($false))
+  [IO.File]::Move($temporary,$destination,$true)
+ } finally {if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary}}
+}
 function Own-App {
  $state=& pwsh -NoProfile -NonInteractive -File "$PSScriptRoot/windows-native-idle-control.ps1" -Operation inspect -Root $Root -AppPid $AppPid -CreationTicks $CreationTicks | ConvertFrom-Json
  if($LASTEXITCODE -or -not $state.alive -or $state.pid -ne $AppPid -or $state.creation_ticks -ne $CreationTicks -or $state.session_id -ne (Get-Process -Id $PID).SessionId){throw 'Candidate identity changed'}
@@ -24,7 +36,7 @@ try {
  do{$matches=@($shell.Windows()|Where-Object{try{[IO.Path]::GetFullPath($_.Document.Folder.Self.Path) -eq $folder}catch{$false}});if($matches.Count -eq 1){$explorer=$matches[0];break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $until)
  if(-not $explorer){throw 'Unique owned Explorer Cabinet unavailable'}
  $layout=[ItdaQualityWindow]::Layout($AppPid,$MainHwnd,[long]$explorer.HWND)
- $layout|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $Root 'layout.json') -Encoding utf8
+ Publish-Receipt -Name 'layout.json' -Value $layout -Depth 8
  $until=[DateTime]::UtcNow.AddMinutes(4)
  while([DateTime]::UtcNow -lt $until){
   $file=Join-Path $Root 'command.json'
@@ -40,12 +52,11 @@ try {
     $result.GuardBefore=$before;$result.GuardAfter=[ItdaQualityWindow]::ProbeIdle()
     $reply=@{request=$c.request;result=$result}
    }catch{$reply=@{request=$c.request;error=$_.Exception.Message}}
-   $reply|ConvertTo-Json -Depth 10 -EnumsAsStrings|Set-Content -LiteralPath (Join-Path $Root 'reply.tmp') -Encoding utf8
-   Move-Item -LiteralPath (Join-Path $Root 'reply.tmp') -Destination (Join-Path $Root 'reply.json') -Force
+   Publish-Receipt -Name 'reply.json' -Value $reply
   }
   Start-Sleep -Milliseconds 50
  }
-} catch { @{error=$_.Exception.Message}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $Root 'controller-error.json') -Encoding utf8;exit 1 }
+} catch { Publish-Receipt -Name 'controller-error.json' -Value @{error=$_.Exception.Message};exit 1 }
 finally {
  $cleanup=@{explorer_creation_attempted=$explorerCreationAttempted;explorer_state='unconfirmed';explorer_close_requested=$false;no_owned_window_confirmed=$false}
  try {if($explorer -and [IO.Path]::GetFullPath($explorer.Document.Folder.Self.Path) -eq $folder){
@@ -59,5 +70,5 @@ finally {
   if(-not $remaining.Count){$cleanup.explorer_state=if($explorerCreationAttempted){'not-present'}else{'not-created'};$cleanup.no_owned_window_confirmed=$true}
  }}
  catch {$cleanup.error=$_.Exception.Message}
- $cleanup|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $Root 'controller-cleanup.json') -Encoding utf8
+ Publish-Receipt -Name 'controller-cleanup.json' -Value $cleanup
 }
