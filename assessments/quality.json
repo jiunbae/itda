@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "assessment_id": "itda-quality-2026-10-23",
-  "status": "iteration-8-mac-local-entry-fixed-1.0.4-release-pending",
+  "status": "iteration-9-1.0.4-published-local-smoke-verified-core-journeys-pending",
   "goal": "Every persona scores at least 9/10 on verified core journeys, with no unresolved P1/P2 task blockers.",
   "baseline": {
     "commit": "521202025e7c5a984f089c1d1df77e846f63fd33",
@@ -775,6 +775,48 @@
         "All seven verified persona scores remain null; 28 complete core journeys have not been certified at 9/10."
       ],
       "acceptance_note": "Supersedes earlier production-1.0.2/release-pending checkpoint notes only. Earlier native receipts remain historical and retain their exact candidate scope. Deployment and local smoke do not certify full persona journeys; all verified scores remain null."
+    },
+    {
+      "id": 9,
+      "status": "in-progress",
+      "changes": [
+        {
+          "release": "1.0.4",
+          "source_commit": "3d755e64b8fa32d6ca511e189e39afae57171734",
+          "status": "published; public hashes and final main CI verified; installed Mac local-entry/window-close component smoke passed",
+          "verification": "Final main CI40059961386 all3success; public assets match verified candidate hashes; Developer ID notarized Mac; Windows unsigned per release-owner report; local profiles and access=true/screen=false permissions preserved.",
+          "embedded_ui_provenance": "Initial Windows strict-LF assertion failed; corrected and independently confirmed whole-blob proof allows only LF-to-CRLF conversion. Initial failure retained; no false all-green initial result.",
+          "evidence": "assessments/evidence/release-1.0.4-checkpoint.json"
+        }
+      ],
+      "verification_gaps": [
+        "Mac managed-copy Wait/Stop remains untested: the bounded approval is unanswered after the earlier Tacto policy refusal before dispatch; no acceptance credit.",
+        "Mac Dock/AppleEvent/logout, Finder promise queue, updater/remote installer/Force and associated native quit paths remain unverified.",
+        "Physical Windows user-PC input, 150% scaling/layout, assistive technology, and Explorer/OLE drag including virtual-file-stream lifetime have not run; hosted managed-copy CI does not replace these.",
+        "iOS runtime is hard-blocked pending concrete per-device/process pasteboard isolation. Last reported read-only inventory had seven registered iPhones disconnected; no physical phone test was performed.",
+        "The build-only MobileSafari scaffold is not native runtime evidence. QR camera, physical touch, Korean IME, mobile clipboard/privacy and real LAN/HTTPS remain unverified.",
+        "Older macOS native runtime remains unverified, including 12.0–12.2; artifact minimum-version/weak-link probes do not certify those systems. 12.3+ remains recommended.",
+        "All seven verified persona scores remain null; 28 complete core journeys have not been certified at 9/10."
+      ],
+      "acceptance_note": "1.0.4 is actually published and installed locally. This supersedes the latest release-pending note without changing historical evidence or any persona score. Local browsing/window-close smoke is component acceptance only; goal remains active and full 9/10 core-journey certification is unproven."
     }
-  ]
+  ],
+  "current_release": {
+    "version": "1.0.4",
+    "source_commit": "3d755e64b8fa32d6ca511e189e39afae57171734",
+    "tag": "v1.0.4",
+    "release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.4",
+    "status": "published; final artifacts and installed Mac local-entry/window-close smoke verified; full native acceptance pending",
+    "final_ci_run": 40059961386,
+    "all_final_ci_checks": "success",
+    "public_asset_sha256": {
+      "Itda-macos-universal.zip": "6d6714c0e3ba4e582fca94ab90737a30567d4112e0eee9c5af9483080288a6b3",
+      "itda.exe": "26e160f8d40fc25eb52f3b5137057c73c36615d064a1a28c7ea79be6785098ee",
+      "SHA256SUMS.txt": "7c02ff9d9932e529563d4d205a342bd6844ed9065dfc5a4cc3face9f989d1cf9"
+    },
+    "evidence": "assessments/evidence/release-1.0.4-checkpoint.json",
+    "goal_status": "active",
+    "verified_persona_scores": "all seven null; no 9/10 certification",
+    "supersedes": "Earlier release-pending and deployed-version facts only; persona objects, rubric, history and native failed/cleaned receipts are unchanged."
+  }
 }

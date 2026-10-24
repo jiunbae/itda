@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "component": "1.0.4-public-release-and-local-install",
+  "recorded_at": "2026-10-24T04:25:54.032340+00:00",
+  "status": "release-and-local-smoke-verified; full-quality-goal-incomplete",
+  "source_commit": "3d755e64b8fa32d6ca511e189e39afae57171734",
+  "tag": "v1.0.4",
+  "release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.4",
+  "published_at": "2026-10-24T04:24:28Z",
+  "final_ci": {
+    "run_id": 40059961386,
+    "url": "https://github.com/jiunbae/itda/actions/runs/40059961386",
+    "event": "push",
+    "branch": "main",
+    "head_sha": "3d755e64b8fa32d6ca511e189e39afae57171734",
+    "checks": {
+      "macos": "success",
+      "windows-file-ui": "success",
+      "build": "success"
+    }
+  },
+  "public_download": {
+    "checked_at": "2026-10-24T04:25:54.032340+00:00",
+    "assets": [
+      {
+        "name": "Itda-macos-universal.zip",
+        "sha256": "6d6714c0e3ba4e582fca94ab90737a30567d4112e0eee9c5af9483080288a6b3",
+        "bytes": 8763604,
+        "public_download_matches": true
+      },
+      {
+        "name": "itda.exe",
+        "sha256": "26e160f8d40fc25eb52f3b5137057c73c36615d064a1a28c7ea79be6785098ee",
+        "bytes": 7519744,
+        "public_download_matches": true
+      },
+      {
+        "name": "SHA256SUMS.txt",
+        "sha256": "7c02ff9d9932e529563d4d205a342bd6844ed9065dfc5a4cc3face9f989d1cf9",
+        "bytes": 166,
+        "public_download_matches": true
+      }
+    ]
+  },
+  "mac_artifact": {
+    "version": "1.0.4",
+    "bundle_id": "dev.jiun.itda",
+    "architectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "executable_sha256": "1128e6b029722d43a8676a754cfe43e580b4fda32cd49c6323210e258d79016f",
+    "developer_id": true,
+    "codesign_verification": "pass",
+    "gatekeeper_notarized": "pass",
+    "stapled_ticket_validation": "pass",
+    "plist_minimum_system_version": "12.0",
+    "optional_capture_artifact_probe": "passed",
+    "older_os_runtime_acceptance": false
+  },
+  "windows_artifact": {
+    "architecture": "AMD64",
+    "subsystem": "Windows GUI",
+    "file_version": "1.0.4",
+    "product_version": "1.0.4",
+    "dpi": "PerMonitorV2",
+    "execution_levels": [
+      "asInvoker"
+    ],
+    "authenticode_signed": false,
+    "signing_evidence_scope": "Unsigned Windows artifact as reported by the release owner; supplied metadata JSON does not contain an independent certificate-table or Authenticode check. No new signing verification performed by this docs task.",
+    "native_physical_acceptance": false
+  },
+  "embedded_ui_source_association": {
+    "source_file": "web/files.js",
+    "status": "whole-blob-match-after-line-ending-aware-check",
+    "mac_entire_lf_source_exact_bytes": true,
+    "windows_entire_crlf_source_exact_bytes": true,
+    "git_blob_lf_source_sha256": "92764241f6028a6e2360c7eaee6663cfd1872179e9ae76a547fbe496daf8057d",
+    "windows_embedded_crlf_source_sha256": "65348e158b83809563dbd0854046912f0d4d57ff5de665b3aba4f39d1e60036a",
+    "initial_strict_lf_assertion": "failed on Windows; retained separately, not an app failure",
+    "provenance": "Initial strict LF-only Windows assertion failed. Corrected whole-blob proof accounts only for LF-to-CRLF checkout conversion; no other code transformation. The release owner reports separate independent confirmation. The failed initial assertion is retained as provenance, not converted into an all-green initial run or classified as an app failure.",
+    "code_transformations_other_than_line_endings": false
+  },
+  "local_mac_install": {
+    "version_before": "1.0.3",
+    "version_after": "1.0.4",
+    "verified_at": "2026-10-24T04:23:42.362873+00:00",
+    "installed_executable_matches_verified_release": true,
+    "graceful_old_app_exit": true,
+    "forced_quit": false,
+    "designated_requirement_unchanged": true,
+    "permission_status_before": {
+      "access": true,
+      "screen": false
+    },
+    "permission_status_after": {
+      "access": true,
+      "screen": false
+    },
+    "permission_writes": false,
+    "hosts_accounts_settings_semantically_unchanged": true,
+    "hosts_accounts_settings_semantically_unchanged_after_smoke": true,
+    "main_window_visible": true,
+    "separate_file_window_opened": true,
+    "network_local_entry_visible": true,
+    "entered_local_folder_without_remote_connection": true,
+    "closed_only_file_window": true,
+    "main_window_preserved": true,
+    "transfer_actions_performed": false,
+    "scope": "Installed 1.0.4 native local-entry/window-lifecycle component smoke only. No transfer, permission grant, managed-copy Wait/Stop or full journey acceptance."
+  },
+  "verification_gaps": [
+    "Mac managed-copy Wait/Stop remains untested: the bounded approval is unanswered after the earlier Tacto policy refusal before dispatch; no acceptance credit.",
+    "Mac Dock/AppleEvent/logout, Finder promise queue, updater/remote installer/Force and associated native quit paths remain unverified.",
+    "Physical Windows user-PC input, 150% scaling/layout, assistive technology, and Explorer/OLE drag including virtual-file-stream lifetime have not run; hosted managed-copy CI does not replace these.",
+    "iOS runtime is hard-blocked pending concrete per-device/process pasteboard isolation. Last reported read-only inventory had seven registered iPhones disconnected; no physical phone test was performed.",
+    "The build-only MobileSafari scaffold is not native runtime evidence. QR camera, physical touch, Korean IME, mobile clipboard/privacy and real LAN/HTTPS remain unverified.",
+    "Older macOS native runtime remains unverified, including 12.0–12.2; artifact minimum-version/weak-link probes do not certify those systems. 12.3+ remains recommended.",
+    "All seven verified persona scores remain null; 28 complete core journeys have not been certified at 9/10."
+  ],
+  "goal_status": "active",
+  "goal_achieved": false,
+  "privacy": "Sanitized facts only. No user/device/account/host names, profile values or hashes, credentials, private paths, process identifiers, raw designated requirements, accessibility trees or screenshots are included.",
+  "historical_receipts": "Prior native failures, recoveries, cleaned-up fixtures and release receipts remain unchanged. This checkpoint supersedes release-pending facts only; it does not retroactively expand any historical native acceptance."
+}
