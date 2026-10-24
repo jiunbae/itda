@@ -28,7 +28,7 @@ try{
  const checkout=execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim();assert(/^[a-f0-9]{40}$/.test(process.env.ITDA_EXPECTED_SOURCE_SHA||'')&&checkout===process.env.ITDA_EXPECTED_SOURCE_SHA&&checkout===process.env.GITHUB_SHA,'Expected source SHA must equal same-job checkout and event SHA');
  report.provenance={checkout,run_id:process.env.GITHUB_RUN_ID,run_attempt:process.env.GITHUB_RUN_ATTEMPT,binary_sha256:hash(path.join(repo,'target/release/itda.exe')),driver_sha256:hash(fileURLToPath(import.meta.url)),native_driver_sha256:hash(path.join(repo,'scripts/fixtures/windows-drop-driver.cs')),sftp_fixture_sha256:hash(path.join(repo,'scripts/fixtures/read-only-sftp-drop.py')),build:'same-job windows-release.ps1 non-release candidate'};
  const initial=fresh('initial');report.environment=initial;
- if(initial.status==='prerequisite-unavailable'){report.status='prerequisite-unavailable';report.unmet=initial.unmet;}
+ if(initial.status==='prerequisite-unavailable'){report.status='prerequisite-unavailable';report.reason='prerequisite-unavailable; not verified';report.unmet=initial.unmet;process.exitCode=2;}
  else {
  assert(initial.status==='eligible-for-owned-drop','Unexpected preflight status');
  root=fs.mkdtempSync(path.join(os.tmpdir(),'itda-native-idle-'));root=control('workspace').root;startup=control('startup');
@@ -40,7 +40,7 @@ try{
  const data=path.join(root,'data/Itda');fs.mkdirSync(data,{recursive:true});fs.mkdirSync(path.join(root,'drop-destination'));
  const fixtureId='native-drop-fixture';
  fs.writeFileSync(path.join(data,'hosts.json'),JSON.stringify([{id:fixtureId,name:'Owned SFTP fixture',host:'127.0.0.1',os:'mac',user:'',opts:{},files:{method:'sftp',host:'127.0.0.1',port:config.port,user:''}}]));fs.writeFileSync(path.join(data,'accounts.json'),'[]');
- fs.writeFileSync(path.join(data,'settings.json'),JSON.stringify({onboarded:true,theme:'light',tray:false,notify:false,announce:false,auto_update:false,thumbnails:false,web:{on:false},share:{on:false},hp:{on:false}}));
+ fs.writeFileSync(path.join(data,'settings.json'),JSON.stringify({onboarded:true,theme:'light',tray:false,notify:false,announce:false,auto_update:false,thumbnails:false,web:{on:false},share:{on:false}}));
  fs.writeFileSync(path.join(data,'known_hosts'),`[127.0.0.1]:${config.port} ${config.host_key_type} ${config.host_key_base64}\n`);
  const candidate=path.join(root,'itda.exe');fs.copyFileSync(path.join(repo,'target/release/itda.exe'),candidate);assert(hash(candidate)===report.provenance.binary_sha256,'Copied exe differs');
  const l=net.createServer();await new Promise(r=>l.listen(0,'127.0.0.1',r));report.debug_port=l.address().port;await new Promise(r=>l.close(r));
@@ -87,12 +87,25 @@ try{
  report.read_timing_review=report.checks.filter(c=>c.reads_before_release?.length).map(c=>({scenario:c.check,before_release:c.reads_before_release,before_explorer:c.reads_before_explorer}));
  report.status=report.read_timing_review.length?'functional-passed-read-timing-review':'passed';
  }
-}catch(error){report.error=config?.password?error.message.replaceAll(config.password,'[redacted]'):error.message;report.status=report.error.includes('prerequisite-unavailable:')?'prerequisite-unavailable':'failed';if(report.status==='failed')process.exitCode=1;}
+}catch(error){report.error=config?.password?error.message.replaceAll(config.password,'[redacted]'):error.message;report.status=report.error.includes('prerequisite-unavailable:')?'prerequisite-unavailable':'failed';if(report.status==='prerequisite-unavailable'){report.reason='prerequisite-unavailable; not verified';process.exitCode=2;}else process.exitCode=1;}
 finally{
  const errors=[];
+ const originalOutcome={status:report.status,error:report.error,reason:report.reason};
  try{
   if(controller){if(controller.exitCode===null){fs.writeFileSync(path.join(root,'command.tmp'),JSON.stringify({op:'stop',request:randomUUID()}));fs.renameSync(path.join(root,'command.tmp'),path.join(root,'command.json'));}const result=await Promise.race([controllerExit,sleep(15000).then(()=>null)]);assert(result,'Controller cleanup timed out; not terminating live native-input driver');controllerQuiesced=true;report.cleanup.controller=result;assert(result.code===0&&!result.signal&&!result.error,'Controller exited abnormally');const p=path.join(root,'controller-cleanup.json');assert(fs.existsSync(p),'Controller cleanup receipt absent');report.cleanup.explorer=read(p);assert(report.cleanup.explorer.explorer_close_requested,'Owned Explorer did not close');}
  }catch(e){errors.push(e.message);}
+ // A source-window emergency release can be accepted by Itda's own DropTarget.
+ // Observe any resulting confirmation; never click/approve it. Closing the owned
+ // app through WM_CLOSE disposes unapproved DOM prompts without starting the copy.
+ if(browser&&controllerQuiesced){
+  report.cleanup.emergency_source_releases=report.checks.filter(c=>c.input?.ReleasePoint==='emergency-source').map(c=>({may_have_offered_source:c.input.EmergencyMayHaveOfferedSource,escape_sent:c.input.EmergencyEscaped}));
+  if(report.cleanup.emergency_source_releases.length)await sleep(1000); // Observe queued native-paste UI only; no input or approval.
+  report.cleanup.unapproved_confirmations=[];
+  for(const context of browser.contexts())for(const page of context.pages()){
+   try{const count=await page.locator('.files-prompt').count();if(count)report.cleanup.unapproved_confirmations.push({count,action:'observed-only; not approved; owned app will be closed'});}catch{}
+  }
+  if(report.cleanup.unapproved_confirmations.length)errors.push('Unexpected unapproved file confirmation after native drag; never auto-approved');
+ }
  try{
   if(child&&!exited&&identity?.hwnd&&identity.hwnd!=='0'&&controllerQuiesced){control('close');await wait(()=>exited,'Candidate did not quit normally',15000,false);}if(child&&controllerQuiesced){report.cleanup.exit=childExit;assert(childExit?.code===0&&!childExit.signal,'Candidate exit was not normal');}
  }catch(e){errors.push(e.message);}
@@ -101,6 +114,6 @@ finally{
  if(browser&&controllerQuiesced)await Promise.race([browser.close().catch(()=>{}),sleep(3000)]);
  try{report.sftp_audit=audit();if(server&&server.exitCode===null){server.kill();await wait(()=>server.exitCode!==null,'Owned SFTP did not stop',5000,false);}report.sftp_audit=audit();if(serverRoot){assert(path.dirname(serverRoot)===os.tmpdir()&&path.basename(serverRoot).startsWith('itda-quality-sftp-'),'SFTP cleanup ownership mismatch');fs.rmSync(serverRoot,{recursive:true,force:true});}if(root&&!errors.length){fs.rmSync(root,{recursive:true,force:true});assert(!fs.existsSync(root),'Private workspace remains');report.cleanup.workspaces_removed=true;}}catch(e){errors.push(e.message);}
  for(const p of [child,server,controller]){p?.stdout?.destroy();p?.stderr?.destroy();p?.unref();}
- report.cleanup.status=errors.length?'failed':'passed';if(errors.length){report.cleanup.errors=errors;report.status='failed';process.exitCode=1;}if(interrupted){report.status='interrupted';process.exitCode=1;}
+ report.cleanup.status=errors.length?'failed':'passed';if(errors.length){report.cleanup.errors=errors;report.original_outcome=originalOutcome;report.status='failed';process.exitCode=1;}if(interrupted){report.status='interrupted';process.exitCode=1;}
  fs.writeFileSync(path.join(artifact,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({status:report.status,cleanup:report.cleanup.status,receipt:path.join(artifact,'result.json')}));
 }

@@ -52,6 +52,25 @@ jobs:
           }
           Add-Type -Path scripts/fixtures/windows-drop-driver.cs
           # Compilation only: no Layout(), Drag(), shell creation, native input or app launch.
+      - name: Compile and run read-only prerequisites (no app or native input)
+        shell: pwsh
+        run: |
+          # This also compiles the separate inline ItdaDropProbe P/Invokes.
+          & pwsh -NoProfile -NonInteractive -File scripts/windows-native-drop-preflight.ps1 -Receipt test-artifacts/native-drop-read-only/preflight.json
+          $probeExit=$LASTEXITCODE
+          $r=Get-Content test-artifacts/native-drop-read-only/preflight.json -Raw|ConvertFrom-Json
+          if ($probeExit -eq 2 -and $r.status -eq 'prerequisite-unavailable') {
+            "Read-only prerequisites unavailable: $($r.unmet -join ', '); native NOT RUN / NOT VERIFIED." | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          if ($probeExit -ne 0 -or $r.status -ne 'eligible-for-owned-drop') { throw 'Read-only prerequisite probe/compilation failed' }
+          'Read-only probe eligible; native NOT RUN / NOT VERIFIED by this PR job.' | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-native-drop-read-only-prerequisites
+          path: test-artifacts/native-drop-read-only/
+          if-no-files-found: error
       - name: Build candidate (no execution)
         shell: pwsh
         run: ./scripts/windows-release.ps1
@@ -94,7 +113,9 @@ jobs:
           ITDA_EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
         run: |
           node scripts/windows-native-drop-ci-e2e.mjs
-          if ($LASTEXITCODE) { throw 'Native functional proof failed; inspect receipt' }
+          $nativeExit=$LASTEXITCODE
+          if ($nativeExit -eq 2) { throw 'prerequisite-unavailable; not verified (native proof did not pass); inspect receipt' }
+          if ($nativeExit -ne 0) { throw 'Native functional proof failed; inspect receipt' }
       - name: Record narrow scope and prerequisite result
         if: always()
         shell: pwsh

@@ -69,7 +69,7 @@ public class ItdaQualityWindow {
   finally{if(desktop!=IntPtr.Zero)CloseDesktop(desktop);if(data!=IntPtr.Zero)WTSFreeMemory(data);}
  }
  static void Pump(int ms){DateTime end=DateTime.UtcNow.AddMilliseconds(ms);do{MSG m;while(PeekMessage(out m,IntPtr.Zero,0,0,1)){TranslateMessage(ref m);DispatchMessage(ref m);}Thread.Sleep(2);}while(DateTime.UtcNow<end);}
- public class DragInfo { public string Outcome,ReleasePoint,Error;public bool Interfered;public uint InputBefore,InputAfter,IdleBefore,TickBefore;public string FocusRestore,CursorRestore;public uint PriorForegroundPid;public long StartedUnixMs,ReleaseUnixMs,FirstExplorerUnixMs;public uint[] GuardBefore,GuardAfter; }
+ public class DragInfo { public string Outcome,ReleasePoint,Error;public bool Interfered,EmergencyEscaped,EmergencyMayHaveOfferedSource;public uint InputBefore,InputAfter,IdleBefore,TickBefore;public string FocusRestore,CursorRestore;public uint PriorForegroundPid;public long StartedUnixMs,ReleaseUnixMs,FirstExplorerUnixMs;public uint[] GuardBefore,GuardAfter; }
  public class LayoutInfo { public long File,Explorer; public int OriginX,OriginY,TargetX,TargetY; public RECT Work,Source,Destination;public uint SourcePid,ExplorerPid,SourceIntegrity,ExplorerIntegrity;public int Session;public string SourceStartedTicks,ExplorerStartedTicks; }
  public static LayoutInfo Layout(uint pid,long main,long explorer) {
   IntPtr old=SetThreadDpiAwarenessContext(new IntPtr(-4)); if(old==IntPtr.Zero)throw new Exception("PMv2 context unavailable");
@@ -174,9 +174,9 @@ public class ItdaQualityWindow {
   finally{
    if(down){
     // No key to a foreign foreground, and no abort commit to Explorer.
-    try{AssertOwners(layout);AssertDesktop();IntPtr fg=GetForegroundWindow();if(fg==file||fg==explorer){Escape(marker);Pump(80);}
+    try{AssertOwners(layout);AssertDesktop();IntPtr fg=GetForegroundWindow();if(fg==file||fg==explorer){Escape(marker);info.EmergencyEscaped=true;Pump(80);}
      if(GetAncestor(WindowFromPoint(new POINT{X=x,Y=y}),2)!=file)throw new Exception("No owned emergency release point");
-     Move(x,y,marker);Mouse(4,marker);down=false;info.ReleasePoint="emergency-source";
+     Move(x,y,marker);Mouse(4,marker);down=false;info.EmergencyMayHaveOfferedSource=!info.EmergencyEscaped;info.ReleasePoint="emergency-source";
     }catch{info.ReleasePoint="emergency-release-failed";}
    }
    LASTINPUTINFO after=new LASTINPUTINFO();after.Size=(uint)Marshal.SizeOf(typeof(LASTINPUTINFO));if(GetLastInputInfo(ref after))info.InputAfter=after.Time;
