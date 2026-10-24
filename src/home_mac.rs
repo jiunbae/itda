@@ -554,6 +554,7 @@ fn flush(target: &EventLoopWindowTarget<Wake>) {
 // ---------------------------------------------------------------- the app
 
 const MENU_SETTINGS: &str = "settings";
+const MENU_QUIT: &str = "quit";
 const MENU_NEW: &str = "new";
 const MENU_FILE_NEW: &str = "file-window-new";
 const MENU_HELP: &str = "help";
@@ -570,6 +571,8 @@ fn menu() -> Menu {
     };
     let item = |id: &str, text: &str, key: Option<(Modifiers, Code)>| MenuItem::with_id(id, text, true, key.map(|(m, c)| Accelerator::new(Some(m), c)));
     let settings = item(MENU_SETTINGS, "설정…", Some((Modifiers::SUPER, Code::Comma)));
+    // Not the predefined Quit: it would end the app at once, mid-transfer.
+    let quit = item(MENU_QUIT, &format!("{} 종료", crate::APP), Some((Modifiers::SUPER, Code::KeyQ)));
     let app = Submenu::with_items(
         crate::APP,
         true,
@@ -584,7 +587,7 @@ fn menu() -> Menu {
             &PredefinedMenuItem::hide_others(None),
             &PredefinedMenuItem::show_all(None),
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::quit(None),
+            &quit,
         ],
     );
     let new = item(MENU_NEW, "새 연결", Some((Modifiers::SUPER, Code::KeyN)));
@@ -620,6 +623,7 @@ fn menu() -> Menu {
 }
 
 fn on_menu(id: &muda::MenuId) {
+    if id.as_ref() == MENU_QUIT { super::request_quit(super::QuitReason::User); return; }
     if let Some(action)=match id.as_ref(){"file-copy"=>Some("copy"),"file-cut"=>Some("cut"),"file-paste"=>Some("paste"),_=>None}{
         let script=format!("window.ItdaFiles?.nativeEdit({})",json!(action));
         let handled=FILE_PANES.with(|p|{let p=p.borrow();if let Some(p)=p.values().find(|p|p.window.is_focused()){let _=p.view.evaluate_script(&script);true}else{false}})
@@ -787,6 +791,11 @@ pub fn run(quick: Option<String>) {
         *flow = ControlFlow::Wait;
         let _ = &menu;
         match event {
+            // Launched: AppKit has installed its own quit handler by now; ours replaces it.
+            TaoEvent::NewEvents(tao::event::StartCause::Init) => {
+                quit_event::install();
+                let _ = crate::files::PROMISE_BUSY.set(native_files::promise_busy);
+            }
             TaoEvent::LoopDestroyed => {
                 permission_guide::shutdown();
                 crate::files::shutdown();
@@ -866,5 +875,54 @@ mod apple_screen_sharing_tests {
         for address in ["", "mac/path", "user:password@mac", "mac?x", "mac#x", "mac\n--args", "https://mac", "mac:0", "mac:no", "mac:65536", "[::1]oops", "[::1]:bad"] {
             assert!(apple_screen_sharing_url(address, "user").is_err(), "accepted {address}");
         }
+    }
+}
+
+/// The Dock's Quit, logging out and AppleScript `quit` reach the app as the Apple Event
+/// kAEQuitApplication. AppKit's own handler terminates at once (tao answers no
+/// applicationShouldTerminate:), so a handler of ours takes that event (public
+/// NSAppleEventManager API; tao's delegate is not touched) and asks like ⌘Q does.
+mod quit_event {
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyObject, NSObject};
+    use objc2::{define_class, msg_send, sel, AnyThread, ClassType};
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[name = "ItdaQuitEventHandler"]
+        struct Handler;
+        impl Handler {
+            #[unsafe(method(handleQuit:withReplyEvent:))]
+            fn handle_quit(&self, _event: &AnyObject, reply: &AnyObject) {
+                // Not ending now (asked, or transfers being stopped): the sender (logout,
+                // AppleScript) is told the quit was cancelled, userCanceledErr. A quit the
+                // person then confirms is their own.
+                if !super::super::request_quit(super::super::QuitReason::User) {
+                    unsafe {
+                        let code: *mut AnyObject = msg_send![objc2::class!(NSAppleEventDescriptor), descriptorWithInt32: USER_CANCELED];
+                        if let Some(code) = code.as_ref() {
+                            let _: () = msg_send![reply, setParamDescriptor: code, forKeyword: KEY_ERROR_NUMBER];
+                        }
+                    }
+                }
+            }
+        }
+    );
+
+    const AEVT: u32 = u32::from_be_bytes(*b"aevt");
+    const KEY_ERROR_NUMBER: u32 = u32::from_be_bytes(*b"errn");
+    const USER_CANCELED: i32 = -128;
+    const QUIT: u32 = u32::from_be_bytes(*b"quit");
+
+    pub fn install() {
+        let handler: Retained<Handler> = unsafe { msg_send![Handler::alloc(), init] };
+        unsafe {
+            let manager: *mut AnyObject = msg_send![objc2::class!(NSAppleEventManager), sharedAppleEventManager];
+            let Some(manager) = manager.as_ref() else { return };
+            let _: () = msg_send![manager, setEventHandler: &*handler, andSelector: sel!(handleQuit:withReplyEvent:), forEventClass: AEVT, andEventID: QUIT];
+        }
+        // The manager doesn't retain its handler: kept for the app's life.
+        std::mem::forget(handler);
+        let _ = Handler::class();
     }
 }

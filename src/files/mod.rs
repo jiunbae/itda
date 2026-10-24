@@ -74,6 +74,8 @@ pub type Emit = Arc<dyn Fn(Value) + Send + Sync>;
 pub struct Control {
     cancel: AtomicBool,
     child: Mutex<Vec<Arc<Mutex<Child>>>>,
+    /// A Finder promise's write: counted through its operation queue, not as a job.
+    promise: AtomicBool,
 }
 impl Control {
     pub fn check(&self) -> io::Result<()> {
@@ -120,15 +122,24 @@ fn connecting() -> &'static Mutex<HashMap<String, Arc<Control>>> {
 }
 type Jobs = HashMap<String, (String, Arc<Control>)>;
 static JOBS: OnceLock<Mutex<Jobs>> = OnceLock::new();
-/// Transfers queued or running, also those whose file window was already closed.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-/// A registered running transfer of `id` owned by page `window`, and whether it was stopped.
+/// A running transfer of `id` owned by page `window`, registered for a test; dropping it
+/// removes it again (the registry is the whole process's).
 #[cfg(test)]
-pub fn test_job(id: &str, window: &str) -> (String, impl Fn() -> bool) {
+pub struct TestJob { pub job: String, control: Arc<Control> }
+#[cfg(test)]
+impl TestJob {
+    pub fn stopped(&self) -> bool { self.control.check().is_err() }
+    /// The job's thread ended (after a cancel, its cleanup).
+    pub fn finish(&self) { jobs().lock().unwrap().remove(&self.job); }
+}
+#[cfg(test)]
+impl Drop for TestJob { fn drop(&mut self) { self.finish(); } }
+#[cfg(test)]
+pub fn test_job(id: &str, window: &str) -> TestJob {
     let job = crate::store::new_id();
     let control = Arc::new(Control::default());
     jobs().lock().unwrap().insert(job.clone(), (scoped_id(id, &json!(window)), control.clone()));
-    (job, move || control.check().is_err())
+    TestJob { job, control }
 }
 /// That transfer seen once by its page, which then closed.
 #[cfg(test)]
@@ -137,8 +148,77 @@ pub fn test_adopt(window: &str, id: &str, job: &str) {
     t(json!({"type":"files_job","id":id,"job":job,"state":"running"}));
     release_page(window);
 }
+/// Transfers and exports queued or running (also those whose file window was already
+/// closed), and files being handed to Explorer from a drag: what quitting would cut off.
 pub fn active_jobs() -> usize {
-    jobs().lock().unwrap().len()
+    let n = jobs().lock().unwrap().values().filter(|(_, c)| !c.promise.load(Ordering::Relaxed)).count();
+    n + native_busy()
+}
+/// What the system file managers are still being given: Windows drag streams, and Finder
+/// promises queued or being written (their writes are jobs too, counted only here).
+fn native_busy() -> usize {
+    let streams = { #[cfg(windows)] { vdrag::active_streams() } #[cfg(not(windows))] { 0 } };
+    streams + PROMISE_BUSY.get().map_or(0, |f| f())
+}
+/// Set by the Mac app: how many Finder promise operations are queued or running.
+pub static PROMISE_BUSY: OnceLock<fn() -> usize> = OnceLock::new();
+thread_local! {
+    /// This thread is writing a Finder promise (files_mac sets it around export::write).
+    pub static PROMISE_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// Stop every transfer, export and drag stream; each cleans up (staged files, sessions) and
+/// leaves `active_jobs` as it ends.
+pub fn stop_jobs() {
+    for (_, c) in jobs().lock().unwrap().values() {
+        c.stop();
+    }
+    #[cfg(windows)]
+    vdrag::stop_all();
+}
+/// Whether new transfers may start: not while Itda is quitting or installing an update.
+#[cfg(not(test))]
+static ACCEPTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+#[cfg(not(test))]
+fn set_accepting(on: bool) { ACCEPTING.store(on, std::sync::atomic::Ordering::SeqCst) }
+// Tests run side by side: each test thread has its own (a quit test must not refuse
+// another test's transfers).
+#[cfg(test)]
+thread_local! { static ACCEPTING_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) }; }
+#[cfg(test)]
+fn set_accepting(on: bool) { ACCEPTING_HERE.with(|a| a.set(on)) }
+pub(crate) const CLOSING: &str = "Itda를 종료하는 중이라 새 전송을 시작하지 않았습니다";
+/// Registers a job unless Itda is closing; checked and inserted under the registry's lock, so
+/// a quit that closed admissions and then found nothing running can't miss one.
+fn admit(job: &str, key: &str, control: &Arc<Control>) -> bool {
+    let mut all = jobs().lock().unwrap();
+    if !accepting() { return false; }
+    all.insert(job.to_string(), (key.to_string(), control.clone()));
+    true
+}
+/// Registers a drag stream (a whole drag, or one more file read) unless Itda is closing; one
+/// step, like `admit`, so a closing count can't miss it.
+#[cfg(any(windows, test))]
+pub(crate) fn admit_stream(control: &Arc<Control>) -> Option<u64> {
+    let _all = jobs().lock().unwrap();
+    accepting().then(|| vdrag::register(control))
+}
+/// Stop admitting new transfers; what is running then (the decision for quitting now).
+pub fn close_admissions() -> usize {
+    let n = {
+        let all = jobs().lock().unwrap();
+        set_accepting(false);
+        all.values().filter(|(_, c)| !c.promise.load(Ordering::Relaxed)).count()
+    };
+    n + native_busy()
+}
+pub fn open_admissions() {
+    set_accepting(true);
+}
+pub fn accepting() -> bool {
+    #[cfg(not(test))]
+    return ACCEPTING.load(std::sync::atomic::Ordering::SeqCst);
+    #[cfg(test)]
+    return ACCEPTING_HERE.with(|a| a.get());
 }
 fn jobs() -> &'static Mutex<Jobs> {
     JOBS.get_or_init(Default::default)
@@ -1191,6 +1271,28 @@ mod tests {
     }
 
     use super::*;
+
+    /// A quit that closed admissions sees every transfer already in, and refuses later ones.
+    #[test]
+    fn closed_admissions_refuse_new_transfers() {
+        let control = Arc::new(Control::default());
+        let job = crate::store::new_id();
+        let before = close_admissions();
+        assert!(!admit(&job, "admit-test", &control), "a transfer started while Itda was closing");
+        assert!(!jobs().lock().unwrap().contains_key(&job));
+        let _ = before;
+        open_admissions();
+        assert!(admit(&job, "admit-test", &control));
+        jobs().lock().unwrap().remove(&job);
+        // A refused transfer is reported as failed, with nothing started.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        close_admissions();
+        transfer::start(json!({"from":"local","to":"local","source":"/a","destination":"/b","names":["x"],"policy":"keep","req":"r"}), Host::default(), Arc::new(move |e: Value| { let _ = tx.lock().unwrap().send(e); }));
+        open_admissions();
+        let e = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert!(e["state"] == "failed" && e["error"] == CLOSING, "{e}");
+    }
 
     #[test]
     fn closing_a_page_keeps_its_running_transfer_until_completion() {

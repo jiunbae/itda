@@ -19,6 +19,7 @@ use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD};
+use windows_sys::Win32::System::Shutdown::{ShutdownBlockReasonCreate, ShutdownBlockReasonDestroy};
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Shell::*;
@@ -649,9 +650,8 @@ unsafe fn tray_menu(h: HWND) {
             show_home();
             send(json!({"type": "go", "page": "share"}));
         }
-        TRAY_QUIT => {
-            DestroyWindow(h);
-        }
+        // Asks first while files are being copied (home.rs); ends the app otherwise.
+        TRAY_QUIT => { super::request_quit(super::QuitReason::User); }
         c if c >= TRAY_HOST0 && c < TRAY_HOST0 + recent.len() => {
             let id = recent[c - TRAY_HOST0].id.clone();
             if store::get_password(&id).is_none() && !home(|m| m.sessions.contains_key(&id)) {
@@ -750,6 +750,19 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
             let r = &*(lp as *const RECT);
             SetWindowPos(h, null_mut(), r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
         }
+        // Windows is shutting down or logging off: not while files are being copied (the
+        // reason shows on the shutdown screen); the person is asked in Itda.
+        WM_QUERYENDSESSION if h == hwnd() => {
+            let n = crate::files::active_jobs();
+            if n > 0 {
+                let why = wide(&format!("파일 전송 {n}개가 진행 중입니다"));
+                ShutdownBlockReasonCreate(h, why.as_ptr());
+                super::request_quit_later(super::QuitReason::User);
+                return 0;
+            }
+            ShutdownBlockReasonDestroy(h);
+            return 1;
+        }
         WM_CLOSE => {
             if h != hwnd() { DestroyWindow(h); return 0; }
             let (tray, hinted) = home(|m| (m.settings.tray, m.settings.tray_hint_shown));
@@ -764,7 +777,8 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
                     super::notify("Itda는 계속 실행 중입니다", "알림 영역 아이콘에서 다시 열거나 종료할 수 있습니다.");
                 }
             } else {
-                DestroyWindow(h);
+                // Closing the home ends the app: asked first while files are being copied.
+                super::request_quit(super::QuitReason::User);
             }
         }
         WM_DESTROY => {

@@ -10,7 +10,7 @@ import {chromium} from 'playwright';
 const repo=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const output=path.join(repo,'test-artifacts/native-idle/result.json');
 fs.mkdirSync(path.dirname(output),{recursive:true});
-const report={status:'failed',scope:'Baseline main without PR102 quit guard: validates the native CI harness only. No transfer/guard, physical-input, shutdown/logout or persona-score acceptance',checks:[],cleanup:{status:'not-started'}};
+const report={status:'failed',scope:'Native CI idle harness only. An idle default reply does not verify busy quit-guard routing, even when guard code is present. No transfer, physical-input, shutdown/logout or persona-score acceptance',checks:[],cleanup:{status:'not-started'}};
 let root,child,identity,browser,ended,interrupted,originalStartup,exited=false;
 for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{interrupted=signal;});
 const assert=(ok,message)=>{if(!ok)throw Error(message);};

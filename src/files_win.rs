@@ -39,13 +39,17 @@ pub fn drag(v: &Value, post: fn(Value)) -> Result<(), String> {
     struct Finish(String);
     impl Drop for Finish { fn drop(&mut self) { crate::files::drag::finish(&self.0); } }
     let _finish = Finish(token.clone());
+    let mut remote_source = None;
     let data: IDataObject = if files.iter().all(|f| !f.remote) { tagged_local(local(&files)?,&token) } else {
-        let data=remote(files, post)?;
-        set_marker(&data,&token).map_err(|e|e.to_string())?;
+        let (data, source)=remote(files, post)?;
+        set_marker(&data,&token).map_err(|e|{source.end_batch();e.to_string()})?;
+        remote_source=Some(source);
         data
     };
     let mut effect = DROPEFFECT_NONE;
     let hr = unsafe { DoDragDrop(&data, &IDropSource::from(Source), DROPEFFECT_COPY, &mut effect) };
+    // Over now, unless Explorer goes on copying in the background (EndOperation ends it).
+    if let Some(source) = &remote_source { source.drop_done(); }
     if hr.is_err() {
         return Err(format!("끌어 놓기를 시작할 수 없습니다 ({})", windows::core::Error::from(hr)));
     }
@@ -89,10 +93,12 @@ fn local(files: &[export::File]) -> Result<IDataObject, String> {
 
 // ---------------------------------------------------------------- remote files
 
-fn remote(files: Vec<export::File>, post: fn(Value)) -> Result<IDataObject, String> {
+fn remote(files: Vec<export::File>, post: fn(Value)) -> Result<(IDataObject, Arc<vdrag::Remote>), String> {
     let source = vdrag::Remote::of(&files).map_err(|e| e.to_string())?;
     let id = files[0].id.clone();
-    in_mta(move || Virtual::new(files, source, id, post).into()).map_err(|e| e.to_string())
+    let kept = source.clone();
+    let data = in_mta(move || Virtual::new(files, source, id, post).into()).map_err(|e| { kept.end_batch(); e.to_string() })?;
+    Ok((data, kept))
 }
 
 /// Make a data object in the multithreaded apartment and hand it to this thread as a proxy.
@@ -315,6 +321,8 @@ impl IDataObjectAsyncCapability_Impl for Virtual_Impl {
     }
     fn StartOperation(&self, _: Ref<IBindCtx>) -> windows::core::Result<()> {
         self.in_op.store(true, Relaxed);
+        // The drag stays running (for quitting) until Explorer's copy ends.
+        self.source.start_operation();
         Ok(())
     }
     fn InOperation(&self) -> windows::core::Result<BOOL> {
@@ -325,6 +333,7 @@ impl IDataObjectAsyncCapability_Impl for Virtual_Impl {
         if hr.is_err() {
             self.source.stop();
         }
+        self.source.end_operation();
         Ok(())
     }
 }
@@ -332,6 +341,7 @@ impl IDataObjectAsyncCapability_Impl for Virtual_Impl {
 impl Drop for Virtual {
     fn drop(&mut self) {
         self.source.stop();
+        self.source.end_batch();
     }
 }
 
