@@ -139,8 +139,8 @@
     },
     {
       "reference": "1a5",
-      "result": "APPROVE",
-      "scope": "Own CI/draft artifact copies, signatures and bounded CLI evidence accepted; release wording subsequently corrected."
+      "result": "REQUEST CHANGES",
+      "scope": "Artifacts, own CI/draft copies, signatures and bounded CLI evidence accepted; release wording required correction, then1a6 approved publication."
     },
     {
       "reference": "1a6",
@@ -337,7 +337,7 @@
   ],
   "qa_guard_history": {
     "initial_verifier_result": "Root file-existence assertion ran before the download completed; private first failure retained.",
-    "resolution": "Waited on the same existing download handles; no download restart, extraction/execution or CI/native rerun to repair the verifier.",
+    "resolution": "Waited on the same existing download handles until exit0, then completed normal read-only artifact verification and extraction. The premature attempt performed no extraction or execution; no download restart or CI/native rerun occurred. Seven headless CLI cases ran once after verification passed.",
     "application_failure_claimed": false
   },
   "history_policy": "All eleven prior iterations, six Explorer attempts including failed cleanup/observation loss, parser failures and rubric/personas remain unchanged. Public1.0.6 cross-host evidence remains separate from1.0.7 static/CLI proof.",
