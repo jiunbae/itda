@@ -13,6 +13,7 @@ use std::num::NonZeroIsize;
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::ptr::{null, null_mut};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicIsize, Ordering::Relaxed};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
@@ -47,7 +48,7 @@ thread_local! {
     /// borrowed shared (except when created and dropped).
     static FILE_PAGES: RefCell<std::collections::HashMap<String, String>> = RefCell::new(std::collections::HashMap::new());
     static FILE_HOSTS: RefCell<std::collections::HashMap<String, String>> = RefCell::new(std::collections::HashMap::new());
-    static FILE_PANES: RefCell<std::collections::HashMap<String, (isize, WebView)>> = RefCell::new(std::collections::HashMap::new());
+    static FILE_PANES: RefCell<std::collections::HashMap<String, (isize, Rc<WebView>)>> = RefCell::new(std::collections::HashMap::new());
     static WEBVIEW: RefCell<Option<WebView>> = const { RefCell::new(None) };
 }
 
@@ -209,17 +210,39 @@ pub(super) fn native_file_drag(v: Value) {
     let source=v["_native_source"].as_i64().unwrap_or(0) as isize;
     let window=v["source_window"].as_str().unwrap_or("");
     let page=v["window"].as_str().unwrap_or("");
-    // Copy identities out: neither a RefCell nor a registry lock crosses OLE.
-    if FILE_PANES.with(|p|p.borrow().get(window).map(|(h,_)|*h))!=Some(source) || FILE_PAGES.with(|p|p.borrow().get(window).cloned()).as_deref()!=Some(page) { return; }
     let gesture=crate::files_win::gesture::registry().lock().unwrap().claim(source,window,page,v["gesture"].as_str().unwrap_or(""),v["sequence"].as_u64().unwrap_or(0));
-    let Some(gesture)=gesture else {return};
+    let Some(gesture)=gesture else {
+        let page=crate::files_win::gesture::registry().lock().unwrap().reject(source,window,v["gesture"].as_str().unwrap_or(""),v["sequence"].as_u64().unwrap_or(0));
+        if let Some(page)=page{reject_drag(&v,&page);}return;
+    };
     struct Retire(isize,std::sync::Arc<crate::files_win::gesture::Gesture>);
     impl Drop for Retire {fn drop(&mut self){crate::files_win::gesture::registry().lock().unwrap().finish(self.0,&self.1);}}
     let _retire=Retire(source,gesture.clone());
+    // A claimed request always retires, even if its UI identity changed in the
+    // queue. Copy values out; no RefCell or registry borrow crosses OLE/send.
+    if FILE_PANES.with(|p|p.borrow().get(window).map(|(h,_)|*h))!=Some(source) || FILE_PAGES.with(|p|p.borrow().get(window).cloned()).as_deref()!=Some(page) {
+        gesture.cancel();reject_drag(&v,page);return;
+    }
     let id = crate::files::scoped_id(v["id"].as_str().unwrap_or(""), &v["window"]);
-    if let Err(e) = crate::files_win::drag(&v, |m| super::post(Event::Page(m)),gesture.clone(),source) {
+    if let Err(e) = crate::files_win::drag(&v, |m| super::post(Event::Page(m)),gesture.clone(),source,focus_drag_webview) {
         super::post(Event::Page(json!({"type":"files_native_drag_end","id":id,"gesture":gesture.nonce,"error":e,"trace":crate::files_win::drag_trace(&gesture,"failed")})));
     }
+}
+
+fn reject_drag(v: &Value, page: &str) {
+    let id=crate::files::scoped_id(v["id"].as_str().unwrap_or(""),&json!(page));
+    super::post(Event::Page(json!({"type":"files_native_drag_end","id":id,"gesture":v["gesture"],"error":"끌어 놓을 파일 창을 다시 확인하세요","trace":{"phase":"rejected","entered_ole":false,"ole_drop_committed":false,"query_count":0,"first_query":false,"cancelled":true,"escape_seen":false,"focus_verified":false}})));
+}
+
+fn focus_drag_webview(source: isize, gesture: &std::sync::Arc<crate::files_win::gesture::Gesture>) {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
+    // Clone the owned WebView first. MoveFocus can re-enter/close the window;
+    // keeping an Rc alive avoids a RefCell borrow or dangling raw pointer.
+    let view=FILE_PANES.with(|p|p.borrow().get(&gesture.window).filter(|(h,_)|*h==source).map(|(_,v)|v.clone()));
+    let Some(view)=view else {return};
+    if !crate::files_win::gesture::registry().lock().unwrap().owns(source,gesture){return;}
+    unsafe {let h=source as HWND;if IsWindow(h)==0 || GetAncestor(GetForegroundWindow(),GA_ROOT)!=h || GetFocus()!=h{return;}}
+    let _=view.focus();
 }
 
 /// Only this native window's callback can bind a page and admit/cancel its
@@ -229,20 +252,26 @@ fn native_drag_ipc(source: isize, native_window: Option<&str>, v: &mut Value) ->
     let cmd=v["cmd"].as_str().unwrap_or("");
     if !["files_window_context","files_native_drag","files_native_drag_cancel"].contains(&cmd){return false;}
     let Some(window)=native_window else {return true};
-    if FILE_PANES.with(|p|p.borrow().get(window).map(|(h,_)|*h))!=Some(source){return true;}
+    if FILE_PANES.with(|p|p.borrow().get(window).map(|(h,_)|*h))!=Some(source){
+        if cmd=="files_native_drag" {let page=crate::files_win::gesture::registry().lock().unwrap().reject(source,window,v["gesture"].as_str().unwrap_or(""),v["sequence"].as_u64().unwrap_or(0));if let Some(page)=page{reject_drag(v,&page);}}
+        return true;
+    }
     if cmd=="files_window_context" {
         if v["window"]!=window{return true;}
         return !crate::files_win::gesture::registry().lock().unwrap().bind(source,window,v["page"].as_str().unwrap_or(""));
     }
-    if v["source_window"]!=window{return true;}
+    if v["source_window"]!=window{
+        if cmd=="files_native_drag" {let page=crate::files_win::gesture::registry().lock().unwrap().reject(source,window,v["gesture"].as_str().unwrap_or(""),v["sequence"].as_u64().unwrap_or(0));if let Some(page)=page{reject_drag(v,&page);}}
+        return true;
+    }
     let mut registry=crate::files_win::gesture::registry().lock().unwrap();
     let (page,nonce,sequence)=(v["window"].as_str().unwrap_or(""),v["gesture"].as_str().unwrap_or(""),v["sequence"].as_u64().unwrap_or(0));
     if cmd=="files_native_drag_cancel" {registry.cancel(source,window,page,nonce,sequence);return true;}
     if registry.active_matches(source,window,page,nonce,sequence){return true;}
     if registry.begin(source,window,page,nonce,sequence).is_none(){
+        let page=registry.reject(source,window,nonce,sequence);
         drop(registry);
-        let id=crate::files::scoped_id(v["id"].as_str().unwrap_or(""),&v["window"]);
-        super::post(Event::Page(json!({"type":"files_native_drag_end","id":id,"gesture":v["gesture"],"error":"끌어 놓을 파일 창을 다시 확인하세요","trace":{"phase":"rejected","entered_ole":false,"query_count":0,"first_query":false,"cancelled":true,"escape_seen":false,"focus_verified":false}})));
+        if let Some(page)=page{reject_drag(v,&page);}
         return true;
     }
     v["_native_source"]=json!(source);
@@ -310,7 +339,7 @@ fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&s
             format!("?files={host}&fileWindow={}", file_window.unwrap_or(""))
         }).unwrap_or_default()))
         .with_background_color(bg)
-        .with_initialization_script(&format!("window.itdaNativeDrag=true;window.ITDA_FILE_PATH={};window.ITDA_WINDOW_CHROME={};", json!(file_path), file.is_some()))
+        .with_initialization_script(&format!("window.itdaNativeDrag={};window.ITDA_FILE_PATH={};window.ITDA_WINDOW_CHROME={};", file_window.is_some(), json!(file_path), file.is_some()))
         .with_devtools(devtools)
         .with_hotkeys_zoom(false)
         .with_browser_accelerator_keys(false)
@@ -391,7 +420,7 @@ fn file_window(id: &str, close: bool, new: bool, path: Option<&str>) {
         CHROMELESS.with(|c| c.borrow_mut().insert(h as isize));
         place_file_window(h);
         match build_webview(h, home(|m| is_dark(&m.settings)), Some(id), Some(&window_id), path) {
-            Ok(view) => { FILE_HOSTS.with(|p| {p.borrow_mut().insert(window_id.clone(), id.into());}); FILE_PANES.with(|p| { p.borrow_mut().insert(window_id, (h as isize, view)); }); resize_webview(h); ShowWindow(h, SW_SHOW); SetForegroundWindow(h); super::send_hosts(); }
+            Ok(view) => { FILE_HOSTS.with(|p| {p.borrow_mut().insert(window_id.clone(), id.into());}); FILE_PANES.with(|p| { p.borrow_mut().insert(window_id, (h as isize, Rc::new(view))); }); resize_webview(h); ShowWindow(h, SW_SHOW); SetForegroundWindow(h); super::send_hosts(); }
             Err(e) => { crate::log!("files webview: {e}"); DestroyWindow(h); }
         }
     }

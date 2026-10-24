@@ -30,7 +30,7 @@ use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
 pub(crate) mod gesture;
 
 pub(crate) fn drag_trace(g: &gesture::Gesture, phase: &str) -> Value {
-    json!({"phase":phase,"entered_ole":g.entered_ole.load(std::sync::atomic::Ordering::SeqCst),
+    json!({"phase":phase,"entered_ole":g.entered_ole.load(std::sync::atomic::Ordering::SeqCst),"ole_drop_committed":g.ole_drop_committed.load(std::sync::atomic::Ordering::SeqCst),
         "query_count":g.queries.load(std::sync::atomic::Ordering::SeqCst),"first_query":g.queries.load(std::sync::atomic::Ordering::SeqCst)>0,
         "escape_seen":g.escape_seen.load(std::sync::atomic::Ordering::SeqCst),"cancelled":g.cancelled(),
         "focus_verified":g.focus_verified.load(std::sync::atomic::Ordering::SeqCst)})
@@ -42,22 +42,24 @@ fn primary_down() -> bool {
 }
 fn escape_down() -> bool { unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x1b) < 0 } }
 
-struct SourceFocus { source: isize, saved: isize }
+struct SourceFocus { source: isize, saved: isize, gesture: Arc<gesture::Gesture>, fallback: fn(isize,&Arc<gesture::Gesture>) }
 impl SourceFocus {
     fn verified(&self) -> bool {
         use windows_sys::Win32::UI::{Input::KeyboardAndMouse::GetFocus, WindowsAndMessaging::*};
+        if !gesture::registry().lock().unwrap().owns(self.source,&self.gesture) {return false;}
         unsafe { let h=self.source as windows_sys::Win32::Foundation::HWND; IsWindow(h)!=0 && GetFocus()==h && GetAncestor(GetForegroundWindow(),GA_ROOT)==h }
     }
-    fn take(source: isize) -> Result<Self, String> {
+    fn take(source: isize, gesture: Arc<gesture::Gesture>, fallback: fn(isize,&Arc<gesture::Gesture>)) -> Result<Self, String> {
         use windows_sys::Win32::{System::Threading::*, UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*}};
         unsafe {
+            if !gesture::registry().lock().unwrap().owns(source,&gesture) {return Err("파일 창이 바뀌었습니다".into());}
             let h=source as windows_sys::Win32::Foundation::HWND;
             let mut pid=0;
             if IsWindow(h)==0 || GetWindowThreadProcessId(h,&mut pid)!=GetCurrentThreadId() || pid!=GetCurrentProcessId() || GetAncestor(GetForegroundWindow(),GA_ROOT)!=h {
                 return Err("파일 창의 입력 위치가 바뀌었습니다. 다시 끌어 놓아 주세요".into());
             }
             let saved=GetFocus();
-            let guard=Self {source,saved:saved as isize};
+            let guard=Self {source,saved:saved as isize,gesture,fallback};
             SetFocus(h);
             if GetFocus()!=h || GetAncestor(GetForegroundWindow(),GA_ROOT)!=h { return Err("파일 창으로 입력을 전달할 수 없습니다".into()); }
             Ok(guard)
@@ -67,24 +69,28 @@ impl SourceFocus {
 impl Drop for SourceFocus {
     fn drop(&mut self) {
         use windows_sys::Win32::UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*};
+        if !gesture::registry().lock().unwrap().owns(self.source,&self.gesture) {return;}
         unsafe {
             let h=self.source as windows_sys::Win32::Foundation::HWND;
             let saved=self.saved as windows_sys::Win32::Foundation::HWND;
-            if gesture::restore_focus(IsWindow(h)!=0 && GetAncestor(GetForegroundWindow(),GA_ROOT)==h,
-                GetFocus()==h, !saved.is_null() && IsWindow(saved)!=0 && GetAncestor(saved,GA_ROOT)==h) { SetFocus(saved); }
+            let foreground=IsWindow(h)!=0 && GetAncestor(GetForegroundWindow(),GA_ROOT)==h;
+            let focused=GetFocus()==h;
+            let saved_owned=!saved.is_null() && saved!=h && IsWindow(saved)!=0 && GetAncestor(saved,GA_ROOT)==h;
+            if gesture::restore_focus(foreground,focused,saved_owned) { SetFocus(saved);if GetFocus()==h {(self.fallback)(self.source,&self.gesture);} }
+            else if foreground && focused { (self.fallback)(self.source,&self.gesture); }
         }
     }
 }
 
 /// Start the drag (the mouse button is still down: the page hands over at its edge). The
 /// outcome is posted as files_native_drag_end; Err: it couldn't start.
-pub fn drag(v: &Value, post: fn(Value), gesture: Arc<gesture::Gesture>, source_hwnd: isize) -> Result<(), String> {
+pub fn drag(v: &Value, post: fn(Value), gesture: Arc<gesture::Gesture>, source_hwnd: isize, focus_webview: fn(isize,&Arc<gesture::Gesture>)) -> Result<(), String> {
     let id = crate::files::scoped_id(v["id"].as_str().unwrap_or(""), &v["window"]);
     let cancelled = || post(json!({"type":"files_native_drag_end","id":id,"gesture":gesture.nonce,"dropped":false,"trace":drag_trace(&gesture,"early_cancel")}));
     if !gesture.admit(primary_down(),escape_down()) { cancelled(); return Ok(()); }
     // The renderer owns a different keyboard input path. Focus our own native
     // window before preparation, without activating or attaching a foreign queue.
-    let focus=SourceFocus::take(source_hwnd)?;
+    let focus=SourceFocus::take(source_hwnd,gesture.clone(),focus_webview)?;
     gesture.focus_verified.store(true,std::sync::atomic::Ordering::SeqCst);
     if !gesture.admit(primary_down(),escape_down()) { cancelled(); return Ok(()); }
     ole()?;
@@ -116,20 +122,22 @@ pub fn drag(v: &Value, post: fn(Value), gesture: Arc<gesture::Gesture>, source_h
     let mut effect = DROPEFFECT_NONE;
     gesture.entered_ole.store(true,std::sync::atomic::Ordering::SeqCst);
     let hr = unsafe { DoDragDrop(&data, &IDropSource::from(Source {gesture:gesture.clone()}), DROPEFFECT_COPY, &mut effect) };
+    let committed=hr==DRAGDROP_S_DROP && effect!=DROPEFFECT_NONE;
+    gesture.ole_drop_committed.store(committed,std::sync::atomic::Ordering::SeqCst);
+    // Preserve the actual OLE commit in trace if cancellation arrived too late;
+    // it must not be mistaken for proof that the target never received a drop.
+    let accepted=committed && !gesture.cancelled();
     // A cancelled/failed drag must stop any early target reads, even if a
     // receiver already negotiated asynchronous extraction. Only an actual
     // accepted drop may keep its batch until EndOperation.
-    if let Some(source) = &remote_source {
-        if hr != DRAGDROP_S_DROP || gesture.cancelled() { source.stop(); source.end_batch(); }
-        else { source.drop_done(); }
-    }
+    if let Some(source) = &remote_source { source.drop_done(accepted); }
     // Rendering errors are reported once, at this gesture's terminal event;
     // an early data-object error must not re-enable the renderer during OLE.
     if let Some(error)=remote_failure.and_then(|e| {let error=e.lock().unwrap().clone();error}) { return Err(error); }
     if hr.is_err() {
         return Err(format!("끌어 놓기를 시작할 수 없습니다 ({})", windows::core::Error::from(hr)));
     }
-    post(json!({"type":"files_native_drag_end","id":id,"gesture":gesture.nonce,"dropped":hr == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE,"trace":drag_trace(&gesture,"ole_returned")}));
+    post(json!({"type":"files_native_drag_end","id":id,"gesture":gesture.nonce,"dropped":accepted,"trace":drag_trace(&gesture,"ole_returned")}));
     Ok(())
 }
 

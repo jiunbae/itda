@@ -11,6 +11,7 @@ pub struct Gesture {
     cancelled: AtomicBool,
     started: AtomicBool,
     pub entered_ole: AtomicBool,
+    pub ole_drop_committed: AtomicBool,
     pub focus_verified: AtomicBool,
     pub escape_seen: AtomicBool,
     pub queries: AtomicU32,
@@ -40,7 +41,7 @@ impl Gesture {
 pub enum Decision { Continue, Cancel, Drop }
 
 struct Page {
-    window: String, page: String, last_sequence: u64, active: Option<Arc<Gesture>>,
+    window: String, page: String, last_sequence: u64, last_rejected: Option<(String,u64)>, active: Option<Arc<Gesture>>,
 }
 #[derive(Default)]
 pub struct Registry { pages: HashMap<isize, Page> }
@@ -50,7 +51,7 @@ impl Registry {
         if hwnd == 0 || window.is_empty() || !token(page) { return false; }
         if self.pages.get(&hwnd).is_some_and(|p| p.window == window && p.page == page) { return true; }
         self.remove(hwnd);
-        self.pages.insert(hwnd, Page { window: window.into(), page: page.into(), last_sequence: 0, active: None });
+        self.pages.insert(hwnd, Page { window: window.into(), page: page.into(), last_sequence: 0, last_rejected: None, active: None });
         true
     }
     pub fn begin(&mut self, hwnd: isize, window: &str, page: &str, nonce: &str, sequence: u64) -> Option<Arc<Gesture>> {
@@ -58,7 +59,7 @@ impl Registry {
         if p.window != window || p.page != page || !token(nonce) || sequence == 0 || sequence > 9_007_199_254_740_991 || sequence <= p.last_sequence || p.active.is_some() { return None; }
         p.last_sequence = sequence;
         let g = Arc::new(Gesture { window: window.into(), page: page.into(), nonce: nonce.into(), sequence,
-            cancelled: AtomicBool::new(false), started: AtomicBool::new(false), entered_ole: AtomicBool::new(false), focus_verified: AtomicBool::new(false), escape_seen: AtomicBool::new(false), queries: AtomicU32::new(0) });
+            cancelled: AtomicBool::new(false), started: AtomicBool::new(false), entered_ole: AtomicBool::new(false), ole_drop_committed: AtomicBool::new(false), focus_verified: AtomicBool::new(false), escape_seen: AtomicBool::new(false), queries: AtomicU32::new(0) });
         p.active = Some(g.clone()); Some(g)
     }
     fn find(&self, hwnd: isize, window: &str, page: &str, nonce: &str, sequence: u64) -> Option<Arc<Gesture>> {
@@ -76,6 +77,16 @@ impl Registry {
     }
     pub fn active_matches(&self, hwnd: isize, window: &str, page: &str, nonce: &str, sequence: u64) -> bool {
         self.find(hwnd,window,page,nonce,sequence).is_some()
+    }
+    pub fn owns(&self, hwnd: isize, gesture: &Arc<Gesture>) -> bool {
+        self.find(hwnd,&gesture.window,&gesture.page,&gesture.nonce,gesture.sequence).is_some_and(|g| Arc::ptr_eq(&g,gesture))
+    }
+    /// A rejected begin has no admitted slot. Report it once to this callback's
+    /// actual page, never to a caller-supplied page or over the active nonce.
+    pub fn reject(&mut self, hwnd: isize, window: &str, nonce: &str, sequence: u64) -> Option<String> {
+        let p=self.pages.get_mut(&hwnd)?;
+        if p.window!=window || p.active.as_ref().is_some_and(|g|g.nonce==nonce) || !token(nonce) || sequence==0 || sequence>9_007_199_254_740_991 || p.last_rejected.as_ref().is_some_and(|(n,s)|n==nonce&&*s==sequence) {return None;}
+        p.last_sequence=p.last_sequence.max(sequence);p.last_rejected=Some((nonce.into(),sequence));Some(p.page.clone())
     }
     pub fn cancel_window(&self, hwnd: isize) {
         if let Some(g) = self.pages.get(&hwnd).and_then(|p| p.active.as_ref()) { g.escape(); }
@@ -138,7 +149,8 @@ mod tests {
     }
     #[test] fn reload_close_and_old_finish_retire_without_touching_replacement() {
         let (mut r,g)=setup(); assert!(r.bind(1,"one",NONCE)); assert!(g.cancelled());
-        let next=r.begin(1,"one",NONCE,PAGE,1).unwrap(); r.finish(1,&g); assert!(!next.cancelled());
+        assert!(!r.owns(1,&g));
+        let next=r.begin(1,"one",NONCE,PAGE,1).unwrap(); r.finish(1,&g); assert!(!next.cancelled()); assert!(r.owns(1,&next));
         r.remove(1); assert!(next.cancelled()); assert!(r.claim(1,"one",NONCE,PAGE,1).is_none());
     }
     #[test] fn restore_never_steals_foreign_focus() {
@@ -146,5 +158,19 @@ mod tests {
         assert!(!restore_focus(true,false,true),"The user already focused another child");
         assert!(!restore_focus(true,true,false),"The saved child no longer belongs to the source");
         assert!(restore_focus(true,true,true));
+    }
+    #[test] fn aborted_dispatch_retires_slot_and_rejected_callbacks_report_once() {
+        let (mut r,g)=setup();
+        let claimed=r.claim(1,"one",PAGE,NONCE,1).unwrap();
+        // The UI binding validation failed after claim; its guard retires it.
+        claimed.cancel();r.finish(1,&claimed);
+        assert!(!r.owns(1,&g));
+        assert_eq!(r.reject(1,"one",NONCE,2).as_deref(),Some(PAGE));
+        assert!(r.reject(1,"one",NONCE,2).is_none());
+        let next=r.begin(1,"one",PAGE,PAGE,3).unwrap();
+        assert_eq!(r.reject(1,"one",NONCE,4).as_deref(),Some(PAGE));
+        assert!(r.reject(1,"one",PAGE,3).is_none(),"a rejection must not terminate the real active nonce");
+        assert!(r.claim(1,"one",PAGE,PAGE,3).is_some());
+        assert!(!next.cancelled());
     }
 }
