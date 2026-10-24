@@ -60,7 +60,11 @@ fn clipboard_board() -> Retained<NSPasteboard> {
     if crate::store::override_base().is_some()
         && std::env::var("ITDA_NATIVE_TEST_PRIVATE_PASTEBOARD").as_deref() == Ok("1")
     {
-        TEST_PASTEBOARD.with(|slot| slot.borrow_mut().get_or_insert_with(NSPasteboard::pasteboardWithUniqueName).clone())
+        TEST_PASTEBOARD.with(|slot| slot.borrow_mut().get_or_insert_with(|| {
+            let board = NSPasteboard::pasteboardWithUniqueName();
+            crate::log!("native fixture: private pasteboard {}", board.name());
+            board
+        }).clone())
     } else {
         NSPasteboard::generalPasteboard()
     }
