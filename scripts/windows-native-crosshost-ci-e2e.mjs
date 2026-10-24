@@ -78,6 +78,21 @@ export function sanitizeNativeReply(raw){
  return {request_sha256:digest(raw?.request),error:sanitizeDiagnostic(raw?.error),result:native};
 }
 
+export async function boundedFinalPromptCount(page,ms=1500){
+ let timer;
+ try{const value=await Promise.race([page.locator('.files-prompt').count(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Final prompt observation timeout')),ms);})]);if(!Number.isSafeInteger(value)||value<0)throw Error('Final prompt state unavailable');return value;}
+ finally{clearTimeout(timer);}
+}
+export function failureContext(phase){
+ return {phase:choice(phase,['entry-gate','public-release-verification','fixture-startup','app-readiness','file-window-setup','window-layout','native-drag','drop-observation','copy-preflight','native-copy-confirmation','copy-completion','copy-verification','final-prompt-observation'])||'unknown'};
+}
+export function exitAfterRetainedReceipt(report){
+ // Called ONLY after synchronous result.json persistence. This exits the harness
+ // parent: its CDP connection/pipes end, with no CDP close RPC or child signals.
+ // Owned app/servers/files are not force-closed; runner lifetime is separate.
+ if(report?.cleanup?.resources_retained===true)process.exit(1);
+}
+
 async function main(){
 let chromium;
 const repo=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -92,7 +107,7 @@ function ownedTemp(dir,prefix){assert(!fs.lstatSync(dir).isSymbolicLink()&&sameP
 const read=p=>JSON.parse(fs.readFileSync(p,'utf8').replace(/^\uFEFF/,''));
 const report={status:'failed',scope:'Actual published 1.0.6 binary: disposable Windows tagged native Itda file-window A to different-host file-window B copy; not physical PC, 150% DPI, AT, multi-monitor, Mac or persona-9 acceptance',checks:[],cleanup:{}};
 let root,app,identity,appExit,browser,controller,controllerExit,controllerQuiescent=true,startup,interrupted;
-const servers=[];let binding,controllerSpawnError;const observedPages=[];let observationSequence=0;
+const servers=[];let binding,controllerSpawnError;let phase='entry-gate';const observedPages=[];let observationSequence=0;
 for(const s of ['SIGINT','SIGTERM'])process.once(s,()=>{interrupted=s;});
 const ps=(file,args=[])=>execFileSync('pwsh',['-NoProfile','-NonInteractive','-File',path.join(repo,'scripts',file),...args],{encoding:'utf8',timeout:30000});
 const control=op=>JSON.parse(ps('windows-native-idle-control.ps1',['-Operation',op,'-Root',root,'-AppPid',String(appExit?.stopped?0:app?.pid||0),'-CreationTicks',identity?.creation_ticks||'','-Hwnd',identity?.hwnd||'0','-DebugPort',String(report.debug_port||0)]).replace(/^\uFEFF/,''));
@@ -149,8 +164,8 @@ try{
  report.provenance={harness_checkout:checkout,run_id:process.env.GITHUB_RUN_ID,run_attempt:process.env.GITHUB_RUN_ATTEMPT,driver_sha256:hash(fileURLToPath(import.meta.url)),controller_sha256:hash(path.join(repo,'scripts/windows-native-crosshost-control.ps1')),workflow_sha256:hash(path.join(repo,'.github/workflows/windows-native-crosshost.yml')),requirements_sha256:hash(path.join(repo,'scripts/fixtures/requirements-sftp.txt')),native_driver_sha256:hash(path.join(repo,'scripts/fixtures/windows-crosshost-driver.cs')),destination_fixture_sha256:hash(path.join(repo,'scripts/fixtures/confined-sftp-crosshost.py')),source_fixture_sha256:hash(path.join(repo,'scripts/fixtures/read-only-sftp-drop.py'))};
  report.environment=fresh('initial');
  root=fs.mkdtempSync(path.join(os.tmpdir(),'itda-native-idle-'));root=control('workspace').root;startup=control('startup');
- report.provenance.release=await publicBinary();
- const a=await fixture('read-only-sftp-drop.py'),b=await fixture('confined-sftp-crosshost.py');assert(a.config.port!==b.config.port&&a.root!==b.root,'Source/destination must differ');
+ phase='public-release-verification';report.provenance.release=await publicBinary();
+ phase='fixture-startup';const a=await fixture('read-only-sftp-drop.py'),b=await fixture('confined-sftp-crosshost.py');assert(a.config.port!==b.config.port&&a.root!==b.root,'Source/destination must differ');
  const sourceBefore=tree(path.join(a.root,'files'));assert(a.config.files.length===3&&sourceBefore.filter(v=>v.dir).length===1,'Expected three generated files and one folder');assert(tree(path.join(b.root,'files')).length===0,'Destination not empty');
  const hosts=[{id:'crosshost-source',name:'QA source',os:'mac',config:a.config},{id:'crosshost-destination',name:'QA destination',os:'windows',config:b.config}];
  const data=path.join(root,'data/Itda');fs.mkdirSync(data,{recursive:true});
@@ -158,10 +173,10 @@ try{
  fs.writeFileSync(path.join(data,'settings.json'),JSON.stringify({onboarded:true,theme:'light',tray:false,notify:false,announce:false,auto_update:false,thumbnails:false,web:{on:false},share:{on:false}}));
  fs.writeFileSync(path.join(data,'known_hosts'),hosts.map(h=>`[127.0.0.1]:${h.config.port} ${h.config.host_key_type} ${h.config.host_key_base64}\n`).join(''));
  const listener=net.createServer();await new Promise(r=>listener.listen(0,'127.0.0.1',r));report.debug_port=listener.address().port;await new Promise(r=>listener.close(r));
- app=spawn(path.join(root,'itda.exe'),[],{env:{...process.env,ITDA_DATA_DIR:path.join(root,'data'),ITDA_DEBUG_PORT:String(report.debug_port)},stdio:['ignore','pipe','pipe']});app.stdout.on('data',()=>{});app.stderr.on('data',()=>{});appExit=observeExit(app);let appError;app.once('error',e=>{appError=e;});
+ phase='app-readiness';app=spawn(path.join(root,'itda.exe'),[],{env:{...process.env,ITDA_DATA_DIR:path.join(root,'data'),ITDA_DEBUG_PORT:String(report.debug_port)},stdio:['ignore','pipe','pipe']});app.stdout.on('data',()=>{});app.stderr.on('data',()=>{});appExit=observeExit(app);let appError;app.once('error',e=>{appError=e;});
  await wait(()=>{assert(!appError&&!appExit.stopped,'Published candidate failed/exited');const s=control('inspect');if(identity)assert(identity.creation_ticks===s.creation_ticks,'Candidate PID reused');identity=s;if(!s.alive||s.hwnd==='0'||!s.visible||!s.private_udf||!s.webview_pids.length||!s.listeners.length)return false;assert(s.session_id===report.environment.checks.session.id&&s.window_class==='itda_home'&&/^Itda \(profile [a-f0-9]{16}\)$/.test(s.window_title),'Wrong isolated main window');assert(s.listeners.every(v=>['127.0.0.1','::1'].includes(v.LocalAddress)&&[app.pid,...s.webview_pids].includes(v.OwningProcess)),'CDP not owned/loopback');return true;},'Private WebView2 readiness',60000);
  browser=await chromium.connectOverCDP(`http://127.0.0.1:${report.debug_port}`);const context=browser.contexts()[0],main=context.pages()[0];assert(context.pages().length===1,'Unexpected initial browser pages');observedPages.push({role:'main',page:main});await main.waitForFunction(()=>typeof S!=='undefined'&&S.hosts.length===2);const mainMapping=await main.evaluate(()=>({host:window.ITDA_FILE_HOST||null,window:window.ITDA_FILE_WINDOW||null,page:ItdaFiles.windowToken,title:document.title}));
- const pages=[];
+ phase='file-window-setup';const pages=[];
  for(const h of hosts){const next=context.waitForEvent('page');await main.evaluate(id=>ItdaFiles.launch(S.hosts.find(h=>h.id===id),true),h.id);const p=await next;pages.push(p);observedPages.push({role:h.id==='crosshost-source'?'source':'destination',page:p});await p.locator('.files-setup').waitFor();
   await p.evaluate(()=>{window.qa={connected:false,remote_path:null,begins:[],ends:[],drops:[],transfers:[],jobs:[],releases:[]};const recv=ItdaFiles.message;ItdaFiles.message=function(m){if(m.type==='files_result'&&m.op==='connect'&&m.window===ItdaFiles.windowToken&&m.ok){qa.connected=true;qa.remote_path=m.data.path;}if(m.type==='files_native_drag_end'&&m.window===ItdaFiles.windowToken)qa.ends.push(m);if(m.type==='files_drop'&&m.window===ITDA_FILE_WINDOW)qa.drops.push(m);if(m.type==='files_job'&&m.window===ItdaFiles.windowToken)qa.jobs.push(m);return recv.call(this,m);};const original=window.send;window.send=function(cmd,data){if(cmd==='files_native_drag')qa.begins.push(data);if(cmd==='files'&&data.op==='transfer')qa.transfers.push(data);if(cmd==='files_drag_release')qa.releases.push(data);return original(cmd,data);};});
   await p.evaluate(c=>{const q=s=>document.querySelector('.files-setup '+s);q('[name=account]').value='custom';q('[name=account]').dispatchEvent(new Event('change',{bubbles:true}));q('[name=user]').value=c.user;q('[name=password]').value=c.password;q('[name=save_password]').checked=false;q('[data-connect]').click();},{user:h.config.user,password:h.config.password});
@@ -172,7 +187,7 @@ try{
  assert(mapping[0].host===hosts[0].id&&mapping[1].host===hosts[1].id&&mapping[0].title==='QA source — 파일'&&mapping[1].title==='QA destination — 파일'&&mapping.every(v=>v.window&&v.page)&&mapping[0].window!==mapping[1].window&&mapping[0].page!==mapping[1].page,'Frontend window identity mapping failed');
  binding={source_host:mapping[0].host,target_host:mapping[1].host,source_window:mapping[0].window,target_window:mapping[1].window,source_page:mapping[0].page,target_page:mapping[1].page};
  await captureObservations('connected-before-native-controller');
- controller=spawn('pwsh',['-NoProfile','-NonInteractive','-File',path.join(repo,'scripts/windows-native-crosshost-control.ps1'),'-Root',root,'-AppPid',String(app.pid),'-CreationTicks',identity.creation_ticks,'-MainHwnd',identity.hwnd],{env:process.env,stdio:['ignore','pipe','pipe']});controller.stdout.on('data',()=>{});controller.stderr.on('data',()=>{});controller.once('error',e=>{controllerSpawnError=e.message;});controllerExit=observeExit(controller);controllerQuiescent=false;
+ phase='window-layout';controller=spawn('pwsh',['-NoProfile','-NonInteractive','-File',path.join(repo,'scripts/windows-native-crosshost-control.ps1'),'-Root',root,'-AppPid',String(app.pid),'-CreationTicks',identity.creation_ticks,'-MainHwnd',identity.hwnd],{env:process.env,stdio:['ignore','pipe','pipe']});controller.stdout.on('data',()=>{});controller.stderr.on('data',()=>{});controller.once('error',e=>{controllerSpawnError=e.message;});controllerExit=observeExit(controller);controllerQuiescent=false;
  const controllerError=()=>{assert(!controllerSpawnError,'Controller start failed: '+controllerSpawnError);const p=path.join(root,'controller-error.json');if(fs.existsSync(p)){const r=path.join(root,'reply.json');if(fs.existsSync(r))report.failed_native_reply=sanitizeNativeReply(read(r));throw Error(read(p).error);}};
  await wait(()=>{controllerError();return fs.existsSync(path.join(root,'layout.json'));},'Two-window layout missing');const layout=read(path.join(root,'layout.json'));report.layout=layout;report.binding=sanitizeBinding(mapping.map((m,i)=>({...m,hwnd:i===0?layout.File:layout.Target})));
  assert(layout.SourceTitle===mapping[0].title&&layout.TargetTitle===mapping[1].title&&layout.SourcePid===app.pid&&layout.TargetPid===app.pid&&layout.File!==layout.Target&&layout.SourceIntegrity===layout.TargetIntegrity&&layout.Session===identity.session_id,'Native mapping/IL/session mismatch');
@@ -182,15 +197,15 @@ try{
  const from=await source.locator('[data-pane=remote] [data-index]').first().boundingBox(),to=await target.locator('[data-pane=remote] .files-list').boundingBox();assert(from&&to,'Source/target list geometry absent');
  const dpr=await source.evaluate(()=>devicePixelRatio),tdpr=await target.evaluate(()=>devicePixelRatio);report.viewport=await Promise.all(pages.map(p=>p.evaluate(()=>({width:innerWidth,height:innerHeight,dpr:devicePixelRatio}))));assert(report.viewport.every(v=>v.width>=440&&v.height>=400),'Insufficient CSS viewport');
  const point={x:Math.round(layout.OriginX+(from.x+Math.min(60,from.width/2))*dpr),y:Math.round(layout.OriginY+(from.y+from.height/2)*dpr),target_x:Math.round(layout.TargetOriginX+(to.x+to.width/2)*tdpr),target_y:Math.round(layout.TargetOriginY+(to.y+Math.min(100,to.height/2))*tdpr)};
- await sleep(5500);fresh('drag');report.checks.push({check:'native drag attribution',input:await command({op:'drag',...point})});
- await target.locator('.files-prompt [data-choice=ok]').waitFor({timeout:15000});
+ phase='native-drag';await sleep(5500);fresh('drag');report.checks.push({check:'native drag attribution',input:await command({op:'drag',...point})});
+ phase='drop-observation';await target.locator('.files-prompt [data-choice=ok]').waitFor({timeout:15000});
  await captureObservations('after-native-drag-before-outcome-assertions');
  const state=await Promise.all(pages.map(p=>p.evaluate(()=>qa))),begin=state[0].begins[0],drop=state[1].drops[0];
  assert(state[0].begins.length===1&&begin.items.length===3&&state[0].ends.length===1&&state[0].ends[0].dropped&&!state[0].ends[0].error&&begin.source_window===binding.source_window&&begin.window===binding.source_page&&typeof begin.gesture==='string'&&Number.isSafeInteger(begin.sequence)&&state[0].ends[0].gesture===begin.gesture&&state[0].ends[0].trace?.entered_ole===true&&state[0].ends[0].trace?.ole_drop_committed===true&&state[0].ends[0].trace?.query_count>0,'Native begin/commit/terminal not proven');
  assert(state[0].drops.length===0&&state[1].drops.length===1&&drop.window===binding.target_window&&/^[a-f0-9]{32}$/.test(drop.origin?.drag||'')&&drop.origin.id===binding.source_host&&drop.origin.window===binding.source_page&&drop.origin.side==='remote'&&drop.origin.path==='/'&&drop.origin.names.length===3&&JSON.stringify([...drop.origin.names].sort())===JSON.stringify(begin.items.map(i=>i.name).sort())&&!drop.paths,'Not a genuine private marker drop on target B');
  assert((await Promise.all(context.pages().map(p=>p.locator('.files-prompt').count()))).reduce((x,y)=>x+y,0)===1,'Unexpected/emergency-source prompt; never approve');
  assert(state.every(v=>v.transfers.length===0)&&tree(path.join(b.root,'files')).length===0,'Transfer/write started before explicit confirmation');
- const prompt=await target.evaluate(()=>{const p=document.querySelector('.files-prompt');return {count:document.querySelectorAll('.files-prompt').length,title:p?.querySelector('h2')?.textContent,button:p?.querySelector('[data-choice=ok]')?.textContent,policy:p?.querySelector('[name=policy]')?.value,text:p?.textContent,selection:p?.querySelector('.body > p > b')?.textContent,route_hint:p?.querySelector('.body > p.hint')?.textContent};});
+ phase='copy-preflight';const prompt=await target.evaluate(()=>{const p=document.querySelector('.files-prompt');return {count:document.querySelectorAll('.files-prompt').length,title:p?.querySelector('h2')?.textContent,button:p?.querySelector('[data-choice=ok]')?.textContent,policy:p?.querySelector('[name=policy]')?.value,text:p?.textContent,selection:p?.querySelector('.body > p > b')?.textContent,route_hint:p?.querySelector('.body > p.hint')?.textContent};});
  assert(prompt.title==='파일 복사'&&prompt.button==='복사'&&prompt.policy==='keep'&&prompt.text.includes('QA source')&&prompt.text.includes('QA destination')&&prompt.text.includes('3개 항목'),'Wrong target copy prompt');
  const parsedPrompt=parseCopyPrompt(prompt);assert(parsedPrompt.names_count===drop.origin.names.length&&parsedPrompt.source===drop.origin.path&&parsedPrompt.destination===(await target.evaluate(()=>qa.remote_path)),'Observed prompt route/count mismatch');
  const button=await target.locator('.files-prompt [data-choice=ok]').boundingBox(),heading=await target.locator('.files-prompt h2').boundingBox(),safePoint=nonChoiceHeadingPoint(button,heading);assert(safePoint,'Non-choice heading geometry absent/overlaps Copy');
@@ -202,10 +217,10 @@ try{
  const promptCounts=await Promise.all(context.pages().map(p=>p.locator('.files-prompt').count()));assert(promptCounts.reduce((a,b)=>a+b,0)===1,'Unexpected prompt before Copy');
  const currentButton=await target.locator('.files-prompt [data-choice=ok]').boundingBox(),currentHeading=await target.locator('.files-prompt h2').boundingBox();assert(JSON.stringify(currentButton)===JSON.stringify(button)&&JSON.stringify(currentHeading)===JSON.stringify(heading),'Confirmation geometry changed');
  assert(await target.evaluate(p=>{const e=document.elementFromPoint(p.x,p.y);return !!e?.closest('.files-prompt h2')&&!e.closest('[data-choice]');},safePoint),'Heading is not a live non-choice hit point');
- report.checks.push({check:'one expected target Copy confirmation attribution',input:await command({op:'confirm',x:Math.round(layout.TargetOriginX+(button.x+button.width/2)*tdpr),y:Math.round(layout.TargetOriginY+(button.y+button.height/2)*tdpr),safe_x:Math.round(layout.TargetOriginX+safePoint.x*tdpr),safe_y:Math.round(layout.TargetOriginY+safePoint.y*tdpr),safe_bounds:{left:Math.round(layout.TargetOriginX+heading.x*tdpr),right:Math.round(layout.TargetOriginX+(heading.x+heading.width)*tdpr),top:Math.round(layout.TargetOriginY+heading.y*tdpr),bottom:Math.round(layout.TargetOriginY+(heading.y+heading.height)*tdpr)},prompt:{count:prompt.count,other_prompts:promptCounts.reduce((a,b)=>a+b,0)-prompt.count,title:prompt.title,button:prompt.button,policy:prompt.policy,names_count:parsedPrompt.names_count,source:parsedPrompt.source,destination:live[2].remote_path,route_destination:parsedPrompt.destination,origin:{id:drop.origin.id,window:drop.origin.window,side:drop.origin.side,path:drop.origin.path,names:drop.origin.names,token_sha256:createHash('sha256').update(drop.origin.drag).digest('hex')}}})});
- const expected=sourceBefore.map(v=>({...v,path:v.path.normalize('NFC')})).sort((a,b)=>a.path.localeCompare(b.path));
+ phase='native-copy-confirmation';report.checks.push({check:'one expected target Copy confirmation attribution',input:await command({op:'confirm',x:Math.round(layout.TargetOriginX+(button.x+button.width/2)*tdpr),y:Math.round(layout.TargetOriginY+(button.y+button.height/2)*tdpr),safe_x:Math.round(layout.TargetOriginX+safePoint.x*tdpr),safe_y:Math.round(layout.TargetOriginY+safePoint.y*tdpr),safe_bounds:{left:Math.round(layout.TargetOriginX+heading.x*tdpr),right:Math.round(layout.TargetOriginX+(heading.x+heading.width)*tdpr),top:Math.round(layout.TargetOriginY+heading.y*tdpr),bottom:Math.round(layout.TargetOriginY+(heading.y+heading.height)*tdpr)},prompt:{count:prompt.count,other_prompts:promptCounts.reduce((a,b)=>a+b,0)-prompt.count,title:prompt.title,button:prompt.button,policy:prompt.policy,names_count:parsedPrompt.names_count,source:parsedPrompt.source,destination:live[2].remote_path,route_destination:parsedPrompt.destination,origin:{id:drop.origin.id,window:drop.origin.window,side:drop.origin.side,path:drop.origin.path,names:drop.origin.names,token_sha256:createHash('sha256').update(drop.origin.drag).digest('hex')}}})});
+ phase='copy-completion';const expected=sourceBefore.map(v=>({...v,path:v.path.normalize('NFC')})).sort((a,b)=>a.path.localeCompare(b.path));
  await wait(async()=>{const q=await target.evaluate(()=>qa);assert(!q.jobs.some(j=>j.state==='failed'||j.state==='cancelled'),'Transfer failed/cancelled');return q.jobs.some(j=>j.state==='completed')&&JSON.stringify(tree(path.join(b.root,'files')))===JSON.stringify(expected);},'Completed job/NFC/exact destination tree/hash mismatch',60000);
- await captureObservations('after-copy-before-outcome-assertions');
+ phase='copy-verification';await captureObservations('after-copy-before-outcome-assertions');
  const final=await target.evaluate(()=>qa),request=final.transfers[0];assert(final.transfers.length===1&&request.id===binding.target_host&&request.window===binding.target_page&&request.from_id===binding.source_host&&request.from_window===binding.source_page&&request.from_drag===drop.origin.drag&&request.from==='remote'&&request.to==='remote'&&request.source==='/'&&request.destination==='/'&&request.move===false&&request.policy==='keep','Copy request origin/destination routing mismatch');
  const jobs=new Set(final.jobs.map(j=>j.job).filter(Boolean));assert(jobs.size===1&&final.releases.length===1&&final.releases[0].drag===drop.origin.drag,'Extra jobs or missing lease release');
  assert(JSON.stringify(tree(path.join(a.root,'files')))===JSON.stringify(sourceBefore),'Source changed');
@@ -214,7 +229,7 @@ try{
  assert(writes.filter(e=>e.event==='create').length===3&&writes.filter(e=>e.event==='rename').length===3&&writes.some(e=>e.event==='write'&&e.bytes>0),'Unexpected staging/write contract');
  assert(await source.locator('.files-prompt').count()===0&&await target.locator('.files-prompt').count()===0,'Unexpected remaining prompt');
  report.destination=tree(path.join(b.root,'files'));report.checks.push({check:'actual marker route, one remote-to-remote job, NFC filenames, three hashes, exact tree and original source preserved',result:'PASS'});report.status='passed';
-}catch(e){try{await captureObservations('failure-before-cleanup');}catch{report.observation_write_failed=true;}report.error=e.message;for(const s of servers)if(s.config?.password)report.error=report.error.replaceAll(s.config.password,'[redacted]');report.status=report.error.includes('prerequisite-unavailable:')?'prerequisite-unavailable':'failed';process.exitCode=1;}
+}catch(e){report.failure_context=failureContext(phase);try{await captureObservations('failure-before-cleanup');}catch{report.observation_write_failed=true;}report.error=e.message;for(const s of servers)if(s.config?.password)report.error=report.error.replaceAll(s.config.password,'[redacted]');report.status=report.error.includes('prerequisite-unavailable:')?'prerequisite-unavailable':'failed';process.exitCode=1;}
 finally{
  const errors=[];const original={status:report.status,error:report.error};let observationsPersisted=false;
  try{await captureObservations('final-before-cleanup');observationsPersisted=true;}catch{errors.push('Final observation persistence failed');}
@@ -222,8 +237,8 @@ finally{
  let appStopped=!app,ownedAppProcessCount=root?null:0;
  if(controllerQuiescent){
   try{
-   if(browser){const prompts=await Promise.all(browser.contexts().flatMap(c=>c.pages()).map(p=>p.locator('.files-prompt').count()));report.cleanup.unapproved_prompts=prompts.reduce((a,b)=>a+b,0);if(report.cleanup.unapproved_prompts)errors.push('Unapproved confirmation present; observed only, never clicked');}
-  }catch{errors.push('Final prompt state unavailable');}
+   if(browser){const prompts=await Promise.all(browser.contexts().flatMap(c=>c.pages()).map(p=>boundedFinalPromptCount(p)));report.cleanup.unapproved_prompts=prompts.reduce((a,b)=>a+b,0);if(report.cleanup.unapproved_prompts)errors.push('Unapproved confirmation present; observed only, never clicked');}
+  }catch{report.cleanup.final_prompt_state='unknown';report.cleanup.failure_context=failureContext('final-prompt-observation');errors.push('Final prompt state unavailable');}
   try{
    if(app&&!appExit.stopped&&identity?.hwnd&&identity.hwnd!=='0'){control('close');await wait(()=>appExit.stopped,'App normal close timeout; no force termination',15000,false);}
   }catch(e){errors.push(e.message);}
@@ -254,6 +269,7 @@ finally{
  report.cleanup.status=errors.length?'failed':'passed';if(errors.length){report.original_outcome=original;report.cleanup.errors=errors.map(sanitizeDiagnostic);report.status='failed';process.exitCode=1;}if(interrupted){report.status='interrupted';process.exitCode=1;}
  if(report.error)report.error=sanitizeDiagnostic(report.error);if(report.original_outcome?.error)report.original_outcome.error=sanitizeDiagnostic(report.original_outcome.error);
  fs.mkdirSync(out,{recursive:true});fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({status:report.status,cleanup:report.cleanup.status}));
+ exitAfterRetainedReceipt(report);
 }
 
 }

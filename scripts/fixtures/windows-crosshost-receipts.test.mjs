@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mayTeardownResources,sanitizeWindowObservation,sanitizeTreeObservation,safeFixturePath,parseCopyPrompt,nonChoiceHeadingPoint,sanitizeBinding,sanitizeDiagnostic,sanitizeNativeReply} from '../windows-native-crosshost-ci-e2e.mjs';
+import {mayTeardownResources,sanitizeWindowObservation,sanitizeTreeObservation,safeFixturePath,parseCopyPrompt,nonChoiceHeadingPoint,sanitizeBinding,sanitizeDiagnostic,sanitizeNativeReply,boundedFinalPromptCount,failureContext} from '../windows-native-crosshost-ci-e2e.mjs';
 const sha=s=>createHash('sha256').update(s).digest('hex');
 const complete={controllerQuiescent:true,appStopped:true,ownedAppProcessCount:0,observationsPersisted:true,fixtureProcessesKnown:true};
 test('controller completion alone cannot authorize dependency/resource teardown',()=>{
@@ -65,4 +65,22 @@ test('binding, cleanup errors and native failure replies use explicit allowlists
  const text=JSON.stringify({binding,diagnostic,failed});for(const value of [token,password,'RawExtra','config'])assert.equal(text.includes(value),false);
  assert.equal(binding[0].page_sha256,sha(token));assert.equal(failed.result.Interfered,true);assert.equal(failed.result.TaggedMouseEchoCount,4);assert.equal(failed.result.ReleasePoint,'emergency-release-failed');
  assert.equal(safeFixturePath('/.itda-'+'a'.repeat(16)+'.partial').kind,'unexpected');
+});
+
+test('final prompt query is bounded and unknown is never counted as zero',async()=>{
+ assert.equal(await boundedFinalPromptCount({locator:()=>({count:async()=>2})},20),2);
+ await assert.rejects(boundedFinalPromptCount({locator:()=>({count:async()=>undefined})},20),/Final prompt state unavailable/);
+ await assert.rejects(boundedFinalPromptCount({locator:()=>({count:()=>new Promise(()=>{})})},5),/Final prompt observation timeout/);
+ await assert.rejects(boundedFinalPromptCount({locator:()=>({count:async()=>{throw Error('unavailable');}})},20),/unavailable/);
+});
+test('retained receipt exits only the harness parent despite a live event loop',async()=>{
+ const {spawnSync}=await import('node:child_process');
+ const moduleURL=new URL('../windows-native-crosshost-ci-e2e.mjs',import.meta.url).href;
+ const script=`import {exitAfterRetainedReceipt} from ${JSON.stringify(moduleURL)}; setInterval(()=>{},1000); exitAfterRetainedReceipt({cleanup:{resources_retained:true}});`;
+ const child=spawnSync(process.execPath,['--input-type=module','-e',script],{timeout:2000,encoding:'utf8'});
+ assert.equal(child.error,undefined);assert.equal(child.signal,null);assert.equal(child.status,1);
+});
+test('failure phase is useful but cannot publish caller-controlled error text',()=>{
+ assert.deepEqual(failureContext('native-copy-confirmation'),{phase:'native-copy-confirmation'});
+ assert.deepEqual(failureContext('private-path/password/opaque-token'),{phase:'unknown'});
 });
