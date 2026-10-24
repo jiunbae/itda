@@ -515,6 +515,7 @@ mod tests {
         let src = format!("/{}", root.to_string_lossy().replace('\\', "/"));
         let file = |n: &str, dir: bool| export::File { id: String::new(), remote: true, source: src.clone(), name: n.into(), dir };
         let files = vec![file("Folder", true), file("한글.txt", false)];
+        let remote = source.clone();
         let data = in_mta(move || Virtual::new(files, source, String::new(), |_| {}).into()).unwrap();
         set_marker(&data,"0123456789abcdef0123456789abcdef").unwrap();
         assert_eq!(marker(&data).as_deref(),Some("0123456789abcdef0123456789abcdef"));
@@ -552,6 +553,9 @@ mod tests {
         }
         // Only "copy" is ever offered.
         drop(data);
+        // A stream ends at its last advertised byte, possibly before its download thread has
+        // closed the remote file; sftp-server holds it open (no delete sharing) until then.
+        assert!(remote.finish(std::time::Duration::from_secs(20)), "a download thread did not finish");
         std::fs::remove_dir_all(root).unwrap();
     }
 

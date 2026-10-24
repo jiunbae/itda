@@ -29,6 +29,20 @@ pub struct Remote {
     batch: Mutex<u64>,
     /// Explorer copies on its own thread after the drop (IDataObjectAsyncCapability).
     operation: std::sync::atomic::AtomicBool,
+    /// Download threads still running (a reader can reach its last byte before its thread
+    /// has closed the remote file and parked the session).
+    downloads: (Mutex<usize>, std::sync::Condvar),
+}
+
+/// One running download thread of a `Remote`; counted until the thread is done with its
+/// session (declared first in the thread, so it is dropped last).
+struct Download(Arc<Remote>);
+impl Drop for Download {
+    fn drop(&mut self) {
+        let (count, done) = &self.0.downloads;
+        *count.lock().unwrap() -= 1;
+        done.notify_all();
+    }
 }
 
 impl Remote {
@@ -44,7 +58,7 @@ impl Remote {
     }
 
     pub(crate) fn new(open: Box<dyn Fn(&Control) -> io::Result<Sftp> + Send + Sync>) -> Arc<Remote> {
-        Arc::new(Remote { open, idle: Mutex::new(None), control: Arc::new(Control::default()), batch: Mutex::new(0), operation: Default::default() })
+        Arc::new(Remote { open, idle: Mutex::new(None), control: Arc::new(Control::default()), batch: Mutex::new(0), operation: Default::default(), downloads: Default::default() })
     }
 
     /// Explorer started copying in the background (it ends with `end_operation`).
@@ -107,7 +121,10 @@ impl Remote {
         let Some(live) = live else { return Reader::refused() };
         let (tx, rx) = sync_channel::<io::Result<Vec<u8>>>(16);
         let (me, path, size) = (self.clone(), item.path.clone(), item.size);
+        *self.downloads.0.lock().unwrap() += 1;
+        let running = Download(self.clone());
         std::thread::spawn(move || {
+            let _running = running;
             let mut s = match me.session() {
                 Ok(s) => s,
                 Err(e) => return drop(tx.try_send(Err(e))),
@@ -127,6 +144,18 @@ impl Remote {
     /// Stop every download still running for this drag.
     pub fn stop(&self) {
         self.control.stop();
+    }
+
+    /// Tests: wait (bounded) until every download thread has finished with its remote file,
+    /// then close the parked session, so nothing of this drag holds a file open any more.
+    #[cfg(test)]
+    pub(crate) fn finish(&self, limit: std::time::Duration) -> bool {
+        let (count, done) = &self.downloads;
+        let (left, _) = done.wait_timeout_while(count.lock().unwrap(), limit, |n| *n > 0).unwrap();
+        let finished = *left == 0;
+        drop(left);
+        drop(self.idle.lock().unwrap().take());
+        finished
     }
 }
 
@@ -356,6 +385,8 @@ mod tests {
             let e = remote.plan(&[file("Folder", true)]).unwrap_err();
             assert!(e.to_string().contains("Folder/bad:name"), "{e}");
         }
+        // Windows' sftp-server keeps a file open until its download thread closes it.
+        assert!(remote.finish(std::time::Duration::from_secs(20)), "a download thread did not finish");
         std::fs::remove_dir_all(root).unwrap();
     }
 
