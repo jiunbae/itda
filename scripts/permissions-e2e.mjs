@@ -30,7 +30,16 @@ try{
  await p.screenshot({path:path.join(out,'helper-restart-required.png')});
  await p.setViewportSize({width:420,height:720});
 
- await p.locator('[data-action="restart"]').click();assert(await p.evaluate(()=>sent.at(-1).cmd)==='permission_restart','Restart action not routed');
+ await p.evaluate(()=>itda.recv({type:'permissions',...permissionState,active_transfers:1}));
+ assert(await p.locator('[data-action="restart"]').isDisabled(),'Restart stayed enabled during a file transfer');
+ assert((await p.locator('.recovery-message').textContent()).includes('파일 전송 1개'),'Blocked restart did not explain waiting for transfer completion');
+ const beforeRestart=await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_restart').length);
+ await p.evaluate(()=>document.querySelector('[data-action="restart"]').click());
+ assert(await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_restart').length)===beforeRestart,'Disabled restart sent a relaunch request');
+ await p.evaluate(()=>itda.recv({type:'permissions',...permissionState,active_transfers:0,restart_closing:true}));
+ assert(await p.locator('[data-action="restart"]').isDisabled()&&(await p.locator('.recovery-message').textContent()).includes('종료 또는 업데이트'),'Existing quit intent not explained');
+ await p.evaluate(()=>itda.recv({type:'permissions',...permissionState,active_transfers:0,restart_closing:false}));
+ await p.locator('[data-action="restart"]').click();assert(await p.evaluate(()=>sent.at(-1).cmd)==='permission_restart','Restart did not recover after transfer finished');
  await p.locator('[data-action="status"]').click();assert(await p.evaluate(()=>sent.some(m=>m.cmd==='permission_status'&&m.refresh===true)),'Manual check did not request fresh verification');
  await p.evaluate(()=>{permissionState.configured_screen=false;permissionState.configured_access=false;itda.recv({type:'permissions',...permissionState});});
 
@@ -65,14 +74,17 @@ try{
  assert(await recovery.evaluate(()=>reads)>=2,'Lost first IPC reply permanently blocked checks');
  const recoveredReads=await recovery.evaluate(()=>reads);await recovery.clock.fastForward(1600);
  assert(await recovery.evaluate(()=>reads)>recoveredReads,'Guide without a requested permission did not poll');await recovery.close();
- // The guide beside System Settings: when a switch doesn't take, it opens its help and offers
- // to remove the earlier build's entry (the request goes to the app; nothing is changed here).
+ // The guide beside System Settings offers manual re-registration for the current
+ // app, never an automatic TCC reset against a hardcoded production bundle identity.
  const g=await browser.newPage({viewport:{width:300,height:470}});await g.addInitScript(()=>{window.sent=[];window.ipc={postMessage:raw=>sent.push(JSON.parse(raw))};});
  await g.goto(`http://127.0.0.1:${server.address().port}/permission-guide.html`);await g.evaluate(()=>itda.recv({type:'guide',permission:'screen'}));
  assert(!await g.locator('#stale').evaluate(d=>d.open),'Stale help open before any wait');
  await g.evaluate(()=>itda.recv({type:'guide',stale:true}));assert(await g.locator('#stale').evaluate(d=>d.open),'Stale help not opened');
- await g.locator('[data-act="reset"]').click();assert(await g.evaluate(()=>sent.at(-1).cmd)==='guide_reset','Reset not routed to the app');
- await g.evaluate(()=>itda.recv({type:'guide',stale:false}));assert(!await g.locator('#stale').evaluate(d=>d.open),'Stale help left open after reset');await g.close();
+ assert(await g.locator('[data-act="reset"]').count()===0,'Guide still offers an automatic TCC reset');
+ assert((await g.locator('#stale').textContent()).includes('현재 앱'),'Stale advice did not identify the current app');
+ await g.locator('#stale [data-act="reveal"]').click();assert(await g.evaluate(()=>sent.at(-1).cmd)==='guide_reveal','Current app reveal was not routed');
+ assert(!await g.evaluate(()=>sent.some(m=>m.cmd==='guide_reset')),'Manual advice sent a reset request');
+ await g.evaluate(()=>itda.recv({type:'guide',stale:false}));assert(!await g.locator('#stale').evaluate(d=>d.open),'Stale help left open after permission recovery');await g.close();
  // The remote panel must not confuse a stale report with a running server.
  await p.goto(`http://127.0.0.1:${server.address().port}/index.html`);await p.evaluate(()=>{window.remoteEvents=[];window.done=0;window.cancelled=0;const screen=document.createElement('div');screen.id='existing-session';screen.textContent='connected';document.body.append(screen);ItdaHpSetup.begin({id:'remote',name:'Studio Mac',send:(op,extra)=>remoteEvents.push({op,...extra}),done:()=>done++,cancel:()=>cancelled++});});
  await p.evaluate(()=>ItdaHpSetup.message({id:'other',ready:true,screen:true,access:true}));assert(await p.evaluate(()=>done)===0,'Other device completed setup');
