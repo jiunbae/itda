@@ -809,7 +809,10 @@ pub fn run(quick: Option<String>) {
                 crate::log!("all native views released before thread-local teardown");
             },
             TaoEvent::UserEvent(Wake::Drain) => drain(),
-            TaoEvent::UserEvent(Wake::Quit) => *flow = ControlFlow::Exit,
+            TaoEvent::UserEvent(Wake::Quit) => {
+                native_files::release_test_pasteboard();
+                *flow = ControlFlow::Exit;
+            }
             TaoEvent::UserEvent(Wake::Permissions(v)) => permission_guide::handle(v,target),
             TaoEvent::UserEvent(Wake::Menu(id)) => on_menu(&id),
             // Clicking the Dock icon brings the home back; during permission setup (also when
