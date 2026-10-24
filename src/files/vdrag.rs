@@ -29,14 +29,17 @@ pub struct Remote {
     batch: Mutex<u64>,
     /// Explorer copies on its own thread after the drop (IDataObjectAsyncCapability).
     operation: std::sync::atomic::AtomicBool,
-    /// Download threads still running (a reader can reach its last byte before its thread
-    /// has closed the remote file and parked the session).
+    /// Tests: download threads still running (a reader can reach its last byte before its
+    /// thread has closed the remote file and parked the session).
+    #[cfg(test)]
     downloads: (Mutex<usize>, std::sync::Condvar),
 }
 
-/// One running download thread of a `Remote`; counted until the thread is done with its
+/// Tests: one running download thread of a `Remote`; counted until the thread is done with its
 /// session (declared first in the thread, so it is dropped last).
+#[cfg(test)]
 struct Download(Arc<Remote>);
+#[cfg(test)]
 impl Drop for Download {
     fn drop(&mut self) {
         let (count, done) = &self.0.downloads;
@@ -58,7 +61,7 @@ impl Remote {
     }
 
     pub(crate) fn new(open: Box<dyn Fn(&Control) -> io::Result<Sftp> + Send + Sync>) -> Arc<Remote> {
-        Arc::new(Remote { open, idle: Mutex::new(None), control: Arc::new(Control::default()), batch: Mutex::new(0), operation: Default::default(), downloads: Default::default() })
+        Arc::new(Remote { open, idle: Mutex::new(None), control: Arc::new(Control::default()), batch: Mutex::new(0), operation: Default::default(), #[cfg(test)] downloads: Default::default() })
     }
 
     /// Explorer started copying in the background (it ends with `end_operation`).
@@ -121,9 +124,13 @@ impl Remote {
         let Some(live) = live else { return Reader::refused() };
         let (tx, rx) = sync_channel::<io::Result<Vec<u8>>>(16);
         let (me, path, size) = (self.clone(), item.path.clone(), item.size);
-        *self.downloads.0.lock().unwrap() += 1;
-        let running = Download(self.clone());
+        #[cfg(test)]
+        let running = {
+            *self.downloads.0.lock().unwrap() += 1;
+            Download(self.clone())
+        };
         std::thread::spawn(move || {
+            #[cfg(test)]
             let _running = running;
             let mut s = match me.session() {
                 Ok(s) => s,
