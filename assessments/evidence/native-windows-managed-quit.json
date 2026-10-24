@@ -1,0 +1,1886 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-10-24T00:45:08.711658+00:00",
+  "status": "Native Windows managed-copy quit component verified on this CI candidate; no persona certification or app rollout",
+  "pr": 102,
+  "source_head": "781dee464f5e683210b8721047b7153d4d007993",
+  "merge_commit": "3311e90ac929f5343c3f309a16931e5e88da3450",
+  "run": 40045117966,
+  "run_url": "https://github.com/jiunbae/itda/actions/runs/40045117966",
+  "artifact": {
+    "id": 12540908895,
+    "name": "windows-native-transfer-quit",
+    "downloaded_binary_sha256": "596e4be7a37f8d923a80bc8239247cdafdb4c55317550c8b485e2d487b558014",
+    "both_receipts_match_downloaded_binary": true
+  },
+  "independent_review": "muxa req_18e15017f98745f0_144: FINAL APPROVE after independent run/artifact/both-case/audit verification",
+  "tree_equivalence": {
+    "pr_head": "781dee464f5e683210b8721047b7153d4d007993",
+    "effective_ci_checkout": "5e3fbb54ced1215ccd54ecf57aee1eeca5072965",
+    "final_main_merge": "3311e90ac929f5343c3f309a16931e5e88da3450",
+    "method": "Root manually fetched the CI merge ref and compared the complete git trees: git diff --exit-code for head vs checkout and head vs final main merge, both empty. Post-run equivalence, not an in-driver/cryptographic attestation."
+  },
+  "script_hash_scope": "Receipt hashes are raw Windows checkout bytes; root matched driver/control/fixture hashes against the current committed files after CRLF conversion (or exact bytes).",
+  "cases": {
+    "wait": {
+      "status": "passed",
+      "scenario": "wait",
+      "scope": "Native Windows CI managed SFTP copy using in-app Ctrl+C/Ctrl+V between tabs and owned main-window messages; no real shutdown, physical input, Explorer OLE, user-machine, Mac or persona-score acceptance",
+      "checks": [
+        {
+          "check": "owned native WebView2 and isolated fixture profile; idle query permits exit without closing",
+          "result": "PASS"
+        },
+        {
+          "check": "actual managed SFTP copy held after source bytes and nonzero destination stage",
+          "result": "PASS",
+          "barrier_offset": 2097152,
+          "staging_bytes": 2097152
+        },
+        {
+          "check": "busy query returns 0 and shows guard; cancel preserves app and held real copy",
+          "result": "PASS"
+        },
+        {
+          "check": "main close waits for real copy commit then exits; complete destination hash matches",
+          "result": "PASS",
+          "bytes": 4194304,
+          "sha256": "2b07811057df887086f06a67edc6ebf911de8b6741156e7a2eb1416a4b8b1b2e"
+        },
+        {
+          "check": "generated source preserved",
+          "result": "PASS"
+        }
+      ],
+      "cleanup": {
+        "forced_candidate": false,
+        "remaining_owned_processes": 0,
+        "workspace_removed": true,
+        "startup_unchanged": true,
+        "sftp_workspace_removed": true,
+        "status": "passed"
+      },
+      "environment": {
+        "schema_version": 1,
+        "recorded_at": "2026-10-24T00:34:00.3962820Z",
+        "status": "eligible-for-idle-pilot",
+        "scope": "Windows CI native-test prerequisites only; no app launch or user-journey acceptance",
+        "source": {
+          "checkout": "5e3fbb54ced1215ccd54ecf57aee1eeca5072965",
+          "pr_head": "781dee464f5e683210b8721047b7153d4d007993",
+          "run_id": "40045117966",
+          "run_attempt": "1",
+          "runner_image": "win25-vs2026",
+          "runner_image_version": "20261021.278.1"
+        },
+        "checks": {
+          "session": {
+            "id": 2,
+            "user_interactive": true,
+            "connect_state": 0
+          },
+          "desktop": {
+            "input": "Default",
+            "thread": "Default",
+            "window_station": "WinSta0",
+            "open_input_error": null
+          },
+          "screen": {
+            "width": 1024,
+            "height": 768,
+            "system_dpi": 96,
+            "thread_awareness": 0,
+            "metric_space": "Calling PowerShell DPI context; not certified physical pixels"
+          },
+          "elevated_admin_token": true,
+          "webview2_runtime": [
+            {
+              "hive": "LocalMachine",
+              "view": "Registry32",
+              "version": "155.0.4283.62"
+            }
+          ]
+        },
+        "unmet": [],
+        "references": [
+          "https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution",
+          "https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openinputdesktop",
+          "https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/ne-wtsapi32-wts_connectstate_class"
+        ]
+      },
+      "provenance": {
+        "checkout": "5e3fbb54ced1215ccd54ecf57aee1eeca5072965",
+        "pr_head": "781dee464f5e683210b8721047b7153d4d007993",
+        "run_id": "40045117966",
+        "run_attempt": "1",
+        "binary_sha256": "596e4be7a37f8d923a80bc8239247cdafdb4c55317550c8b485e2d487b558014",
+        "driver_sha256": "0776092d7c5efc12094aa81ad92e05070ce2c4588ca2694a13799e6d22b32924",
+        "control_sha256": "515dde7f96deee930d6ed370e29696c660be4b5e1c85d0c2dcd4c2c6361148d9",
+        "fixture_sha256": "b335226519e8153d1190858786e296c995e7158ef1d9a102b7b4ea74e7e549b2",
+        "build": "Same-job build, not released/signed provenance",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+      },
+      "sftp": {
+        "library": "5.1.0",
+        "port": 63379
+      },
+      "workspace_spelling": {
+        "requested": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\itda-native-idle-b9Xbu7",
+        "canonical": "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\itda-native-idle-b9Xbu7"
+      },
+      "debug_port": 63381,
+      "last_native_state": {
+        "alive": true,
+        "pid": 6696,
+        "creation_ticks": "639283988482970593",
+        "session_id": 2,
+        "hwnd": "524656",
+        "visible": true,
+        "window_class": "itda_home",
+        "window_title": "Itda (profile cff539c7dbb0485b)",
+        "private_udf": true,
+        "webview_pids": [
+          6528,
+          8984,
+          1308,
+          2364,
+          8244,
+          3436
+        ],
+        "listeners": [
+          {
+            "LocalAddress": "127.0.0.1",
+            "OwningProcess": 6528
+          }
+        ]
+      },
+      "native_identity": {
+        "pid": 6696,
+        "hwnd": "524656",
+        "creation_ticks": "639283988482970593",
+        "session_id": 2,
+        "window_class": "itda_home",
+        "window_title": "Itda (profile cff539c7dbb0485b)"
+      },
+      "guard_events": [
+        {
+          "type": "quit_guard",
+          "reason": "quit",
+          "count": 1,
+          "stuck": false,
+          "waiting": false
+        },
+        {
+          "type": "quit_pending",
+          "count": 0
+        },
+        {
+          "type": "quit_guard",
+          "reason": "quit",
+          "count": 1,
+          "stuck": false,
+          "waiting": false
+        },
+        {
+          "type": "quit_pending",
+          "reason": "quit",
+          "count": 1
+        },
+        {
+          "type": "quit_pending",
+          "reason": "quit",
+          "count": 1
+        },
+        {
+          "type": "quit_pending",
+          "reason": "quit",
+          "count": 1
+        },
+        {
+          "type": "quit_pending",
+          "reason": "quit",
+          "count": 1
+        }
+      ],
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "sftp_audit": [
+        {
+          "event": "list",
+          "path": "/"
+        },
+        {
+          "event": "list",
+          "path": "/"
+        },
+        {
+          "event": "read-open",
+          "path": "/payload.bin"
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 0,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 32768,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 65536,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 98304,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 131072,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 163840,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 196608,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 229376,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 262144,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 294912,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 327680,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 360448,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 393216,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 425984,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 458752,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 491520,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 524288,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 557056,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 589824,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 622592,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 655360,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 688128,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 720896,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 753664,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 786432,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 819200,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 851968,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 884736,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 917504,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 950272,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 983040,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1015808,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1048576,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1081344,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1114112,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1146880,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1179648,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1212416,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1245184,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1277952,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1310720,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1343488,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1376256,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1409024,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1441792,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1474560,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1507328,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1540096,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1572864,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1605632,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1638400,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1671168,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1703936,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1736704,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1769472,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1802240,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1835008,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1867776,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1900544,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1933312,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1966080,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1998848,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2031616,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2064384,
+          "length": 32768
+        },
+        {
+          "event": "read-blocked",
+          "path": "/payload.bin",
+          "offset": 2097152
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2097152,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2129920,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2162688,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2195456,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2228224,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2260992,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2293760,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2326528,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2359296,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2392064,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2424832,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2457600,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2490368,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2523136,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2555904,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2588672,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2621440,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2654208,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2686976,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2719744,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2752512,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2785280,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2818048,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2850816,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2883584,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2916352,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2949120,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2981888,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3014656,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3047424,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3080192,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3112960,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3145728,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3178496,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3211264,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3244032,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3276800,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3309568,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3342336,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3375104,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3407872,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3440640,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3473408,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3506176,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3538944,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3571712,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3604480,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3637248,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3670016,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3702784,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3735552,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3768320,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3801088,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3833856,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3866624,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3899392,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3932160,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3964928,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 3997696,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 4030464,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 4063232,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 4096000,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 4128768,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 4161536,
+          "length": 32768
+        },
+        {
+          "event": "list",
+          "path": "/"
+        }
+      ]
+    },
+    "stop": {
+      "status": "passed",
+      "scenario": "stop",
+      "scope": "Native Windows CI managed SFTP copy using in-app Ctrl+C/Ctrl+V between tabs and owned main-window messages; no real shutdown, physical input, Explorer OLE, user-machine, Mac or persona-score acceptance",
+      "checks": [
+        {
+          "check": "owned native WebView2 and isolated fixture profile; idle query permits exit without closing",
+          "result": "PASS"
+        },
+        {
+          "check": "actual managed SFTP copy held after source bytes and nonzero destination stage",
+          "result": "PASS",
+          "barrier_offset": 2097152,
+          "staging_bytes": 2097152
+        },
+        {
+          "check": "busy query returns 0 and shows guard; cancel preserves app and held real copy",
+          "result": "PASS"
+        },
+        {
+          "check": "main close stops held real copy; empty destination/staging after exit is the cleanup discriminator",
+          "result": "PASS",
+          "supporting_observations": "Held SSH transport aborted and no post-barrier source bytes; transport closure alone would also follow abrupt exit"
+        },
+        {
+          "check": "generated source preserved",
+          "result": "PASS"
+        }
+      ],
+      "cleanup": {
+        "forced_candidate": false,
+        "remaining_owned_processes": 0,
+        "workspace_removed": true,
+        "startup_unchanged": true,
+        "sftp_workspace_removed": true,
+        "status": "passed"
+      },
+      "environment": {
+        "schema_version": 1,
+        "recorded_at": "2026-10-24T00:34:32.0426630Z",
+        "status": "eligible-for-idle-pilot",
+        "scope": "Windows CI native-test prerequisites only; no app launch or user-journey acceptance",
+        "source": {
+          "checkout": "5e3fbb54ced1215ccd54ecf57aee1eeca5072965",
+          "pr_head": "781dee464f5e683210b8721047b7153d4d007993",
+          "run_id": "40045117966",
+          "run_attempt": "1",
+          "runner_image": "win25-vs2026",
+          "runner_image_version": "20261021.278.1"
+        },
+        "checks": {
+          "session": {
+            "id": 2,
+            "user_interactive": true,
+            "connect_state": 0
+          },
+          "desktop": {
+            "input": "Default",
+            "thread": "Default",
+            "window_station": "WinSta0",
+            "open_input_error": null
+          },
+          "screen": {
+            "width": 1024,
+            "height": 768,
+            "system_dpi": 96,
+            "thread_awareness": 0,
+            "metric_space": "Calling PowerShell DPI context; not certified physical pixels"
+          },
+          "elevated_admin_token": true,
+          "webview2_runtime": [
+            {
+              "hive": "LocalMachine",
+              "view": "Registry32",
+              "version": "155.0.4283.62"
+            }
+          ]
+        },
+        "unmet": [],
+        "references": [
+          "https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution",
+          "https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openinputdesktop",
+          "https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/ne-wtsapi32-wts_connectstate_class"
+        ]
+      },
+      "provenance": {
+        "checkout": "5e3fbb54ced1215ccd54ecf57aee1eeca5072965",
+        "pr_head": "781dee464f5e683210b8721047b7153d4d007993",
+        "run_id": "40045117966",
+        "run_attempt": "1",
+        "binary_sha256": "596e4be7a37f8d923a80bc8239247cdafdb4c55317550c8b485e2d487b558014",
+        "driver_sha256": "0776092d7c5efc12094aa81ad92e05070ce2c4588ca2694a13799e6d22b32924",
+        "control_sha256": "515dde7f96deee930d6ed370e29696c660be4b5e1c85d0c2dcd4c2c6361148d9",
+        "fixture_sha256": "b335226519e8153d1190858786e296c995e7158ef1d9a102b7b4ea74e7e549b2",
+        "build": "Same-job build, not released/signed provenance",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+      },
+      "sftp": {
+        "library": "5.1.0",
+        "port": 53711
+      },
+      "workspace_spelling": {
+        "requested": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\itda-native-idle-17hx3U",
+        "canonical": "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\itda-native-idle-17hx3U"
+      },
+      "debug_port": 53712,
+      "last_native_state": {
+        "alive": true,
+        "pid": 6536,
+        "creation_ticks": "639283988757086905",
+        "session_id": 2,
+        "hwnd": "721442",
+        "visible": true,
+        "window_class": "itda_home",
+        "window_title": "Itda (profile 6a877187d520b704)",
+        "private_udf": true,
+        "webview_pids": [
+          680,
+          8640,
+          3456,
+          8272,
+          4272,
+          1988
+        ],
+        "listeners": [
+          {
+            "LocalAddress": "127.0.0.1",
+            "OwningProcess": 680
+          }
+        ]
+      },
+      "native_identity": {
+        "pid": 6536,
+        "hwnd": "721442",
+        "creation_ticks": "639283988757086905",
+        "session_id": 2,
+        "window_class": "itda_home",
+        "window_title": "Itda (profile 6a877187d520b704)"
+      },
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "sftp_audit": [
+        {
+          "event": "list",
+          "path": "/"
+        },
+        {
+          "event": "list",
+          "path": "/"
+        },
+        {
+          "event": "read-open",
+          "path": "/payload.bin"
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 0,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 32768,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 65536,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 98304,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 131072,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 163840,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 196608,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 229376,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 262144,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 294912,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 327680,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 360448,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 393216,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 425984,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 458752,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 491520,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 524288,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 557056,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 589824,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 622592,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 655360,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 688128,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 720896,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 753664,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 786432,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 819200,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 851968,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 884736,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 917504,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 950272,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 983040,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1015808,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1048576,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1081344,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1114112,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1146880,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1179648,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1212416,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1245184,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1277952,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1310720,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1343488,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1376256,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1409024,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1441792,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1474560,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1507328,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1540096,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1572864,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1605632,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1638400,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1671168,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1703936,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1736704,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1769472,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1802240,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1835008,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1867776,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1900544,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1933312,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1966080,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 1998848,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2031616,
+          "length": 32768
+        },
+        {
+          "event": "read-bytes",
+          "path": "/payload.bin",
+          "offset": 2064384,
+          "length": 32768
+        },
+        {
+          "event": "read-blocked",
+          "path": "/payload.bin",
+          "offset": 2097152
+        },
+        {
+          "event": "list",
+          "path": "/"
+        },
+        {
+          "event": "read-aborted",
+          "path": "/payload.bin",
+          "offset": 2097152,
+          "reason": "transport_closed"
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2129920
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2162688
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2195456
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2228224
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2260992
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2293760
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2326528
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2359296
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2392064
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2424832
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2457600
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2490368
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2523136
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2555904
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2588672
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2621440
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2654208
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2686976
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2719744
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2752512
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2785280
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2818048
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2850816
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2883584
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2916352
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2949120
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 2981888
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3014656
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3047424
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3080192
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3112960
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3145728
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3178496
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3211264
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3244032
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3276800
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3309568
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3342336
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3375104
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3407872
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3440640
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3473408
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3506176
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3538944
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3571712
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3604480
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3637248
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3670016
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3702784
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3735552
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3768320
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3801088
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3833856
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3866624
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3899392
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3932160
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3964928
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 3997696
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 4030464
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 4063232
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 4096000
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 4128768
+        },
+        {
+          "event": "read-rejected",
+          "path": "/payload.bin",
+          "offset": 4161536
+        }
+      ]
+    }
+  },
+  "interpretation": {
+    "wait": "4MiB real copy held with2MiB staging; busy query0+guard; cancelling quit preserves copy; wait/release produces exactly one complete hash-matching file and normal exit0.",
+    "stop": "Same real held/staged precondition, busy refusal and Cancel; stop exits0 with empty destination/staging, unchanged generated source and no source bytes at/after the held offset. Empty destination/staging is the cleanup discriminator; transport closure alone also follows abrupt exit.",
+    "cleanup": "Both private app/SFTP workspaces removed, no candidate forced, no owned processes left, Run entry unchanged. Fixture cleanup may stop residual private WebView2 children; no claim of autonomous child-process cleanup."
+  },
+  "limits": [
+    "Hosted Windows Server CI VM, elevated token and100% scaling; not the user PC/150% layout acceptance",
+    "Only managed SFTP copy started with in-app Ctrl+C/Ctrl+V between tabs; no physical input, Explorer/OLE or virtual-file-stream quit proof",
+    "Synthetic WM_QUERYENDSESSION and own WM_CLOSE only; no actual OS shutdown/logout/WM_ENDSESSION or tray click",
+    "No native Mac Cmd-Q/AppleEvent/Finder-queue, updater/installer or timeout/Force runtime acceptance",
+    "Production app remains1.0.2; release and installed behavior pending; all verified persona scores remain null"
+  ]
+}

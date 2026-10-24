@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "assessment_id": "itda-quality-2026-10-23",
-  "status": "iteration-6-completion-audit-and-current-captures",
+  "status": "iteration-7-native-windows-managed-quit",
   "goal": "Every persona scores at least 9/10 on verified core journeys, with no unresolved P1/P2 task blockers.",
   "baseline": {
     "commit": "521202025e7c5a984f089c1d1df77e846f63fd33",
@@ -700,6 +700,53 @@
         }
       ],
       "site_deployment_evidence": "assessments/evidence/site-refresh-deployed-2026-10-24.json"
+    },
+    {
+      "id": 7,
+      "status": "in-progress",
+      "changes": [
+        {
+          "pr": 102,
+          "head": "781dee464f5e683210b8721047b7153d4d007993",
+          "merge_commit": "3311e90ac929f5343c3f309a16931e5e88da3450",
+          "scope": "Guarded quit/update/configuration admission, managed jobs and native export lifetimes; current-main integration plus bounded real Windows CI validation",
+          "status": "merged; native managed-Windows-copy component verified; deployment and broader native acceptance pending",
+          "verification": "All5CI checks passed; actual wait5/5+stop5/5; independent final review144; complete-tree equivalence inspected",
+          "evidence": "assessments/evidence/native-windows-managed-quit.json"
+        },
+        {
+          "pr": 110,
+          "merge_commit": "7b82010acc6a8f0e89de98e1cd7a4053848649bf",
+          "status": "merged; optional SCK weak-link/runtime gates; older-OS native acceptance and release pending",
+          "evidence": "assessments/evidence/macos-optional-capture-candidate.json"
+        },
+        {
+          "pr": 111,
+          "merge_commit": "ff5cb7fcf76a6d0568486f2f09f6279e4567412a",
+          "status": "merged; atomic focus oracle and deterministic list replacement proof, not a new product-bug fix",
+          "evidence": "assessments/evidence/transfer-focus-snapshot.json"
+        },
+        {
+          "pr": 112,
+          "merge_commit": "388fe768425495145bdb57e1ec20d3901c7b2f50",
+          "status": "merged; observed hosted native prerequisites, no app acceptance",
+          "evidence": "assessments/evidence/windows-native-ci-prerequisites.json"
+        },
+        {
+          "pr": 113,
+          "merge_commit": "59d8c53f89cf7f514018b20cf28e90ef9899f4cb",
+          "status": "merged; actual baseline native idle harness; first path/driver-lifetime failure repaired and retained",
+          "evidence": "assessments/evidence/windows-native-ci-idle.json"
+        }
+      ],
+      "verification_gaps": [
+        "Hosted Windows Server CI VM, elevated token and100% scaling; not the user PC/150% layout acceptance",
+        "Only managed SFTP copy started with in-app Ctrl+C/Ctrl+V between tabs; no physical input, Explorer/OLE or virtual-file-stream quit proof",
+        "Synthetic WM_QUERYENDSESSION and own WM_CLOSE only; no actual OS shutdown/logout/WM_ENDSESSION or tray click",
+        "No native Mac Cmd-Q/AppleEvent/Finder-queue, updater/installer or timeout/Force runtime acceptance",
+        "Production app remains1.0.2; release and installed behavior pending; all verified persona scores remain null"
+      ],
+      "acceptance_note": "Windows managed-copy quit now has native candidate evidence. Historical offline user-PC prerequisite is no longer the blocker for this component. Every persona score stays null; full core journeys, production installation and the listed platform/input/native-export gaps remain unverified."
     }
   ]
 }
