@@ -2,7 +2,7 @@
   "schema_version": 1,
   "component": "native-windows-explorer-ole",
   "recorded_at": "2026-10-24T05:10:55.208123+00:00",
-  "status": "three-bounded-runs-failed; no-native-OLE-acceptance; first-cleanup-failed-and-later-cleanups-passed",
+  "status": "sixth-run-bounded-hosted-native-OLE-same-source-CI-candidate-passed; five-prior-failed-runs-and-first-cleanup-failure-retained; full-native-journeys-incomplete",
   "release_context": {
     "public_release_at_preparation": "1.0.4",
     "future_checkpoint": "1.0.5",
@@ -122,10 +122,10 @@
     "native_ole_acceptance_after_fix": false
   },
   "verification_gaps": [
-    "All three completed bounded attempts ended before source drag mousedown or OLE/drop/virtual-file release acceptance. The second had owned window moves and possible activation click; the third may have created/laid out owned windows before the JSON-read failure.",
-    "First-run overall cleanup failed; second- and third-run overall cleanup passed. These outcomes remain separate and are not rewritten.",
-    "PR128 source review and four green CI checks did not yield native OLE acceptance: diagnostic run40067869121 failed reading layout JSON. A suspected non-atomic receipt-publication race is under separate follow-up review17a/root work; no corrected runtime result is available.",
-    "Physical user-PC input,150% scaling/layout, assistive technology and full file journeys remain unverified."
+    "The hosted High/High Explorer proof does not certify Medium-integrity Windows11, physical mouse,150% DPI, assistive technology, multiple monitors, native non-target release or complete user journeys. The tested executable differs from the public executable.",
+    "Cross-host native Itda-to-Itda harness7335c7cf1d3545988a71b55166171501d229408c is source-only: six new files; no runtime execution or acceptance.",
+    "The five prior failures retain their original status; first overall cleanup remains failed and fifth missing observations are not reconstructed as a success.",
+    "The sixth pass records one narrow generated-data component proof, with no general laziness or performance guarantee."
   ],
   "goal_achieved": false,
   "privacy": "Only sanitized public source/build identifiers, hashes and scoped outcomes are included. Personal names, raw paths, process IDs, creation ticks, document case IDs, credentials, key fingerprints, screenshots and accessibility trees are omitted.",
@@ -150,11 +150,12 @@
     "Original overall cleanup failed; later diagnosis does not retroactively certify cleanup.",
     "No full persona journey or 9/10 score is established."
   ],
-  "amended_at": "2026-10-24T06:06:07.204537+00:00",
+  "amended_at": "2026-10-24T08:58:25.652336+00:00",
   "current_checkpoint_context": {
-    "public_release": "1.0.5",
-    "source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
-    "note": "The original release_context describes initial preparation at public 1.0.4 and is preserved as history."
+    "public_release": "1.0.6",
+    "source_commit": "26264572c3163fb63ee1bcfc64508d0f187bf72d",
+    "evidence": "assessments/evidence/release-1.0.6-checkpoint.json",
+    "note": "Earlier release contexts and failed receipts are history, not rewritten by this pass."
   },
   "second_failed_run": {
     "run_id": 40065218281,
@@ -328,5 +329,191 @@
       "follow_up_review_reference": "17a",
       "follow_up_scope": "Separate root-owned atomic receipt publication work; no fixed runtime proof is included."
     }
-  }
+  },
+  "status_at_iteration10": "three-bounded-runs-failed; no-native-OLE-acceptance; first-cleanup-failed-and-later-cleanups-passed",
+  "iteration10_verification_gaps": [
+    "All three completed bounded attempts ended before source drag mousedown or OLE/drop/virtual-file release acceptance. The second had owned window moves and possible activation click; the third may have created/laid out owned windows before the JSON-read failure.",
+    "First-run overall cleanup failed; second- and third-run overall cleanup passed. These outcomes remain separate and are not rewritten.",
+    "PR128 source review and four green CI checks did not yield native OLE acceptance: diagnostic run40067869121 failed reading layout JSON. A suspected non-atomic receipt-publication race is under separate follow-up review17a/root work; no corrected runtime result is available.",
+    "Physical user-PC input,150% scaling/layout, assistive technology and full file journeys remain unverified."
+  ],
+  "previous_checkpoint_context": {
+    "public_release": "1.0.5",
+    "source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
+    "note": "The original release_context describes initial preparation at public 1.0.4 and is preserved as history."
+  },
+  "fourth_failed_run": {
+    "run_id": 40069501377,
+    "run_url": "https://github.com/jiunbae/itda/actions/runs/40069501377",
+    "status": "failed",
+    "source_commit": "d78325268a2588beee56af6fa8aab3982b508c29",
+    "candidate_binary_sha256": "3b11851d307a4de96ca3e52ae94f54d549861840e5670c49ec4e32ab21a73c71",
+    "failure_category": "Input aborted/interfered; no retry",
+    "input": {
+      "Outcome": null,
+      "ReleasePoint": null,
+      "Error": "Input/focus changed before mouse down",
+      "Interfered": true,
+      "TaggedEchoCount": 0,
+      "UnmatchedHookCount": 1
+    },
+    "native_outcome_observation_persisted": false,
+    "destination_snapshot_persisted": false,
+    "acceptance_credit": false,
+    "cleanup": {
+      "status": "passed",
+      "app_exit_code": 0,
+      "forced_candidate": false,
+      "remaining_owned_processes": 0,
+      "startup_unchanged": true,
+      "owned_explorer_absence_confirmed": true,
+      "workspaces_removed": true
+    },
+    "interpretation": "Attribution guard aborted before source mousedown; unmatched injected move tagging is a harness diagnostic, not proof of human interference or product acceptance."
+  },
+  "fifth_failed_run": {
+    "run_id": 40070703297,
+    "run_url": "https://github.com/jiunbae/itda/actions/runs/40070703297",
+    "status": "failed",
+    "source_commit": "bd9711b479c9bbf1b8005c93251edc244d458e08",
+    "candidate_binary_sha256": "19271dac6c96e6a72647b0b7c7b106a44d6e18a0793ddceb0c9bac4694027aa7",
+    "failure_category": "Wrong DoDragDrop outcome",
+    "input": {
+      "Outcome": "cancelled-input",
+      "ReleasePoint": "cancel",
+      "Error": null,
+      "Interfered": false,
+      "TaggedEchoCount": 128,
+      "UnmatchedHookCount": 0
+    },
+    "native_outcome_observation_persisted": false,
+    "destination_snapshot_persisted": false,
+    "acceptance_credit": false,
+    "cleanup": {
+      "status": "passed",
+      "app_exit_code": 0,
+      "forced_candidate": false,
+      "remaining_owned_processes": 0,
+      "startup_unchanged": true,
+      "owned_explorer_absence_confirmed": true,
+      "workspaces_removed": true
+    },
+    "observation_loss": "Driver cancel input attribution passed, then Wrong DoDragDrop outcome failed. Native outcome/destination observations were lost because assertions preceded persistence. The source-read audit exists, but exact OLE entry/cancel/outcome cause is not established by this receipt.",
+    "sftp_audit_event_count": 71
+  },
+  "sixth_successful_run": {
+    "run_id": 40075056787,
+    "run_url": "https://github.com/jiunbae/itda/actions/runs/40075056787",
+    "status": "passed",
+    "source_commit": "26264572c3163fb63ee1bcfc64508d0f187bf72d",
+    "version": "1.0.6",
+    "candidate_binary_sha256": "af9c10ce4828b363c475be5766a37d51e5103b57b35be32241520eb0dbd447e5",
+    "public_executable_sha256": "4b2e3bbe5639e7984348ab002e58d155c131293663a6d594892e04cd4acd33b4",
+    "same_executable_as_public_release": false,
+    "receipt_sha256": "5075b483c80bb0af7c4b9520371a270782ba757d2497312f17dc2979a61a28ff",
+    "source_transforms": [
+      {
+        "file": "scripts/windows-native-drop-ci-e2e.mjs",
+        "transform": "LF-to-CRLF",
+        "sha256": "617b5969f4ec139b164395619081a30101815d4b675f6e308ca658270cc4723a"
+      },
+      {
+        "file": "scripts/fixtures/windows-drop-driver.cs",
+        "transform": "LF-to-CRLF",
+        "sha256": "26ccbd7620f972d140823440542ae99030611ef863dc12a89a7cb12ddfde902d"
+      },
+      {
+        "file": "scripts/fixtures/read-only-sftp-drop.py",
+        "transform": "LF-to-CRLF",
+        "sha256": "95879ae534c42900c9297f87b547a39cf3445855ee21540fbc314f9d42cc20bc"
+      }
+    ],
+    "independent_review_reference": "192",
+    "independent_result": "APPROVE",
+    "observed_scope": "Hosted Windows elevated High/High integrity; generated loopback-only SFTP files, tagged injected input and owned Explorer target only.",
+    "scenario_count": 2,
+    "check_record_count": 6,
+    "outcomes": [
+      {
+        "scenario": "cancel",
+        "result": "passed",
+        "native_queries": 62,
+        "committed": false,
+        "escape_seen": true,
+        "read_bytes_before_release": 0,
+        "read_bytes_after_release": 0
+      },
+      {
+        "scenario": "positive",
+        "result": "passed",
+        "native_queries": 62,
+        "committed": true,
+        "escape_seen": false,
+        "read_bytes_before_release": 0,
+        "read_bytes_after_release": 2097612
+      }
+    ],
+    "cancel_destination_empty": true,
+    "positive_initial_snapshot": "One partially written file at native end; preserved as an intermediate observation, not the final result.",
+    "positive_final_destination_count": 3,
+    "all_final_names_nfc": true,
+    "all_destination_and_generated_source_hashes_match": true,
+    "asynchronous_completion": "Final three exact hash-matching files were checked after asynchronous Explorer completion; the earlier partial snapshot is not discarded.",
+    "cleanup": {
+      "status": "passed",
+      "normal_app_exit": true,
+      "forced_candidate": false,
+      "remaining_owned_processes": 0,
+      "owned_explorer_closed": true,
+      "startup_unchanged": true,
+      "workspaces_removed": true,
+      "unapproved_confirmation_count": 0,
+      "emergency_source_release_count": 0
+    },
+    "read_timing": "This run observed no file reads before release. No general laziness or performance guarantee.",
+    "root_verifier_first_failure": {
+      "status": "verification-script-error",
+      "error": "Python3.9 datetime.fromisoformat rejected a PowerShell seven-digit fractional timestamp",
+      "correction": "Normalize precision to microseconds in a read-only parser; native receipt unchanged",
+      "native_rerun": false
+    },
+    "acceptance_limits": [
+      "The same source commit does not make this CI executable identical to the public release executable.",
+      "No physical user-PC/Medium IL/150% scaling/assistive technology/multiple-monitor proof.",
+      "No native non-target release, cross-host Itda-window drag, phone or Mac proof.",
+      "No complete persona journey or9/10 certification."
+    ]
+  },
+  "failed_run_ledger": [
+    {
+      "ordinal": 1,
+      "run_id": 40063806855,
+      "status": "failed",
+      "cleanup_status": "failed"
+    },
+    {
+      "ordinal": 2,
+      "run_id": 40065218281,
+      "status": "failed",
+      "cleanup_status": "passed"
+    },
+    {
+      "ordinal": 3,
+      "run_id": 40067869121,
+      "status": "failed",
+      "cleanup_status": "passed"
+    },
+    {
+      "ordinal": 4,
+      "run_id": 40069501377,
+      "status": "failed",
+      "cleanup_status": "passed"
+    },
+    {
+      "ordinal": 5,
+      "run_id": 40070703297,
+      "status": "failed",
+      "cleanup_status": "passed"
+    }
+  ]
 }

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "assessment_id": "itda-quality-2026-10-23",
-  "status": "iteration-10-1.0.5-public-local-and-bounded-managed-quit-verified-remote-approval-and-native-gates-pending",
+  "status": "iteration-11-public1.0.6-and-bounded-hosted-OLE/owned-CLI-evidence; local1.0.5-and-remote-approval-pending; all-persona-scores-null",
   "goal": "Every persona scores at least 9/10 on verified core journeys, with no unresolved P1/P2 task blockers.",
   "baseline": {
     "commit": "521202025e7c5a984f089c1d1df77e846f63fd33",
@@ -923,46 +923,85 @@
         "All seven verified persona scores remain null; 28 complete core journeys have not been certified at 9/10. No global claim that all P1/P2 defects are absent."
       ],
       "acceptance_note": "Public1.0.5 and local native smoke are verified. The actual managed Wait/Stop regression has root and independent177 approval but is limited to a distinct same-source CI candidate. Two remote Macs remain older/staged-only pending human idle/close information and approval. All three OLE attempts failed before source drag; latest diagnostic JSON-read failure and cleanup PASS do not establish input or OLE acceptance. Historical failures and seven null persona scores remain intact; the active goal has not reached full9/10."
+    },
+    {
+      "id": 11,
+      "status": "in-progress",
+      "changes": [
+        {
+          "release": "1.0.6",
+          "source_commit": "26264572c3163fb63ee1bcfc64508d0f187bf72d",
+          "status": "public download/artifacts/final CI and independent193 review verified; not locally reinstalled",
+          "evidence": "assessments/evidence/release-1.0.6-checkpoint.json"
+        },
+        {
+          "run_id": 40075056787,
+          "status": "sixth native Explorer attempt passed cancel and positive; five prior failures retained",
+          "evidence": "assessments/evidence/native-windows-explorer-ole.json",
+          "acceptance_scope": "Hosted High/High same-source CI candidate only; distinct public executable; first cleanup failure and fifth observation loss remain historical."
+        },
+        {
+          "scope": "public-zip-identical Mac headless import",
+          "status": "four generated owned profiles passed with normal exits and cleanup; no production metadata published",
+          "evidence": "assessments/evidence/release-1.0.6-checkpoint.json"
+        },
+        {
+          "scope": "local install and remote rollout",
+          "status": "local remains1.0.5 with AX errors; older remote apps unchanged; actual manual-close/idle answers pending",
+          "acceptance_scope": "No new native/app/remote action performed by this evidence task."
+        },
+        {
+          "scope": "cross-host harness",
+          "source_commit": "7335c7cf1d3545988a71b55166171501d229408c",
+          "status": "six-file source scaffold only; no runtime evidence",
+          "independent_audit": "197 REQUEST CHANGES: staging allowlist rejected the actual twelve-hex filenames, emergency COPY release and cleanup; root follow-up b0823c9 not natively executed, further fixes in progress."
+        }
+      ],
+      "verification_gaps": [
+        "All seven persona scores and verified scores remain null. The fixed rubric and all 28 core journeys have not been certified at 9/10; no global P1/P2 absence claim.",
+        "Published1.0.6 is not installed locally. Local1.0.5 currently returns window_list_unavailable/app_accessibility_unresponsive(-25204) despite healthy Tacto permissions. A three-second main-thread sample showed event wait; this does not establish crash or deadlock. Manual-close information/approval remains pending.",
+        "Two anonymous remote Macs still run1.0.2 and0.9.24. Explicit idle/no-transfer information and close approval remain pending because legacy Quit is unguarded. No remote close/install/launch/configuration/TCC change or completed fleet rollout is claimed.",
+        "The hosted High/High Explorer proof does not certify Medium-integrity Windows11, physical mouse,150% DPI, assistive technology, multiple monitors, native non-target release or complete user journeys. The tested executable differs from the public executable.",
+        "Cross-host native Itda-to-Itda harness7335c7cf1d3545988a71b55166171501d229408c is source-only: six new files; no runtime execution or acceptance.",
+        "Mac4MiB managed-copy Wait/Stop human approval remains unanswered after the earlier pre-dispatch policy refusal. No new Mac Wait/Stop action or acceptance.",
+        "Mac Finder promise queue, Dock/AppleEvent/logout, actual permission restart/manual re-registration and actual updater/remote-installer/Force lifetimes remain unverified.",
+        "iOS runtime remains blocked by unresolved per-device/process pasteboard isolation; build-only MobileSafari scaffolding is not phone, QR camera, Korean IME, clipboard/privacy or LAN/HTTPS proof.",
+        "Older macOS native runtime including12.0–12.2 remains unverified; weak linking and minimum-version metadata are static artifact facts only.12.3+ remains recommended.",
+        "CLI import smoke uses four generated owned profiles, not remote provisioning/application swap/startup/TCC/native GUI or selected-secret acceptance. Selected JSON sections still use typed serialization; unknown fields are only promised preserved for unselected sections."
+      ],
+      "acceptance_note": "Release1.0.6 and two bounded component proofs advance evidence, not seven full persona scores. Public Windows bytes differ from the hosted native candidate. Local1.0.6 reinstall is pending, AX failure is not diagnosed as crash/deadlock, remote idle/close information and Mac4MiB Wait/Stop approval remain unanswered. No goal completion or global absence of P1/P2 defects is claimed."
     }
   ],
   "current_release": {
-    "version": "1.0.5",
-    "source_commit": "fbcfc83cf81a0fb3e2f049d6e181bcc46b2c1a8e",
-    "tag": "v1.0.5",
-    "release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.5",
-    "published_at": "2026-10-24T05:22:32Z",
-    "status": "public/local1.0.5 and bounded managed-quit regression independently verified; remote rollout staged-only/pending confirmation; full native acceptance incomplete",
-    "final_ci_run": 40065021161,
+    "version": "1.0.6",
+    "source_commit": "26264572c3163fb63ee1bcfc64508d0f187bf72d",
+    "tag": "v1.0.6",
+    "release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.6",
+    "published_at": "2026-10-24T08:13:58Z",
+    "status": "public1.0.6-verified; local1.0.5-and-remote-rollout-pending; full-quality-goal-incomplete",
+    "final_ci_run": 40074901585,
     "all_final_ci_checks": "success",
     "public_asset_sha256": {
-      "Itda-macos-universal.zip": "b09c2c2fffd12d14f217e1bc4a7b09cf8531df6322d6c17b913c10582659a325",
-      "itda.exe": "88a4478d8f89acb884b955ac5bd7a59f0f0d057b64fd787d65598e367d5168dc",
-      "SHA256SUMS.txt": "3a7f363b8d59ae6dd4e0830b7b849fabf2ea5a59711ae9e99b7e17a771b0463f"
+      "Itda-macos-universal.zip": "85c9b73f16016553d6ce5551b3bf6e2857080687eef268b95224745beb6d3414",
+      "itda.exe": "4b2e3bbe5639e7984348ab002e58d155c131293663a6d594892e04cd4acd33b4",
+      "SHA256SUMS.txt": "72b141466a396d3a671ebbbb4aa1b25989430d3ebbb5ce18932908100ec4ffb6"
     },
-    "evidence": "assessments/evidence/release-1.0.5-checkpoint.json",
+    "evidence": "assessments/evidence/release-1.0.6-checkpoint.json",
+    "native_ole_evidence": "assessments/evidence/native-windows-explorer-ole.json",
+    "local_installed_version": "1.0.5",
+    "local_reinstall_status": "pending manual-close answer; AX observation unavailable",
+    "remote_rollout_scope": "Older1.0.2/0.9.24 unchanged; actual idle/close answer pending",
+    "all_remote_machines_updated": false,
+    "goal_status": "active",
+    "verified_persona_scores": "all seven null; no9/10 certification",
+    "supersedes": "Current public release pointer only; all persona objects/rubric/previous iterations and failed outcomes remain historical and unchanged.",
     "resolved_prior_release_defect_ids": [
       "MAC-PERMISSION-RESTART-ADMISSION",
       "MAC-PERMISSION-GUIDE-RESET-DISPATCH",
       "UPDATE-WAIT-STALE-CANCEL-ADMISSION",
       "WINDOWS-USER-QUIT-DURING-UPDATE-INSTALL"
     ],
-    "defect_scope_note": "The four specifically recorded 1.0.4 source defects are addressed by published1.0.5 with unit/browser coverage. This does not establish global absence of P1/P2 defects or affected native runtime acceptance.",
-    "native_managed_quit_regression_evidence": "assessments/evidence/native-windows-quit-1.0.5.json",
-    "native_ole_evidence": "assessments/evidence/native-windows-explorer-ole.json",
-    "goal_status": "active",
-    "verified_persona_scores": "all seven null; no 9/10 certification",
-    "supersedes": "Current public version/local install facts only; all persona objects, rubric and previous iterations/failed-cleaned receipts remain historical and unchanged.",
-    "native_managed_quit_independent_review": "req_18e1605b8669d7f0_177",
-    "remote_rollout_scope": "Two anonymous remote Macs still run1.0.2/0.9.24; verified1.0.5 staged only, idle/close human information and approval pending. Not an all-remote rollout.",
-    "all_remote_machines_updated": false,
-    "explorer_diagnostic_run": {
-      "run_id": 40067869121,
-      "source_commit": "5a8f454e719d6df016c99c6a967453dbda9081cd",
-      "status": "failed: Unexpected end of JSON input before source Drag command/SendInput",
-      "result_available": true,
-      "acceptance_credit": false,
-      "cleanup_status": "passed"
-    },
-    "guide_reset_resolution": "feature-removed-manual-guidance; unreachable reset UI/handler/tccutil path removed and replaced by current-app manual re-registration/reveal guidance"
+    "guide_reset_resolution": "feature-removed-manual-guidance; unreachable reset UI/handler/tccutil path removed and replaced by current-app manual re-registration/reveal guidance",
+    "defect_scope_note": "Cumulative published source fixes and bounded component evidence do not establish global absence of P1/P2 defects or all affected native scenarios."
   }
 }
