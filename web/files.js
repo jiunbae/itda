@@ -1377,7 +1377,10 @@
       return;
     }
     if (action === "native") {
-      if (!networkMode && active === "local") return call("open", { side: "local", path: panes.local.path });
+      if (!networkMode && active === "local") {
+        if (thisPC()) return;
+        return call("reveal_folder", { side: "local", path: panes.local.path });
+      }
       nativePending.add(host.id);
       call("finder");
       return;
@@ -1435,7 +1438,7 @@
           ["split", split ? "분할 보기 끄기" : "분할 보기"],
           ["hidden", hidden ? "숨김 파일 가리기" : "숨김 파일 보기"],
           ["transfers", "전송 내역"], ["refresh", "새로 고침"],
-          null, ...(host.id === NETWORK ? [] : [["settings", "연결 설정…"]]), ["native", `${nativeName}에서 열기`],
+          null, ...(host.id === NETWORK ? [] : [["settings", "연결 설정…"]]), ["native", MAC && active === "local" ? "Finder에서 보기" : `${nativeName}에서 열기`],
         ], rect.right - 210, rect.bottom + 4);
         return;
       }
@@ -1771,7 +1774,7 @@
     const menu = document.createElement("div"), p = panes[active];
     menu.className = `files-menu${MAC ? "" : " windows-menu"}`;
     menu.setAttribute("role", "menu");
-    const disabled = (a) => ["open", "copy", "cut", "trash"].includes(a) ? !p.selected.size : a === "rename" ? p.selected.size !== 1 : a === "paste" ? !clipboard && !nativeFiles() : a === "undo" ? !undo.some(u => u.host === host.id) : a === "split" ? host.id === NETWORK : false;
+    const disabled = (a) => ["open", "copy", "cut", "trash"].includes(a) ? !p.selected.size : a === "rename" ? p.selected.size !== 1 : a === "paste" ? !clipboard && !nativeFiles() : a === "undo" ? !undo.some(u => u.host === host.id) : a === "split" ? host.id === NETWORK : a === "native" ? thisPC() : false;
     menu.innerHTML = items.map((item) => item ? `<button class="btn subtle" role="${item.length > 2 ? item[3] || "menuitemradio" : "menuitem"}" ${item.length > 2 ? `aria-checked="${item[2]}"` : ""} data-action="${item[0]}" aria-label="${esc(item[1])}" ${disabled(item[0]) ? "disabled" : ""}>${esc(item[1])}</button>` : "<hr>").join("");
     menu.onclick = (e) => {
       const button = e.target.closest("button:not(:disabled)");

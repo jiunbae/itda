@@ -61,8 +61,8 @@ try{
       await l.getByRole('button',{name:'동작',exact:true}).click();
       assert(await p.getByRole('menuitem',{name:'분할 보기',exact:true}).isDisabled(),'Device-less split would expose an empty remote pane');
       assert(!await p.getByRole('menuitem',{name:'연결 설정…',exact:true}).count(),'Device-less folders offer remote connection settings');
-      await p.getByRole('menuitem',{name:'Finder에서 열기',exact:true}).click();
-      const opened=(await p.evaluate(()=>testPackets)).filter(m=>m.op==='open').at(-1);
+      await p.getByRole('menuitem',{name:'Finder에서 보기',exact:true}).click();
+      const opened=(await p.evaluate(()=>testPackets)).filter(m=>m.op==='reveal_folder').at(-1);
       assert(opened?.side==='local'&&opened.path==='/Users/alex/Documents','Finder action did not open the current local folder: '+JSON.stringify(opened));
       assert(!(await p.evaluate(()=>testPackets)).some(m=>m.op==='connect'),'Local browsing tried to connect to a remote device');
       assert(!errors.length,errors.join('\n'));
@@ -146,6 +146,9 @@ try{
   // This PC lists the drives; Up from a drive returns to them.
   await layer.locator('[data-network-sidebar] [data-side="local"]').click();
   await row('C:').waitFor();await row('D:').waitFor();
+  await layer.locator('[data-action="more"]').click();
+  assert(await p.getByRole('menuitem',{name:'탐색기에서 열기',exact:true}).isDisabled(),'Virtual This PC passed an empty path to Explorer');
+  await p.keyboard.press('Escape');
   assert((await row('C:').textContent()).includes('로컬 디스크'),'Drive not labelled');
   assert(await layer.locator('[data-action="up"]').isDisabled(),'Up enabled on This PC');
   await row('C:').dblclick();await row('Users').waitFor();
