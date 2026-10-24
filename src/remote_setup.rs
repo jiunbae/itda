@@ -2551,7 +2551,7 @@ mod session_vault_tests {
     fn linked(peer: UnixStream) -> SessionVault {
         let v = SessionVault::new(PathBuf::new());
         peer.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
-        *v.link.borrow_mut() = Some(peer);
+        *v.link.borrow_mut() = Some(Box::new(peer));
         v
     }
 
