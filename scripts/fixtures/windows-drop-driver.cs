@@ -75,13 +75,13 @@ public class ItdaQualityWindow {
  public enum ActivationRoute { NotAttempted,ForegroundRequest,OwnedStatusBarFallback }
  public class UnmatchedHookInfo {
   public HookKind Hook;public HookMessageClass MessageClass;
-  public bool Injected,LowerILInjected,ExtraZero,ExtraEqual,ExtraLow32Equal,LastOwnTargetKnown,MousePointEqualLastOwnTarget;
+  public bool Injected,LowerILInjected,ExtraZero,ExtraEqual,ExtraLow32Equal,ExtraHigh32Zero,LastOwnTargetKnown,MousePointEqualLastOwnTarget;
   public int MsSinceLastTaggedSendAttempt,TaggedSendAttemptCount;
  }
  public class DragInfo { public string Outcome,ReleasePoint,Error;public bool Interfered,EmergencyEscaped,EmergencyMayHaveOfferedSource;public uint InputBefore,InputAfter,IdleBefore,TickBefore;public string FocusRestore,CursorRestore;public uint PriorForegroundPid;public long StartedUnixMs,ReleaseUnixMs,FirstExplorerUnixMs;public uint[] GuardBefore,GuardAfter;
-  public ActivationRoute ActivationPath;public int TaggedEchoCount,TaggedSendAttemptCount,UnmatchedHookCount;public List<UnmatchedHookInfo> UnmatchedHooks=new List<UnmatchedHookInfo>();
+  public ActivationRoute ActivationPath;public int TaggedEchoCount,TaggedMouseEchoCount,TaggedKeyEchoCount,TaggedSendAttemptCount,UnmatchedHookCount;public List<UnmatchedHookInfo> UnmatchedHooks=new List<UnmatchedHookInfo>();
  }
- // Diagnostic receipt only: no marker normalization or input acceptance changes.
+ // Attribution requires full marker equality; diagnostics never normalize it.
  // At most 8 coarse unmatched records, counts capped at 10000 and elapsed ms at
  // 60000 (-1 before any tagged send). No VK, scan, cursor, message ID, flags word
  // or raw extra-info value is retained. Targets stay private to this one Drag.
@@ -100,7 +100,7 @@ public class ItdaQualityWindow {
    if(m==0x20a||m==0x20e)return HookMessageClass.MouseWheel;return HookMessageClass.OtherMouse;
   }
   public void Observe(HookKind hook,IntPtr message,uint flags,UIntPtr extra,bool samePoint){
-   if(extra==marker){info.TaggedEchoCount=Math.Min(10000,info.TaggedEchoCount+1);return;}
+   if(extra==marker){info.TaggedEchoCount=Math.Min(10000,info.TaggedEchoCount+1);if(hook==HookKind.Mouse)info.TaggedMouseEchoCount=Math.Min(10000,info.TaggedMouseEchoCount+1);else info.TaggedKeyEchoCount=Math.Min(10000,info.TaggedKeyEchoCount+1);return;}
    // Every unmatched event still invalidates the run, even after the record cap.
    info.Interfered=true;info.UnmatchedHookCount=Math.Min(10000,info.UnmatchedHookCount+1);
    if(info.UnmatchedHooks.Count>=8)return;
@@ -108,7 +108,7 @@ public class ItdaQualityWindow {
    // MSLLHOOKSTRUCT: INJECTED=0x1. KBDLLHOOKSTRUCT: INJECTED=0x10.
    // Both use LOWER_IL_INJECTED=0x2. These flags diagnose; none waive failure.
    record.Injected=(flags&(hook==HookKind.Mouse?0x1u:0x10u))!=0;record.LowerILInjected=(flags&0x2)!=0;
-   record.ExtraZero=extra==UIntPtr.Zero;record.ExtraEqual=extra==marker;record.ExtraLow32Equal=unchecked((uint)extra.ToUInt64())==unchecked((uint)marker.ToUInt64());
+   record.ExtraZero=extra==UIntPtr.Zero;record.ExtraEqual=extra==marker;record.ExtraLow32Equal=unchecked((uint)extra.ToUInt64())==unchecked((uint)marker.ToUInt64());record.ExtraHigh32Zero=(extra.ToUInt64()>>32)==0;
    record.LastOwnTargetKnown=haveTarget;record.MousePointEqualLastOwnTarget=hook==HookKind.Mouse&&samePoint;
    record.MsSinceLastTaggedSendAttempt=sent?(int)Math.Min(60000u,unchecked((uint)Environment.TickCount-lastSendTick)):-1;record.TaggedSendAttemptCount=info.TaggedSendAttemptCount;
    info.UnmatchedHooks.Add(record);
@@ -176,9 +176,21 @@ public class ItdaQualityWindow {
  public static DragInfo Drag(LayoutInfo layout,int x,int y,bool cancel){
   long source=layout.File,destination=layout.Explorer;int targetX=layout.TargetX,targetY=layout.TargetY;
   if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true"||Environment.GetEnvironmentVariable("ITDA_ENABLE_OWNED_INPUT")!="true"||!System.Text.RegularExpressions.Regex.IsMatch(Environment.GetEnvironmentVariable("ITDA_EXPECTED_SOURCE_SHA")??"","^[0-9a-f]{40}$")||Environment.GetEnvironmentVariable("ITDA_EXPECTED_SOURCE_SHA")!=Environment.GetEnvironmentVariable("GITHUB_SHA"))throw new Exception("Native input gate is closed");
+  // Run 40069501377 observed low32 equality without full equality; this does not
+  // prove an OS-wide truncation rule. Use a nonzero positive 31-bit random tag
+  // in UIntPtr, avoiding dependence on high-word or sign-bit preservation.
+  // This is attribution, not a security boundary. Full equality remains required;
+  // low32 equality never waives interference. Fail before native work if RNG fails.
+  UIntPtr marker;
+  using(var random=System.Security.Cryptography.RandomNumberGenerator.Create()){
+   byte[] bytes=new byte[4];uint value=0;
+   for(int attempt=0;attempt<8&&value==0;attempt++){random.GetBytes(bytes);value=BitConverter.ToUInt32(bytes,0)&0x7fffffffu;}
+   if(value==0)throw new Exception("Nonzero input attribution marker unavailable");
+   marker=new UIntPtr(value);
+  }
   DragInfo info=new DragInfo();info.StartedUnixMs=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();IntPtr old=SetThreadDpiAwarenessContext(new IntPtr(-4));if(old==IntPtr.Zero)throw new Exception("PMv2 context unavailable");
   bool down=false;POINT prior;bool havePrior=GetCursorPos(out prior);IntPtr file=new IntPtr(source),explorer=new IntPtr(destination),mouseHook=IntPtr.Zero,keyHook=IntPtr.Zero,priorForeground=IntPtr.Zero;uint priorPid=0;
-  UIntPtr marker=new UIntPtr((ulong)DateTime.UtcNow.Ticks);var attribution=new Attribution(info,marker);HookProc mouse=null,keyboard=null;
+  var attribution=new Attribution(info,marker);HookProc mouse=null,keyboard=null;
   try{
    AssertOwners(layout);AssertDesktop();
    LASTINPUTINFO idle=new LASTINPUTINFO();idle.Size=(uint)Marshal.SizeOf(typeof(LASTINPUTINFO));
@@ -201,7 +213,8 @@ public class ItdaQualityWindow {
     // Owned blank status-bar space, never a foreign foreground window or title-bar button.
     int ax=bounds.Right-32,ay=bounds.Bottom-18;AssertOwners(layout);AssertDesktop();
     if(GetAncestor(WindowFromPoint(new POINT{X=ax,Y=ay}),2)!=file)throw new Exception("Activation point is not owned");
-    Move(ax,ay,marker,attribution);Pump(30);if(info.Interfered)throw new Exception("External input during activation");
+    int activationEchoBefore=info.TaggedMouseEchoCount;Move(ax,ay,marker,attribution);Pump(30);if(info.Interfered)throw new Exception("External input during activation");
+    if(info.TaggedMouseEchoCount<=activationEchoBefore)throw new Exception("Tagged activation mouse echo absent; no activation click attempted");
     if(GetAncestor(WindowFromPoint(new POINT{X=ax,Y=ay}),2)!=file)throw new Exception("Activation point changed");
     Mouse(2,marker,attribution);down=true;Mouse(4,marker,attribution);down=false;Pump(80);
     if(GetForegroundWindow()!=file)throw new Exception("Owned source activation refused");
@@ -209,7 +222,9 @@ public class ItdaQualityWindow {
    if(!SetWindowPos(explorer,IntPtr.Zero,0,0,0,0,0x13))throw new Exception("Owned Explorer could not be raised");
    Pump(50);if(info.Interfered)throw new Exception("External console input during focus");
    if(GetAncestor(WindowFromPoint(new POINT{X=x,Y=y}),2)!=file||GetAncestor(WindowFromPoint(new POINT{X=targetX,Y=targetY}),2)!=explorer)throw new Exception("Drop coordinates do not belong to owned windows");
-   Move(x,y,marker,attribution);Pump(80);if(info.Interfered||GetForegroundWindow()!=file)throw new Exception("Input/focus changed before mouse down");Move(x,y,marker,attribution,2);down=true;
+   int sourceEchoBefore=info.TaggedMouseEchoCount;Move(x,y,marker,attribution);Pump(80);if(info.Interfered||GetForegroundWindow()!=file)throw new Exception("Input/focus changed before mouse down");
+   if(info.TaggedMouseEchoCount<=sourceEchoBefore)throw new Exception("Tagged source mouse echo absent; no drag mouse down attempted");
+   Move(x,y,marker,attribution,2);down=true;
    for(int i=1;i<=120;i++){
     int nx=x+(targetX-x)*i/120,ny=y+(targetY-y)*i/120;
     AssertOwners(layout);IntPtr hit=GetAncestor(WindowFromPoint(new POINT{X=nx,Y=ny}),2);
@@ -219,7 +234,7 @@ public class ItdaQualityWindow {
    }
    Pump(500);if(info.Interfered)throw new Exception("External console input detected");
    if(GetAncestor(WindowFromPoint(new POINT{X=targetX,Y=targetY}),2)!=explorer)throw new Exception("Drop target changed");
-   if(cancel){Escape(marker,attribution);Pump(100);}
+   if(cancel){int cancelEchoBefore=info.TaggedKeyEchoCount;Escape(marker,attribution);Pump(100);if(info.TaggedKeyEchoCount<=cancelEchoBefore)throw new Exception("Tagged cancel key echo absent");}
 
    if(info.Interfered||(GetForegroundWindow()!=file&&GetForegroundWindow()!=explorer))throw new Exception("Input/focus changed before release");
    AssertOwners(layout);AssertDesktop();info.ReleaseUnixMs=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();Move(targetX,targetY,marker,attribution,4);down=false;Pump(50);info.ReleasePoint=cancel?"cancel":"target";info.Outcome=cancel?"cancelled-input":"drop-input";
