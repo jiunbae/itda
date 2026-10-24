@@ -37,7 +37,7 @@ Connect to your devices’ **screens and files** from **Windows and Mac**. Brows
 
 ## 🍏 Itda for Mac
 
-Download `Itda-macos-universal.zip` from [Releases](https://github.com/jiunbae/itda/releases/latest). For the current release, use macOS 12.3+ on Apple silicon or Intel. Compatibility with macOS 12.0–12.2 is being corrected.
+Download `Itda-macos-universal.zip` from [Releases](https://github.com/jiunbae/itda/releases/latest). For the current release, use macOS 12.3+ on Apple silicon or Intel. Runtime validation on macOS 12.0–12.2 is still pending.
 
 1. Unzip it and move **Itda.app** to Applications.
 2. Open **Itda.app**. Official Mac releases are Developer ID signed and notarized by Apple.

@@ -1,6 +1,6 @@
 [package]
 name = "itda"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 description = "Itda (잇다): remote desktop and file access for Windows and macOS, with a browser viewer for phones and tablets."
 license = "MIT"
