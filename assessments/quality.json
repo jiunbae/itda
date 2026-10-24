@@ -913,7 +913,7 @@
         }
       ],
       "verification_gaps": [
-        "Actual permission-helper restart during managed transfer, guide_reset/native permission changes, and the actual updater admission/installation/quit scenarios remain unverified. Source fixes and unit/browser CI do not certify those native paths.",
+        "Actual permission-helper restart during managed transfer, manual current-app re-registration and native permission grant/relaunch, and the actual updater admission/installation/quit scenarios remain unverified. The removed guide_reset action is not a supported native test target. Source fixes and unit/browser CI do not certify the remaining native paths.",
         "Mac actual4MiB managed-copy Wait/Stop approval remains unanswered after the earlier pre-dispatch Tacto policy refusal; no native Mac Wait/Stop credit.",
         "Mac Dock/AppleEvent/logout, Finder promise queue, updater/remote-installer/Force and corresponding native lifetimes remain unverified.",
         "All three native Explorer/OLE attempts failed before source drag mousedown; third-run layout JSON parsing failed with no complete layout/viewport receipt, although owned-window setup may have occurred. No OLE/virtual-file release acceptance. Physical user-PC input,150% scaling and assistive technology remain unverified.",
