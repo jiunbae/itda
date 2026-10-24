@@ -2,7 +2,7 @@
   "schema_version": 1,
   "component": "native-windows-explorer-ole",
   "recorded_at": "2026-10-24T05:10:55.208123+00:00",
-  "status": "sixth-run-bounded-hosted-native-OLE-passed; five-prior-failed-runs-and-first-cleanup-failure-retained; full-native-journeys-incomplete",
+  "status": "sixth-run-bounded-hosted-native-OLE-same-source-CI-candidate-passed; five-prior-failed-runs-and-first-cleanup-failure-retained; full-native-journeys-incomplete",
   "release_context": {
     "public_release_at_preparation": "1.0.4",
     "future_checkpoint": "1.0.5",

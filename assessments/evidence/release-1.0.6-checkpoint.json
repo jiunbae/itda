@@ -184,7 +184,8 @@
       "Configuration import only; not remote provisioning/install/swap/startup or native GUI/permission/transfer acceptance.",
       "No user profiles or selected secrets; no keychain-call instrumentation. Existing source/NoVault tests establish the no-secret path."
     ],
-    "production_observations_published": false
+    "production_observations_published": false,
+    "executable_provenance": "CI ZIP executable, public-zip-identical by exact ZIP SHA256 equality; no public-download origin claim."
   },
   "published_source_changes": [
     {
@@ -238,7 +239,21 @@
     "source_commit": "7335c7cf1d3545988a71b55166171501d229408c",
     "changed_files": 6,
     "status": "source-only; no runtime run",
-    "native_acceptance_credit": false
+    "native_acceptance_credit": false,
+    "independent_audit": {
+      "reference": "197",
+      "result": "REQUEST CHANGES",
+      "findings": [
+        "Incorrect twelve-hex staging-file regex",
+        "Emergency release could commit COPY",
+        "Cleanup/failure resource handling"
+      ]
+    },
+    "follow_up": {
+      "source_commit": "b0823c987d3128a8828ad67bb68fdf42b720d315",
+      "status": "root source follow-up only; not natively executed; further fixes in progress",
+      "native_acceptance_credit": false
+    }
   },
   "verification_gaps": [
     "All seven persona scores and verified scores remain null. The fixed rubric and all 28 core journeys have not been certified at 9/10; no global P1/P2 absence claim.",
