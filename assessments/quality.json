@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "assessment_id": "itda-quality-2026-10-23",
-  "status": "iteration-11-public1.0.6-and-bounded-hosted-OLE/owned-CLI-evidence; local1.0.5-and-remote-approval-pending; all-persona-scores-null",
+  "status": "iteration-12-public1.0.7-static-and-owned-CLI; separate-public1.0.6-hosted-crosshost-proof; local1.0.5-and-remote-approval-pending; all-persona-scores-null",
   "goal": "Every persona scores at least 9/10 on verified core journeys, with no unresolved P1/P2 task blockers.",
   "baseline": {
     "commit": "521202025e7c5a984f089c1d1df77e846f63fd33",
@@ -970,27 +970,67 @@
         "CLI import smoke uses four generated owned profiles, not remote provisioning/application swap/startup/TCC/native GUI or selected-secret acceptance. Selected JSON sections still use typed serialization; unknown fields are only promised preserved for unselected sections."
       ],
       "acceptance_note": "Release1.0.6 and two bounded component proofs advance evidence, not seven full persona scores. Public Windows bytes differ from the hosted native candidate. Local1.0.6 reinstall is pending, AX failure is not diagnosed as crash/deadlock, remote idle/close information and Mac4MiB Wait/Stop approval remain unanswered. No goal completion or global absence of P1/P2 defects is claimed."
+    },
+    {
+      "id": 12,
+      "status": "in-progress",
+      "changes": [
+        {
+          "release": "1.0.7",
+          "source_commit": "659694b1ee8aa589e7cd3cdff4644aabc47aa1d2",
+          "status": "Public unauthenticated downloads, final three CI jobs, signatures and independent1a6 publication review verified; not locally reinstalled",
+          "evidence": "assessments/evidence/release-1.0.7-checkpoint.json"
+        },
+        {
+          "scope": "Public-zip-identical signed Mac headless import",
+          "status": "Seven generated owned profiles passed: five exit0, two deliberate exit1; all removed; missing account refs rejected before effects, custom login preserved",
+          "evidence": "assessments/evidence/release-1.0.7-checkpoint.json"
+        },
+        {
+          "run_id": 40082905339,
+          "status": "One authorized native public1.0.6 cross-host Copy passed with independent1a3 approval",
+          "evidence": "assessments/evidence/native-public-windows-crosshost-1.0.6.json",
+          "acceptance_scope": "Actual public1.0.6 unsigned Windows bytes; hosted High/High1024x768@96 only; not1.0.7 native or full persona proof."
+        },
+        {
+          "scope": "Local and remote rollout",
+          "status": "Read-only local bundle metadata still1.0.5; remote versions only last observed1.0.2/0.9.24 with1.0.5 staged; manual-close/idle answers pending",
+          "acceptance_scope": "No new UI/reinstall/quit/live SSH/remote operation performed by this evidence task."
+        }
+      ],
+      "verification_gaps": [
+        "All seven persona scores and verified scores remain null. The fixed rubric and all 28 core journeys have not been certified at 9/10; no global P1/P2 absence claim.",
+        "Published1.0.7 is not installed locally. Fresh read-only bundle metadata still shows1.0.5. Previous AX errors(-25204), healthy Tacto permission report and three-second event-wait sample do not establish crash/deadlock; manual-close answer remains pending.",
+        "Two anonymous remote Macs were last observed on1.0.2 and0.9.24 with verified1.0.5 staged only; no fresh live SSH check. Explicit idle/no-transfer information and close approval remain pending because legacy Quit is unguarded. No remote close/install/launch/configuration/TCC change or completed fleet rollout is claimed.",
+        "Hosted native proofs apply to1.0.6 only: Explorer same-source CI candidate differs from public bytes; separate cross-host Copy used actual public1.0.6. Neither proves1.0.7 native behavior, Medium-integrity Windows, physical input,150% DPI, AT, multimonitor, cross-host conflict/move/cancel or full persona journeys.",
+        "Mac4MiB managed-copy Wait/Stop human approval remains unanswered after the earlier pre-dispatch policy refusal. No new Mac Wait/Stop action or acceptance.",
+        "Mac Finder promise queue, Dock/AppleEvent/logout, actual permission restart/manual re-registration and actual updater/remote-installer/Force lifetimes remain unverified.",
+        "iOS runtime remains blocked by unresolved per-device/process pasteboard isolation; build-only MobileSafari scaffolding is not phone, QR camera, Korean IME, clipboard/privacy or LAN/HTTPS proof.",
+        "Older macOS native runtime including12.0–12.2 remains unverified; weak linking and minimum-version metadata are static artifact facts only.12.3+ remains recommended.",
+        "Seven owned signed-Mac headless import cases are not selected-secret/key, real-profile, GUI, remote installation/application swap/startup/TCC acceptance. Selected JSON typed serialization still does not promise unknown-field preservation; unselected sections are preserved."
+      ],
+      "acceptance_note": "Public1.0.7 static artifacts and seven owned CLI cases are verified. Actual public1.0.6 cross-host Copy is separate bounded native component evidence. All seven scores remain null; no global P1/P2 absence or goal completion claim; historical failures and pending Mac/mobile/physical/AT gates are unchanged."
     }
   ],
   "current_release": {
-    "version": "1.0.6",
-    "source_commit": "26264572c3163fb63ee1bcfc64508d0f187bf72d",
-    "tag": "v1.0.6",
-    "release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.6",
-    "published_at": "2026-10-24T08:13:58Z",
-    "status": "public1.0.6-verified; local1.0.5-and-remote-rollout-pending; full-quality-goal-incomplete",
-    "final_ci_run": 40074901585,
+    "version": "1.0.7",
+    "source_commit": "659694b1ee8aa589e7cd3cdff4644aabc47aa1d2",
+    "tag": "v1.0.7",
+    "release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.7",
+    "published_at": "2026-10-24T10:07:40Z",
+    "status": "public1.0.7-verified; local1.0.5-and-remote-rollout-pending; full-quality-goal-incomplete",
+    "final_ci_run": 40083369358,
     "all_final_ci_checks": "success",
     "public_asset_sha256": {
-      "Itda-macos-universal.zip": "85c9b73f16016553d6ce5551b3bf6e2857080687eef268b95224745beb6d3414",
-      "itda.exe": "4b2e3bbe5639e7984348ab002e58d155c131293663a6d594892e04cd4acd33b4",
-      "SHA256SUMS.txt": "72b141466a396d3a671ebbbb4aa1b25989430d3ebbb5ce18932908100ec4ffb6"
+      "Itda-macos-universal.zip": "c11cc844f9d781c347791f444e54b3ac8dd6a4298e6afdfbbdf5de0512d03acb",
+      "itda.exe": "b652708d94ba9942883048c5d4beac733cfbbfb55a3175c0a9ff6f2d1dfcb456",
+      "SHA256SUMS.txt": "40fbd1b8e35ff0e4ce50eed14a3eedd4e6fefd29ba0a8b3a12f923c34ad0dd8e"
     },
-    "evidence": "assessments/evidence/release-1.0.6-checkpoint.json",
+    "evidence": "assessments/evidence/release-1.0.7-checkpoint.json",
     "native_ole_evidence": "assessments/evidence/native-windows-explorer-ole.json",
     "local_installed_version": "1.0.5",
     "local_reinstall_status": "pending manual-close answer; AX observation unavailable",
-    "remote_rollout_scope": "Older1.0.2/0.9.24 unchanged; actual idle/close answer pending",
+    "remote_rollout_scope": "Last-observed1.0.2/0.9.24;1.0.5 staged only; no fresh SSH check; idle/close answer pending",
     "all_remote_machines_updated": false,
     "goal_status": "active",
     "verified_persona_scores": "all seven null; no9/10 certification",
@@ -1002,6 +1042,8 @@
       "WINDOWS-USER-QUIT-DURING-UPDATE-INSTALL"
     ],
     "guide_reset_resolution": "feature-removed-manual-guidance; unreachable reset UI/handler/tccutil path removed and replaced by current-app manual re-registration/reveal guidance",
-    "defect_scope_note": "Cumulative published source fixes and bounded component evidence do not establish global absence of P1/P2 defects or all affected native scenarios."
+    "defect_scope_note": "Cumulative published source fixes and bounded component evidence do not establish global absence of P1/P2 defects or all affected native scenarios.",
+    "native_crosshost_evidence": "assessments/evidence/native-public-windows-crosshost-1.0.6.json",
+    "native_proof_version": "1.0.6 only; no1.0.7 native claim"
   }
 }
