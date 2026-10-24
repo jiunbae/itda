@@ -55,7 +55,13 @@ try{
  await f.evaluate(id=>document.querySelector(`[data-device="${id}"]`).click(),fixtureId);await f.locator('.files-setup').waitFor();
  await f.evaluate(c=>{const q=s=>document.querySelector('.files-setup '+s);q('[name=account]').value='custom';q('[name=account]').dispatchEvent(new Event('change',{bubbles:true}));q('[name=user]').value=c.user;q('[name=password]').value=c.password;q('[name=save_password]').checked=false;q('[data-connect]').click();},{user:config.user,password:config.password});
  await f.waitForFunction(()=>document.querySelectorAll('[data-pane=remote] [data-index]').length===3,undefined,{timeout:45000});
- await f.evaluate(()=>{window.nativeDragEvents=[];window.nativeDragRequests=[];const recv=ItdaFiles.message;ItdaFiles.message=function(m){if(m.type==='files_native_drag_end')nativeDragEvents.push({dropped:m.dropped,error:m.error,gesture:m.gesture,trace:m.trace,unix_ms:Date.now()});return recv.call(this,m);};const originalSend=window.send;window.send=function(cmd,data){if(cmd==='files_native_drag')nativeDragRequests.push({unix_ms:Date.now(),count:data.items?.length,gesture:data.gesture});return originalSend(cmd,data);};});
+ await f.evaluate(()=>{
+  window.nativeDragEvents=[];window.nativeDragRequests=[];window.nativeDragCancelRequests=[];
+  const gesture=v=>typeof v==='string'&&/^[a-f0-9]{32}$/.test(v)?v:null;
+  const trace=v=>!v?null:{phase:['early_cancel','ole_returned','failed'].includes(v.phase)?v.phase:'invalid',entered_ole:typeof v.entered_ole==='boolean'?v.entered_ole:null,query_count:Number.isInteger(v.query_count)&&v.query_count>=0&&v.query_count<=10000?v.query_count:null,escape_seen:typeof v.escape_seen==='boolean'?v.escape_seen:null,cancelled:typeof v.cancelled==='boolean'?v.cancelled:null,focus_verified:typeof v.focus_verified==='boolean'?v.focus_verified:null};
+  const recv=ItdaFiles.message;ItdaFiles.message=function(m){if(m.type==='files_native_drag_end')nativeDragEvents.push({dropped:m.dropped,error:m.error,gesture:gesture(m.gesture),trace:trace(m.trace),unix_ms:Date.now()});return recv.call(this,m);};
+  const originalSend=window.send;window.send=function(cmd,data){if(cmd==='files_native_drag')nativeDragRequests.push({unix_ms:Date.now(),count:data.items?.length,gesture:gesture(data.gesture)});if(cmd==='files_native_drag_cancel')nativeDragCancelRequests.push({unix_ms:Date.now(),gesture:gesture(data.gesture)});return originalSend(cmd,data);};
+ });
  controller=spawn('pwsh',['-NoProfile','-NonInteractive','-File',path.join(repo,'scripts/windows-native-drop-control.ps1'),'-Root',root,'-AppPid',String(child.pid),'-CreationTicks',identity.creation_ticks,'-MainHwnd',identity.hwnd],{env:process.env,stdio:['ignore','pipe','pipe']});controller.stdout.on('data',()=>{});controller.stderr.on('data',()=>{});controllerQuiesced=false;controllerState=observeExit(controller);controllerExit=new Promise(resolve=>{controller.once('error',e=>resolve({error:e.message}));controller.once('exit',(code,signal)=>resolve({code,signal}));});
  const controllerError=()=>{const p=path.join(root,'controller-error.json');if(fs.existsSync(p))throw Error(read(p).error);};
  await wait(()=>{controllerError();return fs.existsSync(path.join(root,'layout.json'));},'Owned Explorer layout not ready');report.layout=read(path.join(root,'layout.json'));const layout=report.layout;
@@ -64,7 +70,7 @@ try{
  const command=async value=>{const request=randomUUID();fs.writeFileSync(path.join(root,'command.tmp'),JSON.stringify({...value,request}));fs.renameSync(path.join(root,'command.tmp'),path.join(root,'command.json'));let reply;await wait(()=>{controllerError();const p=path.join(root,'reply.json');if(!fs.existsSync(p))return false;reply=read(p);return reply.request===request;},'Native command timed out',20000);assert(!reply.error,reply.error);return reply.result;};
  for(const scenario of ['cancel','positive']){
   // Only selection/geometry preparation through CDP; no CDP pointer drag/button state.
-  await f.evaluate(()=>{nativeDragEvents=[];nativeDragRequests=[];const list=document.querySelector('[data-pane=remote] .files-list');const row=list.querySelector('[data-index]');row.dispatchEvent(new MouseEvent('click',{bubbles:true}));list.focus();list.dispatchEvent(new KeyboardEvent('keydown',{key:'a',ctrlKey:true,bubbles:true,cancelable:true}));});
+  await f.evaluate(()=>{nativeDragEvents=[];nativeDragRequests=[];nativeDragCancelRequests=[];const list=document.querySelector('[data-pane=remote] .files-list');const row=list.querySelector('[data-index]');row.dispatchEvent(new MouseEvent('click',{bubbles:true}));list.focus();list.dispatchEvent(new KeyboardEvent('keydown',{key:'a',ctrlKey:true,bubbles:true,cancelable:true}));});
   assert(await f.locator('[data-pane=remote] [data-index].selected').count()===3,'Fixture multi-selection not established');
   const b=await f.locator('[data-pane=remote] [data-index]').first().boundingBox(),dpr=await f.evaluate(()=>devicePixelRatio);assert(b,'Source row missing');
   const point={x:Math.round(layout.OriginX+(b.x+Math.min(60,b.width/2))*dpr),y:Math.round(layout.OriginY+(b.y+b.height/2)*dpr)};
@@ -73,11 +79,15 @@ try{
   assert(!audit().some(e=>e.event==='read-open'&&e.path==='/payload.bin')||scenario!=='cancel','Payload pre-staged before first native drag');
   const before=audit().length,input=await command({op:'drag',scenario,...point});
   report.checks.push({check:`${scenario} input attribution`,input});assert(!input.Error&&!input.Interfered&&input.ReleaseUnixMs&&input.ReleasePoint===({cancel:'cancel',positive:'target'}[scenario]),'Input aborted/interfered; no retry');
-  await f.waitForFunction(()=>nativeDragEvents.length>0,undefined,{timeout:15000});const observation=await f.evaluate(()=>({requests:nativeDragRequests,events:nativeDragEvents}));
+  await f.waitForFunction(()=>nativeDragEvents.length>0,undefined,{timeout:15000});const observation=await f.evaluate(()=>({requests:nativeDragRequests,cancel_requests:nativeDragCancelRequests,events:nativeDragEvents}));
   // Preserve what happened before judging it. A wrong outcome must not erase the
   // native result, destination or read timing that distinguishes its cause.
   (report.observations??=[]).push({scenario,observation,destination:destination(),reads:audit().slice(before)});
   assert(observation.requests.length===1&&observation.requests[0].count===3,'Did not observe exactly one real files_native_drag');assert(observation.events.every(e=>!e.error),'Native OLE reported error');assert(observation.events.some(e=>e.dropped===(scenario==='positive')),'Wrong DoDragDrop outcome');
+  const request=observation.requests[0],ended=observation.events[0],trace=ended?.trace;
+  assert(observation.events.length===1&&/^[a-f0-9]{32}$/.test(request.gesture||'')&&ended.gesture===request.gesture,'Native outcome did not match this one gesture');
+  assert(trace?.phase==='ole_returned'&&trace.entered_ole===true&&trace.focus_verified===true&&Number.isInteger(trace.query_count)&&trace.query_count>0&&trace.query_count<=10000,'Actual focused OLE loop/query was not observed');
+  assert(trace.escape_seen===(scenario==='cancel')&&trace.cancelled===(scenario==='cancel'),'Native Escape/cancellation state did not match this scenario');
   if(scenario!=='positive'){
    const end=Date.now()+3000;do{assert(destination().length===0,'Negative control created files');await sleep(100);}while(Date.now()<end);
   }else{
@@ -108,7 +118,7 @@ finally{
  if(controllerQuiesced&&root){
   try{report.final_destination=destination();}catch(e){report.final_destination_error=e.message;}
   if(filePage&&!filePage.isClosed()){
-   try{report.final_native_observation=await Promise.race([filePage.evaluate(()=>({requests:window.nativeDragRequests??[],events:window.nativeDragEvents??[]})),sleep(1500).then(()=>{throw Error('Final native observation timed out');})]);}catch(e){report.final_native_observation_error=e.message;}
+   try{report.final_native_observation=await Promise.race([filePage.evaluate(()=>({requests:window.nativeDragRequests??[],cancel_requests:window.nativeDragCancelRequests??[],events:window.nativeDragEvents??[]})),sleep(1500).then(()=>{throw Error('Final native observation timed out');})]);}catch(e){report.final_native_observation_error=e.message;}
   }
   if(config&&serverRoot){
    try{report.generated_sources=config.files.map(file=>{const base=path.join(serverRoot,'files'),source=path.resolve(base,file.path.slice(1));assert(source.startsWith(base+path.sep),'Generated source escaped fixture');return {path:file.path,expected_sha256:file.sha256,actual_sha256:hash(source)};});}catch(e){report.generated_sources_error=e.message;}
