@@ -2,7 +2,7 @@
   "schema_version": 1,
   "component": "1.0.4-public-release-and-local-install",
   "recorded_at": "2026-10-24T04:25:54.032340+00:00",
-  "status": "release-and-local-smoke-verified; known-open-permission-helper-defects; full-quality-goal-incomplete",
+  "status": "release-and-local-smoke-verified; known-open-permission-helper-and-update-defects; full-quality-goal-incomplete",
   "source_commit": "3d755e64b8fa32d6ca511e189e39afae57171734",
   "tag": "v1.0.4",
   "release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.4",
@@ -68,7 +68,7 @@
       "asInvoker"
     ],
     "authenticode_signed": false,
-    "signing_evidence_scope": "Independent cross-provider reviewer parsed both its CI artifact and the matching public artifact with SHA-256 26e160f8d40fc25eb52f3b5137057c73c36615d064a1a28c7ea79be6785098ee: PE Security Directory size is 0, with no embedded Authenticode certificate table. This binary inspection is not Windows native or physical journey acceptance.",
+    "signing_evidence_scope": "Independent cross-provider reviewer15f parsed its independently downloaded CI executable with SHA-256 26e160f8d40fc25eb52f3b5137057c73c36615d064a1a28c7ea79be6785098ee: PE Security Directory size is 0, with no embedded Authenticode certificate table. The public release API asset digest and SHA256SUMS report the identical SHA-256, associating the public artifact with those parsed bytes. The release owner also redownloaded the public asset and matched its hash. Reviewer15f did not parse a separately downloaded public copy; this is binary/hash evidence, not Windows native or physical journey acceptance.",
     "native_physical_acceptance": false,
     "pe_security_directory_size": 0,
     "embedded_authenticode_certificate_table_present": false,
@@ -127,7 +127,7 @@
   "goal_achieved": false,
   "privacy": "Sanitized facts only. No user/device/account/host names, profile values or hashes, credentials, private paths, process identifiers, raw designated requirements, accessibility trees or screenshots are included.",
   "historical_receipts": "Prior native failures, recoveries, cleaned-up fixtures and release receipts remain unchanged. This checkpoint supersedes release-pending facts only; it does not retroactively expand any historical native acceptance.",
-  "amended_at": "2026-10-24T04:45:19.195895+00:00",
+  "amended_at": "2026-10-24T04:49:17.028225+00:00",
   "known_open_defects": [
     {
       "id": "MAC-PERMISSION-RESTART-ADMISSION",
@@ -163,12 +163,46 @@
       "source_evidence": "The guide UI sends guide_reset and a native handler exists, but the guide IPC forwarding allowlist admits only guide_ready, guide_reveal and guide_copy. The UI command therefore never reaches the reset handler.",
       "verification_scope": "source-confirmed; native reset and TCC behavior unverified; no reset or permission change was performed",
       "remediation_branch": "fix/permission-helper-transfer-guard"
+    },
+    {
+      "id": "UPDATE-WAIT-STALE-CANCEL-ADMISSION",
+      "severity": "P2",
+      "release": "1.0.4",
+      "source_commit": "3d755e64b8fa32d6ca511e189e39afae57171734",
+      "status": "open in released 1.0.4; separate follow-up fix in progress; not fixed by this checkpoint",
+      "summary": "A stale transfer-wait Cancel control can reopen copy admissions after an update has already started.",
+      "source_symbols": [
+        "go_now(Update)",
+        "quit_choice(cancel)",
+        "UPDATING",
+        "transfer admission gate"
+      ],
+      "source_evidence": "Deterministic sequence from independent source review168: request Update during a transfer, choose Wait, then let the transfer finish. go_now(Update) clears the pending quit without removing the cancel bar. Clicking its stale Cancel calls quit_choice(cancel), which reopens admissions while UPDATING remains true. A newly admitted copy can then be interrupted by the update worker final quit.",
+      "verification_scope": "source-confirmed deterministic control-flow sequence; actual updater, stale-Cancel UI interaction and transfer interruption were not executed or natively verified",
+      "remediation_branch": "fix/permission-helper-transfer-guard"
+    },
+    {
+      "id": "WINDOWS-USER-QUIT-DURING-UPDATE-INSTALL",
+      "severity": "P2",
+      "release": "1.0.4",
+      "source_commit": "3d755e64b8fa32d6ca511e189e39afae57171734",
+      "status": "open in released 1.0.4; separate follow-up fix in progress; not fixed by this checkpoint",
+      "summary": "An idle Windows user quit during UPDATING can exit before the updater finishes its in-process executable rename/copy, leaving a partial installation.",
+      "source_symbols": [
+        "Windows user quit",
+        "UPDATING",
+        "in-process executable rename/copy",
+        "install-success completion"
+      ],
+      "source_evidence": "Independent source review168 confirms the Windows idle user-quit path can bypass waiting for update installation success while UPDATING is true. Exiting the process at that point can terminate its in-process installer during executable rename/copy.",
+      "verification_scope": "source-confirmed; no actual update, Windows quit-during-install or partial-install scenario was executed or natively verified",
+      "remediation_branch": "fix/permission-helper-transfer-guard"
     }
   ],
   "independent_review": [
     {
       "request_id": "req_18e15b37fec56008_15f",
-      "scope": "Independent CI/public Windows artifact inspection at the recorded public SHA-256; PE Security Directory size 0 confirms no embedded Authenticode certificate table. No native journey acceptance.",
+      "scope": "Independent download and PE parsing of the CI Windows executable only: Security Directory size 0 confirms no embedded Authenticode certificate table. The same recorded SHA-256 is reported by the public release API asset digest and SHA256SUMS; the release owner separately redownloaded the public asset and matched its hash. No independent parsing of a separate public copy, and no native journey acceptance.",
       "result": "confirmed"
     },
     {

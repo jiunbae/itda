@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "assessment_id": "itda-quality-2026-10-23",
-  "status": "iteration-9-1.0.4-published-known-permission-helper-defects-and-native-acceptance-pending",
+  "status": "iteration-9-1.0.4-published-known-permission-helper-and-update-defects-and-native-acceptance-pending",
   "goal": "Every persona scores at least 9/10 on verified core journeys, with no unresolved P1/P2 task blockers.",
   "baseline": {
     "commit": "521202025e7c5a984f089c1d1df77e846f63fd33",
@@ -784,7 +784,7 @@
           "release": "1.0.4",
           "source_commit": "3d755e64b8fa32d6ca511e189e39afae57171734",
           "status": "published; public hashes and final main CI verified; installed Mac local-entry/window-close component smoke passed",
-          "verification": "Final main CI40059961386 all3success; public assets match verified candidate hashes; Developer ID notarized Mac; independent CI/public Windows PE inspection15f confirms no embedded Authenticode certificate table; local profiles and access=true/screen=false permissions preserved.",
+          "verification": "Final main CI40059961386 all3success; public assets match verified candidate hashes; Developer ID notarized Mac; independent CI Windows executable PE inspection15f confirms no embedded Authenticode certificate table. Public release API/checksum SHA and release-owner redownload associate the same Windows bytes; the independent reviewer parsed CI only. Local profiles and access=true/screen=false permissions preserved.",
           "embedded_ui_provenance": "Initial Windows strict-LF assertion failed; corrected whole-blob proof160 independently confirms LF-to-CRLF conversion only. Initial failure retained; no false all-green initial result.",
           "evidence": "assessments/evidence/release-1.0.4-checkpoint.json"
         }
@@ -798,7 +798,7 @@
         "Older macOS native runtime remains unverified, including 12.0–12.2; artifact minimum-version/weak-link probes do not certify those systems. 12.3+ remains recommended.",
         "All seven verified persona scores remain null; 28 complete core journeys have not been certified at 9/10."
       ],
-      "acceptance_note": "1.0.4 is actually published and installed locally, but the permission-helper restart/admission bypass and unreachable guide_reset UI command are known open source-confirmed defects in that release. Native consequences remain unverified. Their separate fix/permission-helper-transfer-guard remediation is not shipped by this documentation checkpoint. Local browsing/window-close smoke is component acceptance only; all persona scores remain null and the active goal has not reached 9/10.",
+      "acceptance_note": "1.0.4 is published and installed locally, but four source-confirmed defects remain open in that release: permission-helper restart/admission bypass, unreachable guide_reset UI command, stale Wait/Cancel reopening admissions during update, and Windows user quit interrupting in-process update installation. Their native consequences and actual updater scenarios remain unverified. Separate fix/permission-helper-transfer-guard follow-ups are not shipped by this documentation checkpoint. Local browsing/window-close smoke is component acceptance only; all persona scores remain null and the active goal has not reached 9/10.",
       "known_open_defects": [
         {
           "id": "MAC-PERMISSION-RESTART-ADMISSION",
@@ -834,6 +834,40 @@
           "source_evidence": "The guide UI sends guide_reset and a native handler exists, but the guide IPC forwarding allowlist admits only guide_ready, guide_reveal and guide_copy. The UI command therefore never reaches the reset handler.",
           "verification_scope": "source-confirmed; native reset and TCC behavior unverified; no reset or permission change was performed",
           "remediation_branch": "fix/permission-helper-transfer-guard"
+        },
+        {
+          "id": "UPDATE-WAIT-STALE-CANCEL-ADMISSION",
+          "severity": "P2",
+          "release": "1.0.4",
+          "source_commit": "3d755e64b8fa32d6ca511e189e39afae57171734",
+          "status": "open in released 1.0.4; separate follow-up fix in progress; not fixed by this checkpoint",
+          "summary": "A stale transfer-wait Cancel control can reopen copy admissions after an update has already started.",
+          "source_symbols": [
+            "go_now(Update)",
+            "quit_choice(cancel)",
+            "UPDATING",
+            "transfer admission gate"
+          ],
+          "source_evidence": "Deterministic sequence from independent source review168: request Update during a transfer, choose Wait, then let the transfer finish. go_now(Update) clears the pending quit without removing the cancel bar. Clicking its stale Cancel calls quit_choice(cancel), which reopens admissions while UPDATING remains true. A newly admitted copy can then be interrupted by the update worker final quit.",
+          "verification_scope": "source-confirmed deterministic control-flow sequence; actual updater, stale-Cancel UI interaction and transfer interruption were not executed or natively verified",
+          "remediation_branch": "fix/permission-helper-transfer-guard"
+        },
+        {
+          "id": "WINDOWS-USER-QUIT-DURING-UPDATE-INSTALL",
+          "severity": "P2",
+          "release": "1.0.4",
+          "source_commit": "3d755e64b8fa32d6ca511e189e39afae57171734",
+          "status": "open in released 1.0.4; separate follow-up fix in progress; not fixed by this checkpoint",
+          "summary": "An idle Windows user quit during UPDATING can exit before the updater finishes its in-process executable rename/copy, leaving a partial installation.",
+          "source_symbols": [
+            "Windows user quit",
+            "UPDATING",
+            "in-process executable rename/copy",
+            "install-success completion"
+          ],
+          "source_evidence": "Independent source review168 confirms the Windows idle user-quit path can bypass waiting for update installation success while UPDATING is true. Exiting the process at that point can terminate its in-process installer during executable rename/copy.",
+          "verification_scope": "source-confirmed; no actual update, Windows quit-during-install or partial-install scenario was executed or natively verified",
+          "remediation_branch": "fix/permission-helper-transfer-guard"
         }
       ]
     }
@@ -843,7 +877,7 @@
     "source_commit": "3d755e64b8fa32d6ca511e189e39afae57171734",
     "tag": "v1.0.4",
     "release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.4",
-    "status": "published; artifact/local-entry smoke verified; known permission-helper defects open and full native acceptance pending",
+    "status": "published; artifact/local-entry smoke verified; known permission-helper/update defects open and full native acceptance pending",
     "final_ci_run": 40059961386,
     "all_final_ci_checks": "success",
     "public_asset_sha256": {
@@ -867,8 +901,20 @@
         "severity": "P2",
         "status": "open in released 1.0.4; separate fix in progress; not fixed by this checkpoint",
         "remediation_branch": "fix/permission-helper-transfer-guard"
+      },
+      {
+        "id": "UPDATE-WAIT-STALE-CANCEL-ADMISSION",
+        "severity": "P2",
+        "status": "open in released 1.0.4; separate follow-up fix in progress; not fixed by this checkpoint",
+        "remediation_branch": "fix/permission-helper-transfer-guard"
+      },
+      {
+        "id": "WINDOWS-USER-QUIT-DURING-UPDATE-INSTALL",
+        "severity": "P2",
+        "status": "open in released 1.0.4; separate follow-up fix in progress; not fixed by this checkpoint",
+        "remediation_branch": "fix/permission-helper-transfer-guard"
       }
     ],
-    "quality_gate_reason": "Known source-confirmed permission-helper restart/admission bypass and unreachable guide_reset UI command remain open in released 1.0.4, in addition to the recorded native acceptance gaps. This checkpoint does not fix them or certify 9/10."
+    "quality_gate_reason": "Four known source-confirmed defects remain open in released 1.0.4: permission-helper restart/admission bypass, unreachable guide_reset UI command, stale update Wait/Cancel reopening admissions, and Windows user quit during in-process update installation. Recorded native acceptance gaps also remain. This checkpoint does not fix these defects or certify 9/10."
   }
 }
