@@ -16,9 +16,59 @@ const server=http.createServer((req,res)=>{
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const base=`http://127.0.0.1:${server.address().port}`;
-const browser=await pw.chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
+const engine=process.env.BROWSER||'chromium';
+const executable=engine==='webkit'?process.env.WEBKIT:process.env.CHROMIUM;
+const browser=await pw[engine].launch({headless:true,...(executable?{executablePath:executable}:{})});
 const assert=(value,msg)=>{if(!value)throw Error(msg);};
 try{
+  // A new Mac profile must reach its own folders before adding or connecting a device.
+  {
+    const c=await browser.newContext({viewport:{width:1200,height:800},reducedMotion:'reduce',userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'});
+    try{
+      await c.addInitScript(()=>{
+        const entry=(name,dir=false)=>({name,dir,size:100,modified:1780000000});
+        const tree={'/Users/alex':[entry('Documents',true),entry('note.txt')],'/Users/alex/Documents':[entry('report.txt')]};
+        window.testPackets=[];
+        window.ipc={postMessage:raw=>{
+          const m=JSON.parse(raw);testPackets.push(m);if(m.cmd!=='files')return;
+          if(m.op!=='local_home'&&m.op!=='list')return;
+          const folder=m.op==='local_home'?'/Users/alex':m.path;
+          const reply=()=>itda.recv({...m,type:'files_result',ok:true,data:{path:folder,entries:tree[folder]||[]}});
+          if(m.op==='local_home')window.answerHome=reply;else setTimeout(reply,10);
+        }};
+      });
+      const p=await c.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
+      await p.goto(base+'/web/');
+      await p.evaluate(()=>{S.hosts=[];S.settings={...S.settings,onboarded:true,theme:'light'};render();ItdaFiles.network();});
+      const l=p.locator('.files-layer'),local=l.getByRole('button',{name:'이 Mac',exact:true}),row=n=>l.locator('[data-index]').filter({hasText:n}).first();
+      await local.waitFor({timeout:1500});
+      assert(await local.isDisabled(),'Local folders must wait for the home reply');
+      await p.evaluate(()=>answerHome());
+      await l.locator('[data-network-sidebar] [data-side="local"]:not([disabled])').waitFor();
+      await local.click();await row('note.txt').waitFor();
+      assert(!await l.locator('.files-network').isVisible(),'Local entry stayed on the network landing');
+      await row('Documents').dblclick();await row('report.txt').waitFor();
+      await l.locator('.files-list').focus();await p.keyboard.press('Meta+t');
+      await row('report.txt').waitFor();
+      assert((await l.locator('[role="tab"][aria-selected="true"]').textContent()).includes('Documents'),'Local tab has a network title');
+      await l.getByRole('button',{name:'홈 폴더',exact:true}).click();await row('note.txt').waitFor();
+      await l.locator('[data-tab]').first().click();await row('report.txt').waitFor();
+      await l.getByRole('button',{name:'모든 기기',exact:true}).click();
+      await l.getByRole('button',{name:'이 Mac',exact:true}).click();await row('report.txt').waitFor();
+      assert(!await l.locator('.files-current-places [data-side="remote"]').isVisible(),'Device-less local browsing exposes an inert remote place');
+      await l.locator('.files-list').focus();await p.keyboard.press('Meta+ArrowUp');await row('note.txt').waitFor();
+      await l.getByRole('button',{name:'뒤로',exact:true}).click();await row('report.txt').waitFor();
+      await l.getByRole('button',{name:'동작',exact:true}).click();
+      assert(await p.getByRole('menuitem',{name:'분할 보기',exact:true}).isDisabled(),'Device-less split would expose an empty remote pane');
+      assert(!await p.getByRole('menuitem',{name:'연결 설정…',exact:true}).count(),'Device-less folders offer remote connection settings');
+      await p.getByRole('menuitem',{name:'Finder에서 열기',exact:true}).click();
+      const opened=(await p.evaluate(()=>testPackets)).filter(m=>m.op==='open').at(-1);
+      assert(opened?.side==='local'&&opened.path==='/Users/alex/Documents','Finder action did not open the current local folder: '+JSON.stringify(opened));
+      assert(!(await p.evaluate(()=>testPackets)).some(m=>m.op==='connect'),'Local browsing tried to connect to a remote device');
+      assert(!errors.length,errors.join('\n'));
+      console.log('PASS: Mac fresh profile enters local folders without a device, waits for home, preserves local folders across tabs/network');
+    }finally{await c.close();}
+  }
   const c=await browser.newContext({viewport:{width:1200,height:800},reducedMotion:'reduce',userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
   await c.addInitScript(()=>{
     const entry=(name,dir=false)=>({name,dir,size:100,modified:1780000000});

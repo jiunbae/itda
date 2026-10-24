@@ -456,7 +456,8 @@
     // While another device is connecting in this tab, the tab still shows its previous device.
     const shown = tabSwitch?.previous || host;
     const deviceLinks = devices.map((h) => `<button class="btn subtle files-device-link ${!networkMode && active === "remote" && shown.id === h.id ? "on" : ""}" data-device="${esc(h.id)}" data-id="file-device-${esc(h.id)}" ${MAC && shown.id === h.id ? 'data-side="remote"' : ""} title="${esc(label(h))} · ${esc(deviceState(h))} · ${MOD}+클릭: 새 창">${I("E7F4")}<span>${esc(label(h))}</span>${(S.fileWindows || []).includes(h.id) ? '<span class="files-device-dot" aria-label="파일 창 열림"></span>' : ""}</button>`).join("");
-    morph(sidebar, MAC ? `<h4>위치</h4><button class="btn subtle ${networkMode ? "on" : ""}" data-action="network">${I("E774")}모든 기기</button>${deviceLinks}` : `<button class="btn subtle ${networkMode && explorerHome ? "on" : ""}" data-action="explorer-home">${I("E80F")}홈</button><div class="files-explorer-pins"><button class="btn subtle" data-bookmark="Desktop" ${!panes.local.home ? "disabled" : ""}>${I("E7F8")}바탕 화면</button><button class="btn subtle" data-bookmark="Downloads" ${!panes.local.home ? "disabled" : ""}>${I("E8B7")}다운로드</button><button class="btn subtle" data-bookmark="Documents" ${!panes.local.home ? "disabled" : ""}>${I("E8A5")}문서</button></div><button class="btn subtle ${!networkMode && active === "local" ? "on" : ""}" data-side="local">${I("E7F8")}내 PC</button><button class="btn subtle ${networkMode && !explorerHome ? "on" : ""}" data-action="network">${I("E774")}네트워크</button><div class="files-explorer-devices">${deviceLinks}</div><button class="btn subtle" data-bookmark=".itda-trash" ${!panes[active].home ? "disabled" : ""}>${I("E74D")}보관함</button>`);
+    const localEntry = MAC && networkMode ? `<button class="btn subtle" data-side="local" ${!panes.local.home ? "disabled" : ""}>${I("E7F8")}${HERE}</button>` : "";
+    morph(sidebar, MAC ? `<h4>위치</h4>${localEntry}<button class="btn subtle ${networkMode ? "on" : ""}" data-action="network">${I("E774")}모든 기기</button>${deviceLinks}` : `<button class="btn subtle ${networkMode && explorerHome ? "on" : ""}" data-action="explorer-home">${I("E80F")}홈</button><div class="files-explorer-pins"><button class="btn subtle" data-bookmark="Desktop" ${!panes.local.home ? "disabled" : ""}>${I("E7F8")}바탕 화면</button><button class="btn subtle" data-bookmark="Downloads" ${!panes.local.home ? "disabled" : ""}>${I("E8B7")}다운로드</button><button class="btn subtle" data-bookmark="Documents" ${!panes.local.home ? "disabled" : ""}>${I("E8A5")}문서</button></div><button class="btn subtle ${!networkMode && active === "local" ? "on" : ""}" data-side="local">${I("E7F8")}내 PC</button><button class="btn subtle ${networkMode && !explorerHome ? "on" : ""}" data-action="network">${I("E774")}네트워크</button><div class="files-explorer-devices">${deviceLinks}</div><button class="btn subtle" data-bookmark=".itda-trash" ${!panes[active].home ? "disabled" : ""}>${I("E74D")}보관함</button>`);
     if (!MAC) { const nav = layer.querySelector(".files-sidebar"), selected = sidebar.querySelector(".on"); const key = `${networkMode}:${explorerHome}:${active}:${host.id}`; if(nav.dataset.selectedLocation !== key) { nav.dataset.selectedLocation = key; selected?.scrollIntoView({block:"nearest"}); } }
     layer.querySelector(".files-locations").hidden = true;
     if (networkMode) renderNetwork();
@@ -1129,6 +1130,8 @@
     layer.querySelector(".files-folder-title").textContent =
       p.path.split(/[\\/]/).filter(Boolean).pop() || p.path;
     layer.querySelector('[data-action="paste"]').disabled = !clipboard && !nativeFiles();
+    const splitButton = layer.querySelector('[data-action="split"]');
+    if (splitButton) splitButton.disabled = host.id === NETWORK;
     for (const a of ["copy", "cut", "rename", "trash"])
       layer.querySelector(`[data-action="${a}"]`).disabled = thisPC() || (a === "rename" && !MAC ? p.selected.size !== 1 : !p.selected.size);
     if (thisPC()) for (const a of ["paste", "new", "mkdir"]) layer.querySelector(`[data-action="${a}"]`)?.setAttribute("disabled", "");
@@ -1374,6 +1377,7 @@
       return;
     }
     if (action === "native") {
+      if (!networkMode && active === "local") return call("open", { side: "local", path: panes.local.path });
       nativePending.add(host.id);
       call("finder");
       return;
@@ -1431,7 +1435,7 @@
           ["split", split ? "분할 보기 끄기" : "분할 보기"],
           ["hidden", hidden ? "숨김 파일 가리기" : "숨김 파일 보기"],
           ["transfers", "전송 내역"], ["refresh", "새로 고침"],
-          null, ["settings", "연결 설정…"], ["native", `${nativeName}에서 열기`],
+          null, ...(host.id === NETWORK ? [] : [["settings", "연결 설정…"]]), ["native", `${nativeName}에서 열기`],
         ], rect.right - 210, rect.bottom + 4);
         return;
       }
@@ -1482,6 +1486,7 @@
         renderPanes();
         return;
       case "split":
+        if (host.id === NETWORK) return;
         split = !split;
         renderPanes();
         return;
@@ -1766,7 +1771,7 @@
     const menu = document.createElement("div"), p = panes[active];
     menu.className = `files-menu${MAC ? "" : " windows-menu"}`;
     menu.setAttribute("role", "menu");
-    const disabled = (a) => ["open", "copy", "cut", "trash"].includes(a) ? !p.selected.size : a === "rename" ? p.selected.size !== 1 : a === "paste" ? !clipboard && !nativeFiles() : a === "undo" ? !undo.some(u => u.host === host.id) : false;
+    const disabled = (a) => ["open", "copy", "cut", "trash"].includes(a) ? !p.selected.size : a === "rename" ? p.selected.size !== 1 : a === "paste" ? !clipboard && !nativeFiles() : a === "undo" ? !undo.some(u => u.host === host.id) : a === "split" ? host.id === NETWORK : false;
     menu.innerHTML = items.map((item) => item ? `<button class="btn subtle" role="${item.length > 2 ? item[3] || "menuitemradio" : "menuitem"}" ${item.length > 2 ? `aria-checked="${item[2]}"` : ""} data-action="${item[0]}" aria-label="${esc(item[1])}" ${disabled(item[0]) ? "disabled" : ""}>${esc(item[1])}</button>` : "<hr>").join("");
     menu.onclick = (e) => {
       const button = e.target.closest("button:not(:disabled)");
