@@ -1095,7 +1095,6 @@ printf '{"platform":"mac","version":"%s","versions":[%s],"running":%s}\n' "$vers
 "#;
 const WIN_PROBE: &str = r#"
 $ErrorActionPreference='Stop'
-$ProgressPreference='SilentlyContinue'
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $owned=@(Get-CimInstance Win32_Process -Filter "Name='itda.exe'" | Where-Object {
  # Other users' processes can deny this query. Only positively identified current-user
@@ -1397,6 +1396,7 @@ mod tests {
         // ProductVersion is read from real generated PE resources, not mocked strings.
         let fixture = r#"
 $ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
 $fixtureOwner=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $fixtureOther=if($fixtureOwner -eq 'S-1-5-18'){'S-1-5-19'}else{'S-1-5-18'}
 function New-VersionFixture($path,$type,$version) {
