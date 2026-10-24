@@ -8,13 +8,14 @@ import {spawn,execFileSync} from 'node:child_process';
 import {randomUUID,createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright';
+import {observeExit,explorerCleanupComplete} from './fixtures/windows-drop-lifecycle.mjs';
 const repo=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const artifact=path.join(repo,'test-artifacts/native-drop');fs.mkdirSync(artifact,{recursive:true});
 const report={status:'failed',scope:'One hosted-CI Explorer IDataObject/IStream functional proof; no physical mouse, user-PC, 150% DPI, AT, multi-monitor, Mac or persona-9 acceptance',checks:[],limits:['Explorer writes normal ShellBag/view state only on disposable VM; explicitly allowed','No released/signed build provenance','No no-payload-before-release assumption: target may legitimately request FileContents before release','Negative B (non-target release) not implemented: Itda source window itself registers a DropTarget; this proof covers Escape cancel and Explorer positive only'],cleanup:{}};
 const assert=(v,m)=>{if(!v)throw Error(m);};
 const hash=p=>createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-let root,child,identity,exited=false,browser,server,serverRoot,config,controller,controllerExit,startup,interrupted,childExit,launchError,controllerQuiesced=true;
+let root,child,identity,exited=false,browser,server,serverExit,serverRoot,config,controller,controllerExit,controllerState,startup,interrupted,childExit,launchError,controllerQuiesced=true;
 for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{interrupted=signal;});
 const ps=(file,args=[])=>execFileSync('pwsh',['-NoProfile','-NonInteractive','-File',path.join(repo,'scripts',file),...args],{encoding:'utf8',timeout:30000});
 const read=p=>JSON.parse(fs.readFileSync(p,'utf8').replace(/^\uFEFF/,''));
@@ -34,6 +35,7 @@ try{
  root=fs.mkdtempSync(path.join(os.tmpdir(),'itda-native-idle-'));root=control('workspace').root;startup=control('startup');
  serverRoot=fs.mkdtempSync(path.join(os.tmpdir(),'itda-quality-sftp-'));
  server=spawn('python',[path.join(repo,'scripts/fixtures/read-only-sftp-drop.py'),'--workspace',serverRoot],{env:{...process.env,PYTHONUTF8:'1'},stdio:['ignore','pipe','pipe']});server.stderr.on('data',()=>{});
+ serverExit=observeExit(server);
  const manifest=await new Promise((resolve,reject)=>{let text='';const t=setTimeout(()=>reject(Error('SFTP startup timed out')),20000);server.once('error',e=>{clearTimeout(t);reject(e);});server.once('exit',()=>{clearTimeout(t);reject(Error('SFTP exited before readiness'));});server.stdout.on('data',b=>{text+=b;if(text.includes('\n')){clearTimeout(t);resolve(text.split('\n')[0].trim());}});});
  assert(path.resolve(manifest)===path.join(serverRoot,'connection.json'),'Manifest escaped workspace');config=read(manifest);assert(config.pid===server.pid&&config.workspace===serverRoot&&config.host==='127.0.0.1','Fixture ownership mismatch');
  report.fixture={host:'127.0.0.1',pinned_key_sha256:createHash('sha256').update(Buffer.from(config.host_key_base64,'base64')).digest('hex'),password_saved:false,port:config.port,paramiko_version:config.paramiko_version,files:config.files.map(({path,size,sha256})=>({path,size,sha256}))};
@@ -54,7 +56,7 @@ try{
  await f.evaluate(c=>{const q=s=>document.querySelector('.files-setup '+s);q('[name=account]').value='custom';q('[name=account]').dispatchEvent(new Event('change',{bubbles:true}));q('[name=user]').value=c.user;q('[name=password]').value=c.password;q('[name=save_password]').checked=false;q('[data-connect]').click();},{user:config.user,password:config.password});
  await f.waitForFunction(()=>document.querySelectorAll('[data-pane=remote] [data-index]').length===3,undefined,{timeout:45000});
  await f.evaluate(()=>{window.nativeDragEvents=[];window.nativeDragRequests=[];const recv=ItdaFiles.message;ItdaFiles.message=function(m){if(m.type==='files_native_drag_end')nativeDragEvents.push({dropped:m.dropped,error:m.error,unix_ms:Date.now()});return recv.call(this,m);};const originalSend=window.send;window.send=function(cmd,data){if(cmd==='files_native_drag')nativeDragRequests.push({unix_ms:Date.now(),count:data.items?.length});return originalSend(cmd,data);};});
- controller=spawn('pwsh',['-NoProfile','-NonInteractive','-File',path.join(repo,'scripts/windows-native-drop-control.ps1'),'-Root',root,'-AppPid',String(child.pid),'-CreationTicks',identity.creation_ticks,'-MainHwnd',identity.hwnd],{env:process.env,stdio:['ignore','pipe','pipe']});controller.stdout.on('data',()=>{});controller.stderr.on('data',()=>{});controllerQuiesced=false;controllerExit=new Promise(resolve=>{controller.once('error',e=>resolve({error:e.message}));controller.once('exit',(code,signal)=>resolve({code,signal}));});
+ controller=spawn('pwsh',['-NoProfile','-NonInteractive','-File',path.join(repo,'scripts/windows-native-drop-control.ps1'),'-Root',root,'-AppPid',String(child.pid),'-CreationTicks',identity.creation_ticks,'-MainHwnd',identity.hwnd],{env:process.env,stdio:['ignore','pipe','pipe']});controller.stdout.on('data',()=>{});controller.stderr.on('data',()=>{});controllerQuiesced=false;controllerState=observeExit(controller);controllerExit=new Promise(resolve=>{controller.once('error',e=>resolve({error:e.message}));controller.once('exit',(code,signal)=>resolve({code,signal}));});
  const controllerError=()=>{const p=path.join(root,'controller-error.json');if(fs.existsSync(p))throw Error(read(p).error);};
  await wait(()=>{controllerError();return fs.existsSync(path.join(root,'layout.json'));},'Owned Explorer layout not ready');report.layout=read(path.join(root,'layout.json'));const layout=report.layout;
  report.viewport=await f.evaluate(()=>({width:innerWidth,height:innerHeight,dpr:devicePixelRatio}));assert(report.viewport.width>=440&&report.viewport.height>=400,'Measured file CSS viewport below minimum');
@@ -92,7 +94,11 @@ finally{
  const errors=[];
  const originalOutcome={status:report.status,error:report.error,reason:report.reason};
  try{
-  if(controller){if(controller.exitCode===null){fs.writeFileSync(path.join(root,'command.tmp'),JSON.stringify({op:'stop',request:randomUUID()}));fs.renameSync(path.join(root,'command.tmp'),path.join(root,'command.json'));}const result=await Promise.race([controllerExit,sleep(15000).then(()=>null)]);assert(result,'Controller cleanup timed out; not terminating live native-input driver');controllerQuiesced=true;report.cleanup.controller=result;assert(result.code===0&&!result.signal&&!result.error,'Controller exited abnormally');const p=path.join(root,'controller-cleanup.json');assert(fs.existsSync(p),'Controller cleanup receipt absent');report.cleanup.explorer=read(p);assert(report.cleanup.explorer.explorer_close_requested,'Owned Explorer did not close');}
+  if(controller){if(!controllerState.stopped){fs.writeFileSync(path.join(root,'command.tmp'),JSON.stringify({op:'stop',request:randomUUID()}));fs.renameSync(path.join(root,'command.tmp'),path.join(root,'command.json'));}const result=await Promise.race([controllerExit,sleep(15000).then(()=>null)]);assert(result,'Controller cleanup timed out; not terminating live native-input driver');report.cleanup.controller=result;assert(controllerState.stopped,'Controller exit unconfirmed; refusing to close live native-input resources');controllerQuiesced=true;
+   // An exited controller is quiescent even if the scenario failed. Preserve
+   // that failure, while judging cleanup from the separate window receipt.
+   if(result.code!==0||result.signal||result.error){report.status='failed';report.error??='Controller exited abnormally';process.exitCode=1;}
+   const p=path.join(root,'controller-cleanup.json');assert(fs.existsSync(p),'Controller cleanup receipt absent');report.cleanup.explorer=read(p);assert(explorerCleanupComplete(report.cleanup.explorer),'Owned Explorer absence was not confirmed');}
  }catch(e){errors.push(e.message);}
  // A source-window emergency release can be accepted by Itda's own DropTarget.
  // Observe any resulting confirmation; never click/approve it. Closing the owned
@@ -112,7 +118,7 @@ finally{
  try{if(root&&controllerQuiesced){report.cleanup.app=control('cleanup');assert(!report.cleanup.app.forced_candidate,'Candidate required forced termination');assert(!startup||JSON.stringify(control('startup'))===JSON.stringify(startup),'Startup registration changed');report.cleanup.startup_unchanged=true;}}catch(e){errors.push(e.message);}
  if(!controllerQuiesced)errors.push('Controller still live: refusing to close its source/target or delete its workspace');
  if(browser&&controllerQuiesced)await Promise.race([browser.close().catch(()=>{}),sleep(3000)]);
- try{report.sftp_audit=audit();if(server&&server.exitCode===null){server.kill();await wait(()=>server.exitCode!==null,'Owned SFTP did not stop',5000,false);}report.sftp_audit=audit();if(serverRoot){assert(path.dirname(serverRoot)===os.tmpdir()&&path.basename(serverRoot).startsWith('itda-quality-sftp-'),'SFTP cleanup ownership mismatch');fs.rmSync(serverRoot,{recursive:true,force:true});}if(root&&!errors.length){fs.rmSync(root,{recursive:true,force:true});assert(!fs.existsSync(root),'Private workspace remains');report.cleanup.workspaces_removed=true;}}catch(e){errors.push(e.message);}
+ try{report.sftp_audit=audit();if(server){report.cleanup.sftp_termination_requested=false;if(!serverExit.stopped){report.cleanup.sftp_termination_requested=server.kill();await wait(()=>serverExit.stopped,'Owned SFTP did not stop',5000,false);}report.cleanup.sftp_exit=serverExit.result;}report.sftp_audit=audit();if(serverRoot){assert(path.dirname(serverRoot)===os.tmpdir()&&path.basename(serverRoot).startsWith('itda-quality-sftp-'),'SFTP cleanup ownership mismatch');fs.rmSync(serverRoot,{recursive:true,force:true});assert(!fs.existsSync(serverRoot),'SFTP workspace remains');}if(root&&!errors.length){fs.rmSync(root,{recursive:true,force:true});assert(!fs.existsSync(root),'Private workspace remains');report.cleanup.workspaces_removed=true;}}catch(e){errors.push(e.message);}
  for(const p of [child,server,controller]){p?.stdout?.destroy();p?.stderr?.destroy();p?.unref();}
  report.cleanup.status=errors.length?'failed':'passed';if(errors.length){report.cleanup.errors=errors;report.original_outcome=originalOutcome;report.status='failed';process.exitCode=1;}if(interrupted){report.status='interrupted';process.exitCode=1;}
  fs.writeFileSync(path.join(artifact,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({status:report.status,cleanup:report.cleanup.status,receipt:path.join(artifact,'result.json')}));
