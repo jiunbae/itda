@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "component": "1.0.6-public-release-and-bounded-component-evidence",
+  "recorded_at": "2026-10-24T08:58:25.652336+00:00",
+  "status": "public1.0.6-verified; local1.0.5-and-remote-rollout-pending; full-quality-goal-incomplete",
+  "source_commit": "26264572c3163fb63ee1bcfc64508d0f187bf72d",
+  "tag": "v1.0.6",
+  "release_url": "https://github.com/jiunbae/itda/releases/tag/v1.0.6",
+  "published_at": "2026-10-24T08:13:58Z",
+  "latest_at_public_check": true,
+  "public_checked_at": "2026-10-24T08:19:46.457718+00:00",
+  "final_ci": {
+    "run_id": 40074901585,
+    "url": "https://github.com/jiunbae/itda/actions/runs/40074901585",
+    "checks": {
+      "macos": "success",
+      "build": "success",
+      "windows-file-ui": "success"
+    }
+  },
+  "public_asset_sha256": {
+    "Itda-macos-universal.zip": "85c9b73f16016553d6ce5551b3bf6e2857080687eef268b95224745beb6d3414",
+    "itda.exe": "4b2e3bbe5639e7984348ab002e58d155c131293663a6d594892e04cd4acd33b4",
+    "SHA256SUMS.txt": "72b141466a396d3a671ebbbb4aa1b25989430d3ebbb5ce18932908100ec4ffb6"
+  },
+  "public_download_scope": "Unauthenticated HTTPS downloads match independently reviewed CI/draft hashes; manually associated source/CI/artifacts, not signed build attestation.",
+  "independent_reviews": [
+    {
+      "reference": "192",
+      "result": "APPROVE",
+      "scope": "Independent artifact copy of native sixth run; bounded hosted High/High Explorer result only."
+    },
+    {
+      "reference": "193",
+      "result": "APPROVE",
+      "scope": "Independent release artifact copies and headless CLI evidence; no native full-journey certification."
+    }
+  ],
+  "mac_artifact": {
+    "bundle_id": "dev.jiun.itda",
+    "bundle_version": "1.0.6",
+    "minimum_macos": "12.0",
+    "architectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "executable_sha256": "cc5f9b8dfbfaf76d326b8091cbd3b4d7f96aa9075a132ddf1c33f454f2bfbaf0",
+    "team": "728FW73BS8",
+    "signature": "Developer ID Application, hardened runtime; deep strict verification passed",
+    "gatekeeper": "accepted Notarized Developer ID",
+    "stapled_ticket": "validated",
+    "capture_compatibility": {
+      "status": "passed",
+      "slices": [
+        {
+          "architecture": "x86_64",
+          "minimum_macos": "10.12",
+          "screen_capture_kit": "weak"
+        },
+        {
+          "architecture": "arm64",
+          "minimum_macos": "11.0",
+          "screen_capture_kit": "weak"
+        }
+      ]
+    }
+  },
+  "windows_artifact": {
+    "machine": "AMD64",
+    "subsystem": "Windows GUI",
+    "version_strings": {
+      "FileDescription": "Itda",
+      "FileVersion": "1.0.6",
+      "InternalName": "itda",
+      "OriginalFilename": "itda.exe",
+      "ProductName": "Itda",
+      "ProductVersion": "1.0.6"
+    },
+    "per_monitor_v2": true,
+    "requested_execution_levels": [
+      "asInvoker"
+    ],
+    "authenticode_signed": false
+  },
+  "embedded_ui_whole_blob_proof": [
+    {
+      "file": "web/files.js",
+      "lf_source_sha256": "359f5eb886acf088bfb8f55f64c64213a7fcb8258d75d59a531233afcec88cb8",
+      "windows_crlf_sha256": "8dc4567d71d0d25446441e2b85e870e2932013b51069900a8ef6df78cc51550b",
+      "mac_exact_lf_count": 2,
+      "windows_exact_crlf_count": 1,
+      "transform": "only LF-to-CRLF on Windows checkout"
+    },
+    {
+      "file": "web/permissions.js",
+      "lf_source_sha256": "0727d5c47ea58658dc8f1d54f5f6a7c399b15c09b76205dbba640a5c7bc5d976",
+      "windows_crlf_sha256": "4880a73657a4c6271f586228699dad130d588527671d7da33d7b35323a3c3548",
+      "mac_exact_lf_count": 2,
+      "windows_exact_crlf_count": 1,
+      "transform": "only LF-to-CRLF on Windows checkout"
+    }
+  ],
+  "owned_cli_import_smoke": {
+    "status": "passed",
+    "version": "1.0.6",
+    "source_commit": "26264572c3163fb63ee1bcfc64508d0f187bf72d",
+    "executable_sha256": "cc5f9b8dfbfaf76d326b8091cbd3b4d7f96aa9075a132ddf1c33f454f2bfbaf0",
+    "mode": "headless --import-configuration with generated ITDA_DATA_DIR only",
+    "cases": [
+      {
+        "case": "empty-valid",
+        "status": "passed",
+        "unchanged_sections": [
+          "hosts.json",
+          "accounts.json",
+          "settings.json"
+        ],
+        "reply": {
+          "accounts": 0,
+          "hosts": 0,
+          "keys": 0,
+          "ok": true,
+          "secrets": 0
+        },
+        "exit_code": 0,
+        "no_imported_keys": true
+      },
+      {
+        "case": "empty-invalid",
+        "status": "passed",
+        "unchanged_sections": [
+          "hosts.json",
+          "accounts.json",
+          "settings.json"
+        ],
+        "reply": {
+          "accounts": 0,
+          "hosts": 0,
+          "keys": 0,
+          "ok": true,
+          "secrets": 0
+        },
+        "exit_code": 0,
+        "no_imported_keys": true
+      },
+      {
+        "case": "empty-missing",
+        "status": "passed",
+        "unchanged_sections": [
+          "hosts.json",
+          "accounts.json",
+          "settings.json"
+        ],
+        "reply": {
+          "accounts": 0,
+          "hosts": 0,
+          "keys": 0,
+          "ok": true,
+          "secrets": 0
+        },
+        "exit_code": 0,
+        "no_imported_keys": true
+      },
+      {
+        "case": "host-only-corrupt-opt-outs",
+        "status": "passed",
+        "unchanged_sections": [
+          "accounts.json",
+          "settings.json"
+        ],
+        "reply": {
+          "accounts": 0,
+          "hosts": 1,
+          "keys": 0,
+          "ok": true,
+          "secrets": 0
+        },
+        "exit_code": 0,
+        "no_imported_keys": true
+      }
+    ],
+    "cleanup": "All four CLI processes exited0; owned temporary profiles removed",
+    "limits": [
+      "Configuration import only; not remote provisioning/install/swap/startup or native GUI/permission/transfer acceptance.",
+      "No user profiles or selected secrets; no keychain-call instrumentation. Existing source/NoVault tests establish the no-secret path."
+    ],
+    "production_observations_published": false
+  },
+  "published_source_changes": [
+    {
+      "pr": 133,
+      "merge": "ac36a62f8ab44a8c3f1c8205960dca88b397cacd",
+      "scope": "Empty validated package configuration no-op; selective section read/write/backup; malformed secret owner rejected before effects; existing actual locks and transaction retained. Public CLI proves four owned import cases only."
+    },
+    {
+      "pr": 134,
+      "merge": "a4b6ff9f9dfd93a106e44d9f8a18d92247717d95",
+      "scope": "Bounded Windows drag cancellation state and gesture binding; unit/frontend CI plus scoped hosted native cancel/positive proof below; no broad non-target/cross-host lifetime certification."
+    }
+  ],
+  "native_explorer_ole": {
+    "evidence": "assessments/evidence/native-windows-explorer-ole.json",
+    "run_id": 40075056787,
+    "status": "passed; scoped actual cancel and positive Explorer consumption",
+    "candidate_binary_sha256": "af9c10ce4828b363c475be5766a37d51e5103b57b35be32241520eb0dbd447e5",
+    "public_executable_sha256": "4b2e3bbe5639e7984348ab002e58d155c131293663a6d594892e04cd4acd33b4",
+    "binary_identity_equal": false,
+    "scope": "Hosted High/High IL native Explorer IDataObject/IStream proof on generated loopbackSFTP files. Same release source, different CI executable from public candidate; no physical user-PC, 150%, AT, phone, Mac, cross-window Itda-host drag or persona9 acceptance."
+  },
+  "local_mac": {
+    "installed_version": "1.0.5",
+    "1.0.6_installed": false,
+    "status": "AX observation unavailable; manual close information/approval pending",
+    "observed_errors": [
+      "window_list_unavailable",
+      "app_accessibility_unresponsive"
+    ],
+    "ax_error_code": -25204,
+    "tacto_permission_health": "healthy as reported by release owner; no permission change",
+    "existing_sample": {
+      "duration_seconds": 3,
+      "observed_main_thread": "event wait",
+      "diagnosis": "No crash or deadlock established"
+    },
+    "force_or_native_close_performed_by_this_checkpoint": false
+  },
+  "remote_rollout": {
+    "anonymous_installed_versions": [
+      "1.0.2",
+      "0.9.24"
+    ],
+    "status": "unchanged older apps; idle/no-transfer and close answer pending",
+    "legacy_quit_guarded": false,
+    "close_install_or_launch_performed": false,
+    "all_remote_machines_updated": false
+  },
+  "cross_host_harness": {
+    "source_commit": "7335c7cf1d3545988a71b55166171501d229408c",
+    "changed_files": 6,
+    "status": "source-only; no runtime run",
+    "native_acceptance_credit": false
+  },
+  "verification_gaps": [
+    "All seven persona scores and verified scores remain null. The fixed rubric and all 28 core journeys have not been certified at 9/10; no global P1/P2 absence claim.",
+    "Published1.0.6 is not installed locally. Local1.0.5 currently returns window_list_unavailable/app_accessibility_unresponsive(-25204) despite healthy Tacto permissions. A three-second main-thread sample showed event wait; this does not establish crash or deadlock. Manual-close information/approval remains pending.",
+    "Two anonymous remote Macs still run1.0.2 and0.9.24. Explicit idle/no-transfer information and close approval remain pending because legacy Quit is unguarded. No remote close/install/launch/configuration/TCC change or completed fleet rollout is claimed.",
+    "The hosted High/High Explorer proof does not certify Medium-integrity Windows11, physical mouse,150% DPI, assistive technology, multiple monitors, native non-target release or complete user journeys. The tested executable differs from the public executable.",
+    "Cross-host native Itda-to-Itda harness7335c7cf1d3545988a71b55166171501d229408c is source-only: six new files; no runtime execution or acceptance.",
+    "Mac4MiB managed-copy Wait/Stop human approval remains unanswered after the earlier pre-dispatch policy refusal. No new Mac Wait/Stop action or acceptance.",
+    "Mac Finder promise queue, Dock/AppleEvent/logout, actual permission restart/manual re-registration and actual updater/remote-installer/Force lifetimes remain unverified.",
+    "iOS runtime remains blocked by unresolved per-device/process pasteboard isolation; build-only MobileSafari scaffolding is not phone, QR camera, Korean IME, clipboard/privacy or LAN/HTTPS proof.",
+    "Older macOS native runtime including12.0–12.2 remains unverified; weak linking and minimum-version metadata are static artifact facts only.12.3+ remains recommended.",
+    "CLI import smoke uses four generated owned profiles, not remote provisioning/application swap/startup/TCC/native GUI or selected-secret acceptance. Selected JSON sections still use typed serialization; unknown fields are only promised preserved for unselected sections."
+  ],
+  "goal_status": "active",
+  "goal_achieved": false,
+  "history_policy": "All prior iterations and failed/cleanup/parser outcomes remain recorded; no rerun was performed to repair an evidence parser.",
+  "privacy": "Explicit sanitized allowlist only: no production metadata, profile/install/workspace paths, file sizes/mtime, aliases, process identifiers, credentials, raw accessibility trees or screenshots."
+}
