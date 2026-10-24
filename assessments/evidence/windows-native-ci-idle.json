@@ -1,0 +1,151 @@
+{
+  "status": "baseline native CI harness passed; no quit-guard acceptance",
+  "run": 40043401342,
+  "artifact_id": 12540108813,
+  "artifact_name": "windows-native-idle-pilot",
+  "downloaded_receipt_sha256": "bacfca014ec2ce8d5f30add3a692faecaa94f5a19c3312d5e94cada77c498c01",
+  "downloaded_binary_matches_receipt": true,
+  "receipt": {
+    "status": "passed",
+    "scope": "Baseline main without PR102 quit guard: validates the native CI harness only. No transfer/guard, physical-input, shutdown/logout or persona-score acceptance",
+    "checks": [
+      {
+        "check": "native window and private WebView2 profile, same active session, owned loopback CDP listener",
+        "result": "PASS"
+      },
+      {
+        "check": "real native page loads isolated empty address book, tray off and unchanged startup registration",
+        "result": "PASS"
+      },
+      {
+        "check": "incorrect creation-time identity rejected before querying the owned window",
+        "result": "PASS"
+      },
+      {
+        "check": "PID/HWND-bound idle WM_QUERYENDSESSION returns 1 without terminating app",
+        "result": "PASS",
+        "scope": "query only; no WM_ENDSESSION or OS shutdown/logout"
+      },
+      {
+        "check": "owned native main-window close exits cleanly with tray disabled",
+        "result": "PASS",
+        "exit": {
+          "code": 0,
+          "signal": null
+        }
+      }
+    ],
+    "cleanup": {
+      "forced_candidate": false,
+      "remaining_owned_processes": 0,
+      "status": "passed",
+      "workspace_removed": true,
+      "startup_unchanged": true
+    },
+    "provenance": {
+      "checkout": "685c5102b346264a207c3007a640b8f1c318bd1e",
+      "pr_head": "64d22bcd4fffab24e3723cdfc0f7eb548d7b3bc4",
+      "run_id": "40043401342",
+      "run_attempt": "1",
+      "build": "Same-job scripts/windows-release.ps1; copied executable byte comparison, not released/signed provenance",
+      "binary_sha256": "c7e74a9a2b55dba7db093cf3229db1ca600b2f481497362df74a2bd4f8100ec5",
+      "driver_sha256": "efeef19f3053f1db1eefc0b87b120574018a96587eeaeaf37e328027c9b22830",
+      "control_sha256": "515dde7f96deee930d6ed370e29696c660be4b5e1c85d0c2dcd4c2c6361148d9",
+      "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+    },
+    "environment": {
+      "schema_version": 1,
+      "recorded_at": "2026-10-24T00:13:34.4015883Z",
+      "status": "eligible-for-idle-pilot",
+      "scope": "Windows CI native-test prerequisites only; no app launch or user-journey acceptance",
+      "source": {
+        "checkout": "685c5102b346264a207c3007a640b8f1c318bd1e",
+        "pr_head": "64d22bcd4fffab24e3723cdfc0f7eb548d7b3bc4",
+        "run_id": "40043401342",
+        "run_attempt": "1",
+        "runner_image": "win25-vs2026",
+        "runner_image_version": "20261021.278.1"
+      },
+      "checks": {
+        "session": {
+          "id": 2,
+          "user_interactive": true,
+          "connect_state": 0
+        },
+        "desktop": {
+          "input": "Default",
+          "thread": "Default",
+          "window_station": "WinSta0",
+          "open_input_error": null
+        },
+        "screen": {
+          "width": 1024,
+          "height": 768,
+          "system_dpi": 96,
+          "thread_awareness": 0,
+          "metric_space": "Calling PowerShell DPI context; not certified physical pixels"
+        },
+        "elevated_admin_token": true,
+        "webview2_runtime": [
+          {
+            "hive": "LocalMachine",
+            "view": "Registry32",
+            "version": "155.0.4283.62"
+          }
+        ]
+      },
+      "unmet": [],
+      "references": [
+        "https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution",
+        "https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openinputdesktop",
+        "https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/ne-wtsapi32-wts_connectstate_class"
+      ]
+    },
+    "workspace_spelling": {
+      "requested": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\itda-native-idle-PvFpVG",
+      "canonical": "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\itda-native-idle-PvFpVG"
+    },
+    "debug_port": 58117,
+    "last_native_state": {
+      "alive": true,
+      "pid": 6388,
+      "creation_ticks": "639283976246198289",
+      "session_id": 2,
+      "hwnd": "589936",
+      "visible": true,
+      "window_class": "itda_home",
+      "window_title": "Itda (profile a196f1a24b2c6f91)",
+      "private_udf": true,
+      "webview_pids": [
+        7288,
+        7480,
+        7584,
+        3608,
+        4596,
+        4992
+      ],
+      "listeners": [
+        {
+          "LocalAddress": "127.0.0.1",
+          "OwningProcess": 7288
+        }
+      ]
+    },
+    "native_identity": {
+      "pid": 6388,
+      "hwnd": "589936",
+      "creation_ticks": "639283976246198289",
+      "session_id": 2,
+      "window_class": "itda_home",
+      "window_title": "Itda (profile a196f1a24b2c6f91)",
+      "private_webview_count": 6
+    }
+  },
+  "interpretation": "Real native Itda/WebView2 home and private profile were verified, incorrect creation identity was refused, an idle native query returned1 without exiting, and owned WM_CLOSE exited0 with tray off. Root used8.3 requestedpath and canonical longpath; path guard now passes. Fixture cleanup passed without forcing the candidate.",
+  "limits": [
+    "Baseline main does not contain PR102; default idle reply does not prove guard routing",
+    "Fixture cleanup may stop remaining private WebView2 processes; no claim they all exited autonomously",
+    "No active transfer, physical input, Explorer OLE, actual OS shutdown/logout, user-PC or Mac quit acceptance",
+    "No production deployment or verified persona score"
+  ]
+}

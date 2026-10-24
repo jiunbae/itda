@@ -1,0 +1,105 @@
+name: Windows native transfer quit
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-native-quit.yml'
+      - 'scripts/windows-native-quit-ci-e2e.mjs'
+      - 'scripts/windows-native-idle-control.ps1'
+      - 'scripts/windows-native-preflight.ps1'
+      - 'scripts/fixtures/read-only-sftp-barrier.py'
+      - 'scripts/fixtures/requirements-sftp.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  transfer-quit:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install CDP client and private SFTP dependencies
+        shell: pwsh
+        run: |
+          npm install --no-save --package-lock=false --ignore-scripts playwright@1.64.1
+          if ($LASTEXITCODE) { throw 'CDP client installation failed' }
+          python -m pip install -r scripts/fixtures/requirements-sftp.txt
+          if ($LASTEXITCODE) { throw 'SFTP fixture dependency installation failed' }
+      - name: Build candidate once for both scenarios
+        shell: pwsh
+        run: ./scripts/windows-release.ps1
+      - name: Fresh wait-scenario prerequisites
+        continue-on-error: true
+        shell: pwsh
+        env:
+          ITDA_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: ./scripts/windows-native-preflight.ps1 -Receipt test-artifacts/native-quit-wait/preflight.json
+      - name: Real mid-stream copy, cancel quit, then wait for completion
+        shell: pwsh
+        timeout-minutes: 5
+        env:
+          ITDA_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          ITDA_QUIT_SCENARIO: wait
+        run: |
+          $r = Get-Content test-artifacts/native-quit-wait/preflight.json -Raw | ConvertFrom-Json
+          if ($r.status -eq 'prerequisite-unavailable') {
+            @{status='prerequisite-unavailable';scope='No app launched';unmet=$r.unmet} | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 test-artifacts/native-quit-wait/result.json
+            exit 0
+          }
+          if ($r.status -ne 'eligible-for-idle-pilot') { throw 'Wait prerequisites probe failed' }
+          node scripts/windows-native-quit-ci-e2e.mjs
+          if ($LASTEXITCODE) { throw 'Native wait scenario failed; inspect receipt' }
+      - name: Fresh stop-scenario prerequisites
+        continue-on-error: true
+        shell: pwsh
+        env:
+          ITDA_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: ./scripts/windows-native-preflight.ps1 -Receipt test-artifacts/native-quit-stop/preflight.json
+      - name: Real mid-stream copy, cancel quit, then stop and clean staging
+        shell: pwsh
+        timeout-minutes: 5
+        env:
+          ITDA_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          ITDA_QUIT_SCENARIO: stop
+        run: |
+          $r = Get-Content test-artifacts/native-quit-stop/preflight.json -Raw | ConvertFrom-Json
+          if ($r.status -eq 'prerequisite-unavailable') {
+            @{status='prerequisite-unavailable';scope='No app launched';unmet=$r.unmet} | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 test-artifacts/native-quit-stop/result.json
+            exit 0
+          }
+          if ($r.status -ne 'eligible-for-idle-pilot') { throw 'Stop prerequisites probe failed' }
+          node scripts/windows-native-quit-ci-e2e.mjs
+          if ($LASTEXITCODE) { throw 'Native stop scenario failed; inspect receipt' }
+      - name: Report observed scope
+        if: always()
+        shell: pwsh
+        run: |
+          @('### Native Windows managed-transfer quit', 'Same-job non-release candidate; owned HWND queries/close and generated SFTP files only.', 'No physical input, OS shutdown/logout, Explorer OLE, user-PC, Mac, updater, installer or persona-score acceptance.') | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          foreach ($s in @('wait','stop')) {
+            $p = "test-artifacts/native-quit-$s/result.json"
+            if (Test-Path -LiteralPath $p) {
+              $r = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json
+              "$s status: $($r.status)" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+            } else { "${s}: no result; not verified" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-native-transfer-quit
+          path: |
+            test-artifacts/native-quit-wait/
+            test-artifacts/native-quit-stop/
+            target/release/itda.exe
+          if-no-files-found: error
