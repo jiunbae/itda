@@ -20,6 +20,11 @@ impl Gesture {
     pub fn cancel(&self) { self.cancelled.store(true, SeqCst); }
     pub fn cancelled(&self) -> bool { self.cancelled.load(SeqCst) }
     pub fn escape(&self) { self.escape_seen.store(true, SeqCst); self.cancel(); }
+    /// OLE's completed commit is authoritative. Cancellation requests observed
+    /// after the Drop decision cannot revoke the receiver's accepted copy.
+    pub fn finish_ole(&self, committed: bool) -> bool {
+        self.ole_drop_committed.store(committed,SeqCst);committed
+    }
     pub fn admit(&self, primary_down: bool, escape_down: bool) -> bool {
         if escape_down { self.escape(); }
         if !primary_down { self.cancel(); }
@@ -146,6 +151,13 @@ mod tests {
         let (_,g)=setup(); assert!(g.admit(true,false)); assert!(g.admit(true,false));
         assert_eq!(g.decide(false,true),Decision::Continue); assert_eq!(g.decide(false,false),Decision::Drop);
         let (_,g)=setup(); assert_eq!(g.decide(true,false),Decision::Cancel); assert_eq!(g.decide(false,false),Decision::Cancel);
+    }
+    #[test] fn completed_drop_is_not_rewritten_by_a_late_cancellation() {
+        let (_,g)=setup(); assert!(g.admit(true,false));
+        assert_eq!(g.decide(false,false),Decision::Drop);
+        g.escape(); // Received while the target's Drop call finishes.
+        assert!(g.finish_ole(true));
+        assert!(g.cancelled());assert!(g.ole_drop_committed.load(SeqCst));
     }
     #[test] fn reload_close_and_old_finish_retire_without_touching_replacement() {
         let (mut r,g)=setup(); assert!(r.bind(1,"one",NONCE)); assert!(g.cancelled());

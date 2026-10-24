@@ -32,7 +32,7 @@ pub(crate) mod gesture;
 pub(crate) fn drag_trace(g: &gesture::Gesture, phase: &str) -> Value {
     json!({"phase":phase,"entered_ole":g.entered_ole.load(std::sync::atomic::Ordering::SeqCst),"ole_drop_committed":g.ole_drop_committed.load(std::sync::atomic::Ordering::SeqCst),
         "query_count":g.queries.load(std::sync::atomic::Ordering::SeqCst),"first_query":g.queries.load(std::sync::atomic::Ordering::SeqCst)>0,
-        "escape_seen":g.escape_seen.load(std::sync::atomic::Ordering::SeqCst),"cancelled":g.cancelled(),
+        "escape_seen":g.escape_seen.load(std::sync::atomic::Ordering::SeqCst),"cancelled":g.cancelled(),"cancelled_after_commit":g.ole_drop_committed.load(std::sync::atomic::Ordering::SeqCst)&&g.cancelled(),
         "focus_verified":g.focus_verified.load(std::sync::atomic::Ordering::SeqCst)})
 }
 
@@ -122,14 +122,12 @@ pub fn drag(v: &Value, post: fn(Value), gesture: Arc<gesture::Gesture>, source_h
     let mut effect = DROPEFFECT_NONE;
     gesture.entered_ole.store(true,std::sync::atomic::Ordering::SeqCst);
     let hr = unsafe { DoDragDrop(&data, &IDropSource::from(Source {gesture:gesture.clone()}), DROPEFFECT_COPY, &mut effect) };
-    let committed=hr==DRAGDROP_S_DROP && effect!=DROPEFFECT_NONE;
-    gesture.ole_drop_committed.store(committed,std::sync::atomic::Ordering::SeqCst);
-    // Preserve the actual OLE commit in trace if cancellation arrived too late;
-    // it must not be mistaken for proof that the target never received a drop.
-    let accepted=committed && !gesture.cancelled();
-    // A cancelled/failed drag must stop any early target reads, even if a
-    // receiver already negotiated asynchronous extraction. Only an actual
-    // accepted drop may keep its batch until EndOperation.
+    let accepted=gesture.finish_ole(hr==DRAGDROP_S_DROP && effect!=DROPEFFECT_NONE);
+    // A late cancellation cannot retract a committed copy or truncate the
+    // receiver's asynchronous streams. Trace retains that cancellation request.
+    // Without an OLE commit, stop early target reads even if the receiver
+    // negotiated async extraction. A committed copy keeps its batch until
+    // EndOperation, independently of cancellation requests arriving too late.
     if let Some(source) = &remote_source { source.drop_done(accepted); }
     // Rendering errors are reported once, at this gesture's terminal event;
     // an early data-object error must not re-enable the renderer during OLE.

@@ -5,6 +5,9 @@
 use super::*;
 use std::io::{Read, Write};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
+#[cfg(all(test,not(windows)))]
+#[path="drag_cancel.rs"]
+mod gesture_test;
 
 /// Most entries one drag may carry, as for any export.
 const LIMIT: usize = 10_000;
@@ -358,6 +361,8 @@ pub(crate) fn test_server() -> Option<Arc<Remote>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)] use crate::files_win::gesture as gesture_policy;
+    #[cfg(not(windows))] use super::gesture_test as gesture_policy;
 
     #[test]
     fn rejected_async_drop_stops_reads_and_releases_batch_but_accepted_copy_lives() {
@@ -368,7 +373,8 @@ mod tests {
         struct Clean(PathBuf);
         impl Drop for Clean {fn drop(&mut self){let _=std::fs::remove_dir_all(&self.0);}}
         let _clean=Clean(root.clone());
-        std::fs::write(root.join("one.txt"),b"one owned stream").unwrap();
+        let payload:Vec<u8>=(0..96_217).map(|i|(i%251) as u8).collect();
+        std::fs::write(root.join("one.txt"),&payload).unwrap();
         let files=[export::File {id:String::new(),remote:true,source:root.to_string_lossy().into_owned(),name:"one.txt".into(),dir:false}];
         let rejected_items=rejected.plan(&files).unwrap();
         *rejected.batch.lock().unwrap()=register(&rejected.control);
@@ -386,11 +392,21 @@ mod tests {
         let accepted_items=accepted.plan(&files).unwrap();
         *accepted.batch.lock().unwrap()=register(&accepted.control);
         let accepted_batch=*accepted.batch.lock().unwrap();
-        accepted.start_operation();accepted.drop_done(true);
+        let mut registry=gesture_policy::Registry::default();
+        let page="11111111111111111111111111111111";let nonce="22222222222222222222222222222222";
+        registry.bind(1,"owned",page);
+        let gesture=registry.begin(1,"owned",page,nonce,1).unwrap();
+        assert!(gesture.admit(true,false));
+        assert_eq!(gesture.decide(false,false),gesture_policy::Decision::Drop);
+        accepted.start_operation();
+        gesture.escape(); // Late Escape/navigation request after the Drop decision.
+        accepted.drop_done(gesture.finish_ole(true));
         assert_eq!(*accepted.batch.lock().unwrap(),accepted_batch);
         assert!(LIVE.lock().unwrap().iter().any(|(id,_)|*id==accepted_batch));
         let mut bytes=Vec::new();accepted.reader(&accepted_items[0]).read_to_end(&mut bytes).unwrap();
-        assert_eq!(bytes,b"one owned stream");
+        use sha2::{Digest,Sha256};
+        assert_eq!(bytes.len(),payload.len());
+        assert_eq!(Sha256::digest(&bytes),Sha256::digest(&payload),"late cancellation truncated a committed async copy");
         assert!(accepted.finish(std::time::Duration::from_secs(5)));
         accepted.end_operation();
         assert_eq!(*accepted.batch.lock().unwrap(),0);

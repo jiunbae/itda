@@ -231,7 +231,7 @@ pub(super) fn native_file_drag(v: Value) {
 
 fn reject_drag(v: &Value, page: &str) {
     let id=crate::files::scoped_id(v["id"].as_str().unwrap_or(""),&json!(page));
-    super::post(Event::Page(json!({"type":"files_native_drag_end","id":id,"gesture":v["gesture"],"error":"끌어 놓을 파일 창을 다시 확인하세요","trace":{"phase":"rejected","entered_ole":false,"ole_drop_committed":false,"query_count":0,"first_query":false,"cancelled":true,"escape_seen":false,"focus_verified":false}})));
+    super::post(Event::Page(json!({"type":"files_native_drag_end","id":id,"gesture":v["gesture"],"error":"끌어 놓을 파일 창을 다시 확인하세요","trace":{"phase":"rejected","entered_ole":false,"ole_drop_committed":false,"cancelled_after_commit":false,"query_count":0,"first_query":false,"cancelled":true,"escape_seen":false,"focus_verified":false}})));
 }
 
 fn focus_drag_webview(source: isize, gesture: &std::sync::Arc<crate::files_win::gesture::Gesture>) {
