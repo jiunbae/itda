@@ -46,7 +46,8 @@
     },
     "source_files_unchanged": true,
     "no_user_documents_modified": true,
-    "no_sftp_or_transfer_jobs": true
+    "no_sftp_or_transfer_jobs": true,
+    "driver_temporary_copy": "The driver also generated an identical copy under its private temporary workspace; that copy was not navigated. The native UI used the worktree copy. All three hashes matched and stayed unchanged in both copies before cleanup."
   },
   "checks": [
     {
