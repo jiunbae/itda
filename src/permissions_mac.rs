@@ -56,7 +56,7 @@ fn app_path() -> Option<PathBuf> {
 fn state() -> Value {
     let (screen, access) = crate::host_mac::permissions();
     let support = crate::host_mac::capture_support();
-    let mut v = json!({"type":"permissions","screen":screen,"access":access,"app_path":app_path(),"version":crate::home::VERSION,"enabled":crate::host_mac::enabled(),"hp_serving":crate::host_mac::enabled() && std::fs::metadata(crate::store::dir().join("hp-status")).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|d| d.as_secs() < 10)),"requested":REQUESTED.with(|r|r.borrow().clone()),"requested_seq":REQUEST_SEQ.with(Cell::get)});
+    let mut v = json!({"type":"permissions","screen":screen,"access":access,"app_path":app_path(),"version":crate::home::VERSION,"enabled":crate::host_mac::enabled(),"hp_serving":crate::host_mac::enabled() && std::fs::metadata(crate::store::dir().join("hp-status")).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|d| d.as_secs() < 10)),"requested":REQUESTED.with(|r|r.borrow().clone()),"requested_seq":REQUEST_SEQ.with(Cell::get),"active_transfers":crate::files::active_jobs(),"restart_closing":crate::home::permission_restart_closing()});
     v["supported"] = json!(support.is_ok());
     v["support_error"] = json!(support.err());
     FRESH.with(|fresh| {
@@ -215,27 +215,6 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
                 guide_intro();
                 return Ok(());
             }
-            "guide_reset" => {
-                // A switch that is on but doesn't take: an entry left from an earlier build
-                // (pinned to that build's signature). Remove Itda's entry for this permission,
-                // ask again so a fresh one appears, and have it switched on once more.
-                let permission = GUIDE.with(|g| g.borrow().as_ref().map(|g| g.permission.clone())).unwrap_or_default();
-                let service = match permission.as_str() {
-                    "screen" => "ScreenCapture",
-                    "access" => "Accessibility",
-                    _ => return Ok(()),
-                };
-                let ok = std::process::Command::new("/usr/bin/tccutil").args(["reset", service, "dev.jiun.itda"]).status().is_ok_and(|s| s.success());
-                crate::log!("permission reset {service}: {ok}");
-                if !ok {
-                    guide_reply(json!({"type":"guide","state":"예전 항목을 지우지 못했어요. 목록에서 Itda를 선택하고 − 버튼으로 지운 뒤 다시 추가해 주세요","error":true}));
-                    return Ok(());
-                }
-                request(&permission)?;
-                GUIDE.with(|g| if let Some(g) = g.borrow_mut().as_mut() { g.started = std::time::Instant::now(); g.stale_hint = false; });
-                guide_reply(json!({"type":"guide","stale":false,"state":"예전 항목을 지웠어요. 목록에 새로 나타난 Itda 스위치를 다시 켜 주세요"}));
-                return Ok(());
-            }
             "guide_reveal" | "guide_copy" => {
                 let app = app_path().ok_or("응용 프로그램 폴더의 Itda 앱을 실행해 주세요")?;
                 if v["cmd"] == "guide_reveal" {
@@ -336,19 +315,20 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
 /// Quit, then open this same app again on the helper (it reports the result there).
 fn restart_app() -> Result<(), String> {
     let app = app_path().ok_or("응용 프로그램 폴더의 Itda 앱을 실행해 주세요")?;
-    std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(RESTART_HELPER)
-        .arg("itda-permission-restart")
-        .arg(std::process::id().to_string())
-        .arg(app)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    super::quit();
-    Ok(())
+    crate::home::permission_restart(|| {
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(RESTART_HELPER)
+            .arg("itda-permission-restart")
+            .arg(std::process::id().to_string())
+            .arg(app)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
 }
 
 fn request(permission: &str) -> Result<(), String> {
@@ -482,7 +462,7 @@ struct Guide {
     checked: std::time::Instant,
     done: Option<std::time::Instant>,
     side: &'static str,
-    /// Offered to reset an entry that is on but doesn't take (see guide_reset).
+    /// Show manual re-registration advice when a visible grant still does not take.
     stale_hint: bool,
 }
 thread_local! { static GUIDE: RefCell<Option<Guide>> = const { RefCell::new(None) }; }
@@ -659,7 +639,8 @@ fn advance(permission: &str, target: &EventLoopWindowTarget<Wake>) {
         return;
     }
     if !crate::host_mac::permissions().0 {
-        // Relaunching closes every Itda window: only when nothing else is open in it.
+        // Auto-relaunch only with no windows/sessions. The transfer count is a UX
+        // hint; restart_app atomically closes admission and recounts before launch.
         let busy = super::super::home(|m| m.sessions.len()) + super::file_windows().len() + crate::files::active_jobs();
         if busy == 0 {
             guide_reply(json!({"type":"guide","done":"모두 허용됐어요. 적용하려고 Itda를 다시 여는 중…"}));

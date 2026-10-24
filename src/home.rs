@@ -253,9 +253,13 @@ fn start_update_install() {
                 plat::quit();
             }
             Err(e) => {
-                UPDATING.store(false, std::sync::atomic::Ordering::SeqCst);
-                // Transfers were held off for the install (go_now): they may start again.
-                crate::files::open_admissions();
+                // Coordinate the worker's rollback with permission relaunch's
+                // reservation; it must never reopen admission after that commit.
+                {
+                    let _pending = QUIT_PENDING.lock().unwrap();
+                    UPDATING.store(false, std::sync::atomic::Ordering::SeqCst);
+                    crate::files::open_admissions();
+                }
                 post(Event::Page(json!({"type": "update", "error": e.to_string()})));
             }
         }
@@ -492,6 +496,41 @@ fn go_now(reason: QuitReason) -> bool {
     if reason == QuitReason::Update { start_update_install() } else { plat::quit() }
     true
 }
+/// Permission relaunch is never a stop/force choice. Called only on the UI thread.
+/// Keep quit intent locked while reserving idle admission and launching the helper;
+/// the updater's worker rollback takes the same lock before reopening admission.
+#[cfg(target_os = "macos")]
+pub(crate) fn permission_restart(launch: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    permission_restart_with(launch, plat::quit)
+}
+#[cfg(target_os = "macos")]
+pub(crate) fn permission_restart_closing() -> bool {
+    QUIT_PENDING.lock().unwrap().is_some() || UPDATING.load(std::sync::atomic::Ordering::SeqCst) || !crate::files::accepting()
+}
+#[cfg(any(target_os = "macos", test))]
+fn permission_restart_with(launch: impl FnOnce() -> Result<(), String>, quit: impl FnOnce()) -> Result<(), String> {
+    let pending = QUIT_PENDING.lock().unwrap();
+    if pending.is_some() || UPDATING.load(std::sync::atomic::Ordering::SeqCst) || !crate::files::accepting() {
+        return Err("Itda의 종료 또는 업데이트가 진행 중입니다. 끝난 뒤 권한 적용을 다시 시도해 주세요.".into());
+    }
+    // Job admission and this close+recount share the registry lock. A transfer
+    // accepted after an earlier UI count is included; later attempts are refused.
+    let count = crate::files::close_admissions();
+    if count > 0 {
+        crate::files::open_admissions();
+        return Err(format!("파일 전송 {count}개가 진행 중이라 Itda를 다시 열지 않았습니다. 전송이 끝난 뒤 다시 시도해 주세요."));
+    }
+    if let Err(error) = launch() {
+        // Only this guard's open→closed reservation is rolled back. A prior
+        // closed gate or quit intent was rejected above and remains untouched.
+        crate::files::open_admissions();
+        return Err(error);
+    }
+    drop(pending);
+    quit();
+    Ok(())
+}
+
 /// The person's answer: wait for the transfers, stop them, force the quit (only after a stop
 /// that didn't finish, and never for an update), or keep Itda open.
 fn quit_choice(choice: &str, reason: QuitReason, ticket: u64) {
@@ -1985,5 +2024,49 @@ mod quit_tests {
         let f = crate::files::test_job("quit-test", "page");
         assert!(drain_jobs(std::time::Duration::from_millis(200), None) >= 1);
         drop(f);
+        clear();
+        // Permission relaunch does not stop/wait/force or launch anything while
+        // a transfer accepted after a UI's earlier idle observation is present.
+        let launch = std::cell::Cell::new(0);
+        let quit = std::cell::Cell::new(0);
+        assert_eq!(crate::files::active_jobs(), 0);
+        let busy = crate::files::test_job("permission-restart", "page");
+        let result = permission_restart_with(|| { launch.set(launch.get()+1); Ok(()) }, || quit.set(quit.get()+1));
+        assert!(result.unwrap_err().contains("전송"));
+        assert_eq!((launch.get(), quit.get()), (0, 0));
+        assert!(crate::files::accepting() && !busy.stopped());
+        busy.finish();
+        // Launch failure restores only the admission reservation owned here.
+        let result = permission_restart_with(|| { assert!(!crate::files::accepting()); Err("fake launch failure".into()) }, || quit.set(quit.get()+1));
+        assert_eq!(result.unwrap_err(), "fake launch failure");
+        assert!(crate::files::accepting() && quit.get()==0);
+        crate::files::close_admissions();
+        assert!(permission_restart_with(|| panic!("launched through a closed gate"), || panic!("quit through a closed gate")).is_err());
+        assert!(!crate::files::accepting(), "permission helper reopened someone else's gate");
+        crate::files::open_admissions();
+        let intent = pend(QuitPending::Waiting(QuitReason::Update));
+        assert!(permission_restart_with(|| panic!("replaced pending quit"), || panic!("quit over pending intent")).is_err());
+        assert_eq!(*QUIT_PENDING.lock().unwrap(), Some((intent, QuitPending::Waiting(QuitReason::Update))));
+        assert!(crate::files::accepting());
+        clear();
+        UPDATING.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(permission_restart_with(|| panic!("launched during an update"), || panic!("quit over an update")).is_err());
+        assert!(UPDATING.load(std::sync::atomic::Ordering::SeqCst) && crate::files::accepting());
+        UPDATING.store(false, std::sync::atomic::Ordering::SeqCst);
+        // Once reserved idle, even a late transfer attempt inside the fake launch
+        // cannot enter, and only a successful launch commits the injected quit.
+        permission_restart_with(|| {
+            assert!(!crate::files::accepting());
+            let events = std::sync::Arc::new(Mutex::new(Vec::<Value>::new()));
+            let captured = events.clone();
+            crate::files::dispatch(json!({"op":"transfer","from":"local","to":"local","source":"/never-read","destination":"/never-write","names":["fixture"],"policy":"keep","window":"permission-late"}), Host::default(), store::Login::default(), std::sync::Arc::new(move |v| captured.lock().unwrap().push(v)));
+            assert_eq!(crate::files::active_jobs(), 0, "late transfer bypassed admission close");
+            assert!(events.lock().unwrap().iter().any(|v| v["state"]=="failed" && v["error"]==crate::files::CLOSING), "late request was not explicitly refused");
+            launch.set(launch.get()+1);
+            Ok(())
+        }, || { assert!(!crate::files::accepting()); quit.set(quit.get()+1); }).unwrap();
+        assert_eq!((launch.get(), quit.get()), (1, 1));
+        assert!(!crate::files::accepting());
+        clear();
     }
 }
