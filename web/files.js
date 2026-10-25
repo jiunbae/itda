@@ -213,10 +213,11 @@
     const show = previewOn || view === "gallery" || previewModal;
     el.hidden = !show;
     el.classList.toggle("quick-look", previewModal);
-    if (!show) { clearTimeout(previewTimer); previewKey = ""; ++previewSeq; return; }
+    if (!show) { if (previewKey) send("files_preview_release", {page:pageToken}); clearTimeout(previewTimer); previewKey = ""; ++previewSeq; return; }
     const details = !MAC && previewKind === "details" && view !== "gallery" && !previewModal;
     const identity = `${currentTab}:${active}:${panes[active].path}:${entry?.name || ""}:${details}`;
     if (previewKey === identity) return;
+    send("files_preview_release", {page:pageToken});
     previewKey = identity;
     clearTimeout(previewTimer);
     previewSeq = ++sequence;
@@ -247,7 +248,7 @@
       el.innerHTML = '<pre></pre>';
       el.querySelector("pre").textContent = d.text;
     } else {
-      const src = `data:${d.mime};base64,${d.base64}`;
+      const src = d.url?.startsWith("/preview/") ? d.url : `data:${d.mime};base64,${d.base64}`;
       if (d.first_page) layer.querySelector(".files-preview footer").textContent += " · 첫 페이지";
       el.innerHTML = d.mime.startsWith("image/") ? `<img alt="${esc(entry?.name || "미리보기")}" src="${src}">` : `<${d.mime.startsWith("video/") ? "video" : "audio"} controls src="${src}"></${d.mime.startsWith("video/") ? "video" : "audio"}>`;
     }

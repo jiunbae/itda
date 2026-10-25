@@ -295,9 +295,13 @@ fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&s
     let drop_id = file_window.map(str::to_string);
     let native_drop_id = drop_id.clone();
     let ipc_window=drop_id.clone();let ipc_source=h as isize;
+    let protocol_owner = file_window.unwrap_or("home").to_string();
+    let ipc_owner = protocol_owner.clone();
+    let navigation_owner = protocol_owner.clone();
     let view = WebViewBuilder::new_with_web_context(&mut ctx)
         .with_additional_browser_args(args)
-        .with_custom_protocol("itda".into(), |_id, req| {
+        .with_custom_protocol("itda".into(), move |_id, req| {
+            if req.uri().path().starts_with("/preview/") { return crate::files::preview::response(&protocol_owner, &req); }
             let resp = match super::asset(req.uri().path()) {
                 Some((body, mime)) => http::Response::builder().header("Content-Type", mime).header("Cache-Control", "no-store").body(body),
                 None => http::Response::builder().status(404).body(Cow::Borrowed(&b"not found"[..])),
@@ -314,6 +318,7 @@ fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&s
             let body = req.into_body();
             match serde_json::from_str::<Value>(&body) {
                 Ok(mut v) => {
+                    if !crate::files::preview::admit_ipc(&v, &ipc_owner) { return; }
                     if native_drag_ipc(ipc_source,ipc_window.as_deref(),&mut v){return;}
                     // Handle after this callback returns: WebView2 must not be re-entered from here.
                     QUEUE.lock().unwrap().push(Event::Session("__ipc".into(), v));
@@ -325,6 +330,7 @@ fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&s
         .with_navigation_handler(move |url| {
             // External links open in the browser, never inside the app.
             if url.starts_with("http://itda.localhost/") || url.starts_with("itda://") {
+                crate::files::preview::revoke_owner(&navigation_owner);
                 crate::files_win::gesture::registry().lock().unwrap().remove(ipc_source);
                 return true;
             }
@@ -875,3 +881,8 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
 
 /// The native Windows viewer has no web page to tell (high-performance mode is Mac-to-Mac).
 pub(super) fn session_eval(_id: &str, _js: &str) {}
+
+pub fn eval_files(owner: &str, js: &str) {
+    if owner == "home" { WEBVIEW.with(|w| { if let Some(v) = w.borrow().as_ref() { let _ = v.evaluate_script(js); } }); }
+    else { FILE_PANES.with(|p| { if let Some((_, v)) = p.borrow().get(owner) { let _ = v.evaluate_script(js); } }); }
+}

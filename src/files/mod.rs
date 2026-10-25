@@ -1,5 +1,6 @@
 //! File browsing and transfers, independent of remote screen sessions.
 pub mod locations;
+pub mod preview;
 #[cfg(any(target_os = "macos", windows))]
 pub mod export;
 #[cfg(any(target_os = "macos", windows))]
@@ -620,6 +621,7 @@ fn retire(key: String) {
     retired().lock().unwrap().insert(key.clone()); cleanup_retired(&key);
 }
 pub fn release_page(page: &str) {
+    preview::revoke_page(page);
     if page.is_empty() { return; }
     // Its transfers keep running, now the app's (shown and cancellable from any Itda page).
     background::adopt(page);
@@ -629,6 +631,7 @@ pub fn release_page(page: &str) {
     keys.sort(); keys.dedup(); for key in keys { retire(key); }
 }
 pub fn disconnect(id: &str) {
+    preview::revoke_connection(id);
     if !id.contains('\x1f') {
         let prefix = format!("{id}\x1f");
         // The device itself is going (deleted, or its files disconnected): a copied selection
@@ -693,6 +696,9 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
         disconnect(&key);
         return;
     }
+    let preview_ticket = if op == "preview" && crate::home::binary_previews() {
+        preview::begin(window_page(&v), &key).map(Some)
+    } else { Ok(None) };
     std::thread::spawn(move || {
         let result = (|| -> io::Result<Value> {
             match op.as_str() {
@@ -758,6 +764,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                     )
                 }
                 "preview" => {
+                    let ticket = preview_ticket?;
                     // Return bounded inert content; never launch an application or render HTML/SVG.
                     let p = get(&v, "path");
                     let ext = Path::new(&p)
@@ -848,12 +855,12 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                     }
                     #[cfg(target_os = "macos")]
                     if mime == "application/pdf" {
-                        return pdf_preview(&bytes);
+                        return pdf_preview(&bytes, ticket.as_ref());
                     }
                     if mime == "text/plain" {
                         Ok(json!({"mime":mime,"text":String::from_utf8_lossy(&bytes)}))
                     } else {
-                        Ok(json!({"mime":mime,"base64":crate::ws::base64(&bytes)}))
+                        preview_media(ticket.as_ref(), bytes, mime, false)
                     }
                 }
                 "reveal_folder" => {
@@ -1093,7 +1100,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
 /// Render only the first PDF page to inert pixels; PDF plugins in sandboxed frames are
 /// unavailable in WebKit/WebView2. Keep the source private and remove both files afterward.
 #[cfg(target_os = "macos")]
-fn pdf_preview(bytes: &[u8]) -> io::Result<Value> {
+fn pdf_preview(bytes: &[u8], ticket: Option<&preview::Ticket>) -> io::Result<Value> {
     use std::{process::{Command, Stdio}, time::{Duration, Instant}};
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::io::Write;
@@ -1120,7 +1127,7 @@ fn pdf_preview(bytes: &[u8]) -> io::Result<Value> {
         }
         let png = std::fs::read(output)?;
         if png.len() > 16 * 1024 * 1024 { return Ok(json!({"too_large":true})); }
-        Ok(json!({"mime":"image/png","base64":crate::ws::base64(&png),"first_page":true}))
+        preview_media(ticket, png, "image/png", true)
     })();
     let _ = std::fs::remove_dir_all(root);
     result
@@ -1629,5 +1636,15 @@ mod preview_slot_tests {
         slot.state.lock().unwrap().0 = Some(11);
         slot.stop();
         assert!(f.check().is_err() && slot.state.lock().unwrap().0.is_none());
+    }
+}
+
+fn window_page(v: &Value) -> &str { v["window"].as_str().unwrap_or("") }
+fn preview_media(ticket: Option<&preview::Ticket>, bytes: Vec<u8>, mime: &str, first_page: bool) -> io::Result<Value> {
+    if let Some(ticket) = ticket {
+        Ok(json!({"mime":mime,"url":preview::publish(ticket, bytes, mime)?,"first_page":first_page}))
+    } else {
+        // The HTTP fixture bridge has no native window/protocol handler.
+        Ok(json!({"mime":mime,"base64":crate::ws::base64(&bytes),"first_page":first_page}))
     }
 }
