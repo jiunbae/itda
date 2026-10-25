@@ -169,6 +169,7 @@
   }
   // Point the window at the device of the current tab; the other tabs keep their connections.
   function useHost(h) {
+    send("files_preview_release", {page:pageToken});
     host = h;
     previewKey = "";
     document.title = `${label(h)} — 파일`;
@@ -525,6 +526,7 @@
     </div>`;
   }
   function renderNetwork() {
+    send("files_preview_release", {page:pageToken});
     previewModal = false; previewKey = ""; ++previewSeq;
     layer.querySelector(".files-preview").hidden = true;
     layer.classList.remove("has-preview", "gallery-view");
