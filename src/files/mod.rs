@@ -379,7 +379,9 @@ fn local_mode(m: &std::fs::Metadata) -> Option<u32> {
     }
 }
 fn local_entry(p: &Path) -> io::Result<Entry> {
-    let m = std::fs::symlink_metadata(p)?;
+    local_entry_with(p, std::fs::symlink_metadata(p)?)
+}
+fn local_entry_with(p: &Path, m: std::fs::Metadata) -> io::Result<Entry> {
     Ok(Entry {
         name: p
             .file_name()
@@ -413,7 +415,11 @@ fn drives() -> Vec<Entry> {
 fn local_list(p: &str) -> io::Result<Vec<Entry>> {
     let mut out = Vec::new();
     for e in std::fs::read_dir(p)? {
-        if let Ok(entry) = local_entry(&e?.path()) {
+        // The directory scan's own metadata (not followed through links, like
+        // symlink_metadata): on Windows it comes with the scan instead of opening each file,
+        // which on a network drive was a round trip per file.
+        let e = e?;
+        if let Ok(entry) = e.metadata().and_then(|m| local_entry_with(&e.path(), m)) {
             if name(&entry.name).is_ok() {
                 out.push(entry);
             }
