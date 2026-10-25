@@ -4,13 +4,11 @@ use std::{
     collections::HashMap,
     io,
     sync::{Mutex, OnceLock},
-    time::{Duration, Instant},
 };
 use wry::http::{self, Request, Response};
 
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ITEM: usize = 16 * 1024 * 1024;
-const TTL: Duration = Duration::from_secs(600);
 #[derive(Clone)]
 pub struct Ticket {
     page: String,
@@ -20,7 +18,6 @@ struct Asset {
     token: String,
     bytes: Vec<u8>,
     mime: &'static str,
-    at: Instant,
 }
 struct Page {
     owner: String,
@@ -93,45 +90,31 @@ impl Registry {
                 "이전 미리보기입니다",
             ));
         }
-        self.prune();
-        while self
+        // A currently displayed audio/video may request a later range after a long pause.
+        // Never evict its URL behind the player's back; reject new work at the active budget.
+        if self
             .pages
-            .values()
-            .filter_map(|p| p.asset.as_ref())
+            .iter()
+            .filter(|(page, _)| *page != &ticket.page)
+            .filter_map(|(_, p)| p.asset.as_ref())
             .map(|a| a.bytes.len())
             .sum::<usize>()
             + bytes.len()
             > MAX_BYTES
         {
-            let Some(oldest) = self
-                .pages
-                .iter()
-                .filter_map(|(id, p)| p.asset.as_ref().map(|a| (id.clone(), a.at)))
-                .min_by_key(|(_, at)| *at)
-                .map(|(id, _)| id)
-            else {
-                break;
-            };
-            self.pages.get_mut(&oldest).unwrap().asset = None;
+            return Err(io::Error::other(
+                "다른 파일 창의 미리보기를 닫은 뒤 다시 선택해 주세요",
+            ));
         }
         let token = random()?;
         self.pages.get_mut(&ticket.page).unwrap().asset = Some(Asset {
             token: token.clone(),
             bytes,
             mime,
-            at: Instant::now(),
         });
         Ok(format!("/preview/{token}"))
     }
-    fn prune(&mut self) {
-        for p in self.pages.values_mut() {
-            if p.asset.as_ref().is_some_and(|a| a.at.elapsed() >= TTL) {
-                p.asset = None;
-            }
-        }
-    }
     fn response(&mut self, owner: &str, req: &Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
-        self.prune();
         let Some(token) = req.uri().path().strip_prefix("/preview/") else {
             return empty(404, None);
         };
@@ -375,20 +358,21 @@ mod tests {
                 .status(),
             416
         );
-        r.pages.get_mut("p").unwrap().asset.as_mut().unwrap().at = Instant::now() - TTL;
-        assert_eq!(r.response("w", &req(&url, None, "GET")).status(), 404);
     }
     #[test]
-    fn retained_payloads_are_bounded_across_windows() {
+    fn retained_payloads_are_bounded_without_breaking_another_windows_player() {
         let mut r = Registry::default();
         let mut urls = Vec::new();
-        for i in 0..5 {
+        for i in 0..4 {
             let p = format!("page-{i}");
             let w = format!("window-{i}");
             r.bind(&p, &w);
             let t = r.begin(&p, "c").unwrap();
-            urls.push(r.publish(&t, vec![0; MAX_ITEM], "image/png").unwrap());
+            urls.push(r.publish(&t, vec![0; MAX_ITEM], "video/mp4").unwrap());
         }
+        r.bind("page-4", "window-4");
+        let t = r.begin("page-4", "c").unwrap();
+        assert!(r.publish(&t, vec![0; MAX_ITEM], "image/png").is_err());
         assert_eq!(
             r.pages
                 .values()
@@ -397,12 +381,12 @@ mod tests {
                 .sum::<usize>(),
             MAX_BYTES
         );
-        assert_eq!(
-            r.response("window-0", &req(&urls[0], None, "HEAD"))
-                .status(),
-            404
-        );
-        let last = r.response("window-4", &req(&urls[4], None, "HEAD"));
+        let first = r.response("window-0", &req(&urls[0], Some("bytes=0-1"), "GET"));
+        assert_eq!(first.status(), 206);
+        assert_eq!(first.body().as_ref(), &[0, 0]);
+        r.begin("page-0", "c").unwrap(); // Selection change frees that window's original.
+        let url = r.publish(&t, vec![0; MAX_ITEM], "image/png").unwrap();
+        let last = r.response("window-4", &req(&url, None, "HEAD"));
         assert_eq!(last.status(), 200);
         assert_eq!(last.headers()["Content-Length"], MAX_ITEM.to_string());
         assert_eq!(last.headers()["X-Content-Type-Options"], "nosniff");
