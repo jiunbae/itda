@@ -161,6 +161,7 @@ fn init(quick: Option<String>) {
 /// The window is up: start the background work.
 fn started() {
     plat::apply_zoom(home(|m| m.settings.zoom));
+    std::thread::spawn(crate::files::sweep_view_copies);
     start_probes();
     let w = home(|m| m.settings.web.clone());
     if w.on {
