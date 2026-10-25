@@ -529,15 +529,16 @@ impl Sftp {
                 }
             }
         })();
-        if broken {
+        if result.is_err() {
+            // Nothing after a failure waits on the server (it may never answer): on a transport
+            // still in step, the replies still due and the CLOSE's are dropped as they arrive.
+            if !broken {
+                self.deferred.extend(queue.iter().map(|q| q.0).filter(|id| !got.contains_key(id)));
+                let _ = self.close_later(&h);
+            }
             return result;
         }
-        if result.is_err() {
-            // Replies still due are dropped when they arrive, so the session stays in step.
-            self.deferred.extend(queue.iter().map(|q| q.0).filter(|id| !got.contains_key(id)));
-        }
-        let closed = self.close(&h);
-        result.and(closed)
+        self.close(&h)
     }
     /// Stream a file to another device with bounded read/write windows. The caller owns
     /// the destination staging name and commits it only after source/size verification.
@@ -671,6 +672,56 @@ while True:
     elif t in (7, 17): flush(); send(105, id, struct.pack(">IQ", 1, len(data)))
     else: flush(); send(101, id, status(8))
 "#;
+    /// A server that refuses every READ with a given (possibly malformed) reply and never
+    /// answers CLOSE: the download fails at once instead of waiting on it.
+    const REFUSING_SERVER: &str = r#"
+import struct, sys
+i, o = sys.stdin.buffer, sys.stdout.buffer
+reply = bytes.fromhex(sys.argv[1])
+def readexact(n):
+    b = b""
+    while len(b) < n:
+        c = i.read(n - len(b))
+        if not c: sys.exit(0)
+        b += c
+    return b
+def send(t, id, body=b""):
+    p = bytes([t]) + struct.pack(">I", id) + body; o.write(struct.pack(">I", len(p)) + p); o.flush()
+first = True
+while True:
+    b = readexact(struct.unpack(">I", readexact(4))[0])
+    if first:
+        first = False; p = struct.pack(">I", 3); o.write(struct.pack(">I", len(p) + 1) + bytes([2]) + p); o.flush(); continue
+    t, id = b[0], struct.unpack(">I", b[1:5])[0]
+    if t == 3: send(102, id, struct.pack(">I", 1) + b"h")
+    elif t == 5: send(reply[0], id, reply[1:])
+"#;
+    #[test]
+    fn download_failure_never_waits_on_close() {
+        // type byte + body: a proper refusal, a STATUS with only its code, an empty DATA, a
+        // DATA larger than asked, a reply type that doesn't belong.
+        let refusal = |code: u32, full: bool| {
+            let mut b = vec![101u8];
+            b.extend_from_slice(&code.to_be_bytes());
+            if full { b.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]); }
+            b
+        };
+        let mut big = vec![103u8];
+        big.extend_from_slice(&40_000u32.to_be_bytes());
+        big.extend(std::iter::repeat_n(7u8, 40_000));
+        let cases = [refusal(3, true), refusal(2, false), vec![103, 0, 0, 0, 0], big, vec![105, 0, 0, 0, 0]];
+        for reply in cases {
+            let hex: String = reply.iter().map(|b| format!("{b:02x}")).collect();
+            let Ok(child) = std::process::Command::new("python3").args(["-c", REFUSING_SERVER, &hex]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn() else {
+                return;
+            };
+            let control = Control::default();
+            let mut s = Sftp::start(child, &control).unwrap();
+            let started = std::time::Instant::now();
+            assert!(s.download("/f", 100_000, &mut Vec::new(), &control, |_| {}).is_err());
+            assert!(started.elapsed() < std::time::Duration::from_secs(2), "waited on a CLOSE after {hex:.20}");
+        }
+    }
     #[test]
     fn download_window_handles_short_and_reordered_reads() {
         let Ok(child) = std::process::Command::new("python3").args(["-c", SHORT_READ_SERVER]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn() else {
