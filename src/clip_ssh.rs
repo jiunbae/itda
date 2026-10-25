@@ -39,8 +39,12 @@ pub struct Bridge {
 
 impl Drop for Bridge {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        self.outbox.1.notify_all();
+        {
+            // (Under the sender's lock: it can't miss the wake-up between its check and wait.)
+            let _pending = self.outbox.0.lock().unwrap();
+            self.stop.store(true, Ordering::Relaxed);
+            self.outbox.1.notify_all();
+        }
         for child in [&self.watcher, &self.sending] {
             reap(child);
         }
