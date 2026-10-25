@@ -443,10 +443,9 @@ impl SessionVault {
         let stream = loop {
             match listener.accept() {
                 Ok((mut s, _)) => {
-                    let proven = s.set_nonblocking(false).is_ok()
-                        && s.set_read_timeout(Some(std::time::Duration::from_secs(2))).is_ok()
-                        && read_line_secret(&mut s).is_ok_and(|proof| proof.as_slice() == token.as_bytes());
-                    if proven {
+                    // Two seconds at most per candidate, never past the overall deadline.
+                    let by = until.min(std::time::Instant::now() + std::time::Duration::from_secs(2));
+                    if s.set_nonblocking(false).is_ok() && proves(&mut s, token.as_bytes(), by) {
                         break s;
                     }
                 }
@@ -584,6 +583,25 @@ fn vault_helper(base: &str, socket: &Path) -> io::Result<()> {
     }
     let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
     serve_vault(&mut stream, &mut NativeVault)
+}
+
+/// Whether the peer sends `token` and a newline before `by` (an absolute deadline: a peer that
+/// trickles bytes can't hold the wait open), reading no more than that.
+#[cfg(any(windows, test))]
+fn proves(s: &mut std::net::TcpStream, token: &[u8], by: std::time::Instant) -> bool {
+    let mut got = Zeroizing::new(Vec::with_capacity(token.len() + 1));
+    let mut b = [0u8; 1];
+    while got.len() <= token.len() {
+        let left = by.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() || s.set_read_timeout(Some(left)).is_err() {
+            return false;
+        }
+        match s.read(&mut b) {
+            Ok(1) => got.push(b[0]),
+            _ => return false,
+        }
+    }
+    std::time::Instant::now() < by && got.last() == Some(&b'\n') && &got[..token.len()] == token
 }
 
 /// The Windows helper, run by the one-time task in the desktop session: the folder must be a
@@ -2662,5 +2680,47 @@ mod running_tests {
         assert!(!super::running_from("0 0").unwrap());
         assert!(super::running_from("0 1").is_err());
         assert!(super::running_from("x").is_err());
+    }
+}
+
+#[cfg(test)]
+mod proof_tests {
+    use std::io::Write;
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+
+    fn pair() -> (TcpStream, TcpStream) {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let c = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        (l.accept().unwrap().0, c)
+    }
+
+    /// The right token passes; a wrong one, an overlong one, or one dripped past the
+    /// deadline does not, and the trickle is cut off at the deadline.
+    #[test]
+    fn helper_proof() {
+        let (mut s, mut c) = pair();
+        c.write_all(b"abc\n").unwrap();
+        assert!(super::proves(&mut s, b"abc", Instant::now() + Duration::from_secs(2)));
+        let (mut s, mut c) = pair();
+        c.write_all(b"abd\n").unwrap();
+        assert!(!super::proves(&mut s, b"abc", Instant::now() + Duration::from_secs(2)));
+        let (mut s, mut c) = pair();
+        c.write_all(b"abcabc\n").unwrap();
+        assert!(!super::proves(&mut s, b"abc", Instant::now() + Duration::from_secs(2)));
+        let (mut s, mut c) = pair();
+        let drip = std::thread::spawn(move || {
+            for _ in 0..20 {
+                if c.write_all(b"a").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let start = Instant::now();
+        assert!(!super::proves(&mut s, b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Instant::now() + Duration::from_millis(500)));
+        assert!(start.elapsed() < Duration::from_millis(900));
+        drop(s);
+        drip.join().unwrap();
     }
 }
