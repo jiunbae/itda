@@ -469,12 +469,16 @@ impl Sftp {
             b.extend_from_slice(&n.to_be_bytes());
             s.send(5, &b)
         };
+        // A broken transport (a failed write or read, a reply out of step) ends at once: no
+        // CLOSE is sent or waited for on it.
+        let mut broken = false;
         let result = (|| -> io::Result<()> {
             loop {
                 control.check()?;
                 while queue.len() < WINDOW && offset < size {
                     let n = (size - offset).min(CHUNK as u64) as u32;
-                    queue.push_back((read(self, offset, n)?, offset, n));
+                    let id = read(self, offset, n).inspect_err(|_| broken = true)?;
+                    queue.push_back((id, offset, n));
                     offset += n as u64;
                 }
                 while let Some(&(id, at, n)) = queue.front() {
@@ -488,7 +492,8 @@ impl Sftp {
                     progress(done);
                     if data.len() < n as usize {
                         let (rest_at, rest) = (at + data.len() as u64, n - data.len() as u32);
-                        queue.push_front((read(self, rest_at, rest)?, rest_at, rest));
+                        let id = read(self, rest_at, rest).inspect_err(|_| broken = true)?;
+                        queue.push_front((id, rest_at, rest));
                     }
                 }
                 if queue.is_empty() {
@@ -497,9 +502,10 @@ impl Sftp {
                     }
                     continue;
                 }
-                let mut r = self.packet()?;
+                let mut r = self.packet().inspect_err(|_| broken = true)?;
                 let id = r.id;
                 if !queue.iter().any(|q| q.0 == id) || got.contains_key(&id) {
+                    broken = true;
                     return Err(err("SFTP 응답 순서 불일치"));
                 }
                 if r.t != 103 {
@@ -517,6 +523,9 @@ impl Sftp {
                 }
             }
         })();
+        if broken {
+            return result;
+        }
         if result.is_err() {
             // Replies still due are dropped when they arrive, so the session stays in step.
             self.deferred.extend(queue.iter().map(|q| q.0).filter(|id| !got.contains_key(id)));
@@ -613,31 +622,45 @@ mod tests {
     /// 1000 bytes each): the download still writes every byte in order, and the session stays
     /// usable afterwards.
     const SHORT_READ_SERVER: &str = r#"
-import struct, sys, select
+import struct, sys, threading, queue
 i, o = sys.stdin.buffer, sys.stdout.buffer
 data = bytes((k * 7 + k // 251) % 256 for k in range(60000))
-def read():
-    n = i.read(4)
-    if len(n) < 4: sys.exit(0)
-    b = i.read(struct.unpack(">I", n)[0]); return b[0], struct.unpack(">I", b[1:5])[0] if len(b) >= 5 else 0, b
+def readexact(n):
+    b = b""
+    while len(b) < n:
+        c = i.read(n - len(b))
+        if not c: return None
+        b += c
+    return b
+requests = queue.Queue()
+def reader():
+    while True:
+        n = readexact(4)
+        if n is None: requests.put(None); return
+        requests.put(readexact(struct.unpack(">I", n)[0]))
+threading.Thread(target=reader, daemon=True).start()
 def send(t, id, body=b""):
     p = bytes([t]) + struct.pack(">I", id) + body; o.write(struct.pack(">I", len(p)) + p); o.flush()
 def s(x): return struct.pack(">I", len(x)) + x
 def status(code): return struct.pack(">I", code) + s(b"") + s(b"")
-t, _, b = read(); p = struct.pack(">I", 3); o.write(struct.pack(">I", len(p) + 1) + bytes([2]) + p); o.flush()
+requests.get(); p = struct.pack(">I", 3); o.write(struct.pack(">I", len(p) + 1) + bytes([2]) + p); o.flush()
 held = []
 def flush():
     global held
     for rid, body in reversed(held): send(103, rid, body)
     held = []
 while True:
-    t, id, b = read()
+    try:
+        b = requests.get(timeout=0.05)
+    except queue.Empty:
+        flush(); continue
+    if b is None: sys.exit(0)
+    t, id = b[0], struct.unpack(">I", b[1:5])[0]
     if t == 3: flush(); send(102, id, s(b"h"))
     elif t == 5:
         hl = struct.unpack(">I", b[5:9])[0]; off, n = struct.unpack(">QI", b[9 + hl:9 + hl + 12])
         held.append((id, s(data[off:off + min(n, 1000)])))
-        # Reverse up to four, but don't sit on fewer when nothing more is coming.
-        if len(held) == 4 or not select.select([sys.stdin], [], [], 0.05)[0]: flush()
+        if len(held) == 4: flush()
     elif t == 4: flush(); send(101, id, status(0))
     elif t in (7, 17): flush(); send(105, id, struct.pack(">IQ", 1, len(data)))
     else: flush(); send(101, id, status(8))
