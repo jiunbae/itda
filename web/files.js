@@ -37,7 +37,6 @@
   let previewKind = "preview", explorerHome = false;
   // Windows Explorer: the Home / Network page a local folder was opened from (Back returns).
   let returnPage = null;
-  let previewInFlight = false, queuedPreview = null;
   let tabId = 0, currentTab = 0, suppressClick = false;
   const fileTabs = [], folderCache = new Map(), columnRequests = new Map();
   const viewModes = ["grid", "list", "columns", "gallery"];
@@ -214,7 +213,7 @@
     const show = previewOn || view === "gallery" || previewModal;
     el.hidden = !show;
     el.classList.toggle("quick-look", previewModal);
-    if (!show) { clearTimeout(previewTimer); queuedPreview = null; previewKey = ""; ++previewSeq; return; }
+    if (!show) { clearTimeout(previewTimer); previewKey = ""; ++previewSeq; return; }
     const details = !MAC && previewKind === "details" && view !== "gallery" && !previewModal;
     const identity = `${currentTab}:${active}:${panes[active].path}:${entry?.name || ""}:${details}`;
     if (previewKey === identity) return;
@@ -232,11 +231,9 @@
     if (!entry || entry.dir || entry.link) return;
     const seq = previewSeq, side = active, path = child(panes[active].path, entry.name);
     el.querySelector(".files-preview-content").insertAdjacentHTML("beforeend", '<small>미리보기 불러오는 중…</small>');
-    previewTimer = setTimeout(() => {
-      const request = { side, path, seq };
-      if (previewInFlight) queuedPreview = request;
-      else { previewInFlight = true; call("preview", request); }
-    }, 180);
+    // Each selection asks at once (after a short pause): the app stops a preview of this
+    // device that is still downloading, so moving on never waits for the last one to finish.
+    previewTimer = setTimeout(() => call("preview", { side, path, seq }), 180);
   }
   function previewResult(m) {
     if (m.seq !== previewSeq || !layer) return;
@@ -527,7 +524,7 @@
     </div>`;
   }
   function renderNetwork() {
-    previewModal = false; previewKey = ""; queuedPreview = null; ++previewSeq;
+    previewModal = false; previewKey = ""; ++previewSeq;
     layer.querySelector(".files-preview").hidden = true;
     layer.classList.remove("has-preview", "gallery-view");
     const { html, devices, found, peers } = networkData();
@@ -876,7 +873,7 @@
     returnPage = null;
     undo.length = 0;
     layer = document.createElement("div");
-    previewKey = ""; queuedPreview = null; ++previewSeq;
+    previewKey = ""; ++previewSeq;
     fileTabs.length = 0; currentTab = ++tabId; fileTabs.push({ id: currentTab, host }); folderCache.clear(); columnRequests.clear();
     layer.className = `files-layer ${MAC ? "mac" : "windows"}`;
     const tool = (action, glyph, text) =>
@@ -1736,10 +1733,6 @@
     const h = id === host.id ? host : hostById(id);
     return `${h ? label(h) : "원격"}: ${path}`;
   }
-  function previewDone() {
-    previewInFlight = false;
-    if (queuedPreview) { const request = queuedPreview; queuedPreview = null; if (request.seq === previewSeq) { previewInFlight = true; call("preview", request); } }
-  }
   function transferName(j) {
     const n = j.request?.names.length || j.count || 0;
     return j.file || (n === 1 && j.request ? j.request.names[0] : n ? `${n}개 항목` : "파일 전송");
@@ -2339,15 +2332,12 @@
       return true;
     }
     if (!host || m.id !== host.id) {
-      // The tab moved to another device; let its folder be asked for again on return,
-      // and free the preview slot so this device's previews are requested.
+      // The tab moved to another device; let its folder be asked for again on return.
       if (m.op === "list") columnRequests.delete(m.seq);
-      if (m.op === "preview") previewDone();
       return true;
     }
     if (m.op === "preview") {
       previewResult(m);
-      previewDone();
       return true;
     }
     if (m.op === "list" && columnRequests.has(m.seq)) {
