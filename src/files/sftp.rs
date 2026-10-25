@@ -510,6 +510,9 @@ impl Sftp {
                 }
                 if r.t != 103 {
                     queue.retain(|q| q.0 != id);
+                    // A STATUS is the server refusing the read (still in step); any other kind
+                    // of reply means the transport can't be trusted.
+                    broken |= r.t != 101;
                     return Err(err("파일이 전송 중 바뀌었거나 읽을 수 없습니다"));
                 }
                 match r.bytes() {
@@ -517,7 +520,7 @@ impl Sftp {
                         got.insert(id, data);
                     }
                     Err(e) => {
-                        queue.retain(|q| q.0 != id);
+                        broken = true;
                         return Err(e);
                     }
                 }
