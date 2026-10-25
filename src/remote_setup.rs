@@ -1022,20 +1022,7 @@ fn other_app_running() -> io::Result<bool> {
     #[cfg(target_os = "windows")]
     {
         let script = format!(
-            r#"$ProgressPreference='SilentlyContinue';$me={};$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-# Each Itda's owner from its access token: ours, another account's, or unknown (no access).
-Add-Type -TypeDefinition @'
-using System;using System.Runtime.InteropServices;
-public static class ItdaOwner {{
-[DllImport("kernel32",SetLastError=true)] static extern IntPtr OpenProcess(uint a,bool i,uint p);
-[DllImport("advapi32",SetLastError=true)] static extern bool OpenProcessToken(IntPtr h,uint a,out IntPtr t);
-[DllImport("kernel32")] static extern bool CloseHandle(IntPtr h);
-public static string Sid(uint pid){{IntPtr p=OpenProcess(0x1000,false,pid);if(p==IntPtr.Zero)return null;try{{IntPtr t;if(!OpenProcessToken(p,8,out t))return null;try{{using(var id=new System.Security.Principal.WindowsIdentity(t)){{return id.User.Value;}}}}finally{{CloseHandle(t);}}}}finally{{CloseHandle(p);}}}}
-}}
-'@
-$own=0;$unknown=0
-foreach($p in @(Get-Process -Name itda -ErrorAction SilentlyContinue)){{if($p.Id -eq $me){{continue}};$s=$null;try{{$s=[ItdaOwner]::Sid([uint32]$p.Id)}}catch{{}};if($null -eq $s){{$unknown++}}elseif($s -eq $sid){{$own++}}}}
-[Console]::Write("$own $unknown")"#,
+            "$ProgressPreference='SilentlyContinue';$me={}\n{WIN_OWNERS}\n$own=0;$unknown=0\nforeach($p in Get-ItdaProcesses){{if($p.Id -eq $me){{continue}};$s=Get-ItdaOwner $p;if($null -eq $s){{$unknown++}}elseif($s -eq $ItdaMe){{$own++}}}}\n[Console]::Write(\"$own $unknown\")",
             std::process::id()
         );
         let bytes: Vec<_> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
@@ -1564,20 +1551,35 @@ for pid in $(pgrep -u "$(id -u)" -x itda || true); do
 done
 printf '{"platform":"mac","version":"%s","versions":[%s],"running":%s}\n' "$version" "$versions" "$r"
 "#;
+/// Itda's processes and each one's owner, read from its access token (WMI, which needs more
+/// rights over SSH, isn't used): this account's SID, another's, or $null when it can't be read.
+/// A test may define Get-ItdaProcesses / Get-ItdaOwner first.
+const WIN_OWNERS: &str = r#"$ItdaMe=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+if(-not ('ItdaOwner' -as [type])){Add-Type -TypeDefinition @'
+using System;using System.Runtime.InteropServices;
+public static class ItdaOwner {
+[DllImport("kernel32",SetLastError=true)] static extern IntPtr OpenProcess(uint a,bool i,uint p);
+[DllImport("advapi32",SetLastError=true)] static extern bool OpenProcessToken(IntPtr h,uint a,out IntPtr t);
+[DllImport("kernel32")] static extern bool CloseHandle(IntPtr h);
+public static string Sid(uint pid){IntPtr p=OpenProcess(0x1000,false,pid);if(p==IntPtr.Zero)return null;try{IntPtr t;if(!OpenProcessToken(p,8,out t))return null;try{using(var id=new System.Security.Principal.WindowsIdentity(t)){return id.User.Value;}}finally{CloseHandle(t);}}finally{CloseHandle(p);}}
+}
+'@}
+if(-not (Get-Command Get-ItdaProcesses -ErrorAction SilentlyContinue)){function Get-ItdaProcesses{@(Get-Process -Name itda -ErrorAction SilentlyContinue)}}
+if(-not (Get-Command Get-ItdaOwner -ErrorAction SilentlyContinue)){function Get-ItdaOwner($p){try{[ItdaOwner]::Sid([uint32]$p.Id)}catch{$null}}}
+"#;
+
+fn win_probe() -> String {
+    WIN_PROBE.replace("__OWNERS__", WIN_OWNERS)
+}
 const WIN_PROBE: &str = r#"
 $ErrorActionPreference='Stop'
-$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$owned=@(Get-CimInstance Win32_Process -Filter "Name='itda.exe'" | Where-Object {
- # Other users' processes can deny this query. Only positively identified current-user
- # processes belong to this per-user installation; do not block it on a foreign session.
- try {
-  $owner=Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop
-  $owner.ReturnValue -eq 0 -and $owner.Sid -eq $sid
- } catch {$false}
-})
+__OWNERS__
+# Only positively identified current-user processes belong to this per-user installation; one
+# of another account (or whose owner can't be read) doesn't block or describe it.
+$owned=@(Get-ItdaProcesses | Where-Object { (Get-ItdaOwner $_) -eq $ItdaMe })
 $running=$owned.Count -gt 0
 $exe=Join-Path $env:LOCALAPPDATA 'Programs\Itda\itda.exe'
-$paths=@($exe)+@($owned | ForEach-Object {$_.ExecutablePath} | Where-Object {$_})
+$paths=@($exe)+@($owned | ForEach-Object {$_.Path} | Where-Object {$_})
 $version=''
 $versions=@(foreach($path in ($paths | Select-Object -Unique)) {
  if(Test-Path -LiteralPath $path -PathType Leaf) {
@@ -1623,7 +1625,7 @@ fn probe(cfg: &crate::tunnel::SshCfg) -> io::Result<Remote> {
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => return Err(e),
         Err(_) => {}
     }
-    let out = run(cfg, &ps(WIN_PROBE), &[])?;
+    let out = run(cfg, &ps(&win_probe()), &[])?;
     out.lines()
         .find_map(parse_probe)
         .ok_or_else(|| {
@@ -1895,24 +1897,22 @@ $foreign=Join-Path $env:LOCALAPPDATA 'Other user\itda.exe'
 New-VersionFixture $installed 'InstalledFixture' '1.0.2'
 New-VersionFixture $portable 'PortableFixture' '9.9.9'
 New-VersionFixture $foreign 'OtherFixture' '99.0.0'
-function Get-CimInstance {
- param($ClassName,$Filter)
- $rows=@([pscustomobject]@{ExecutablePath=$portable;FixtureSid=$fixtureOwner},
-   [pscustomobject]@{ExecutablePath=$foreign;FixtureSid=$fixtureOther})
- if($fixtureDeny){$rows+=@([pscustomobject]@{ExecutablePath=$foreign;FixtureSid='denied'},[pscustomobject]@{ExecutablePath=$foreign;FixtureSid='exited'})}
+function Get-ItdaProcesses {
+ $rows=@([pscustomobject]@{Id=1;Path=$portable;FixtureSid=$fixtureOwner},
+   [pscustomobject]@{Id=2;Path=$foreign;FixtureSid=$fixtureOther})
+ if($fixtureDeny){$rows+=@([pscustomobject]@{Id=3;Path=$foreign;FixtureSid='denied'},[pscustomobject]@{Id=4;Path=$foreign;FixtureSid='exited'})}
  $rows
 }
-function Invoke-CimMethod {
- param($InputObject,$MethodName)
- if($InputObject.FixtureSid -eq 'denied'){return @{ReturnValue=2;Sid=$fixtureOwner}}
- if($InputObject.FixtureSid -eq 'exited'){throw 'fixture process exited'}
- @{ReturnValue=0;Sid=$InputObject.FixtureSid}
+function Get-ItdaOwner($p) {
+ # An unreadable token (access denied, process gone) reads as $null.
+ if($p.FixtureSid -in 'denied','exited'){return $null}
+ $p.FixtureSid
 }
 "#;
         for denied in [false, true] {
             let root = std::env::temp_dir().join(format!("itda-portable-probe-{}", store::new_id()));
             fs::create_dir_all(&root).unwrap();
-            let script = format!("$fixtureDeny=${denied}\n{fixture}\n{WIN_PROBE}");
+            let script = format!("$fixtureDeny=${denied}\n{fixture}\n{}", win_probe());
             let encoded = ps(&script);
             let result = std::process::Command::new("powershell.exe")
                 .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded.split_whitespace().last().unwrap()])
@@ -1932,7 +1932,7 @@ function Invoke-CimMethod {
     #[cfg(windows)]
     #[test]
     fn windows_bootstrap_is_valid_powershell_without_executing_it() {
-        for command in [win_install("0.9.99", true, true), ps(WIN_VAULT_PROBE), ps(WIN_PROBE)] {
+        for command in [win_install("0.9.99", true, true), ps(WIN_VAULT_PROBE), ps(&win_probe())] {
             let encoded = command.split_whitespace().last().unwrap();
             let mut child=std::process::Command::new("powershell.exe").args(["-NoProfile","-NonInteractive","-Command",r#"$s=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd()));$t=$null;$e=$null;[Management.Automation.Language.Parser]::ParseInput($s,[ref]$t,[ref]$e)|Out-Null;if($e.Count){$e|ForEach-Object {[Console]::Error.WriteLine($_.Message)};exit 1}"#]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
             child
