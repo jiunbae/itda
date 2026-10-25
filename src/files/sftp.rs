@@ -485,6 +485,9 @@ impl Sftp {
                     let Some(data) = got.remove(&id) else { break };
                     queue.pop_front();
                     if data.is_empty() || data.len() > n as usize {
+                        // (A reply the protocol doesn't allow: the server can't be trusted to
+                        // answer a CLOSE either.)
+                        broken = true;
                         return Err(err("SFTP 읽기 크기 오류: 전송 중 파일이 바뀌었을 수 있습니다"));
                     }
                     out.write_all(&data)?;
@@ -512,7 +515,7 @@ impl Sftp {
                     queue.retain(|q| q.0 != id);
                     // A STATUS is the server refusing the read (still in step); any other kind
                     // of reply means the transport can't be trusted.
-                    broken |= r.t != 101;
+                    broken |= r.t != 101 || r.status().is_err();
                     return Err(err("파일이 전송 중 바뀌었거나 읽을 수 없습니다"));
                 }
                 match r.bytes() {
