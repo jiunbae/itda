@@ -332,7 +332,7 @@ pub fn run(c: Conn, l: Launch) {
         // Text copied on that Mac is taken only while this viewer is in front: a Mac behind
         // mustn't replace the clipboard the one in use is working with.
         let copied = |t: String| {
-            if GetForegroundWindow() as isize == sh().hwnd.load(Relaxed) {
+            if in_front(sh().hwnd.load(Relaxed) as HWND) {
                 crate::clip::from_bridge(t);
             }
         };
@@ -566,7 +566,9 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
         }
         WM_CLIP => {
             if let Some(t) = sh().clip_in.lock().unwrap().take() {
-                if ui(|u| u.l.opts.clipboard) {
+                // Only the connection in use may set the clipboard (checked here, when it
+                // lands: the window in front may have changed since it was sent).
+                if ui(|u| u.l.opts.clipboard) && in_front(h) {
                     set_clipboard(h, &t);
                 }
             }
@@ -1256,6 +1258,11 @@ unsafe fn refit_children() {
 
 unsafe extern "system" fn child_proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match m {
+        // A display window coming forward offers the clipboard like the main window does.
+        WM_SETFOCUS => {
+            clip_out(sh().hwnd.load(Relaxed) as HWND);
+            return DefWindowProcW(h, m, wp, lp);
+        }
         WM_PAINT => paint(h),
         WM_ERASEBKGND => return 1,
         WM_SIZE => {
@@ -1438,22 +1445,29 @@ unsafe fn clip_out(h: HWND) {
     if !ui(|u| u.l.opts.clipboard) || GetClipboardOwner() == h {
         return;
     }
+    // Only from the connection in front (its window or one of its display windows): a copy
+    // goes to the computer being used, not to every one with a viewer open behind. It's
+    // offered again when the connection comes forward.
+    if !in_front(h) {
+        return;
+    }
     let Some(t) = get_clipboard(h) else { return };
     if t.is_empty() {
         return;
     }
-    // Over SSH only from the viewer in front (also when it comes forward): a copy goes to the
-    // Mac being used, not to every Mac with a viewer open behind. (The bridge skips repeats.)
-    if GetForegroundWindow() == h {
-        if let Some(b) = CLIP_BRIDGE.lock().unwrap().as_ref() {
-            b.send(&t);
-        }
+    if let Some(b) = CLIP_BRIDGE.lock().unwrap().as_ref() {
+        b.send(&t); // (it skips repeats itself)
     }
     if ui(|u| u.last_clip == t) {
         return;
     }
     ui(|u| u.last_clip = t.clone());
     crate::clip::send_local(&t);
+}
+/// The connection is in use: its window, or one of its display windows, is in front.
+unsafe fn in_front(main: HWND) -> bool {
+    let fg = GetForegroundWindow();
+    !fg.is_null() && (fg == main || GetWindow(fg, GW_OWNER) == main)
 }
 /// This connection's clipboard over SSH, when it has one (see clip_ssh).
 static CLIP_BRIDGE: std::sync::Mutex<Option<crate::clip_ssh::Bridge>> = std::sync::Mutex::new(None);
