@@ -1733,8 +1733,13 @@ mod preview_pipeline_tests {
         DynamicImage::new_rgba8(8,4).save_with_format(&path,ImageFormat::Png).unwrap();
         let changed=ask(3); assert_eq!(changed["ok"],true,"{changed}");
         assert_eq!(response(&changed).body().as_ref(),std::fs::read(&path).unwrap());
-        std::fs::remove_file(&path).unwrap(); let removed=ask(4); assert_eq!(removed["ok"],false);
-        assert_eq!(response(&changed).status(),404);
+        // A full image GET is now consumed after delivery. Keep a fresh capability unconsumed
+        // (HEAD only) to prove failed metadata refresh revokes it, rather than relying on GET.
+        let waiting=ask(4); assert_eq!(waiting["ok"],true);
+        let head=|m:&Value| preview::response(&owner,&wry::http::Request::builder().method("HEAD").uri(m["data"]["url"].as_str().unwrap()).body(Vec::new()).unwrap());
+        assert_eq!(head(&waiting).status(),200);
+        std::fs::remove_file(&path).unwrap(); let removed=ask(5); assert_eq!(removed["ok"],false);
+        assert_eq!(head(&waiting).status(),404);
     }
 }
 
