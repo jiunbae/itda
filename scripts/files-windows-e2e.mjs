@@ -44,6 +44,14 @@ try{
   await p.goto(base+'/web/');
   await p.evaluate(()=>{S.hosts=[{id:'test',name:'Studio Mac',host:'studio.local',os:'mac',kind:'vnc',login_user:'alex',has_pw:true,files:{method:'sftp',user:'alex'}}];S.settings={...S.settings,onboarded:true,theme:'light'};render();ItdaFiles.launch(S.hosts[0]);});
   const layer=p.locator('.files-layer');await layer.locator('[data-index]').first().waitFor();
+  // Search waits for a pause in typing: a row still shown and clicked before the list
+  // narrows is the row that gets selected (not the one now at its index).
+  await layer.locator('[data-search]').fill('Zebra');
+  await layer.locator('[data-index]').filter({hasText:'Notes.txt'}).first().click();
+  await p.waitForTimeout(250);
+  assert((await layer.locator('[data-index]').allTextContents()).every(t=>t.includes('Zebra')),'Search did not filter after the pause');
+  await layer.locator('[data-search]').fill('');await p.waitForTimeout(250);
+  assert(await layer.locator('[data-index][aria-selected="true"]').filter({hasText:'Notes.txt'}).count()===1&&await layer.locator('[data-index][aria-selected="true"]').count()===1,'Click during a pending search selected another row');
   if(platform==='windows'){
    const boxes=await p.evaluate(()=>['.files-tabs','.files-title','.files-tools','.files-panes'].map(s=>document.querySelector(s).getBoundingClientRect().top));
    assert(boxes.every((y,i)=>!i||y>boxes[i-1]),'Explorer row order is wrong');

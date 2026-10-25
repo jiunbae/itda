@@ -19,6 +19,7 @@
   let nativeGesturePending = null, nativeSequence = 0;
   let pendingFolder = null, tabSwitch = null, pendingDeviceDrop = null;
   let localRsyncAvailable = false;
+  let searchTimer;
   let host,
     layer,
     setup,
@@ -123,7 +124,14 @@
     morph(bar, html);
     if (focused) bar.querySelector('[role="tab"][aria-selected="true"]')?.focus({preventScroll:true});
   }
+  // A filter still being typed belongs to the tab it was typed in: dropped when leaving it.
+  function dropPendingSearch() {
+    clearTimeout(searchTimer);
+    const box = layer?.querySelector("[data-search]");
+    if (box) box.value = search;
+  }
   function newTab(path, side) {
+    dropPendingSearch();
     saveTab();
     currentTab = ++tabId;
     fileTabs.push({ id: currentTab, host });
@@ -135,6 +143,7 @@
   }
   function switchTab(id) {
     if (id === currentTab) return;
+    dropPendingSearch();
     saveTab();
     const t = fileTabs.find(t => t.id === id);
     if (!t) return;
@@ -442,7 +451,7 @@
     explorerHome = !MAC && page === "home";
     if (layer) {
       networkMode = true;
-      search = "";
+      clearTimeout(searchTimer); search = "";
       layer.querySelector("[data-search]").value = "";
       renderPanes();
       return;
@@ -825,7 +834,7 @@
     Object.assign(panes.remote, emptyPane(), { path: data.path, home: data.path, entries: data.entries, history: [data.path], at: 0 });
     if (!panes.local.home) Object.assign(panes.local, emptyPane(), { path: data.local_path, home: data.local_path, entries: data.local_entries, history: [data.local_path], at: 0 });
     active = "remote";
-    search = "";
+    clearTimeout(searchTimer); search = "";
     layer.querySelector("[data-search]").value = "";
     previewKey = "";
     saveTab();
@@ -863,7 +872,7 @@
     });
     active = "remote";
     split = false;
-    search = "";
+    clearTimeout(searchTimer); search = "";
     returnPage = null;
     undo.length = 0;
     layer = document.createElement("div");
@@ -949,12 +958,13 @@
     layer.addEventListener("pointerdown", pointerDown);
     layer.addEventListener("dragstart", e => { if (!e.target.closest("input,textarea")) e.preventDefault(); });
     layer.addEventListener("selectstart", e => { if (!e.target.closest("input,textarea,pre")) e.preventDefault(); });
-    // Re-filter after a short pause in typing, not on every key in a large folder.
-    let searchTimer;
+    // Re-filter after a short pause in typing, not on every key in a large folder. The filter
+    // the rows (and clicks on them) follow changes only with the repaint.
     layer.querySelector("[data-search]").oninput = (e) => {
-      search = e.target.value;
+      const typed = e.target.value;
       clearTimeout(searchTimer);
       searchTimer = setTimeout(() => {
+        search = typed;
         for (const p of Object.values(panes)) {
           p.start = 0;
           p.scroll = 0;
@@ -1324,9 +1334,9 @@
       if (!thisPC && !panes[s.dataset.side].home) return;
       if (networkMode && !MAC) { returnPage = explorerHome ? "home" : "network"; Object.assign(panes.local, { history: [], at: -1 }); }
       networkMode = false;
-      if (thisPC) { active = "local"; search = ""; layer.querySelector("[data-search]").value = ""; nav("local", ""); return; }
+      if (thisPC) { active = "local"; clearTimeout(searchTimer); search = ""; layer.querySelector("[data-search]").value = ""; nav("local", ""); return; }
       active = s.dataset.side;
-      search = "";
+      clearTimeout(searchTimer); search = "";
       layer.querySelector("[data-search]").value = "";
       renderPanes();
       return;
