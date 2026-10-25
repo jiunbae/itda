@@ -329,7 +329,14 @@ pub fn run(c: Conn, l: Launch) {
         toolbar::create(h, toolbar_items(), &toolbar_mode);
         AddClipboardFormatListener(h);
         // A Mac whose screen comes from Screen Sharing: the clipboard goes over SSH beside it.
-        if let Some(b) = crate::clip_ssh::start(&ui(|u| u.l.id.clone()), crate::clip::from_bridge) {
+        // Text copied on that Mac is taken only while this viewer is in front: a Mac behind
+        // mustn't replace the clipboard the one in use is working with.
+        let copied = |t: String| {
+            if GetForegroundWindow() as isize == sh().hwnd.load(Relaxed) {
+                crate::clip::from_bridge(t);
+            }
+        };
+        if let Some(b) = crate::clip_ssh::start(&ui(|u| u.l.id.clone()), copied) {
             *CLIP_BRIDGE.lock().unwrap() = Some(b);
         }
         update_title(h);
@@ -1432,14 +1439,21 @@ unsafe fn clip_out(h: HWND) {
         return;
     }
     let Some(t) = get_clipboard(h) else { return };
-    if t.is_empty() || ui(|u| u.last_clip == t) {
+    if t.is_empty() {
+        return;
+    }
+    // Over SSH only from the viewer in front (also when it comes forward): a copy goes to the
+    // Mac being used, not to every Mac with a viewer open behind. (The bridge skips repeats.)
+    if GetForegroundWindow() == h {
+        if let Some(b) = CLIP_BRIDGE.lock().unwrap().as_ref() {
+            b.send(&t);
+        }
+    }
+    if ui(|u| u.last_clip == t) {
         return;
     }
     ui(|u| u.last_clip = t.clone());
     crate::clip::send_local(&t);
-    if let Some(b) = CLIP_BRIDGE.lock().unwrap().as_ref() {
-        b.send(&t);
-    }
 }
 /// This connection's clipboard over SSH, when it has one (see clip_ssh).
 static CLIP_BRIDGE: std::sync::Mutex<Option<crate::clip_ssh::Bridge>> = std::sync::Mutex::new(None);
