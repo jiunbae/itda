@@ -588,6 +588,9 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         if out.dead() {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, "viewer connection lost"));
         }
+        // Terminal shared-capture failure must close even an idle/view-only viewer.
+        #[cfg(target_os = "macos")]
+        cap.lock().unwrap().check()?;
         // Wake for the viewer's messages, the next capture when an update is due, or a
         // clipboard check. Captures stay FRAME apart also when the screen doesn't change.
         let gap = if video.is_some() { VIDEO_FRAME } else { FRAME };

@@ -25,7 +25,7 @@ use objc2_core_graphics::{CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMo
 use objc2_core_media::CMSampleBuffer;
 use objc2_core_video::{CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight, CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress};
 use objc2_foundation::{NSArray, NSError, NSProcessInfo, NSString};
-use objc2_screen_capture_kit::{SCContentFilter, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamOutput, SCStreamOutputType};
+use objc2_screen_capture_kit::{SCContentFilter, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamDelegate, SCStreamOutput, SCStreamOutputType};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::io;
@@ -254,6 +254,69 @@ pub(crate) fn monitors() -> Vec<(u32, i32, i32, i32, i32)> {
 /// (With when it arrived, under ITDA_HP_TRACE.)
 type Latest = Arc<Mutex<Option<(CFRetained<CVPixelBuffer>, Option<Instant>)>>>;
 
+#[derive(Clone)]
+struct StreamHealth {
+    last_frame: Instant,
+    frames: u64,
+    error: Option<String>,
+}
+impl StreamHealth {
+    fn new() -> Self { Self { last_frame: Instant::now(), frames: 0, error: None } }
+}
+type Health = Arc<Mutex<StreamHealth>>;
+
+const QUIET_PROBE: Duration = Duration::from_secs(8);
+const RECOVERY_BACKOFF: Duration = Duration::from_secs(2);
+const RECOVERY_WINDOW: Duration = Duration::from_secs(60);
+const CAPTURE_LOST: &str = "고성능 화면 캡처가 멈춰 연결을 종료합니다. 잠시 후 다시 연결해 주세요.";
+
+/// A quiet desktop is normal: lack of images asks for a liveness probe, never a restart
+/// by itself. Only an explicit stream failure or an unanswered/failed probe restarts it.
+struct Watchdog {
+    probed: Instant,
+    retry_at: Instant,
+    reason: Option<String>,
+    attempts: Vec<Instant>,
+    failures: u8,
+}
+impl Watchdog {
+    fn new(now: Instant) -> Self {
+        Self { probed: now, retry_at: now, reason: None, attempts: Vec::new(), failures: 0 }
+    }
+    fn step<T>(&mut self, now: Instant, health: &StreamHealth,
+        probe: impl FnOnce() -> Result<(), String>,
+        restart: impl FnOnce() -> Result<T, String>,
+        completed: impl FnOnce() -> Instant) -> Result<Option<T>, String> {
+        if let Some(error) = &health.error { self.reason = Some(error.clone()); }
+        if self.reason.is_none() && now.saturating_duration_since(health.last_frame) >= QUIET_PROBE
+            && now.saturating_duration_since(self.probed) >= QUIET_PROBE {
+            self.probed = now;
+            if let Err(error) = probe() { self.reason = Some(error); }
+        }
+        if self.reason.is_none() || now < self.retry_at { return Ok(None); }
+        self.attempts.retain(|at| now.saturating_duration_since(*at) < RECOVERY_WINDOW);
+        if self.attempts.len() >= 3 { return Err(CAPTURE_LOST.into()); }
+        self.attempts.push(now);
+        crate::log!("hp: restarting stalled capture: {}", self.reason.as_deref().unwrap_or_default());
+        let restarted = restart();
+        let completed = completed();
+        match restarted {
+            Ok(capture) => {
+                self.reason = None;
+                self.failures = 0;
+                self.probed = completed;
+                Ok(Some(capture))
+            }
+            Err(error) => {
+                crate::log!("hp: capture restart failed: {error}");
+                self.failures += 1;
+                self.retry_at = completed + RECOVERY_BACKOFF;
+                if self.failures >= 2 { Err(CAPTURE_LOST.into()) } else { Ok(None) }
+            }
+        }
+    }
+}
+
 /// Called when a new frame arrives.
 type Waker = Box<dyn Fn() + Send>;
 static FRAME_WAKERS: Mutex<Vec<(u64, Waker)>> = Mutex::new(Vec::new());
@@ -272,6 +335,7 @@ pub(crate) fn off_frame(id: u64) {
 
 struct OutputIvars {
     latest: Latest,
+    health: Health,
 }
 
 define_class!(
@@ -288,6 +352,7 @@ define_class!(
             }
             // Idle frames (nothing changed) carry no image.
             if let Some(image) = unsafe { sample.image_buffer() } {
+                { let mut h = self.ivars().health.lock().unwrap(); h.last_frame = Instant::now(); h.frames = h.frames.wrapping_add(1); }
                 let arrived = crate::trace::on().then(|| {
                     // From the frame's display time to its delivery here.
                     let (now, shown) = unsafe { (objc2_core_media::CMClock::host_time_clock().time().seconds(), sample.presentation_time_stamp().seconds()) };
@@ -302,11 +367,17 @@ define_class!(
             }
         }
     }
+    unsafe impl SCStreamDelegate for Output {
+        #[unsafe(method(stream:didStopWithError:))]
+        fn stopped(&self, _stream: &SCStream, error: &NSError) {
+            self.ivars().health.lock().unwrap().error = Some(error.localizedDescription().to_string());
+        }
+    }
 );
 
 impl Output {
-    fn new(latest: Latest) -> Retained<Self> {
-        let this = Self::alloc().set_ivars(OutputIvars { latest });
+    fn new(latest: Latest, health: Health) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(OutputIvars { latest, health });
         unsafe { msg_send![super(this), init] }
     }
 }
@@ -315,13 +386,17 @@ impl Output {
 /// when the last viewer leaves.
 pub(crate) fn capture() -> Result<Arc<Mutex<Capture>>, String> {
     let mut g = SHARED_CAPTURE.lock().unwrap();
-    if let Some(c) = g.upgrade() { return Ok(c); }
+    if let Some(c) = g.upgrade() {
+        let error = c.lock().unwrap().failed.clone();
+        return match error { Some(error) => Err(error), None => Ok(c) };
+    }
     if let Some((at, why)) = CAPTURE_FAILURE.lock().unwrap().as_ref() {
         if at.elapsed() < CAPTURE_COOLDOWN { return Err(why.clone()); }
     }
     match Capture::new() {
         Ok(c) => {
             let c = Arc::new(Mutex::new(c));
+            supervise_capture(Arc::downgrade(&c))?;
             *g = Arc::downgrade(&c);
             *CAPTURE_FAILURE.lock().unwrap() = None;
             Ok(c)
@@ -342,7 +417,7 @@ pub(crate) fn capture() -> Result<Arc<Mutex<Capture>>, String> {
 pub(crate) fn fixed_capture(w: usize, h: usize, pixels: Vec<u32>) -> Capture {
     assert_eq!(pixels.len(), w * h);
     Capture { x: 0, y: 0, w, h, native_pixels: false, buf: Arc::new(pixels), native: None,
-        latest: Arc::new(Mutex::new(None)), generation: 0, stream: None, _output: None }
+        latest: Arc::new(Mutex::new(None)), health: Arc::new(Mutex::new(StreamHealth::new())), failed: None, generation: 0, stream: None, _output: None }
 }
 
 pub(crate) struct Capture {
@@ -354,6 +429,8 @@ pub(crate) struct Capture {
     buf: Arc<Vec<u32>>,
     native: Option<CFRetained<CVPixelBuffer>>,
     latest: Latest,
+    health: Health,
+    failed: Option<String>,
     /// Counts frames copied into `buf`: each viewer remembers the one it last grabbed, since
     /// all viewers share this capture and the first to grab takes the pending frame.
     generation: u64,
@@ -380,13 +457,18 @@ impl Capture {
     fn new() -> Result<Capture, String> {
         let native_pixels = native_pixels_requested();
         let (w, h) = display_dimensions(native_pixels);
-        let (stream, output, latest) = start_stream(w, h)?;
-        let mut c = Capture { x: 0, y: 0, w, h, native_pixels, buf: Arc::new(vec![0; w * h]), native: None, latest, generation: 0, stream: Some(stream), _output: Some(output) };
+        Self::with_dimensions(w, h, native_pixels)
+    }
+
+    fn with_dimensions(w: usize, h: usize, native_pixels: bool) -> Result<Capture, String> {
+        let (stream, output, latest, health) = start_stream(w, h)?;
+        let mut c = Capture { x: 0, y: 0, w, h, native_pixels, buf: Arc::new(vec![0; w * h]), native: None, latest, health, failed: None, generation: 0, stream: Some(stream), _output: Some(output) };
         // Success means a usable image exists, not only that startCapture returned.
         // Drop stops the stream on failure; no empty capture is published to viewers.
         let until = Instant::now() + FIRST_FRAME_WAIT;
         loop {
             c.update();
+            if let Some(error) = c.health.lock().unwrap().error.clone() { return Err(error); }
             if c.generation != 0 { return Ok(c); }
             if Instant::now() >= until { return Err("ScreenCaptureKit이 첫 화면을 보내지 않았습니다".into()); }
             std::thread::sleep(Duration::from_millis(10));
@@ -395,6 +477,10 @@ impl Capture {
 
     /// The capture's size and quality are fixed for its life (one display).
     pub(crate) fn fit(&mut self) {}
+
+    pub(crate) fn check(&self) -> io::Result<()> {
+        match &self.failed { Some(error) => Err(io::Error::other(error.clone())), None => Ok(()) }
+    }
 
     /// Has a frame arrived that the viewer who last grabbed at `seen` hasn't had? (Pending, or
     /// grabbed by another viewer since. ScreenCaptureKit sends none while nothing changes.)
@@ -461,6 +547,174 @@ impl Drop for Capture {
     }
 }
 
+fn wake_viewers() {
+    for (_, wake) in FRAME_WAKERS.lock().unwrap().iter() { wake(); }
+}
+
+/// The supervisor owns only a Weak capture between operations. No framework startup wait
+/// holds the framebuffer mutex or keeps a viewer-less capture alive.
+fn supervise_capture(weak: std::sync::Weak<Mutex<Capture>>) -> Result<(), String> {
+    std::thread::Builder::new().name("hp-capture-watchdog".into()).spawn(move || {
+        let mut watchdog = Watchdog::new(Instant::now());
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+            let (w, h, native, stream, health) = {
+                let Some(capture) = weak.upgrade() else { return; };
+                let c = capture.lock().unwrap();
+                if c.failed.is_some() { return; }
+                (c.w, c.h, c.native_pixels, c.stream.clone(), c.health.clone())
+            };
+            let Some(stream) = stream else { return; };
+            let observed = health.lock().unwrap().clone();
+            let result = watchdog.step(Instant::now(), &observed,
+                || probe_stream(&stream, w, h, &health),
+                || {
+                    if weak.strong_count() == 0 { return Err("viewer left".into()); }
+                    unsafe { stream.stopCaptureWithCompletionHandler(None); }
+                    // Includes a usable first-frame check, not merely start completion.
+                    Capture::with_dimensions(w, h, native)
+                }, Instant::now);
+            match result {
+                Ok(Some(mut fresh)) => {
+                    let Some(capture) = weak.upgrade() else { return; };
+                    let old = {
+                        let mut c = capture.lock().unwrap();
+                        fresh.generation = c.generation.wrapping_add(1);
+                        std::mem::replace(&mut *c, fresh)
+                    };
+                    drop(old); // Stop/drop the old private stream outside the capture lock.
+                    wake_viewers();
+                    crate::log!("hp: capture recovered");
+                }
+                Ok(None) => (),
+                Err(error) => {
+                    let Some(capture) = weak.upgrade() else { return; };
+                    capture.lock().unwrap().failed = Some(error.clone());
+                    *CAPTURE_FAILURE.lock().unwrap() = Some((Instant::now(), error));
+                    wake_viewers(); // Pump checks failure even with no update demand.
+                    return;
+                }
+            }
+        }
+    }).map(|_| ()).map_err(|e| e.to_string())
+}
+
+fn stream_configuration(w: usize, h: usize) -> Retained<SCStreamConfiguration> {
+    let config = unsafe { SCStreamConfiguration::new() };
+    unsafe {
+        config.setWidth(w);
+        config.setHeight(h);
+        config.setPixelFormat(u32::from_be_bytes(*b"BGRA"));
+        config.setMinimumFrameInterval(objc2_core_media::CMTime::new(1, 60));
+        config.setShowsCursor(true);
+        config.setQueueDepth(3);
+    }
+    config
+}
+
+/// A static screen may never send images. A healthy idle stream must still answer a
+/// configuration command; a broken replayd connection errors or misses this deadline.
+fn probe_stream(stream: &SCStream, w: usize, h: usize, health: &Health) -> Result<(), String> {
+    let before = health.lock().unwrap().frames;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let done = RcBlock::new(move |error: *mut NSError| {
+        let _ = tx.send(unsafe { error.as_ref() }.map(|e| e.localizedDescription().to_string()));
+    });
+    let config = stream_configuration(w, h);
+    unsafe { stream.updateConfiguration_completionHandler(&config, Some(&done)); }
+    let result = start_result(rx.recv_timeout(START_WAIT));
+    // A real image arriving during a delayed command is stronger evidence than its timeout.
+    let health = health.lock().unwrap();
+    if health.error.is_none() && health.frames != before { Ok(()) } else { result }
+}
+
+#[cfg(test)]
+mod watchdog_tests {
+    use super::*;
+    use std::cell::Cell;
+    struct FakeCapture { frame: u8 }
+    fn step<T>(watch: &mut Watchdog, now: Instant, health: &StreamHealth,
+        probe: impl FnOnce() -> Result<(), String>, restart: impl FnOnce() -> Result<T, String>) -> Result<Option<T>, String> {
+        watch.step(now, health, probe, restart, || now)
+    }
+
+    #[test]
+    fn watchdog_healthy_idle_only_probes_and_recent_frames_skip_probe() {
+        let at = Instant::now();
+        let mut watch = Watchdog::new(at);
+        let mut health = StreamHealth { last_frame: at, frames: 1, error: None };
+        let probes = Cell::new(0);
+        for n in 1..=60 {
+            let result = step::<FakeCapture>(&mut watch, at + Duration::from_secs(n * 8), &health,
+                || { probes.set(probes.get()+1); Ok(()) }, || panic!("static screen restarted"));
+            assert!(result.unwrap().is_none());
+        }
+        assert_eq!(probes.get(), 60);
+        health.last_frame = at + Duration::from_secs(488);
+        assert!(step::<FakeCapture>(&mut watch, health.last_frame, &health,
+            || panic!("recent healthy frame was probed"), || panic!("healthy stream restarted")).unwrap().is_none());
+    }
+
+    #[test]
+    fn watchdog_delegate_error_and_unanswered_probe_recover_with_new_frame() {
+        let at = Instant::now();
+        let mut watch = Watchdog::new(at);
+        let mut health = StreamHealth { last_frame: at, frames: 1, error: Some("fake stream stopped".into()) };
+        let recovered = step(&mut watch, at, &health, || panic!("error must restart directly"),
+            || Ok(FakeCapture { frame: 2 })).unwrap().unwrap();
+        assert_eq!(recovered.frame, 2);
+        health.error = None;
+        let recovered = step(&mut watch, at + QUIET_PROBE, &health, || Err("fake command timeout".into()),
+            || Ok(FakeCapture { frame: 3 })).unwrap().unwrap();
+        assert_eq!(recovered.frame, 3);
+        assert!(step::<FakeCapture>(&mut watch, at + QUIET_PROBE + Duration::from_millis(1), &health,
+            || panic!("probe not due"), || panic!("recovery repeated")).unwrap().is_none());
+    }
+
+    #[test]
+    fn watchdog_backoff_and_two_failed_restarts_become_terminal() {
+        let at = Instant::now();
+        let mut watch = Watchdog::new(at);
+        let health = StreamHealth { last_frame: at, frames: 1, error: Some("fake stopped".into()) };
+        assert!(step::<FakeCapture>(&mut watch, at, &health, || unreachable!(), || Err("no first frame".into())).unwrap().is_none());
+        assert!(step::<FakeCapture>(&mut watch, at + RECOVERY_BACKOFF / 2, &health,
+            || unreachable!(), || panic!("retry ignored backoff")).unwrap().is_none());
+        assert_eq!(step::<FakeCapture>(&mut watch, at + RECOVERY_BACKOFF, &health,
+            || unreachable!(), || Err("fake restart timed out".into())).err().as_deref(), Some(CAPTURE_LOST));
+    }
+
+    #[test]
+    fn watchdog_slow_restart_backoff_starts_after_completion() {
+        let at = Instant::now();
+        let finished = at + Duration::from_secs(14);
+        let mut watch = Watchdog::new(at);
+        let health = StreamHealth { last_frame: at, frames: 1, error: Some("fake stopped".into()) };
+        assert!(watch.step::<FakeCapture>(at, &health, || unreachable!(),
+            || Err("slow fake restart".into()), || finished).unwrap().is_none());
+        assert_eq!(watch.retry_at, finished + RECOVERY_BACKOFF);
+        assert!(step::<FakeCapture>(&mut watch, finished + RECOVERY_BACKOFF / 2, &health,
+            || unreachable!(), || panic!("retry ran before post-failure backoff")).unwrap().is_none());
+    }
+
+    #[test]
+    fn watchdog_flapping_is_bounded_and_terminal_capture_check_rejects_stale_screen() {
+        let at = Instant::now();
+        let mut watch = Watchdog::new(at);
+        let health = StreamHealth { last_frame: at, frames: 1, error: Some("repeated stream error".into()) };
+        for n in 0..3 {
+            assert!(step(&mut watch, at + Duration::from_secs(n), &health, || unreachable!(),
+                || Ok(FakeCapture { frame: n as u8 })).unwrap().is_some());
+        }
+        assert!(step::<FakeCapture>(&mut watch, at + Duration::from_secs(3), &health,
+            || unreachable!(), || panic!("unbounded restart loop")).is_err());
+        let mut capture = fixed_capture(16,16,vec![7;256]);
+        let held = capture.snapshot();
+        capture.failed = Some(CAPTURE_LOST.into());
+        assert_eq!(capture.check().unwrap_err().to_string(), CAPTURE_LOST);
+        assert_eq!(held.pixels[0],7); // Old immutable pictures survive until their viewer drops them.
+    }
+}
+
 #[cfg(test)]
 mod snapshot_tests {
     use super::*;
@@ -502,7 +756,7 @@ mod snapshot_tests {
 
     fn capture() -> Capture {
         Capture { x: 0, y: 0, w: 16, h: 16, native_pixels: false, buf: Arc::new(vec![0; 256]), native: None,
-            latest: Arc::new(Mutex::new(None)), generation: 0, stream: None, _output: None }
+            latest: Arc::new(Mutex::new(None)), health: Arc::new(Mutex::new(StreamHealth::new())), failed: None, generation: 0, stream: None, _output: None }
     }
 
     #[test]
@@ -542,7 +796,7 @@ mod snapshot_tests {
 }
 
 /// Start a ScreenCaptureKit stream of the main display at w×h, BGRA, ≤60 fps.
-fn start_stream(w: usize, h: usize) -> Result<(Retained<SCStream>, Retained<Output>, Latest), String> {
+fn start_stream(w: usize, h: usize) -> Result<(Retained<SCStream>, Retained<Output>, Latest, Health), String> {
     capture_support().map_err(str::to_owned)?;
     if !CGPreflightScreenCaptureAccess() {
         return Err("Screen Recording permission not granted".into());
@@ -551,7 +805,8 @@ fn start_stream(w: usize, h: usize) -> Result<(Retained<SCStream>, Retained<Outp
         // A timed-out attempt can still deliver a late frame. Its private slot must
         // never satisfy the next attempt's first-frame check.
         let latest: Latest = Arc::new(Mutex::new(None));
-        start_stream_once(w, h, latest.clone()).map(|(stream, output)| (stream, output, latest))
+        let health = Arc::new(Mutex::new(StreamHealth::new()));
+        start_stream_once(w, h, latest.clone(), health.clone()).map(|(stream, output)| (stream, output, latest, health))
     })
 }
 
@@ -565,7 +820,7 @@ fn retry_start<T>(mut create: impl FnMut() -> Result<T, String>) -> Result<T, St
     Err(last)
 }
 
-fn start_stream_once(w: usize, h: usize, latest: Latest) -> Result<(Retained<SCStream>, Retained<Output>), String> {
+fn start_stream_once(w: usize, h: usize, latest: Latest, health: Health) -> Result<(Retained<SCStream>, Retained<Output>), String> {
     let (tx, rx) = std::sync::mpsc::channel::<Result<Retained<SCShareableContent>, String>>();
     let handler = RcBlock::new(move |content: *mut SCShareableContent, error: *mut NSError| {
         let r = match unsafe { content.as_ref() } {
@@ -581,15 +836,9 @@ fn start_stream_once(w: usize, h: usize, latest: Latest) -> Result<(Retained<SCS
     let display = displays.iter().find(|d| unsafe { d.displayID() } == main).or_else(|| displays.iter().next()).ok_or("no display")?;
     unsafe {
         let filter = SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), &display, &NSArray::new());
-        let config = SCStreamConfiguration::new();
-        config.setWidth(w);
-        config.setHeight(h);
-        config.setPixelFormat(u32::from_be_bytes(*b"BGRA"));
-        config.setMinimumFrameInterval(objc2_core_media::CMTime::new(1, 60));
-        config.setShowsCursor(true);
-        config.setQueueDepth(3);
-        let stream = SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), &filter, &config, None);
-        let output = Output::new(latest);
+        let config = stream_configuration(w, h);
+        let output = Output::new(latest, health);
+        let stream = SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), &filter, &config, Some(ProtocolObject::from_ref(&*output)));
         let queue = DispatchQueue::new("itda.capture", None);
         stream
             .addStreamOutput_type_sampleHandlerQueue_error(ProtocolObject::from_ref(&*output), SCStreamOutputType::Screen, Some(&queue))
