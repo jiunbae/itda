@@ -301,21 +301,43 @@ struct Watchdog {
     reason: Option<String>,
     attempts: Vec<Instant>,
     failures: u8,
+    probe_failures: u8,
+    observed_frames: Option<u64>,
+    delegate_error: bool,
 }
 impl Watchdog {
     fn new(now: Instant) -> Self {
-        Self { probed: now, retry_at: now, reason: None, attempts: Vec::new(), failures: 0 }
+        Self { probed: now, retry_at: now, reason: None, attempts: Vec::new(), failures: 0,
+            probe_failures: 0, observed_frames: None, delegate_error: false }
     }
     fn step<T>(&mut self, now: Instant, health: &StreamHealth,
         probe: impl FnOnce() -> Result<(), String>,
-        restart: impl FnOnce() -> Result<T, String>,
-        completed: impl FnOnce() -> Instant) -> Result<Option<T>, String> {
+        restart: impl FnOnce(bool) -> Result<Option<T>, String>,
+        completed: impl Fn() -> Instant) -> Result<Option<T>, String> {
         if health.user_stopped { return Err(CAPTURE_STOPPED.into()); }
-        if let Some(error) = &health.error { self.reason = Some(error.clone()); }
+        if self.observed_frames != Some(health.frames) {
+            self.observed_frames = Some(health.frames);
+            self.probe_failures = 0;
+            // Actual frames cancel a probe suspicion/retry; a delegate-stopped stream stays failed.
+            if !self.delegate_error { self.reason = None; self.failures = 0; }
+        }
+        if let Some(error) = &health.error {
+            self.reason = Some(error.clone());
+            self.delegate_error = true;
+        }
         if self.reason.is_none() && now.saturating_duration_since(health.last_frame) >= QUIET_PROBE
             && now.saturating_duration_since(self.probed) >= QUIET_PROBE {
-            self.probed = now;
-            if let Err(error) = probe() { self.reason = Some(error); }
+            let result = probe();
+            self.probed = completed();
+            match result {
+                Ok(()) => self.probe_failures = 0,
+                Err(error) if error == CAPTURE_STOPPED => return Err(error),
+                Err(error) => {
+                    self.probe_failures += 1;
+                    // A single delay after wake/load is not evidence that the stream is broken.
+                    if self.probe_failures >= 2 { self.reason = Some(error); }
+                }
+            }
         }
         if self.reason.as_deref() == Some(CAPTURE_STOPPED) { return Err(CAPTURE_STOPPED.into()); }
         if self.reason.is_none() || now < self.retry_at { return Ok(None); }
@@ -323,14 +345,17 @@ impl Watchdog {
         if self.attempts.len() >= 3 { return Err(CAPTURE_LOST.into()); }
         self.attempts.push(now);
         crate::log!("hp: restarting stalled capture: {}", self.reason.as_deref().unwrap_or_default());
-        let restarted = restart();
+        // Stop first ONLY after an explicit delegate error. Probe suspicion retains the old stream.
+        let restarted = restart(self.delegate_error);
         let completed = completed();
         match restarted {
             Ok(capture) => {
                 self.reason = None;
+                self.delegate_error = false;
                 self.failures = 0;
+                self.probe_failures = 0;
                 self.probed = completed;
-                Ok(Some(capture))
+                Ok(capture) // None means the old stream recovered while a candidate failed.
             }
             Err(error) => {
                 if error == CAPTURE_STOPPED { return Err(error); }
@@ -588,6 +613,20 @@ fn wake_viewers() {
     for (_, wake) in FRAME_WAKERS.lock().unwrap().iter() { wake(); }
 }
 
+/// Dropping an unadopted candidate (including a departed last viewer) stops only that candidate.
+/// The replaced capture is dropped after releasing the framebuffer mutex.
+fn adopt_capture<T>(weak: &std::sync::Weak<Mutex<T>>, mut fresh: T,
+    prepare: impl FnOnce(&mut T, &T)) -> bool {
+    let Some(capture) = weak.upgrade() else { return false; };
+    let old = {
+        let mut old = capture.lock().unwrap();
+        prepare(&mut fresh, &old);
+        std::mem::replace(&mut *old, fresh)
+    };
+    drop(old);
+    true
+}
+
 /// The supervisor owns only a Weak capture between operations. No framework startup wait
 /// holds the framebuffer mutex or keeps a viewer-less capture alive.
 fn supervise_capture(weak: std::sync::Weak<Mutex<Capture>>) -> Result<(), String> {
@@ -606,11 +645,16 @@ fn supervise_capture(weak: std::sync::Weak<Mutex<Capture>>) -> Result<(), String
             observed.user_stopped |= USER_STOPPED.load(Ordering::Acquire);
             let result = watchdog.step(Instant::now(), &observed,
                 || probe_stream(&stream, w, h, &health),
-                || {
+                |stop_first| {
                     if weak.strong_count() == 0 { return Err("viewer left".into()); }
-                    unsafe { stream.stopCaptureWithCompletionHandler(None); }
-                    // Includes a usable first-frame check, not merely start completion.
-                    Capture::with_dimensions(w, h, native)
+                    if stop_first { unsafe { stream.stopCaptureWithCompletionHandler(None); } }
+                    // Keep negotiated w/h for existing viewers and pointer coordinates.
+                    // Probe recovery leaves the old stream alive until a usable candidate is adopted.
+                    let result = Capture::with_dimensions(w, h, native);
+                    let old = health.lock().unwrap();
+                    if result.is_err() && !stop_first && old.error.is_none() && old.frames != observed.frames {
+                        Ok(None) // Old capture resumed; don't turn a failed candidate into terminal failure.
+                    } else { result.map(Some) }
                 }, Instant::now);
             // A user stop may arrive while a replacement is starting. Never publish it then.
             let stopped = USER_STOPPED.load(Ordering::Acquire) || health.lock().unwrap().user_stopped || match &result {
@@ -619,14 +663,10 @@ fn supervise_capture(weak: std::sync::Weak<Mutex<Capture>>) -> Result<(), String
             };
             let result = if stopped { Err(CAPTURE_STOPPED.into()) } else { result };
             match result {
-                Ok(Some(mut fresh)) => {
-                    let Some(capture) = weak.upgrade() else { return; };
-                    let old = {
-                        let mut c = capture.lock().unwrap();
-                        fresh.generation = c.generation.wrapping_add(1);
-                        std::mem::replace(&mut *c, fresh)
-                    };
-                    drop(old); // Stop/drop the old private stream outside the capture lock.
+                Ok(Some(fresh)) => {
+                    if !adopt_capture(&weak, fresh, |fresh, old| {
+                        fresh.generation = old.generation.wrapping_add(1);
+                    }) { return; }
                     wake_viewers();
                     crate::log!("hp: capture recovered");
                 }
@@ -681,7 +721,7 @@ mod watchdog_tests {
     struct FakeCapture { frame: u8 }
     fn step<T>(watch: &mut Watchdog, now: Instant, health: &StreamHealth,
         probe: impl FnOnce() -> Result<(), String>, restart: impl FnOnce() -> Result<T, String>) -> Result<Option<T>, String> {
-        watch.step(now, health, probe, restart, || now)
+        watch.step(now, health, probe, |_| restart().map(Some), || now)
     }
 
     #[test]
@@ -710,11 +750,81 @@ mod watchdog_tests {
             || Ok(FakeCapture { frame: 2 })).unwrap().unwrap();
         assert_eq!(recovered.frame, 2);
         health.error = None;
-        let recovered = step(&mut watch, at + QUIET_PROBE, &health, || Err("fake command timeout".into()),
+        assert!(step::<FakeCapture>(&mut watch, at + QUIET_PROBE, &health, || Err("fake command timeout".into()),
+            || panic!("single probe failure restarted the stream")).unwrap().is_none());
+        let recovered = step(&mut watch, at + QUIET_PROBE * 2, &health, || Err("fake command timeout".into()),
             || Ok(FakeCapture { frame: 3 })).unwrap().unwrap();
         assert_eq!(recovered.frame, 3);
-        assert!(step::<FakeCapture>(&mut watch, at + QUIET_PROBE + Duration::from_millis(1), &health,
+        assert!(step::<FakeCapture>(&mut watch, at + QUIET_PROBE * 2 + Duration::from_millis(1), &health,
             || panic!("probe not due"), || panic!("recovery repeated")).unwrap().is_none());
+    }
+
+    #[test]
+    fn watchdog_probe_streak_resets_on_success_or_actual_frames() {
+        let at = Instant::now();
+        let mut watch = Watchdog::new(at);
+        let mut health = StreamHealth { last_frame: at, frames: 1, error: None, user_stopped: false };
+        for (n, ok) in [(1,false),(2,true),(3,false)] {
+            assert!(step::<FakeCapture>(&mut watch, at + QUIET_PROBE * n, &health,
+                || if ok { Ok(()) } else { Err("one delayed probe".into()) },
+                || panic!("nonconsecutive probe failures restarted capture")).unwrap().is_none());
+        }
+        health.frames += 1;
+        health.last_frame = at + QUIET_PROBE * 4;
+        assert!(step::<FakeCapture>(&mut watch, health.last_frame, &health,
+            || panic!("fresh frame probed"), || panic!("fresh frame restarted")).unwrap().is_none());
+        assert_eq!(watch.probe_failures,0);
+        assert!(watch.reason.is_none());
+    }
+
+    #[test]
+    fn watchdog_probe_candidate_failure_keeps_old_until_successful_adoption() {
+        struct FakeStream { running: Arc<AtomicBool>, lock_was_free: Arc<AtomicBool>, owner: Option<std::sync::Weak<Mutex<FakeStream>>> }
+        impl Drop for FakeStream {
+            fn drop(&mut self) {
+                self.running.store(false,Ordering::Release);
+                if let Some(owner) = self.owner.as_ref().and_then(|w|w.upgrade()) {
+                    self.lock_was_free.store(owner.try_lock().is_ok(),Ordering::Release);
+                }
+            }
+        }
+        let at=Instant::now(); let mut watch=Watchdog::new(at);
+        let health=StreamHealth {last_frame:at,frames:1,error:None,user_stopped:false};
+        let old_running=Arc::new(AtomicBool::new(true)); let unlocked=Arc::new(AtomicBool::new(false));
+        let old=Arc::new(Mutex::new(FakeStream {running:old_running.clone(),lock_was_free:unlocked.clone(),owner:None}));
+        let weak=Arc::downgrade(&old); old.lock().unwrap().owner=Some(weak.clone());
+        assert!(watch.step::<FakeStream>(at+QUIET_PROBE,&health,||Err("timeout".into()),
+            |_|panic!("first probe failure started candidate"),||at+QUIET_PROBE).unwrap().is_none());
+        assert!(watch.step::<FakeStream>(at+QUIET_PROBE*2,&health,||Err("timeout".into()),
+            |stop_first|{assert!(!stop_first);assert!(old_running.load(Ordering::Acquire));Err("candidate has no first frame".into())},
+            ||at+QUIET_PROBE*2).unwrap().is_none());
+        assert!(old_running.load(Ordering::Acquire));
+        let new_running=Arc::new(AtomicBool::new(true));
+        let now=at+QUIET_PROBE*2+RECOVERY_BACKOFF;
+        let candidate=watch.step(now,&health,||unreachable!(),|stop_first| {
+            assert!(!stop_first); assert!(old_running.load(Ordering::Acquire));
+            Ok(Some(FakeStream {running:new_running.clone(),lock_was_free:Arc::default(),owner:None}))
+        },||now).unwrap().unwrap();
+        assert!(old_running.load(Ordering::Acquire)); // A usable candidate alone does not stop old capture.
+        assert!(adopt_capture(&weak,candidate,|_,_|{}));
+        assert!(!old_running.load(Ordering::Acquire));
+        assert!(unlocked.load(Ordering::Acquire));
+        drop(old);
+        assert!(!new_running.load(Ordering::Acquire));
+        let abandoned=Arc::new(AtomicBool::new(true));
+        assert!(!adopt_capture(&weak,FakeStream{running:abandoned.clone(),lock_was_free:Arc::default(),owner:None},|_,_|panic!("departed viewer adopted")));
+        assert!(!abandoned.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn watchdog_delegate_failure_may_stop_first_and_resumed_old_capture_cancels_retry() {
+        let at=Instant::now(); let mut watch=Watchdog::new(at);
+        let mut health=StreamHealth{last_frame:at,frames:1,error:Some("delegate stopped".into()),user_stopped:false};
+        assert!(watch.step::<FakeCapture>(at,&health,||unreachable!(),|stop_first|{assert!(stop_first);Ok(None)},||at).unwrap().is_none());
+        health.error=None;
+        assert!(watch.step::<FakeCapture>(at+QUIET_PROBE,&health,||Err("timeout".into()),|_|unreachable!(),||at+QUIET_PROBE).unwrap().is_none());
+        assert!(watch.step::<FakeCapture>(at+QUIET_PROBE*2,&health,||Err("timeout".into()),|stop_first|{assert!(!stop_first);Ok(None)},||at+QUIET_PROBE*2).unwrap().is_none());
+        assert!(watch.reason.is_none()); assert_eq!(watch.failures,0);
     }
 
     #[test]
@@ -736,7 +846,7 @@ mod watchdog_tests {
         let mut watch = Watchdog::new(at);
         let health = StreamHealth { last_frame: at, frames: 1, user_stopped: false, error: Some("fake stopped".into()) };
         assert!(watch.step::<FakeCapture>(at, &health, || unreachable!(),
-            || Err("slow fake restart".into()), || finished).unwrap().is_none());
+            |_| Err("slow fake restart".into()), || finished).unwrap().is_none());
         assert_eq!(watch.retry_at, finished + RECOVERY_BACKOFF);
         assert!(step::<FakeCapture>(&mut watch, finished + RECOVERY_BACKOFF / 2, &health,
             || unreachable!(), || panic!("retry ran before post-failure backoff")).unwrap().is_none());
