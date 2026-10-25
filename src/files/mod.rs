@@ -107,14 +107,62 @@ struct Connection {
     cfg: SshCfg,
     browse: Mutex<Sftp>,
     /// Previews' own SFTP session, kept between them (a new SSH login per preview cost about a
-    /// second), and the preview it is working for: a newer preview stops that one.
-    preview: Mutex<Option<Sftp>>,
-    preview_job: Mutex<Option<Arc<Control>>>,
+    /// second), and the preview working now.
+    previews: PreviewSlot<Sftp>,
     control: Arc<Control>,
     home: String,
     options: Options,
     /// The remote is Windows: names it can't store are refused before anything is written.
     windows: bool,
+}
+/// One connection's previews: the idle session kept between them, and the preview working
+/// now with its selection's number. Starting, finishing and stopping all change both under one
+/// lock, so a stopped preview can never leave its (killed) session for the next.
+struct PreviewSlot<T> {
+    state: Mutex<(Option<T>, Option<(u64, Arc<Control>)>)>,
+}
+impl<T> Default for PreviewSlot<T> {
+    fn default() -> Self {
+        PreviewSlot { state: Mutex::new((None, None)) }
+    }
+}
+impl<T> PreviewSlot<T> {
+    /// Preview `generation` (the page's increasing request number) starts: one for an older
+    /// selection still working is stopped. None when a newer one has already started (requests
+    /// run on their own threads and may arrive out of order).
+    fn begin(&self, generation: u64) -> Option<(Arc<Control>, Option<T>)> {
+        let mut state = self.state.lock().unwrap();
+        if let Some((working, control)) = &state.1 {
+            if *working > generation {
+                return None;
+            }
+            control.stop();
+        }
+        let control = Arc::new(Control::default());
+        state.1 = Some((generation, control.clone()));
+        Some((control, state.0.take()))
+    }
+    /// The preview ends with its session (None if it shouldn't be reused): kept for the next
+    /// one only if this preview wasn't stopped.
+    fn finish(&self, control: &Arc<Control>, session: Option<T>) {
+        let mut state = self.state.lock().unwrap();
+        if state.1.as_ref().is_some_and(|(_, c)| Arc::ptr_eq(c, control)) {
+            state.1 = None;
+        }
+        if control.check().is_ok() {
+            if let Some(session) = session {
+                state.0 = Some(session);
+            }
+        }
+    }
+    /// The connection goes: stop the working preview, drop the idle session.
+    fn stop(&self) {
+        let mut state = self.state.lock().unwrap();
+        if let Some((_, control)) = state.1.take() {
+            control.stop();
+        }
+        state.0 = None;
+    }
 }
 const NO_FILE: &str = "파일이 없습니다";
 const NOT_A_FILE: &str = "일반 파일을 선택하세요";
@@ -594,10 +642,8 @@ pub fn disconnect(id: &str) {
     }
     if let Some(c) = connections().lock().unwrap().remove(id) {
         c.control.stop();
-        // A preview downloading now stops too; its idle session goes with the connection.
-        if let Some(job) = c.preview_job.lock().unwrap().take() {
-            job.stop();
-        }
+        // A preview downloading now stops too, and the idle session goes.
+        c.previews.stop();
     }
     for (host, c) in jobs().lock().unwrap().values() {
         if host == id {
@@ -692,8 +738,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                         Arc::new(Connection {
                             cfg: c,
                             browse: Mutex::new(s),
-                            preview: Mutex::new(None),
-                            preview_job: Mutex::new(None),
+                            previews: PreviewSlot::default(),
                             control,
                             windows: host.os == "windows" || windows_root(&root),
                             home: root.clone(),
@@ -747,23 +792,23 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                     } else {
                         let c = connection(&key)?;
                         let p = remote_path(&p, &c.home);
-                        let control = Arc::new(Control::default());
-                        // A preview still downloading for an earlier selection stops here
-                        // (its session goes with it); an idle session is kept and reused.
-                        if let Some(old) = c.preview_job.lock().unwrap().replace(control.clone()) {
-                            old.stop();
-                        }
-                        let mut slot = c.preview.lock().unwrap();
+                        // A preview of an older selection still downloading stops; this one,
+                        // if a newer selection already asked, doesn't run at all.
+                        let generation = v["seq"].as_u64().unwrap_or(u64::MAX);
+                        let Some((control, kept)) = c.previews.begin(generation) else {
+                            return Err(io::Error::new(io::ErrorKind::Interrupted, "더 최근 미리보기가 있습니다"));
+                        };
                         let started = std::time::Instant::now();
-                        let reused = slot.is_some();
+                        let reused = kept.is_some();
+                        let mut session = kept;
                         let result = (|| {
                             control.check()?;
-                            let s = match slot.take() {
+                            let s = match session.take() {
                                 Some(s) => {
                                     s.bind(&control)?;
-                                    slot.insert(s)
+                                    session.insert(s)
                                 }
-                                None => slot.insert(Sftp::connect(&c.cfg, &control)?),
+                                None => session.insert(Sftp::connect(&c.cfg, &control)?),
                             };
                             let entry = s.stat(&p)?.ok_or_else(|| error(NO_FILE))?;
                             if entry.dir || entry.link {
@@ -776,27 +821,20 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                             s.download(&p, entry.size, &mut bytes, &control, |_| {})?;
                             Ok(Some(bytes))
                         })();
-                        // Done (or stopped): later previews mustn't stop the idle session.
-                        let mut job = c.preview_job.lock().unwrap();
-                        if job.as_ref().is_some_and(|j| Arc::ptr_eq(j, &control)) {
-                            *job = None;
-                        }
-                        drop(job);
+                        // Only a refusal about the file itself leaves the session usable;
+                        // after any other failure it isn't kept (nor after a stop: finish
+                        // decides that under the same lock as a newer preview's stop).
+                        let usable = match &result {
+                            Ok(_) => true,
+                            Err(e) => [NOT_A_FILE, NO_FILE].contains(&e.to_string().as_str()),
+                        };
+                        c.previews.finish(&control, session.filter(|_| usable));
                         if let Ok(Some(bytes)) = &result {
                             crate::log!("files: preview {} bytes in {} ms ({} session)", bytes.len(), started.elapsed().as_millis(), if reused { "kept" } else { "new" });
                         }
-                        match result {
-                            Ok(Some(bytes)) => bytes,
-                            Ok(None) => return Ok(json!({"too_large":true})),
-                            Err(e) => {
-                                // Only a refusal about the file itself leaves the session usable;
-                                // after any other failure (or a stop) it isn't reused.
-                                let about_file = control.check().is_ok() && [NOT_A_FILE, NO_FILE].contains(&e.to_string().as_str());
-                                if !about_file {
-                                    *slot = None;
-                                }
-                                return Err(e);
-                            }
+                        match result? {
+                            Some(bytes) => bytes,
+                            None => return Ok(json!({"too_large":true})),
                         }
                     };
                     if bytes.len() as u64 > limit {
@@ -1547,5 +1585,43 @@ mod tests {
             assert!(name(n).is_err());
         }
         assert!(name("한글 '문서'.txt").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod preview_slot_tests {
+    use super::*;
+
+    /// A finished preview's session is the next one's; a stopped one's never is, even when it
+    /// finishes successfully after the stop; an older request arriving late doesn't run and
+    /// doesn't stop the newer one; disconnecting stops the working one and drops the idle one.
+    #[test]
+    fn preview_slot_lifecycle() {
+        let slot = PreviewSlot::<u32>::default();
+        let (a, idle) = slot.begin(1).unwrap();
+        assert!(idle.is_none());
+        slot.finish(&a, Some(7));
+        let (b, idle) = slot.begin(2).unwrap();
+        assert_eq!(idle, Some(7), "kept session reused");
+        // c starts while b is working: b is stopped; b's late success isn't kept.
+        let (c, idle) = slot.begin(3).unwrap();
+        assert!(idle.is_none() && b.check().is_err());
+        slot.finish(&b, Some(8));
+        assert!(slot.state.lock().unwrap().0.is_none(), "stopped preview's session kept");
+        // An older request (2) arriving after 3 started doesn't run and doesn't stop 3.
+        assert!(slot.begin(2).is_none());
+        assert!(c.check().is_ok());
+        slot.finish(&c, Some(9));
+        // A too-large or refused file still hands its session on (finish with Some).
+        let (d, idle) = slot.begin(4).unwrap();
+        assert_eq!(idle, Some(9));
+        slot.finish(&d, None); // a failed session isn't offered
+        assert!(slot.state.lock().unwrap().0.is_none());
+        let (e, _) = slot.begin(5).unwrap();
+        slot.finish(&e, Some(10));
+        let (f, _) = slot.begin(6).unwrap();
+        slot.state.lock().unwrap().0 = Some(11);
+        slot.stop();
+        assert!(f.check().is_err() && slot.state.lock().unwrap().0.is_none());
     }
 }
