@@ -106,12 +106,18 @@ impl Control {
 struct Connection {
     cfg: SshCfg,
     browse: Mutex<Sftp>,
+    /// Previews' own SFTP session, kept between them (a new SSH login per preview cost about a
+    /// second), and the preview it is working for: a newer preview stops that one.
+    preview: Mutex<Option<Sftp>>,
+    preview_job: Mutex<Option<Arc<Control>>>,
     control: Arc<Control>,
     home: String,
     options: Options,
     /// The remote is Windows: names it can't store are refused before anything is written.
     windows: bool,
 }
+const NO_FILE: &str = "파일이 없습니다";
+const NOT_A_FILE: &str = "일반 파일을 선택하세요";
 static CONNECTIONS: OnceLock<Mutex<HashMap<String, Arc<Connection>>>> = OnceLock::new();
 fn connections() -> &'static Mutex<HashMap<String, Arc<Connection>>> {
     CONNECTIONS.get_or_init(Default::default)
@@ -588,6 +594,10 @@ pub fn disconnect(id: &str) {
     }
     if let Some(c) = connections().lock().unwrap().remove(id) {
         c.control.stop();
+        // A preview downloading now stops too; its idle session goes with the connection.
+        if let Some(job) = c.preview_job.lock().unwrap().take() {
+            job.stop();
+        }
     }
     for (host, c) in jobs().lock().unwrap().values() {
         if host == id {
@@ -682,6 +692,8 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                         Arc::new(Connection {
                             cfg: c,
                             browse: Mutex::new(s),
+                            preview: Mutex::new(None),
+                            preview_job: Mutex::new(None),
                             control,
                             windows: host.os == "windows" || windows_root(&root),
                             home: root.clone(),
@@ -735,18 +747,57 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                     } else {
                         let c = connection(&key)?;
                         let p = remote_path(&p, &c.home);
-                        let control = Control::default();
-                        let mut s = Sftp::connect(&c.cfg, &control)?;
-                        let entry = s.stat(&p)?.ok_or_else(|| error("파일이 없습니다"))?;
-                        if entry.dir || entry.link {
-                            return Err(error("일반 파일을 선택하세요"));
+                        let control = Arc::new(Control::default());
+                        // A preview still downloading for an earlier selection stops here
+                        // (its session goes with it); an idle session is kept and reused.
+                        if let Some(old) = c.preview_job.lock().unwrap().replace(control.clone()) {
+                            old.stop();
                         }
-                        if entry.size > limit {
-                            return Ok(json!({"too_large":true}));
+                        let mut slot = c.preview.lock().unwrap();
+                        let started = std::time::Instant::now();
+                        let reused = slot.is_some();
+                        let result = (|| {
+                            control.check()?;
+                            let s = match slot.take() {
+                                Some(s) => {
+                                    s.bind(&control)?;
+                                    slot.insert(s)
+                                }
+                                None => slot.insert(Sftp::connect(&c.cfg, &control)?),
+                            };
+                            let entry = s.stat(&p)?.ok_or_else(|| error(NO_FILE))?;
+                            if entry.dir || entry.link {
+                                return Err(error(NOT_A_FILE));
+                            }
+                            if entry.size > limit {
+                                return Ok(None);
+                            }
+                            let mut bytes = Vec::new();
+                            s.download(&p, entry.size, &mut bytes, &control, |_| {})?;
+                            Ok(Some(bytes))
+                        })();
+                        // Done (or stopped): later previews mustn't stop the idle session.
+                        let mut job = c.preview_job.lock().unwrap();
+                        if job.as_ref().is_some_and(|j| Arc::ptr_eq(j, &control)) {
+                            *job = None;
                         }
-                        let mut bytes = Vec::new();
-                        s.download(&p, entry.size, &mut bytes, &control, |_| {})?;
-                        bytes
+                        drop(job);
+                        if let Ok(Some(bytes)) = &result {
+                            crate::log!("files: preview {} bytes in {} ms ({} session)", bytes.len(), started.elapsed().as_millis(), if reused { "kept" } else { "new" });
+                        }
+                        match result {
+                            Ok(Some(bytes)) => bytes,
+                            Ok(None) => return Ok(json!({"too_large":true})),
+                            Err(e) => {
+                                // Only a refusal about the file itself leaves the session usable;
+                                // after any other failure (or a stop) it isn't reused.
+                                let about_file = control.check().is_ok() && [NOT_A_FILE, NO_FILE].contains(&e.to_string().as_str());
+                                if !about_file {
+                                    *slot = None;
+                                }
+                                return Err(e);
+                            }
+                        }
                     };
                     if bytes.len() as u64 > limit {
                         return Ok(json!({"too_large":true}));
