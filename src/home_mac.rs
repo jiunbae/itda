@@ -499,7 +499,7 @@ fn flush(target: &EventLoopWindowTarget<Wake>) {
     let file_requests = FILE_REQUESTS.with(|q| std::mem::take(&mut *q.borrow_mut()));
     let files_changed = !file_requests.is_empty();
     for (id, close, new, path) in file_requests {
-        if close { if let Some(page) = FILE_PAGES.with(|p| p.borrow_mut().remove(&id)) {crate::files::release_page(&page);}
+        if close { crate::files::preview::revoke_owner(&id); if let Some(page) = FILE_PAGES.with(|p| p.borrow_mut().remove(&id)) {crate::files::release_page(&page);}
             let pane = FILE_PANES.with(|p| p.borrow_mut().remove(&id)); FILE_HOSTS.with(|p| {p.borrow_mut().remove(&id);}); drop(pane); continue; }
         let existing = if new { None } else { FILE_HOSTS.with(|p| p.borrow().iter().find(|(_,host)| *host == &id).map(|(key,_)| key.clone())) };
         let exists = FILE_PANES.with(|p| {
@@ -512,7 +512,7 @@ fn flush(target: &EventLoopWindowTarget<Wake>) {
         match WindowBuilder::new().with_title(title).with_titlebar_transparent(true).with_title_hidden(true).with_fullsize_content_view(true).with_inner_size(LogicalSize::new(1000.0, 700.0)).with_min_inner_size(LogicalSize::new(720.0, 480.0)).build(target) {
             Ok(window) => match home_view(&window, home(|m| is_dark(&m.settings)), Some(&id), Some(&window_id), path.as_deref()) {
                 Ok(view) => { crate::log!("file window up: {id}"); FILE_HOSTS.with(|p| {p.borrow_mut().insert(window_id.clone(), id);}); FILE_PANES.with(|p| { p.borrow_mut().insert(window_id, Pane { window, view }); }); }
-                Err(e) => crate::log!("files webview: {e}"),
+                Err(e) => { crate::files::preview::revoke_owner(&window_id); crate::log!("files webview: {e}"); },
             },
             Err(e) => crate::log!("files window: {e}"),
         }

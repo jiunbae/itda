@@ -255,7 +255,10 @@
     }
     zoom = null;
     const img = el.querySelector("img");
-    if (img) img.onload = () => applyZoom();
+    if (img) img.onload = () => {
+      if (d.url) send("files_preview_release", {page:pageToken,url:d.url});
+      if (m.seq === previewSeq) applyZoom();
+    };
     applyZoom();
     if (!zoomWatch) {
       zoomWatch = new ResizeObserver(() => { if (zoom === null) applyZoom(); });

@@ -326,7 +326,7 @@ fn send(v: Value) {
     }
     let script = format!("window.itda&&itda.recv({v})");
     if v["type"] == "files_result" {
-        if let Some(owner) = v["window"].as_str().and_then(crate::files::preview::owner) {
+        if let Some(owner) = crate::files::preview::result_owner(&v) {
             plat::eval_files(&owner, &script);
         }
     } else { plat::eval(&script); }

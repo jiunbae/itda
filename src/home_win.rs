@@ -427,7 +427,7 @@ fn file_window(id: &str, close: bool, new: bool, path: Option<&str>) {
         place_file_window(h);
         match build_webview(h, home(|m| is_dark(&m.settings)), Some(id), Some(&window_id), path) {
             Ok(view) => { FILE_HOSTS.with(|p| {p.borrow_mut().insert(window_id.clone(), id.into());}); FILE_PANES.with(|p| { p.borrow_mut().insert(window_id, (h as isize, Rc::new(view))); }); resize_webview(h); ShowWindow(h, SW_SHOW); SetForegroundWindow(h); super::send_hosts(); }
-            Err(e) => { crate::log!("files webview: {e}"); DestroyWindow(h); }
+            Err(e) => { crate::files::preview::revoke_owner(&window_id); crate::log!("files webview: {e}"); DestroyWindow(h); }
         }
     }
 }
@@ -864,7 +864,7 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
             crate::files_win::forget_drop(h as isize);
             if h != hwnd() {
                 let id = FILE_PANES.with(|p| p.borrow().iter().find(|(_, (wh, _))| *wh == h as isize).map(|(id, _)| id.clone()));
-                if let Some(id) = id { if let Some(page) = FILE_PAGES.with(|p| p.borrow_mut().remove(&id)) {crate::files::release_page(&page);}
+                if let Some(id) = id { crate::files::preview::revoke_owner(&id); if let Some(page) = FILE_PAGES.with(|p| p.borrow_mut().remove(&id)) {crate::files::release_page(&page);}
                     FILE_HOSTS.with(|p| {p.borrow_mut().remove(&id);}); let removed = FILE_PANES.with(|p| p.borrow_mut().remove(&id)); drop(removed); super::send_hosts(); }
                 return 0;
             }

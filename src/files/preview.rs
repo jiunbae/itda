@@ -3,7 +3,7 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     io,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 use wry::http::{self, Request, Response};
 
@@ -16,7 +16,7 @@ pub struct Ticket {
 }
 struct Asset {
     token: String,
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
     mime: &'static str,
 }
 struct Page {
@@ -74,7 +74,13 @@ impl Registry {
             nonce: p.nonce.clone(),
         })
     }
-    fn publish(&mut self, ticket: &Ticket, bytes: Vec<u8>, mime: &str) -> io::Result<String> {
+    fn publish(
+        &mut self,
+        ticket: &Ticket,
+        bytes: impl Into<Arc<[u8]>>,
+        mime: &str,
+    ) -> io::Result<String> {
+        let bytes = bytes.into();
         let mime = media_mime(mime)
             .ok_or_else(|| io::Error::other("지원하지 않는 미리보기 형식입니다"))?;
         if bytes.len() > MAX_ITEM {
@@ -114,45 +120,57 @@ impl Registry {
         });
         Ok(format!("/preview/{token}"))
     }
-    fn response(&mut self, owner: &str, req: &Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
+    fn revoke_owner(&mut self, owner: &str) {
+        self.pages.retain(|_, p| p.owner != owner);
+    }
+    fn resolve(&mut self, owner: &str, req: &Request<Vec<u8>>) -> Snapshot {
         let Some(token) = req.uri().path().strip_prefix("/preview/") else {
-            return empty(404, None);
+            return Snapshot::Empty(404, None);
         };
-        let Some(a) = self
+        let Some(page) = self
             .pages
-            .values()
-            .filter(|p| p.owner == owner)
-            .filter_map(|p| p.asset.as_ref())
-            .find(|a| a.token == token)
+            .values_mut()
+            .find(|p| p.owner == owner && p.asset.as_ref().is_some_and(|a| a.token == token))
         else {
-            return empty(404, None);
+            return Snapshot::Empty(404, None);
         };
         if req.method() != "GET" && req.method() != "HEAD" {
-            return empty(405, None);
+            return Snapshot::Empty(405, None);
         }
+        let a = page.asset.as_ref().unwrap();
         let len = a.bytes.len();
-        let range = if let Some(range) = req.headers().get("Range") {
-            match range.to_str().ok().and_then(|r| byte_range(r, len)) {
-                Some(range) => Some(range),
-                None => return empty(416, Some(format!("bytes */{len}"))),
+        // Range is defined for GET; ignore unsupported/malformed/multiple ranges.
+        let range = if req.method() == "GET" && !req.headers().contains_key("If-Range") {
+            let mut values = req.headers().get_all("Range").iter();
+            match (values.next(), values.next()) {
+                (Some(v), None) => v
+                    .to_str()
+                    .map(|s| byte_range(s, len))
+                    .unwrap_or(ByteRange::Full),
+                _ => ByteRange::Full,
             }
         } else {
-            None
+            ByteRange::Full
         };
-        let (start, end) = range.unwrap_or((0, len));
-        let mut b = headers(if range.is_some() { 206 } else { 200 })
-            .header("Content-Type", a.mime)
-            .header("Accept-Ranges", "bytes")
-            .header("Content-Length", end - start);
-        if range.is_some() {
-            b = b.header("Content-Range", format!("bytes {start}-{}/{len}", end - 1));
+        if matches!(range, ByteRange::Unsatisfiable) {
+            return Snapshot::Empty(416, Some(format!("bytes */{len}")));
         }
-        b.body(if req.method() == "HEAD" {
-            Cow::Borrowed(&b""[..])
-        } else {
-            Cow::Owned(a.bytes[start..end].to_vec())
-        })
-        .unwrap()
+        let result = Snapshot::Data {
+            bytes: a.bytes.clone(),
+            mime: a.mime,
+            range,
+            head: req.method() == "HEAD",
+        };
+        // A decoded image retains its own pixels. Unlike an audio/video player, it doesn't
+        // need a future range read. The Arc keeps this response alive after detaching it.
+        if req.method() == "GET" && range == ByteRange::Full && a.mime.starts_with("image/") {
+            page.asset = None;
+        }
+        result
+    }
+    #[cfg(test)]
+    fn response(&mut self, owner: &str, req: &Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
+        self.resolve(owner, req).into_response()
     }
 }
 fn headers(status: u16) -> http::response::Builder {
@@ -164,6 +182,9 @@ fn headers(status: u16) -> http::response::Builder {
 }
 fn empty(status: u16, range: Option<String>) -> Response<Cow<'static, [u8]>> {
     let mut b = headers(status).header("Content-Length", "0");
+    if status == 405 {
+        b = b.header("Allow", "GET, HEAD");
+    }
     if let Some(range) = range {
         b = b.header("Content-Range", range);
     }
@@ -185,26 +206,101 @@ fn media_mime(mime: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
-/// A single HTTP byte range, converted to an exclusive end. Multipart requests are refused.
-fn byte_range(value: &str, len: usize) -> Option<(usize, usize)> {
-    if len == 0 {
-        return None;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ByteRange {
+    Full,
+    Partial(usize, usize),
+    Unsatisfiable,
+}
+enum Snapshot {
+    Empty(u16, Option<String>),
+    Data {
+        bytes: Arc<[u8]>,
+        mime: &'static str,
+        range: ByteRange,
+        head: bool,
+    },
+}
+impl Snapshot {
+    fn into_response(self) -> Response<Cow<'static, [u8]>> {
+        match self {
+            Self::Empty(status, range) => empty(status, range),
+            Self::Data {
+                bytes,
+                mime,
+                range,
+                head,
+            } => {
+                let len = bytes.len();
+                let (status, start, end) = match range {
+                    ByteRange::Partial(start, end) => (206, start, end),
+                    _ => (200, 0, len),
+                };
+                let mut builder = headers(status)
+                    .header("Content-Type", mime)
+                    .header("Accept-Ranges", "bytes")
+                    .header("Content-Length", end - start);
+                if status == 206 {
+                    builder =
+                        builder.header("Content-Range", format!("bytes {start}-{}/{len}", end - 1));
+                }
+                builder
+                    .body(if head {
+                        Cow::Borrowed(&b""[..])
+                    } else {
+                        Cow::Owned(bytes[start..end].to_vec())
+                    })
+                    .unwrap()
+            }
+        }
     }
-    let (start, end) = value.strip_prefix("bytes=")?.split_once('-')?;
-    if !start.bytes().all(|b| b.is_ascii_digit()) || !end.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    if start.is_empty() {
-        let count = end.parse::<usize>().ok()?;
-        return (count > 0).then_some((len.saturating_sub(count), len));
-    }
-    let start = start.parse::<usize>().ok()?;
-    let end = if end.is_empty() {
-        len
-    } else {
-        end.parse::<usize>().ok()?.checked_add(1)?.min(len)
+}
+/// Single byte ranges with saturating numeral parsing (RFC 9110 sections 14.1.2/14.2).
+/// Unsupported/malformed range sets are ignored; only valid unsatisfiable ranges yield 416.
+fn byte_range(value: &str, len: usize) -> ByteRange {
+    let Some((start, end)) = value
+        .trim()
+        .strip_prefix("bytes=")
+        .and_then(|v| v.split_once('-'))
+    else {
+        return ByteRange::Full;
     };
-    (start < end && start < len).then_some((start, end))
+    let number = |s: &str| {
+        (!s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())).then(|| {
+            s.bytes().fold(0usize, |n, b| {
+                n.saturating_mul(10).saturating_add((b - b'0') as usize)
+            })
+        })
+    };
+    if start.is_empty() {
+        let Some(count) = number(end) else {
+            return ByteRange::Full;
+        };
+        return if count == 0 || len == 0 {
+            ByteRange::Unsatisfiable
+        } else {
+            ByteRange::Partial(len.saturating_sub(count), len)
+        };
+    }
+    let Some(first) = number(start) else {
+        return ByteRange::Full;
+    };
+    let last = if end.is_empty() {
+        None
+    } else {
+        let Some(last) = number(end) else {
+            return ByteRange::Full;
+        };
+        let (a, b) = (start.trim_start_matches('0'), end.trim_start_matches('0'));
+        if (a.len(), a) > (b.len(), b) {
+            return ByteRange::Full;
+        }
+        Some(last)
+    };
+    if first >= len {
+        return ByteRange::Unsatisfiable;
+    }
+    ByteRange::Partial(first, last.map_or(len, |n| n.min(len - 1) + 1))
 }
 pub fn bind_page(page: &str, owner: &str) -> bool {
     registry().lock().unwrap().bind(page, owner)
@@ -213,6 +309,9 @@ pub fn bind_page(page: &str, owner: &str) -> bool {
 pub fn admit_ipc(v: &serde_json::Value, owner: &str) -> bool {
     match v["cmd"].as_str() {
         Some("files") => bind_page(v["window"].as_str().unwrap_or(""), owner),
+        Some("files_release_page") => {
+            self::owner(v["page"].as_str().unwrap_or("")).as_deref() == Some(owner)
+        }
         Some("files_preview_release") => {
             if let Some(p) = registry()
                 .lock()
@@ -220,7 +319,12 @@ pub fn admit_ipc(v: &serde_json::Value, owner: &str) -> bool {
                 .pages
                 .get_mut(v["page"].as_str().unwrap_or(""))
             {
-                if p.owner == owner {
+                let token_matches = v["url"].as_str().is_none_or(|url| {
+                    p.asset
+                        .as_ref()
+                        .is_some_and(|a| url.strip_prefix("/preview/") == Some(a.token.as_str()))
+                });
+                if p.owner == owner && token_matches {
                     p.asset = None;
                     p.nonce.clear();
                 }
@@ -238,22 +342,26 @@ pub fn owner(page: &str) -> Option<String> {
         .get(page)
         .map(|p| p.owner.clone())
 }
+pub fn result_owner(v: &serde_json::Value) -> Option<String> {
+    if v["type"] != "files_result" {
+        return None;
+    }
+    owner(v["window"].as_str()?)
+}
 pub fn begin(page: &str, connection: &str) -> io::Result<Ticket> {
     registry().lock().unwrap().begin(page, connection)
 }
 pub fn publish(ticket: &Ticket, bytes: Vec<u8>, mime: &str) -> io::Result<String> {
+    let bytes: Arc<[u8]> = bytes.into(); // Allocate before acquiring the shared registry.
     registry().lock().unwrap().publish(ticket, bytes, mime)
 }
 pub fn revoke_page(page: &str) {
     registry().lock().unwrap().pages.remove(page);
 }
 pub fn revoke_owner(owner: &str) {
-    registry()
-        .lock()
-        .unwrap()
-        .pages
-        .retain(|_, p| p.owner != owner);
+    registry().lock().unwrap().revoke_owner(owner);
 }
+
 pub fn revoke_connection(key: &str) {
     for p in registry().lock().unwrap().pages.values_mut() {
         if p.connection == key
@@ -265,7 +373,8 @@ pub fn revoke_connection(key: &str) {
     }
 }
 pub fn response(owner: &str, req: &Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
-    registry().lock().unwrap().response(owner, req)
+    let snapshot = { registry().lock().unwrap().resolve(owner, req) };
+    snapshot.into_response() // Copy only after the global mutex has been released.
 }
 
 #[cfg(test)]
@@ -309,7 +418,9 @@ mod tests {
         let mut r = Registry::default();
         r.bind("p", "w");
         let t = r.begin("p", "c").unwrap();
-        let url = r.publish(&t, (0..10).collect(), "video/mp4").unwrap();
+        let url = r
+            .publish(&t, (0..10).collect::<Vec<u8>>(), "video/mp4")
+            .unwrap();
         for (range, bytes, content) in [
             ("bytes=2-4", vec![2, 3, 4], "bytes 2-4/10"),
             ("bytes=-2", vec![8, 9], "bytes 8-9/10"),
@@ -322,21 +433,40 @@ mod tests {
             assert_eq!(resp.headers()["Content-Range"], content);
             let head = r.response("w", &req(&url, Some(range), "HEAD"));
             assert!(head.body().is_empty());
-            assert_eq!(head.headers()["Content-Length"], bytes.len().to_string());
+            assert_eq!(head.status(), 200);
+            assert_eq!(head.headers()["Content-Length"], "10");
         }
         for bad in [
             "bytes=10-",
-            "bytes=5-2",
             "bytes=-0",
-            "bytes=0-1,4-5",
-            "bytes=0-18446744073709551615",
-            "garbage",
+            "bytes=999999999999999999999999999999-",
         ] {
             let resp = r.response("w", &req(&url, Some(bad), "GET"));
             assert_eq!(resp.status(), 416);
             assert_eq!(resp.headers()["Content-Range"], "bytes */10");
         }
+        for ignored in ["bytes=5-2", "bytes=0-1,4-5", "garbage", "bytes=+1-2"] {
+            let resp = r.response("w", &req(&url, Some(ignored), "GET"));
+            assert_eq!(resp.status(), 200);
+            assert_eq!(resp.body().len(), 10);
+        }
+        for huge in [
+            "bytes=0-18446744073709551615",
+            "bytes=0-9999999999999999999999999999999999999999",
+            "bytes=-9999999999999999999999999999999999",
+        ] {
+            let resp = r.response("w", &req(&url, Some(huge), "GET"));
+            assert_eq!(resp.status(), 206);
+            assert_eq!(resp.body().len(), 10);
+        }
         assert_eq!(r.response("w", &req(&url, None, "POST")).status(), 405);
+        let conditional = Request::builder()
+            .uri(&url)
+            .header("Range", "bytes=1-2")
+            .header("If-Range", "\"unmatched\"")
+            .body(Vec::new())
+            .unwrap();
+        assert_eq!(r.response("w", &conditional).status(), 200);
     }
     #[test]
     fn only_inert_media_and_bounded_live_capabilities() {
@@ -384,7 +514,7 @@ mod tests {
         let first = r.response("window-0", &req(&urls[0], Some("bytes=0-1"), "GET"));
         assert_eq!(first.status(), 206);
         assert_eq!(first.body().as_ref(), &[0, 0]);
-        r.begin("page-0", "c").unwrap(); // Selection change frees that window's original.
+        r.revoke_owner("window-0"); // Native close works even without a FILE_PAGES entry.
         let url = r.publish(&t, vec![0; MAX_ITEM], "image/png").unwrap();
         let last = r.response("window-4", &req(&url, None, "HEAD"));
         assert_eq!(last.status(), 200);
@@ -400,10 +530,97 @@ mod tests {
         let url = publish(&t, vec![42], "image/png").unwrap();
         let release = serde_json::json!({"cmd":"files_preview_release","page":page});
         assert!(!admit_ipc(&release, "foreign"));
-        assert_eq!(response(&owner, &req(&url, None, "GET")).status(), 200);
+        assert_eq!(response(&owner, &req(&url, None, "HEAD")).status(), 200);
         assert!(!admit_ipc(&release, &owner));
-        assert_eq!(response(&owner, &req(&url, None, "GET")).status(), 404);
+        assert_eq!(response(&owner, &req(&url, None, "HEAD")).status(), 404);
         assert!(publish(&t, vec![42], "image/png").is_err());
         revoke_owner(&owner);
+    }
+    #[test]
+    fn images_detach_before_copy_but_players_keep_future_ranges() {
+        let mut r = Registry::default();
+        r.bind("image-page", "native-window");
+        let t = r.begin("image-page", "c").unwrap();
+        let url = r.publish(&t, vec![1, 2, 3], "image/png").unwrap();
+        assert_eq!(
+            r.response("native-window", &req(&url, None, "HEAD"))
+                .status(),
+            200
+        );
+        assert_eq!(
+            r.response("native-window", &req(&url, Some("bytes=0-0"), "GET"))
+                .status(),
+            206
+        );
+        let snapshot = r.resolve("native-window", &req(&url, None, "GET"));
+        assert!(
+            r.pages["image-page"].asset.is_none(),
+            "image pinned while full response copy is deferred"
+        );
+        assert_eq!(snapshot.into_response().body().as_ref(), &[1, 2, 3]);
+        assert_eq!(
+            r.response("native-window", &req(&url, None, "GET"))
+                .status(),
+            404
+        );
+        let video = r.publish(&t, vec![1, 2, 3], "video/mp4").unwrap();
+        assert_eq!(
+            r.response("native-window", &req(&video, None, "GET"))
+                .status(),
+            200
+        );
+        assert_eq!(
+            r.response("native-window", &req(&video, Some("bytes=1-2"), "GET"))
+                .body()
+                .as_ref(),
+            &[2, 3]
+        );
+        r.revoke_owner("native-window");
+        assert!(!r.pages.contains_key("image-page"));
+        assert!(r.publish(&t, vec![1], "image/png").is_err());
+        assert_eq!(
+            r.response("native-window", &req(&video, None, "GET"))
+                .status(),
+            404
+        );
+    }
+    #[test]
+    fn stale_image_load_and_foreign_page_release_do_not_revoke_a_new_player() {
+        let page = random().unwrap();
+        let native = random().unwrap();
+        assert!(bind_page(&page, &native));
+        let first = begin(&page, "c").unwrap();
+        let image = publish(&first, vec![1], "image/png").unwrap();
+        let second = begin(&page, "c").unwrap();
+        let video = publish(&second, vec![2], "video/mp4").unwrap();
+        assert!(!admit_ipc(
+            &serde_json::json!({"cmd":"files_preview_release","page":page,"url":image}),
+            &native
+        ));
+        assert_eq!(response(&native, &req(&video, None, "GET")).status(), 200);
+        let release = serde_json::json!({"cmd":"files_release_page","page":page});
+        assert!(!admit_ipc(&release, "foreign"));
+        assert!(admit_ipc(&release, &native));
+        assert_eq!(owner(&page).as_deref(), Some(native.as_str()));
+        revoke_owner(&native);
+        assert!(owner(&page).is_none());
+    }
+    #[test]
+    fn same_device_results_route_only_to_the_live_native_page() {
+        let (a, b) = (random().unwrap(), random().unwrap());
+        let (wa, wb) = (random().unwrap(), random().unwrap());
+        assert!(bind_page(&a, &wa));
+        assert!(bind_page(&b, &wb));
+        let event = serde_json::json!({"type":"files_result","id":"same-device","window":b});
+        assert_eq!(result_owner(&event).as_deref(), Some(wb.as_str()));
+        assert!(result_owner(&serde_json::json!({"type":"files_job","window":b})).is_none());
+        revoke_owner(&wb);
+        assert!(result_owner(&event).is_none());
+        assert_eq!(
+            result_owner(&serde_json::json!({"type":"files_result","id":"same-device","window":a}))
+                .as_deref(),
+            Some(wa.as_str())
+        );
+        revoke_owner(&wa);
     }
 }
