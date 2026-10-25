@@ -57,11 +57,13 @@ pub fn prepare(
         first_page: false,
     };
     let format = match mime {
-        "image/png" if !bytes.windows(4).any(|b| b == b"acTL") => ImageFormat::Png,
+        "image/png" if !animated_png(&bytes) => ImageFormat::Png,
         "image/jpeg" => ImageFormat::Jpeg,
         "image/bmp" => ImageFormat::Bmp,
         "image/webp"
-            if !(bytes.get(12..16) == Some(b"VP8X")
+            if !(bytes.get(..4) == Some(b"RIFF")
+                && bytes.get(8..12) == Some(b"WEBP")
+                && bytes.get(12..16) == Some(b"VP8X")
                 && bytes.get(20).is_some_and(|b| b & 2 != 0)) =>
         {
             ImageFormat::WebP
@@ -125,6 +127,31 @@ pub fn prepare(
     })
 }
 
+fn animated_png(bytes: &[u8]) -> bool {
+    if bytes.get(..8) != Some(b"\x89PNG\r\n\x1a\n") {
+        return false;
+    }
+    let mut at = 8usize;
+    while let Some(header) = at.checked_add(8).and_then(|end| bytes.get(at..end)) {
+        let len = u32::from_be_bytes(header[..4].try_into().unwrap()) as usize;
+        let Some(end) = at
+            .checked_add(12)
+            .and_then(|n| n.checked_add(len))
+            .filter(|end| *end <= bytes.len())
+        else {
+            return false;
+        };
+        if &header[4..] == b"acTL" {
+            return len == 8;
+        }
+        if &header[4..] == b"IDAT" || &header[4..] == b"IEND" {
+            return false;
+        }
+        at = end;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,6 +190,14 @@ mod tests {
             );
         }
         assert!(prepare(vec![1, 2, 3], "image/png", None).is_err());
+        assert!(prepare(b"not a PNG with acTL text".to_vec(), "image/png", None).is_err());
+        let mut text = b"\x89PNG\r\n\x1a\n".to_vec();
+        text.extend_from_slice(&4u32.to_be_bytes());
+        text.extend_from_slice(b"tEXtacTL0000");
+        assert!(
+            !animated_png(&text),
+            "chunk payload text is not an animation control chunk"
+        );
     }
     #[test]
     fn jpeg_orientation_is_applied_before_thumbnailing() {

@@ -769,7 +769,6 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                 }
                 "preview" => {
                     let ticket = preview_ticket?;
-                    let _work = preview_image::work(ticket.as_ref())?;
                     // Return bounded inert content; never launch an application or render HTML/SVG.
                     let p = get(&v, "path");
                     let ext = Path::new(&p)
@@ -799,7 +798,9 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                         16 * 1024 * 1024
                     };
                     let mut cache_key = None;
+                    let _work;
                     let bytes = if v["side"] == "local" {
+                        _work = preview_image::work(ticket.as_ref())?;
                         use std::io::Read;
                         let canonical = std::fs::canonicalize(&p)?;
                         let mut file = std::fs::File::open(&canonical)?;
@@ -820,9 +821,8 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                         // A preview of an older selection still downloading stops; this one,
                         // if a newer selection already asked, doesn't run at all.
                         let generation = v["seq"].as_u64().unwrap_or(u64::MAX);
-                        let Some((control, kept)) = c.previews.begin(generation) else {
-                            return Err(io::Error::new(io::ErrorKind::Interrupted, "더 최근 미리보기가 있습니다"));
-                        };
+                        let (control, kept, permit) = preview_remote_begin(&c.previews, generation, ticket.as_ref())?;
+                        _work = permit;
                         let started = std::time::Instant::now();
                         let reused = kept.is_some();
                         let mut session = kept;
@@ -1693,6 +1693,21 @@ mod preview_pipeline_tests {
     use image::{DynamicImage, ImageFormat, ImageReader};
     use std::{io::Cursor, sync::mpsc, time::Duration};
     #[test]
+    fn newer_remote_preview_cancels_before_waiting_for_memory_budget() {
+        let held: Vec<_> = (0..4).map(|_| preview_image::work(None).unwrap()).collect();
+        let slot=Arc::new(PreviewSlot::<u32>::default());
+        let (old,_) = slot.begin(1).unwrap();
+        let (tx,rx)=mpsc::channel(); let pending=slot.clone();
+        let worker=std::thread::spawn(move || { let _=tx.send(preview_remote_begin(&pending,2,None)); });
+        let by=std::time::Instant::now()+Duration::from_secs(1);
+        while old.check().is_ok() && std::time::Instant::now()<by { std::thread::sleep(Duration::from_millis(10)); }
+        let cancelled_before_capacity=old.check().is_err();
+        drop(held);
+        let (control,kept,permit)=rx.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
+        slot.finish(&control,kept); drop(permit); worker.join().unwrap();
+        assert!(cancelled_before_capacity,"new request waited for capacity before stopping the old download");
+    }
+    #[test]
     fn local_preview_pipeline_refreshes_metadata_and_never_serves_a_removed_file() {
         let owner = format!("preview-test-{}", crate::store::new_id());
         let page = format!("{owner}-page");
@@ -1720,5 +1735,17 @@ mod preview_pipeline_tests {
         assert_eq!(response(&changed).body().as_ref(),std::fs::read(&path).unwrap());
         std::fs::remove_file(&path).unwrap(); let removed=ask(4); assert_eq!(removed["ok"],false);
         assert_eq!(response(&changed).status(),404);
+    }
+}
+
+/// Cancellation must precede waiting for bounded preview memory: an older download may own
+/// the very permit the newer request needs. Return every taken idle session on admission error.
+fn preview_remote_begin<T>(slot: &PreviewSlot<T>, generation: u64, ticket: Option<&preview::Ticket>) -> io::Result<(Arc<Control>, Option<T>, preview_image::Work)> {
+    let Some((control, kept)) = slot.begin(generation) else {
+        return Err(io::Error::new(io::ErrorKind::Interrupted, "더 최근 미리보기가 있습니다"));
+    };
+    match preview_image::work(ticket) {
+        Ok(work) => Ok((control, kept, work)),
+        Err(e) => { slot.finish(&control, kept); Err(e) }
     }
 }
