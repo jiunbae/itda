@@ -1413,19 +1413,23 @@ fn rename_local(from: &str, to: &str, replace: bool) -> io::Result<()> {
 /// app can't seem to save back). A copy older than a day is removed when Itda starts: the
 /// app it opened in has long had it, and nothing else would ever remove it.
 pub fn sweep_view_copies() {
-    let root = crate::store::dir().join("file-previews");
-    let Ok(entries) = std::fs::read_dir(&root) else { return };
     let day = std::time::Duration::from_secs(24 * 60 * 60);
+    let removed = sweep_copies_before(&crate::store::dir().join("file-previews"), std::time::SystemTime::now() - day);
+    if removed > 0 {
+        crate::log!("files: removed {removed} old view-only copies");
+    }
+}
+/// Remove the copy folders in `root` last changed before `cutoff`; how many went.
+fn sweep_copies_before(root: &Path, cutoff: std::time::SystemTime) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else { return 0 };
     let mut removed = 0;
     for e in entries.flatten() {
-        let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > day);
+        let old = e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t < cutoff);
         if old && e.file_type().is_ok_and(|t| t.is_dir()) && remove_view_copy(&e.path()).is_ok() {
             removed += 1;
         }
     }
-    if removed > 0 {
-        crate::log!("files: removed {removed} old view-only copies");
-    }
+    removed
 }
 /// A copy folder, its read-only file made writable first (Windows won't delete it otherwise).
 fn remove_view_copy(dir: &Path) -> io::Result<()> {
@@ -1796,26 +1800,29 @@ pub(crate) fn preview_decode_mode() -> bool { preview_image::decode_mode() }
 
 #[cfg(test)]
 mod sweep_tests {
-    /// An old copy (read-only file inside) is removed, a fresh one stays.
+    /// A copy folder older than the cutoff goes (its read-only file included); a newer one
+    /// stays.
     #[test]
     fn old_view_copies_go() {
         let root = std::env::temp_dir().join(format!("itda-sweep-{}", crate::store::new_id()));
-        let (old, fresh) = (root.join("old"), root.join("fresh"));
-        for d in [&old, &fresh] {
-            std::fs::create_dir_all(d).unwrap();
+        let make = |name: &str| {
+            let d = root.join(name);
+            std::fs::create_dir_all(&d).unwrap();
             let f = d.join("문서.pdf");
             std::fs::write(&f, b"x").unwrap();
             let mut p = std::fs::metadata(&f).unwrap().permissions();
             p.set_readonly(true);
             std::fs::set_permissions(&f, p).unwrap();
-        }
-        let two_days = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 86400);
-        std::fs::File::open(&old).unwrap().set_modified(two_days).unwrap_or(());
-        let age = std::fs::metadata(&old).unwrap().modified().unwrap().elapsed().unwrap();
-        if age > std::time::Duration::from_secs(86400) {
-            super::remove_view_copy(&old).unwrap();
-            assert!(!old.exists() && fresh.exists());
-        }
+            d
+        };
+        let old = make("old");
+        // (Coarse file systems keep times in whole seconds.)
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let cutoff = std::time::SystemTime::now();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let fresh = make("fresh");
+        assert_eq!(super::sweep_copies_before(&root, cutoff), 1);
+        assert!(!old.exists() && fresh.exists());
         super::remove_view_copy(&fresh).unwrap();
         let _ = std::fs::remove_dir_all(&root);
     }

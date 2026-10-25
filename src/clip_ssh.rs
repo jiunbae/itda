@@ -27,20 +27,39 @@ done
 "#;
 
 pub struct Bridge {
-    cfg: SshCfg,
     stop: Arc<AtomicBool>,
     watcher: Arc<Mutex<Option<Child>>>,
     /// The last text that went either way (an echo of it is not passed on again).
     last: Arc<Mutex<String>>,
+    /// Text to put on that Mac, newest only (one sender works through it, in order), and the
+    /// pbcopy running for it.
+    outbox: Arc<(Mutex<Option<String>>, std::sync::Condvar)>,
+    sending: Arc<Mutex<Option<Child>>>,
 }
 
 impl Drop for Bridge {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        if let Some(mut c) = self.watcher.lock().unwrap().take() {
-            let _ = c.kill();
-            let _ = c.wait();
+        self.outbox.1.notify_all();
+        for child in [&self.watcher, &self.sending] {
+            reap(child);
         }
+    }
+}
+
+/// End a child process kept in `slot`, if any.
+fn reap(slot: &Mutex<Option<Child>>) {
+    if let Some(mut c) = slot.lock().unwrap().take() {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+}
+
+/// Ends the child kept in a slot whenever the function using it returns (an error included).
+struct Reaping<'a>(&'a Mutex<Option<Child>>);
+impl Drop for Reaping<'_> {
+    fn drop(&mut self) {
+        reap(self.0);
     }
 }
 
@@ -53,7 +72,8 @@ fn target(id: &str) -> Option<SshCfg> {
         return None;
     }
     let login = store::resolve(&host, &store::load_accounts());
-    let pass = login.pass.clone().unwrap_or_default();
+    // (A password typed for this connection and not saved counts too, as for the screen.)
+    let pass = crate::gateway::typed(id).or_else(|| login.pass.clone()).unwrap_or_default();
     Some(crate::hp_upgrade::ssh_cfg_with(&host, &login, pass))
 }
 
@@ -64,7 +84,27 @@ pub fn start(id: &str, copied: impl Fn(String) + Send + 'static) -> Option<Bridg
 }
 
 fn start_with(cfg: SshCfg, copied: impl Fn(String) + Send + 'static) -> Bridge {
-    let bridge = Bridge { cfg: cfg.clone(), stop: Arc::default(), watcher: Arc::default(), last: Arc::default() };
+    let bridge = Bridge { stop: Arc::default(), watcher: Arc::default(), last: Arc::default(), outbox: Arc::default(), sending: Arc::default() };
+    let (stop, outbox, sending) = (bridge.stop.clone(), bridge.outbox.clone(), bridge.sending.clone());
+    let sender_cfg = cfg.clone();
+    std::thread::spawn(move || {
+        // One sender, the newest text only: an older copy can't land after a newer one.
+        loop {
+            let text = {
+                let mut pending = outbox.0.lock().unwrap();
+                while pending.is_none() && !stop.load(Ordering::Relaxed) {
+                    pending = outbox.1.wait(pending).unwrap();
+                }
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                pending.take().unwrap_or_default()
+            };
+            if let Err(e) = put(&sender_cfg, &text, &stop, &sending) {
+                crate::log!("clipboard over SSH: couldn't copy to the Mac: {e}");
+            }
+        }
+    });
     let (stop, watcher, last) = (bridge.stop.clone(), bridge.watcher.clone(), bridge.last.clone());
     std::thread::spawn(move || {
         // Restarted after a dropped SSH connection, a few seconds apart, until the bridge goes.
@@ -84,12 +124,19 @@ fn start_with(cfg: SshCfg, copied: impl Fn(String) + Send + 'static) -> Bridge {
 }
 
 fn watch(cfg: &SshCfg, stop: &AtomicBool, watcher: &Mutex<Option<Child>>, last: &Mutex<String>, copied: &dyn Fn(String)) -> std::io::Result<()> {
+    let _reaping = Reaping(watcher);
     let mut cmd = crate::tunnel::ssh_command(cfg)?;
     cmd.arg(crate::tunnel::ssh_target(cfg)?).arg("/bin/bash -s");
     let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
-    child.stdin.take().ok_or_else(|| std::io::Error::other("no stdin"))?.write_all(WATCH.as_bytes())?;
-    let out = child.stdout.take().ok_or_else(|| std::io::Error::other("no stdout"))?;
+    let input = child.stdin.take();
+    let out = child.stdout.take();
+    // Kept where the bridge (or this function's return) ends it, before anything can fail.
     *watcher.lock().unwrap() = Some(child);
+    if stop.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    input.ok_or_else(|| std::io::Error::other("no stdin"))?.write_all(WATCH.as_bytes())?;
+    let out = out.ok_or_else(|| std::io::Error::other("no stdout"))?;
     let mut first = true;
     for line in BufReader::new(out).lines() {
         if stop.load(Ordering::Relaxed) {
@@ -110,11 +157,35 @@ fn watch(cfg: &SshCfg, stop: &AtomicBool, watcher: &Mutex<Option<Child>>, last: 
         drop(seen);
         copied(text);
     }
-    if let Some(mut c) = watcher.lock().unwrap().take() {
-        let _ = c.kill();
-        let _ = c.wait();
-    }
     Ok(())
+}
+
+/// Put `text` on that Mac's clipboard (pbcopy over SSH), stoppable through `sending`.
+fn put(cfg: &SshCfg, text: &str, stop: &AtomicBool, sending: &Mutex<Option<Child>>) -> std::io::Result<()> {
+    let _reaping = Reaping(sending);
+    let mut cmd = crate::tunnel::ssh_command(cfg)?;
+    cmd.arg(crate::tunnel::ssh_target(cfg)?).arg("LANG=en_US.UTF-8 pbcopy");
+    let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+    let input = child.stdin.take();
+    *sending.lock().unwrap() = Some(child);
+    if stop.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    {
+        let mut input = input.ok_or_else(|| std::io::Error::other("no stdin"))?;
+        input.write_all(text.as_bytes())?;
+    } // (closed: pbcopy reads to the end)
+    // Wait without holding the slot, so the bridge can still end it.
+    loop {
+        if let Some(c) = sending.lock().unwrap().as_mut() {
+            if let Some(status) = c.try_wait()? {
+                return if status.success() { Ok(()) } else { Err(std::io::Error::other("pbcopy failed")) };
+            }
+        } else {
+            return Ok(()); // ended by the bridge
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }
 
 impl Bridge {
@@ -130,22 +201,8 @@ impl Bridge {
             }
             *seen = text.to_string();
         }
-        let (cfg, text) = (self.cfg.clone(), text.to_string());
-        std::thread::spawn(move || {
-            let result = (|| -> std::io::Result<()> {
-                let mut cmd = crate::tunnel::ssh_command(&cfg)?;
-                cmd.arg(crate::tunnel::ssh_target(&cfg)?).arg("LANG=en_US.UTF-8 pbcopy");
-                let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
-                child.stdin.take().ok_or_else(|| std::io::Error::other("no stdin"))?.write_all(text.as_bytes())?;
-                if !child.wait()?.success() {
-                    return Err(std::io::Error::other("pbcopy failed"));
-                }
-                Ok(())
-            })();
-            if let Err(e) = result {
-                crate::log!("clipboard over SSH: couldn't copy to the Mac: {e}");
-            }
-        });
+        *self.outbox.0.lock().unwrap() = Some(text.to_string());
+        self.outbox.1.notify_all();
     }
 }
 
