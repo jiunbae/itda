@@ -2386,7 +2386,10 @@
       // A folder shown from its last listing that hasn't changed stays as it is (no repaint
       // under a pointer that's about to drag or click).
       const same = (a, b) => a.length === b.length && a.every((e, i) => e.name === b[i].name && e.dir === b[i].dir && e.size === b[i].size && e.modified === b[i].modified && e.link === b[i].link && e.mode === b[i].mode);
-      if (!p.busy && p.path === m.data.path && p.entries && same(p.entries, m.data.entries)) return true;
+      if (!p.busy && p.path === m.data.path && p.entries && same(p.entries, m.data.entries)) {
+        if (m.side === "remote") rememberFolder();
+        return true;
+      }
       p.path = m.data.path;
       p.entries = m.data.entries;
       folderCache.set(cacheKey(m.side, p.path), p.entries);
