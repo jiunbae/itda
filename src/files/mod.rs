@@ -807,10 +807,11 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                         if !metadata.is_file() { return Err(error("일반 파일을 선택하세요")); }
                         if metadata.len() > limit { return Ok(json!({"too_large":true})); }
                         if mime != "text/plain" {
-                            let modified = metadata.modified()?.duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-                            let k = preview_cache::key(&key, canonical.to_string_lossy().into_owned(), metadata.len(), modified);
-                            if let Some(cached) = preview_cache::get(&k) { return preview_prepared(ticket.as_ref(), cached); }
-                            cache_key = Some(k);
+                            if let Ok(modified) = metadata.modified().and_then(|m| m.duration_since(UNIX_EPOCH).map_err(io::Error::other)) {
+                                let k = preview_cache::key(&key, canonical.to_string_lossy().into_owned(), metadata.len(), modified.as_nanos());
+                                if let Some(cached) = preview_cache::get(&k) { return preview_prepared(ticket.as_ref(), cached); }
+                                cache_key = Some(k);
+                            }
                         }
                         let mut bytes = Vec::new(); file.by_ref().take(limit + 1).read_to_end(&mut bytes)?; bytes
                     } else {
