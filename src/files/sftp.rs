@@ -455,65 +455,97 @@ impl Sftp {
         mut progress: impl FnMut(u64),
     ) -> io::Result<()> {
         let h = self.open(p, 1)?;
-        let mut offset = 0;
-        let mut done = 0;
-        while offset < size {
-            control.check()?;
-            let mut pending = Vec::new();
-            for _ in 0..WINDOW {
-                if offset >= size {
-                    break;
+        // A sliding window: up to WINDOW reads stay outstanding, a new one goes out as each
+        // reply is written (rather than 64 at a time, each batch waiting for its slowest), and
+        // replies may arrive in any order; data is written in file order. A short read asks
+        // for the rest at once, first in line.
+        let mut queue: std::collections::VecDeque<(u32, u64, u32)> = Default::default();
+        let mut got: std::collections::HashMap<u32, Vec<u8>> = Default::default();
+        let (mut offset, mut done) = (0u64, 0u64);
+        let read = |s: &mut Self, at: u64, n: u32| -> io::Result<u32> {
+            let mut b = Vec::new();
+            string(&mut b, &h);
+            b.extend_from_slice(&at.to_be_bytes());
+            b.extend_from_slice(&n.to_be_bytes());
+            s.send(5, &b)
+        };
+        // A broken transport (a failed write or read, a reply out of step) ends at once: no
+        // CLOSE is sent or waited for on it.
+        let mut broken = false;
+        let result = (|| -> io::Result<()> {
+            loop {
+                control.check()?;
+                while queue.len() < WINDOW && offset < size {
+                    let n = (size - offset).min(CHUNK as u64) as u32;
+                    let id = read(self, offset, n).inspect_err(|_| broken = true)?;
+                    queue.push_back((id, offset, n));
+                    offset += n as u64;
                 }
-                let n = (size - offset).min(CHUNK as u64) as u32;
-                let mut b = Vec::new();
-                string(&mut b, &h);
-                b.extend_from_slice(&offset.to_be_bytes());
-                b.extend_from_slice(&n.to_be_bytes());
-                pending.push((self.send(5, &b)?, offset, n));
-                offset += n as u64;
-            }
-            let mut chunks = std::collections::HashMap::new();
-            for _ in 0..pending.len() {
-                let mut r = self.packet()?;
-                if r.t != 103 {
-                    if r.t == 101 {
-                        r.status()?;
-                    }
-                    return Err(err("파일이 전송 중 바뀌었거나 읽을 수 없습니다"));
-                }
-                let id = r.id;
-                if chunks.insert(id, r.bytes()?).is_some() {
-                    return Err(err("중복 SFTP 응답"));
-                }
-            }
-            for (id, at, n) in pending {
-                let mut data = chunks.remove(&id).ok_or_else(|| err("SFTP 응답 누락"))?;
-                let mut consumed = 0;
-                loop {
-                    if data.is_empty() || data.len() > n as usize - consumed {
-                        return Err(err(
-                            "SFTP 읽기 크기 오류: 전송 중 파일이 바뀌었을 수 있습니다",
-                        ));
+                while let Some(&(id, at, n)) = queue.front() {
+                    let Some(data) = got.remove(&id) else { break };
+                    queue.pop_front();
+                    if data.is_empty() || data.len() > n as usize {
+                        // (A reply the protocol doesn't allow: the server can't be trusted to
+                        // answer a CLOSE either.)
+                        broken = true;
+                        return Err(err("SFTP 읽기 크기 오류: 전송 중 파일이 바뀌었을 수 있습니다"));
                     }
                     out.write_all(&data)?;
-                    consumed += data.len();
                     done += data.len() as u64;
                     progress(done);
-                    if consumed == n as usize {
-                        break;
+                    if data.len() < n as usize {
+                        let (rest_at, rest) = (at + data.len() as u64, n - data.len() as u32);
+                        let id = read(self, rest_at, rest).inspect_err(|_| broken = true)?;
+                        queue.push_front((id, rest_at, rest));
                     }
-                    control.check()?;
-                    let mut b = Vec::new();
-                    string(&mut b, &h);
-                    b.extend_from_slice(&(at + consumed as u64).to_be_bytes());
-                    b.extend_from_slice(&(n - consumed as u32).to_be_bytes());
-                    let mut r = self.request(5, &b)?;
-                    if r.t != 103 {
-                        return Err(err("전송 중 파일이 바뀌었습니다"));
+                }
+                if queue.is_empty() {
+                    if offset >= size {
+                        return Ok(());
                     }
-                    data = r.bytes()?;
+                    continue;
+                }
+                let mut r = self.packet().inspect_err(|_| broken = true)?;
+                let id = r.id;
+                if !queue.iter().any(|q| q.0 == id) || got.contains_key(&id) {
+                    broken = true;
+                    return Err(err("SFTP 응답 순서 불일치"));
+                }
+                if r.t == 101 {
+                    // The server refusing the read (still in step, unless the STATUS hasn't
+                    // even a code): its reason is passed on.
+                    queue.retain(|q| q.0 != id);
+                    broken |= r.b.len().saturating_sub(r.at) < 4;
+                    return Err(match r.status() {
+                        Err(e) => e,
+                        Ok(_) => err("파일이 전송 중 바뀌었거나 읽을 수 없습니다"),
+                    });
+                }
+                if r.t != 103 {
+                    // Any other kind of reply: the transport can't be trusted.
+                    queue.retain(|q| q.0 != id);
+                    broken = true;
+                    return Err(err("파일이 전송 중 바뀌었거나 읽을 수 없습니다"));
+                }
+                match r.bytes() {
+                    Ok(data) => {
+                        got.insert(id, data);
+                    }
+                    Err(e) => {
+                        broken = true;
+                        return Err(e);
+                    }
                 }
             }
+        })();
+        if result.is_err() {
+            // Nothing after a failure waits on the server (it may never answer): on a transport
+            // still in step, the replies still due and the CLOSE's are dropped as they arrive.
+            if !broken {
+                self.deferred.extend(queue.iter().map(|q| q.0).filter(|id| !got.contains_key(id)));
+                let _ = self.close_later(&h);
+            }
+            return result;
         }
         self.close(&h)
     }
@@ -601,6 +633,117 @@ impl Sftp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A server that answers READs out of order (in reversed groups of up to four) and short (at most
+    /// 1000 bytes each): the download still writes every byte in order, and the session stays
+    /// usable afterwards.
+    const SHORT_READ_SERVER: &str = r#"
+import struct, sys, threading, queue
+i, o = sys.stdin.buffer, sys.stdout.buffer
+data = bytes((k * 7 + k // 251) % 256 for k in range(60000))
+def readexact(n):
+    b = b""
+    while len(b) < n:
+        c = i.read(n - len(b))
+        if not c: return None
+        b += c
+    return b
+requests = queue.Queue()
+def reader():
+    while True:
+        n = readexact(4)
+        if n is None: requests.put(None); return
+        requests.put(readexact(struct.unpack(">I", n)[0]))
+threading.Thread(target=reader, daemon=True).start()
+def send(t, id, body=b""):
+    p = bytes([t]) + struct.pack(">I", id) + body; o.write(struct.pack(">I", len(p)) + p); o.flush()
+def s(x): return struct.pack(">I", len(x)) + x
+def status(code): return struct.pack(">I", code) + s(b"") + s(b"")
+requests.get(); p = struct.pack(">I", 3); o.write(struct.pack(">I", len(p) + 1) + bytes([2]) + p); o.flush()
+held = []
+def flush():
+    global held
+    for rid, body in reversed(held): send(103, rid, body)
+    held = []
+while True:
+    try:
+        b = requests.get(timeout=0.05)
+    except queue.Empty:
+        flush(); continue
+    if b is None: sys.exit(0)
+    t, id = b[0], struct.unpack(">I", b[1:5])[0]
+    if t == 3: flush(); send(102, id, s(b"h"))
+    elif t == 5:
+        hl = struct.unpack(">I", b[5:9])[0]; off, n = struct.unpack(">QI", b[9 + hl:9 + hl + 12])
+        held.append((id, s(data[off:off + min(n, 1000)])))
+        if len(held) == 4: flush()
+    elif t == 4: flush(); send(101, id, status(0))
+    elif t in (7, 17): flush(); send(105, id, struct.pack(">IQ", 1, len(data)))
+    else: flush(); send(101, id, status(8))
+"#;
+    /// A server that refuses every READ with a given (possibly malformed) reply and never
+    /// answers CLOSE: the download fails at once instead of waiting on it.
+    const REFUSING_SERVER: &str = r#"
+import struct, sys
+i, o = sys.stdin.buffer, sys.stdout.buffer
+reply = bytes.fromhex(sys.argv[1])
+def readexact(n):
+    b = b""
+    while len(b) < n:
+        c = i.read(n - len(b))
+        if not c: sys.exit(0)
+        b += c
+    return b
+def send(t, id, body=b""):
+    p = bytes([t]) + struct.pack(">I", id) + body; o.write(struct.pack(">I", len(p)) + p); o.flush()
+first = True
+while True:
+    b = readexact(struct.unpack(">I", readexact(4))[0])
+    if first:
+        first = False; p = struct.pack(">I", 3); o.write(struct.pack(">I", len(p) + 1) + bytes([2]) + p); o.flush(); continue
+    t, id = b[0], struct.unpack(">I", b[1:5])[0]
+    if t == 3: send(102, id, struct.pack(">I", 1) + b"h")
+    elif t == 5: send(reply[0], id, reply[1:])
+"#;
+    #[test]
+    fn download_failure_never_waits_on_close() {
+        // type byte + body: a proper refusal, a STATUS with only its code, an empty DATA, a
+        // DATA larger than asked, a reply type that doesn't belong.
+        let refusal = |code: u32, full: bool| {
+            let mut b = vec![101u8];
+            b.extend_from_slice(&code.to_be_bytes());
+            if full { b.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]); }
+            b
+        };
+        let mut big = vec![103u8];
+        big.extend_from_slice(&40_000u32.to_be_bytes());
+        big.extend(std::iter::repeat_n(7u8, 40_000));
+        let cases = [refusal(3, true), refusal(2, false), vec![103, 0, 0, 0, 0], big, vec![105, 0, 0, 0, 0]];
+        for reply in cases {
+            let hex: String = reply.iter().map(|b| format!("{b:02x}")).collect();
+            let Ok(child) = std::process::Command::new("python3").args(["-c", REFUSING_SERVER, &hex]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn() else {
+                return;
+            };
+            let control = Control::default();
+            let mut s = Sftp::start(child, &control).unwrap();
+            let started = std::time::Instant::now();
+            assert!(s.download("/f", 100_000, &mut Vec::new(), &control, |_| {}).is_err());
+            assert!(started.elapsed() < std::time::Duration::from_secs(2), "waited on a CLOSE after {hex:.20}");
+        }
+    }
+    #[test]
+    fn download_window_handles_short_and_reordered_reads() {
+        let Ok(child) = std::process::Command::new("python3").args(["-c", SHORT_READ_SERVER]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn() else {
+            return;
+        };
+        let control = Control::default();
+        let mut s = Sftp::start(child, &control).unwrap();
+        let want: Vec<u8> = (0..60000u32).map(|k| ((k * 7 + k / 251) % 256) as u8).collect();
+        let mut got = Vec::new();
+        s.download("/f", want.len() as u64, &mut got, &control, |_| {}).unwrap();
+        assert!(got == want, "bytes out of order or missing ({} of {})", got.len(), want.len());
+        assert_eq!(s.stat("/f").unwrap().unwrap().size, want.len() as u64, "session out of step");
+    }
 
     /// A server that answers out of order (as SFTP allows): the first three READDIRs come back
     /// reversed (two NAME batches and an "end"), and two CLOSE replies come back reversed.
