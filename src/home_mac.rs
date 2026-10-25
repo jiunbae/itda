@@ -95,9 +95,10 @@ thread_local! {
     static TO_FULL: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// Each Mac connection's clipboard over SSH (see clip_ssh), while its window is open.
     static CLIP_BRIDGES: RefCell<HashMap<String, crate::clip_ssh::Bridge>> = RefCell::new(HashMap::new());
-    /// The connection window in front, if any (copying here while it's in front goes there too).
-    static FRONT_SESSION: RefCell<Option<String>> = const { RefCell::new(None) };
 }
+/// The connection window in front, if any: copying here while it's in front goes there too,
+/// and only its Mac's copies come here (read by the clipboard bridges' threads as well).
+static FRONT_SESSION: Mutex<Option<String>> = Mutex::new(None);
 /// The pasteboard text last handed to a connection, or brought from one (set from the
 /// clipboard bridges' threads too).
 static LAST_CLIP: Mutex<String> = Mutex::new(String::new());
@@ -417,7 +418,12 @@ fn open_window(target: &EventLoopWindowTarget<Wake>, id: String, url: String, ti
             unsafe { view.webview().configuration().preferences().setJavaScriptCanOpenWindowsAutomatically(true); }
             s.borrow_mut().insert(id.clone(), Pane { window, view });
             // Text copied on that Mac lands on this Mac's pasteboard.
-            if let Some(bridge) = crate::clip_ssh::start(&id, |text| {
+            let from = id.clone();
+            if let Some(bridge) = crate::clip_ssh::start(&id, move |text| {
+                // (A Mac whose window is behind mustn't replace what the one in use works with.)
+                if FRONT_SESSION.lock().unwrap().as_deref() != Some(from.as_str()) {
+                    return;
+                }
                 *LAST_CLIP.lock().unwrap() = text.clone();
                 pbcopy(&text);
             }) {
@@ -551,7 +557,12 @@ fn flush(target: &EventLoopWindowTarget<Wake>) {
         MONITOR_AUTO_FULL.with(|h| {h.borrow_mut().remove(&id);});
         MONITOR_PANES.with(|p| p.borrow_mut().retain(|(owner,_),_| owner!=&id));
         CLIP_BRIDGES.with(|b| b.borrow_mut().remove(&id));
-        FRONT_SESSION.with(|f| if f.borrow().as_deref() == Some(id.as_str()) { *f.borrow_mut() = None });
+        {
+            let mut front = FRONT_SESSION.lock().unwrap();
+            if front.as_deref() == Some(id.as_str()) {
+                *front = None;
+            }
+        }
         if let Some(p) = SESSIONS.with(|s| s.borrow_mut().remove(&id)) {
             drop(p);
             super::post(Event::Exit(id));
@@ -851,7 +862,7 @@ pub fn run(quick: Option<String>) {
             },
             TaoEvent::UserEvent(Wake::Drain) => drain(),
             TaoEvent::UserEvent(Wake::Pasteboard) => {
-                if let Some(id) = FRONT_SESSION.with(|f| f.borrow().clone()) {
+                if let Some(id) = FRONT_SESSION.lock().unwrap().clone() {
                     offer_clipboard(&id);
                 }
             }
@@ -899,12 +910,12 @@ pub fn run(quick: Option<String>) {
                     WindowEvent::Focused(true) => {
                         if let Some((ref owner,_))=mid { offer_clipboard(owner); }
                         let front = sid.clone().or_else(|| mid.as_ref().map(|(owner, _)| owner.clone()));
-                        FRONT_SESSION.with(|f| *f.borrow_mut() = front);
+                        *FRONT_SESSION.lock().unwrap() = front;
                         if let Some(id) = sid {
                             offer_clipboard(&id);
                         }
                     }
-                    WindowEvent::Focused(false) if sid.is_some() || mid.is_some() => FRONT_SESSION.with(|f| *f.borrow_mut() = None),
+                    WindowEvent::Focused(false) if sid.is_some() || mid.is_some() => *FRONT_SESSION.lock().unwrap() = None,
                     WindowEvent::ThemeChanged(_) if is_home => send(json!({"type": "system_theme", "dark": system_dark()})),
                     _ => {}
                 }
