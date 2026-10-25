@@ -40,6 +40,11 @@ pub fn send_local(text: &str) {
     s.send(&m);
 }
 
+/// Text copied on the Mac, brought over SSH (see clip_ssh).
+pub fn from_bridge(text: String) {
+    deliver(sh(), text);
+}
+
 fn deliver(s: &Shared, text: String) {
     *s.clip_in.lock().unwrap() = Some(text);
     s.post(WM_CLIP);

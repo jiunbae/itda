@@ -12,7 +12,7 @@ mod cu_e2e;
 mod h264_mac;
 #[cfg(target_os = "macos")]
 mod host_mac;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod clip_ssh;
 mod hp_upgrade;
 mod update;

@@ -328,6 +328,10 @@ pub fn run(c: Conn, l: Launch) {
         SetWindowsHookExW(WH_KEYBOARD_LL, Some(kb_hook), hinst, 0);
         toolbar::create(h, toolbar_items(), &toolbar_mode);
         AddClipboardFormatListener(h);
+        // A Mac whose screen comes from Screen Sharing: the clipboard goes over SSH beside it.
+        if let Some(b) = crate::clip_ssh::start(&ui(|u| u.l.id.clone()), crate::clip::from_bridge) {
+            *CLIP_BRIDGE.lock().unwrap() = Some(b);
+        }
         update_title(h);
         update_scroll(h);
         SetTimer(h, TIMER_TICK, 1000, None);
@@ -622,7 +626,11 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
             SetWindowPos(h, null_mut(), r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
         }
         WM_CLOSE => close(h),
-        WM_DESTROY => PostQuitMessage(0),
+        WM_DESTROY => {
+            // (Stops the clipboard watcher on the Mac before the process ends.)
+            CLIP_BRIDGE.lock().unwrap().take();
+            PostQuitMessage(0)
+        }
         WM_TEST_SNAP => test_snap(h, wp),
         _ => return DefWindowProcW(h, m, wp, lp),
     }
@@ -1429,7 +1437,12 @@ unsafe fn clip_out(h: HWND) {
     }
     ui(|u| u.last_clip = t.clone());
     crate::clip::send_local(&t);
+    if let Some(b) = CLIP_BRIDGE.lock().unwrap().as_ref() {
+        b.send(&t);
+    }
 }
+/// This connection's clipboard over SSH, when it has one (see clip_ssh).
+static CLIP_BRIDGE: std::sync::Mutex<Option<crate::clip_ssh::Bridge>> = std::sync::Mutex::new(None);
 
 // ---------------------------------------------------------------- painting
 
