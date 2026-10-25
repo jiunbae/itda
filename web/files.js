@@ -19,6 +19,7 @@
   let nativeGesturePending = null, nativeSequence = 0;
   let pendingFolder = null, tabSwitch = null, pendingDeviceDrop = null;
   let localRsyncAvailable = false;
+  let searchTimer;
   let host,
     layer,
     setup,
@@ -47,13 +48,25 @@
     const saved = JSON.parse(localStorage.getItem("itda.file.sort"));
     if (saved && sortKeys.includes(saved.key)) sorting = { key: saved.key, desc: saved.desc === true };
   } catch {}
+  // One collator for every comparison: localeCompare with options builds one per call, which
+  // made sorting a large folder take a noticeable moment.
+  const collator = new Intl.Collator(undefined, { numeric: true });
   function ordered(entries) {
-    const names = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    const names = (a, b) => collator.compare(a.name, b.name) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     return [...entries].sort((a, b) => {
       if (a.dir !== b.dir) return a.dir ? -1 : 1;
-      const n = sorting.key === "name" ? names(a, b) : sorting.key === "kind" ? kind(a).localeCompare(kind(b)) : sorting.key === "size" ? a.size - b.size : a.modified - b.modified;
+      const n = sorting.key === "name" ? names(a, b) : sorting.key === "kind" ? collator.compare(kind(a), kind(b)) : sorting.key === "size" ? a.size - b.size : a.modified - b.modified;
       return (sorting.desc ? -1 : 1) * (n || names(a, b));
     });
+  }
+  // The other columns' folders, sorted once per listing and order (not on every render).
+  const columnOrder = new WeakMap();
+  function orderedColumn(entries) {
+    const key = [hidden, sorting.key, sorting.desc].join("|"), memo = columnOrder.get(entries);
+    if (memo?.key === key) return memo.list;
+    const list = ordered(entries.filter(e => hidden || !e.name.startsWith(".")));
+    columnOrder.set(entries, { key, list });
+    return list;
   }
   // `from_other`: the change came from another file window (don't echo it back).
   function setSort(key, desc = sorting.desc, from_other = false) {
@@ -110,7 +123,14 @@
     morph(bar, html);
     if (focused) bar.querySelector('[role="tab"][aria-selected="true"]')?.focus({preventScroll:true});
   }
+  // A filter still being typed belongs to the tab it was typed in: dropped when leaving it.
+  function dropPendingSearch() {
+    clearTimeout(searchTimer);
+    const box = layer?.querySelector("[data-search]");
+    if (box) box.value = search;
+  }
   function newTab(path, side) {
+    dropPendingSearch();
     saveTab();
     currentTab = ++tabId;
     fileTabs.push({ id: currentTab, host });
@@ -122,6 +142,7 @@
   }
   function switchTab(id) {
     if (id === currentTab) return;
+    dropPendingSearch();
     saveTab();
     const t = fileTabs.find(t => t.id === id);
     if (!t) return;
@@ -170,7 +191,7 @@
       const loading = p.busy && path === target;
       const current = path === p.path && !p.busy, k = cacheKey(side, path);
       const entries = loading ? null : current ? visible(side) : folderCache.get(k);
-      const shown = entries && ordered(entries.filter(e => hidden || !e.name.startsWith(".")));
+      const shown = entries && (current ? entries : orderedColumn(entries));
       if (!loading && !entries && ![...columnRequests.values()].some(r => r.key === k)) {
         const seq = ++sequence;
         columnRequests.set(seq, { key: k, side });
@@ -427,7 +448,7 @@
     explorerHome = !MAC && page === "home";
     if (layer) {
       networkMode = true;
-      search = "";
+      clearTimeout(searchTimer); search = "";
       layer.querySelector("[data-search]").value = "";
       renderPanes();
       return;
@@ -810,7 +831,7 @@
     Object.assign(panes.remote, emptyPane(), { path: data.path, home: data.path, entries: data.entries, history: [data.path], at: 0 });
     if (!panes.local.home) Object.assign(panes.local, emptyPane(), { path: data.local_path, home: data.local_path, entries: data.local_entries, history: [data.local_path], at: 0 });
     active = "remote";
-    search = "";
+    clearTimeout(searchTimer); search = "";
     layer.querySelector("[data-search]").value = "";
     previewKey = "";
     saveTab();
@@ -848,7 +869,7 @@
     });
     active = "remote";
     split = false;
-    search = "";
+    clearTimeout(searchTimer); search = "";
     returnPage = null;
     undo.length = 0;
     layer = document.createElement("div");
@@ -934,13 +955,19 @@
     layer.addEventListener("pointerdown", pointerDown);
     layer.addEventListener("dragstart", e => { if (!e.target.closest("input,textarea")) e.preventDefault(); });
     layer.addEventListener("selectstart", e => { if (!e.target.closest("input,textarea,pre")) e.preventDefault(); });
+    // Re-filter after a short pause in typing, not on every key in a large folder. The filter
+    // the rows (and clicks on them) follow changes only with the repaint.
     layer.querySelector("[data-search]").oninput = (e) => {
-      search = e.target.value;
-      for (const p of Object.values(panes)) {
-        p.start = 0;
-        p.scroll = 0;
-      }
-      renderPanes();
+      const typed = e.target.value;
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        search = typed;
+        for (const p of Object.values(panes)) {
+          p.start = 0;
+          p.scroll = 0;
+        }
+        renderPanes();
+      }, 100);
     };
     saveTab();
     rememberFolder();
@@ -1147,8 +1174,19 @@
     const p = panes[side];
     folderCache.set(cacheKey(side, p.path), p.entries);
     p.seq = ++sequence;
-    p.busy = true;
-    p.pendingPath = path;
+    // A folder seen before shows at once from its last listing; the fresh one replaces it
+    // when it arrives. Only an unseen folder shows "reading".
+    const seen = folderCache.get(cacheKey(side, path));
+    if (seen && path) {
+      p.path = path;
+      p.entries = seen;
+      p.busy = false;
+      p.pendingPath = null;
+      p.start = Math.min(p.start || 0, Math.max(0, seen.length - 160));
+    } else {
+      p.busy = true;
+      p.pendingPath = path;
+    }
     if (history) {
       p.start = 0;
       p.scroll = 0;
@@ -1293,9 +1331,9 @@
       if (!thisPC && !panes[s.dataset.side].home) return;
       if (networkMode && !MAC) { returnPage = explorerHome ? "home" : "network"; Object.assign(panes.local, { history: [], at: -1 }); }
       networkMode = false;
-      if (thisPC) { active = "local"; search = ""; layer.querySelector("[data-search]").value = ""; nav("local", ""); return; }
+      if (thisPC) { active = "local"; clearTimeout(searchTimer); search = ""; layer.querySelector("[data-search]").value = ""; nav("local", ""); return; }
       active = s.dataset.side;
-      search = "";
+      clearTimeout(searchTimer); search = "";
       layer.querySelector("[data-search]").value = "";
       renderPanes();
       return;
@@ -2345,6 +2383,13 @@
     if (m.op === "list") {
       const p = panes[m.side];
       if (m.seq !== p.seq) return true;
+      // A folder shown from its last listing that hasn't changed stays as it is (no repaint
+      // under a pointer that's about to drag or click).
+      const same = (a, b) => a.length === b.length && a.every((e, i) => e.name === b[i].name && e.dir === b[i].dir && e.size === b[i].size && e.modified === b[i].modified && e.link === b[i].link && e.mode === b[i].mode);
+      if (!p.busy && p.path === m.data.path && p.entries && same(p.entries, m.data.entries)) {
+        if (m.side === "remote") rememberFolder();
+        return true;
+      }
       p.path = m.data.path;
       p.entries = m.data.entries;
       folderCache.set(cacheKey(m.side, p.path), p.entries);
