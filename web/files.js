@@ -238,9 +238,10 @@
     previewTimer = setTimeout(() => call("preview", { side, path, seq }), 180);
   }
   function previewResult(m) {
-    if (m.seq !== previewSeq || !layer) return;
+    const release = () => { if (m.data?.url) send("files_preview_release", {page:pageToken,url:m.data.url}); };
+    if (m.seq !== previewSeq || !layer) { release(); return; }
     const el = layer.querySelector(".files-preview-content");
-    if (!el) return;
+    if (!el) { release(); return; }
     const d = m.data || {};
     const entry = previewTarget();
     if (!m.ok || d.unsupported || d.too_large) {
@@ -2342,6 +2343,7 @@
     if (!host || m.id !== host.id) {
       // The tab moved to another device; let its folder be asked for again on return.
       if (m.op === "list") columnRequests.delete(m.seq);
+      if (m.op === "preview" && m.data?.url) send("files_preview_release", {page:pageToken,url:m.data.url});
       return true;
     }
     if (m.op === "preview") {

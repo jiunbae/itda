@@ -310,7 +310,8 @@ pub fn admit_ipc(v: &serde_json::Value, owner: &str) -> bool {
     match v["cmd"].as_str() {
         Some("files") => bind_page(v["window"].as_str().unwrap_or(""), owner),
         Some("files_release_page") => {
-            self::owner(v["page"].as_str().unwrap_or("")).as_deref() == Some(owner)
+            // An already-unbound page can still have backend browse resources to retire.
+            self::owner(v["page"].as_str().unwrap_or("")).is_none_or(|bound| bound == owner)
         }
         Some("files_preview_release") => {
             if let Some(p) = registry()
@@ -604,6 +605,10 @@ mod tests {
         assert_eq!(owner(&page).as_deref(), Some(native.as_str()));
         revoke_owner(&native);
         assert!(owner(&page).is_none());
+        assert!(
+            admit_ipc(&release, "cleanup-window"),
+            "unbound page cleanup was dropped"
+        );
     }
     #[test]
     fn same_device_results_route_only_to_the_live_native_page() {
