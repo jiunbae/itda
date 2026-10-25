@@ -92,7 +92,8 @@ features = [
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-panic = "abort"
+# Preview decoder failures are caught on their worker; abort would bypass catch_unwind.
+panic = "unwind"
 strip = true
 
 # RDP login and protocol plumbing runs once per connection: favour size.

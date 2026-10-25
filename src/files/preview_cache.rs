@@ -1,7 +1,7 @@
 //! Bounded prepared-preview cache. A disconnected connection's in-flight work cannot refill it.
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
     time::{Duration, Instant},
 };
 const BUDGET: usize = 32 * 1024 * 1024;
@@ -46,6 +46,9 @@ impl Cache {
             size,
             modified,
         }
+    }
+    fn expire(&mut self) {
+        self.entries.retain(|_, v| v.touched.elapsed() < TTL);
     }
     fn get(&mut self, key: &Key) -> Option<Prepared> {
         if self.epochs.get(&key.connection) != Some(&key.epoch) {
@@ -94,6 +97,14 @@ impl Cache {
             },
         );
     }
+    fn release_page(&mut self, page: &str) {
+        if page.is_empty() {
+            return;
+        }
+        let suffix = format!("\x1f{page}");
+        self.entries.retain(|k, _| !k.connection.ends_with(&suffix));
+        self.epochs.retain(|k, _| !k.ends_with(&suffix));
+    }
     fn invalidate(&mut self, connection: &str) {
         let matches = |k: &str| {
             k == connection
@@ -105,22 +116,41 @@ impl Cache {
 }
 fn cache() -> &'static Mutex<Cache> {
     static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
-    CACHE.get_or_init(Default::default)
+    CACHE.get_or_init(|| {
+        let _ = std::thread::Builder::new()
+            .name("preview-cache-expiry".into())
+            .spawn(|| loop {
+                std::thread::sleep(Duration::from_secs(30));
+                if let Some(cache) = CACHE.get() {
+                    cache_lock(cache).expire();
+                }
+            });
+        Mutex::new(Cache::default())
+    })
+}
+fn cache_lock(mutex: &Mutex<Cache>) -> MutexGuard<'_, Cache> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 pub fn key(connection: &str, path: String, size: u64, modified: u128) -> Key {
-    cache()
-        .lock()
-        .unwrap()
-        .key(connection, path, size, modified)
+    cache_lock(cache()).key(connection, path, size, modified)
 }
 pub fn get(key: &Key) -> Option<Prepared> {
-    cache().lock().unwrap().get(key)
+    cache_lock(cache()).get(key)
 }
 pub fn insert(key: Key, value: Prepared) {
-    cache().lock().unwrap().insert(key, value);
+    cache_lock(cache()).insert(key, value);
 }
 pub fn invalidate(connection: &str) {
-    cache().lock().unwrap().invalidate(connection);
+    cache_lock(cache()).invalidate(connection);
+}
+pub fn release_page(page: &str) {
+    cache_lock(cache()).release_page(page);
+}
+
+pub fn invalidate_all() {
+    let mut cache = cache_lock(cache());
+    cache.entries.clear();
+    cache.epochs.clear();
 }
 
 #[cfg(test)]
@@ -185,10 +215,36 @@ mod tests {
                 <= BUDGET
         );
     }
-}
-
-pub fn invalidate_all() {
-    let mut c = cache().lock().unwrap();
-    c.entries.clear();
-    c.epochs.clear();
+    #[test]
+    fn poisoned_cache_recovers_and_idle_expiry_needs_no_lookup() {
+        let cache = Mutex::new(Cache::default());
+        let key = cache_lock(&cache).key("c", "f".into(), 1, 1);
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = cache.lock().unwrap();
+            panic!("generated cache poison");
+        }))
+        .is_err());
+        let mut c = cache_lock(&cache);
+        c.insert(key.clone(), content(1));
+        assert!(c.get(&key).is_some());
+        c.entries.get_mut(&key).unwrap().touched = Instant::now() - TTL;
+        c.expire();
+        assert!(c.entries.is_empty());
+    }
+    #[test]
+    fn closed_page_releases_all_its_device_caches_only() {
+        let mut c = Cache::default();
+        let a = c.key("host-a\x1fclosed", "f".into(), 1, 1);
+        let b = c.key("host-b\x1fclosed", "f".into(), 1, 1);
+        let other = c.key("host-a\x1fopen", "f".into(), 1, 1);
+        c.insert(a.clone(), content(1));
+        c.insert(b.clone(), content(1));
+        c.insert(other.clone(), content(1));
+        c.release_page("closed");
+        assert!(c.get(&a).is_none());
+        assert!(c.get(&b).is_none());
+        assert!(c.get(&other).is_some());
+        c.insert(a.clone(), content(1));
+        assert!(c.get(&a).is_none());
+    }
 }

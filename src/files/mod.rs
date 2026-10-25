@@ -624,6 +624,7 @@ fn retire(key: String) {
 }
 pub fn release_page(page: &str) {
     preview::revoke_page(page);
+    preview_cache::release_page(page);
     if page.is_empty() { return; }
     // Its transfers keep running, now the app's (shown and cancellable from any Itda page).
     background::adopt(page);
@@ -699,7 +700,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
         disconnect(&key);
         return;
     }
-    if ["undo", "mkdir", "rename", "trash"].contains(&op.as_str()) { preview_cache::invalidate_all(); }
+    if mutates_files(&op) { preview_cache::invalidate_all(); }
     let preview_ticket = if op == "preview" && crate::home::binary_previews() {
         preview::begin(window_page(&v), &key).map(Some)
     } else { Ok(None) };
@@ -845,13 +846,14 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                             }
                             if mime != "text/plain" && entry.modified != 0 {
                                 // Preserve LSTAT refusal of a symlink leaf before canonicalizing.
-                                let canonical = s.realpath(&p)?;
-                                let k = preview_cache::key(&key, canonical, entry.size, entry.modified as u128 * 1_000_000_000);
-                                if let Some(cached) = preview_cache::get(&k) {
-                                    cached_remote = Some(cached);
-                                    return Ok(Some(Vec::new()));
+                                if let Ok(canonical) = s.realpath(&p) {
+                                    let k = preview_cache::key(&key, canonical, entry.size, entry.modified as u128 * 1_000_000_000);
+                                    if let Some(cached) = preview_cache::get(&k) {
+                                        cached_remote = Some(cached);
+                                        return Ok(Some(Vec::new()));
+                                    }
+                                    cache_key = Some(k);
                                 }
-                                cache_key = Some(k);
                             }
                             let mut bytes = Vec::new();
                             s.download(&p, entry.size, &mut bytes, &control, |_| {})?;
@@ -1078,7 +1080,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                 _ => Err(error("지원하지 않는 파일 작업입니다")),
             }
         })();
-        if ["undo", "mkdir", "rename", "trash"].contains(&op.as_str()) { preview_cache::invalidate_all(); }
+        if mutates_files(&op) { preview_cache::invalidate_all(); }
         if op == "connect"
             && host.files.method == "auto"
             && result.as_ref().err().is_some_and(|e| {
@@ -1754,3 +1756,8 @@ fn preview_remote_begin<T>(slot: &PreviewSlot<T>, generation: u64, ticket: Optio
         Err(e) => { slot.finish(&control, kept); Err(e) }
     }
 }
+
+fn mutates_files(op: &str) -> bool { matches!(op,"undo"|"mkdir"|"rename"|"trash") }
+
+#[cfg(any(windows,test))]
+pub(crate) fn preview_panic_is_handled() -> bool { preview_image::panic_is_handled() }
