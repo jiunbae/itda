@@ -25,7 +25,7 @@ use objc2_core_graphics::{CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMo
 use objc2_core_media::CMSampleBuffer;
 use objc2_core_video::{CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight, CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress};
 use objc2_foundation::{NSArray, NSError, NSProcessInfo, NSString};
-use objc2_screen_capture_kit::{SCContentFilter, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamDelegate, SCStreamOutput, SCStreamOutputType};
+use objc2_screen_capture_kit::{SCContentFilter, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamDelegate, SCStreamErrorCode, SCStreamErrorDomain, SCStreamOutput, SCStreamOutputType};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::io;
@@ -191,7 +191,8 @@ pub(crate) fn video(w: usize, h: usize) -> Option<Video> {
 static SHARED_CAPTURE: Mutex<std::sync::Weak<Mutex<Capture>>> = Mutex::new(std::sync::Weak::new());
 // Concurrent connections share a failed attempt too: they must not each queue another
 // full startup timeout while holding the capture lock.
-static CAPTURE_FAILURE: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+// The final flag latches a system-user stop until relaunch; automatic reconnect must not undo it.
+static CAPTURE_FAILURE: Mutex<Option<(Instant, String, bool)>> = Mutex::new(None);
 const CAPTURE_COOLDOWN: Duration = Duration::from_secs(2);
 const START_WAIT: Duration = Duration::from_secs(3);
 const FIRST_FRAME_WAIT: Duration = Duration::from_secs(2);
@@ -259,16 +260,22 @@ struct StreamHealth {
     last_frame: Instant,
     frames: u64,
     error: Option<String>,
+    user_stopped: bool,
 }
 impl StreamHealth {
-    fn new() -> Self { Self { last_frame: Instant::now(), frames: 0, error: None } }
+    fn new() -> Self { Self { last_frame: Instant::now(), frames: 0, error: None, user_stopped: false } }
 }
 type Health = Arc<Mutex<StreamHealth>>;
 
 const QUIET_PROBE: Duration = Duration::from_secs(8);
 const RECOVERY_BACKOFF: Duration = Duration::from_secs(2);
 const RECOVERY_WINDOW: Duration = Duration::from_secs(60);
+const CAPTURE_STOPPED: &str = "이 Mac에서 화면 공유를 중지했습니다. 다시 공유하려면 이 Mac에서 Itda를 다시 열어 주세요.";
 const CAPTURE_LOST: &str = "고성능 화면 캡처가 멈춰 연결을 종료합니다. 잠시 후 다시 연결해 주세요.";
+
+fn intentional_stop(sc_domain: bool, code: isize) -> bool {
+    sc_domain && matches!(SCStreamErrorCode(code), SCStreamErrorCode::UserStopped | SCStreamErrorCode::UserDeclined)
+}
 
 /// A quiet desktop is normal: lack of images asks for a liveness probe, never a restart
 /// by itself. Only an explicit stream failure or an unanswered/failed probe restarts it.
@@ -287,12 +294,14 @@ impl Watchdog {
         probe: impl FnOnce() -> Result<(), String>,
         restart: impl FnOnce() -> Result<T, String>,
         completed: impl FnOnce() -> Instant) -> Result<Option<T>, String> {
+        if health.user_stopped { return Err(CAPTURE_STOPPED.into()); }
         if let Some(error) = &health.error { self.reason = Some(error.clone()); }
         if self.reason.is_none() && now.saturating_duration_since(health.last_frame) >= QUIET_PROBE
             && now.saturating_duration_since(self.probed) >= QUIET_PROBE {
             self.probed = now;
             if let Err(error) = probe() { self.reason = Some(error); }
         }
+        if self.reason.as_deref() == Some(CAPTURE_STOPPED) { return Err(CAPTURE_STOPPED.into()); }
         if self.reason.is_none() || now < self.retry_at { return Ok(None); }
         self.attempts.retain(|at| now.saturating_duration_since(*at) < RECOVERY_WINDOW);
         if self.attempts.len() >= 3 { return Err(CAPTURE_LOST.into()); }
@@ -308,6 +317,7 @@ impl Watchdog {
                 Ok(Some(capture))
             }
             Err(error) => {
+                if error == CAPTURE_STOPPED { return Err(error); }
                 crate::log!("hp: capture restart failed: {error}");
                 self.failures += 1;
                 self.retry_at = completed + RECOVERY_BACKOFF;
@@ -370,7 +380,10 @@ define_class!(
     unsafe impl SCStreamDelegate for Output {
         #[unsafe(method(stream:didStopWithError:))]
         fn stopped(&self, _stream: &SCStream, error: &NSError) {
-            self.ivars().health.lock().unwrap().error = Some(error.localizedDescription().to_string());
+            let user_stopped = intentional_stop(unsafe { error.domain().isEqualToString(SCStreamErrorDomain) }, error.code());
+            let mut health = self.ivars().health.lock().unwrap();
+            health.error = Some(error.localizedDescription().to_string());
+            health.user_stopped |= user_stopped;
         }
     }
 );
@@ -390,8 +403,8 @@ pub(crate) fn capture() -> Result<Arc<Mutex<Capture>>, String> {
         let error = c.lock().unwrap().failed.clone();
         return match error { Some(error) => Err(error), None => Ok(c) };
     }
-    if let Some((at, why)) = CAPTURE_FAILURE.lock().unwrap().as_ref() {
-        if at.elapsed() < CAPTURE_COOLDOWN { return Err(why.clone()); }
+    if let Some((at, why, sticky)) = CAPTURE_FAILURE.lock().unwrap().as_ref() {
+        if *sticky || at.elapsed() < CAPTURE_COOLDOWN { return Err(why.clone()); }
     }
     match Capture::new() {
         Ok(c) => {
@@ -405,8 +418,9 @@ pub(crate) fn capture() -> Result<Arc<Mutex<Capture>>, String> {
             crate::log!("hp: screen capture unavailable: {why}");
             // Keep framework diagnostics out of the auth reason (including words
             // like "password" which RFB clients classify as bad credentials).
-            let why = "이 Mac의 화면 캡처를 시작하지 못했습니다. 잠시 후 다시 시도해 주세요.".to_string();
-            *CAPTURE_FAILURE.lock().unwrap() = Some((Instant::now(), why.clone()));
+            let stopped = why == CAPTURE_STOPPED;
+            let why = if stopped { CAPTURE_STOPPED } else { "이 Mac의 화면 캡처를 시작하지 못했습니다. 잠시 후 다시 시도해 주세요." }.to_string();
+            *CAPTURE_FAILURE.lock().unwrap() = Some((Instant::now(), why.clone(), stopped));
             Err(why)
         }
     }
@@ -468,7 +482,9 @@ impl Capture {
         let until = Instant::now() + FIRST_FRAME_WAIT;
         loop {
             c.update();
-            if let Some(error) = c.health.lock().unwrap().error.clone() { return Err(error); }
+            let health = c.health.lock().unwrap().clone();
+            if health.user_stopped { return Err(CAPTURE_STOPPED.into()); }
+            if let Some(error) = health.error { return Err(error); }
             if c.generation != 0 { return Ok(c); }
             if Instant::now() >= until { return Err("ScreenCaptureKit이 첫 화면을 보내지 않았습니다".into()); }
             std::thread::sleep(Duration::from_millis(10));
@@ -574,6 +590,12 @@ fn supervise_capture(weak: std::sync::Weak<Mutex<Capture>>) -> Result<(), String
                     // Includes a usable first-frame check, not merely start completion.
                     Capture::with_dimensions(w, h, native)
                 }, Instant::now);
+            // A user stop may arrive while a replacement is starting. Never publish it then.
+            let stopped = health.lock().unwrap().user_stopped || match &result {
+                Ok(Some(fresh)) => fresh.health.lock().unwrap().user_stopped,
+                _ => false,
+            };
+            let result = if stopped { Err(CAPTURE_STOPPED.into()) } else { result };
             match result {
                 Ok(Some(mut fresh)) => {
                     let Some(capture) = weak.upgrade() else { return; };
@@ -590,7 +612,7 @@ fn supervise_capture(weak: std::sync::Weak<Mutex<Capture>>) -> Result<(), String
                 Err(error) => {
                     let Some(capture) = weak.upgrade() else { return; };
                     capture.lock().unwrap().failed = Some(error.clone());
-                    *CAPTURE_FAILURE.lock().unwrap() = Some((Instant::now(), error));
+                    *CAPTURE_FAILURE.lock().unwrap() = Some((Instant::now(), error.clone(), error == CAPTURE_STOPPED));
                     wake_viewers(); // Pump checks failure even with no update demand.
                     return;
                 }
@@ -625,7 +647,8 @@ fn probe_stream(stream: &SCStream, w: usize, h: usize, health: &Health) -> Resul
     let result = start_result(rx.recv_timeout(START_WAIT));
     // A real image arriving during a delayed command is stronger evidence than its timeout.
     let health = health.lock().unwrap();
-    if health.error.is_none() && health.frames != before { Ok(()) } else { result }
+    if health.user_stopped { Err(CAPTURE_STOPPED.into()) }
+    else if health.error.is_none() && health.frames != before { Ok(()) } else { result }
 }
 
 #[cfg(test)]
@@ -642,7 +665,7 @@ mod watchdog_tests {
     fn watchdog_healthy_idle_only_probes_and_recent_frames_skip_probe() {
         let at = Instant::now();
         let mut watch = Watchdog::new(at);
-        let mut health = StreamHealth { last_frame: at, frames: 1, error: None };
+        let mut health = StreamHealth { last_frame: at, frames: 1, user_stopped: false, error: None };
         let probes = Cell::new(0);
         for n in 1..=60 {
             let result = step::<FakeCapture>(&mut watch, at + Duration::from_secs(n * 8), &health,
@@ -659,7 +682,7 @@ mod watchdog_tests {
     fn watchdog_delegate_error_and_unanswered_probe_recover_with_new_frame() {
         let at = Instant::now();
         let mut watch = Watchdog::new(at);
-        let mut health = StreamHealth { last_frame: at, frames: 1, error: Some("fake stream stopped".into()) };
+        let mut health = StreamHealth { last_frame: at, frames: 1, user_stopped: false, error: Some("fake stream stopped".into()) };
         let recovered = step(&mut watch, at, &health, || panic!("error must restart directly"),
             || Ok(FakeCapture { frame: 2 })).unwrap().unwrap();
         assert_eq!(recovered.frame, 2);
@@ -675,7 +698,7 @@ mod watchdog_tests {
     fn watchdog_backoff_and_two_failed_restarts_become_terminal() {
         let at = Instant::now();
         let mut watch = Watchdog::new(at);
-        let health = StreamHealth { last_frame: at, frames: 1, error: Some("fake stopped".into()) };
+        let health = StreamHealth { last_frame: at, frames: 1, user_stopped: false, error: Some("fake stopped".into()) };
         assert!(step::<FakeCapture>(&mut watch, at, &health, || unreachable!(), || Err("no first frame".into())).unwrap().is_none());
         assert!(step::<FakeCapture>(&mut watch, at + RECOVERY_BACKOFF / 2, &health,
             || unreachable!(), || panic!("retry ignored backoff")).unwrap().is_none());
@@ -688,7 +711,7 @@ mod watchdog_tests {
         let at = Instant::now();
         let finished = at + Duration::from_secs(14);
         let mut watch = Watchdog::new(at);
-        let health = StreamHealth { last_frame: at, frames: 1, error: Some("fake stopped".into()) };
+        let health = StreamHealth { last_frame: at, frames: 1, user_stopped: false, error: Some("fake stopped".into()) };
         assert!(watch.step::<FakeCapture>(at, &health, || unreachable!(),
             || Err("slow fake restart".into()), || finished).unwrap().is_none());
         assert_eq!(watch.retry_at, finished + RECOVERY_BACKOFF);
@@ -697,10 +720,26 @@ mod watchdog_tests {
     }
 
     #[test]
+    fn watchdog_never_restarts_a_user_stopped_or_declined_capture() {
+        assert!(intentional_stop(true, SCStreamErrorCode::UserStopped.0));
+        assert!(intentional_stop(true, SCStreamErrorCode::UserDeclined.0));
+        assert!(!intentional_stop(false, SCStreamErrorCode::UserStopped.0));
+        assert!(!intentional_stop(true, SCStreamErrorCode::InternalError.0));
+        let at = Instant::now();
+        let mut watch = Watchdog::new(at);
+        let health = StreamHealth { last_frame: at, frames: 1, error: None, user_stopped: true };
+        assert_eq!(step::<FakeCapture>(&mut watch, at, &health,
+            || panic!("user stop was probed"), || panic!("user stop was overridden")).err().as_deref(),Some(CAPTURE_STOPPED));
+        let health = StreamHealth { user_stopped: false, error: Some("stream error".into()), ..health };
+        assert_eq!(step::<FakeCapture>(&mut watch, at, &health, || unreachable!(),
+            || Err(CAPTURE_STOPPED.into())).err().as_deref(),Some(CAPTURE_STOPPED));
+    }
+
+    #[test]
     fn watchdog_flapping_is_bounded_and_terminal_capture_check_rejects_stale_screen() {
         let at = Instant::now();
         let mut watch = Watchdog::new(at);
-        let health = StreamHealth { last_frame: at, frames: 1, error: Some("repeated stream error".into()) };
+        let health = StreamHealth { last_frame: at, frames: 1, user_stopped: false, error: Some("repeated stream error".into()) };
         for n in 0..3 {
             assert!(step(&mut watch, at + Duration::from_secs(n), &health, || unreachable!(),
                 || Ok(FakeCapture { frame: n as u8 })).unwrap().is_some());
