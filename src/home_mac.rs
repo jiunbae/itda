@@ -38,6 +38,8 @@ enum Wake {
     Menu(muda::MenuId),
     Permissions(Value),
     Quit,
+    /// This Mac's pasteboard changed (checked while a connection window is in front).
+    Pasteboard,
 }
 
 static PROXY: OnceLock<Mutex<EventLoopProxy<Wake>>> = OnceLock::new();
@@ -91,9 +93,14 @@ thread_local! {
     static TO_OPEN: RefCell<Vec<(String, String, String, bool)>> = const { RefCell::new(Vec::new()) };
     static TO_CLOSE: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static TO_FULL: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    /// The pasteboard text last handed to a connection.
-    static LAST_CLIP: RefCell<String> = const { RefCell::new(String::new()) };
+    /// Each Mac connection's clipboard over SSH (see clip_ssh), while its window is open.
+    static CLIP_BRIDGES: RefCell<HashMap<String, crate::clip_ssh::Bridge>> = RefCell::new(HashMap::new());
+    /// The connection window in front, if any (copying here while it's in front goes there too).
+    static FRONT_SESSION: RefCell<Option<String>> = const { RefCell::new(None) };
 }
+/// The pasteboard text last handed to a connection, or brought from one (set from the
+/// clipboard bridges' threads too).
+static LAST_CLIP: Mutex<String> = Mutex::new(String::new());
 
 /// A connection: its window, opened and closed on the UI thread. Dropping it closes it.
 pub struct Proc {
@@ -379,7 +386,7 @@ fn open_window(target: &EventLoopWindowTarget<Wake>, id: String, url: String, ti
             if v["ev"] == "clip" {
                 // Text copied on the remote device lands on this Mac's pasteboard.
                 let text = v["text"].as_str().unwrap_or("").to_string();
-                LAST_CLIP.with(|c| *c.borrow_mut() = text.clone());
+                *LAST_CLIP.lock().unwrap() = text.clone();
                 std::thread::spawn(move || pbcopy(&text));
                 return;
             }
@@ -408,7 +415,14 @@ fn open_window(target: &EventLoopWindowTarget<Wake>, id: String, url: String, ti
         Ok(view) => SESSIONS.with(|s| {
             // Only the strict same-origin mirror handler above can create popups.
             unsafe { view.webview().configuration().preferences().setJavaScriptCanOpenWindowsAutomatically(true); }
-            s.borrow_mut().insert(id, Pane { window, view });
+            s.borrow_mut().insert(id.clone(), Pane { window, view });
+            // Text copied on that Mac lands on this Mac's pasteboard.
+            if let Some(bridge) = crate::clip_ssh::start(&id, |text| {
+                *LAST_CLIP.lock().unwrap() = text.clone();
+                pbcopy(&text);
+            }) {
+                CLIP_BRIDGES.with(|b| b.borrow_mut().insert(id, bridge));
+            }
         }),
         Err(e) => super::post(Event::Session(id, json!({"ev": "error", "kind": "other", "msg": format!("화면을 만들 수 없습니다: {e}")}))),
     }
@@ -483,15 +497,17 @@ pub(super) fn session_eval(id: &str, js: &str) {
 /// Text copied on this Mac goes to the connection when its window comes forward.
 fn offer_clipboard(id: &str) {
     let text = output("/usr/bin/pbpaste", &[]);
-    if text.is_empty() || text.len() > 256 << 10 || LAST_CLIP.with(|c| *c.borrow() == text) {
+    if text.is_empty() || text.len() > 256 << 10 || *LAST_CLIP.lock().unwrap() == text {
         return;
     }
-    LAST_CLIP.with(|c| *c.borrow_mut() = text.clone());
+    *LAST_CLIP.lock().unwrap() = text.clone();
     SESSIONS.with(|s| {
         if let Some(p) = s.borrow().get(id) {
             let _ = p.view.evaluate_script(&format!("window.itdaPaste&&itdaPaste({})", json!(text)));
         }
     });
+    // A Mac whose screen comes from Screen Sharing gets it over SSH as well.
+    CLIP_BRIDGES.with(|b| if let Some(b) = b.borrow().get(id) { b.send(&text) });
 }
 
 /// Open and close the windows asked for while handling the last event.
@@ -534,6 +550,8 @@ fn flush(target: &EventLoopWindowTarget<Wake>) {
         HIDDEN_OWNERS.with(|h| {h.borrow_mut().remove(&id);});
         MONITOR_AUTO_FULL.with(|h| {h.borrow_mut().remove(&id);});
         MONITOR_PANES.with(|p| p.borrow_mut().retain(|(owner,_),_| owner!=&id));
+        CLIP_BRIDGES.with(|b| b.borrow_mut().remove(&id));
+        FRONT_SESSION.with(|f| if f.borrow().as_deref() == Some(id.as_str()) { *f.borrow_mut() = None });
         if let Some(p) = SESSIONS.with(|s| s.borrow_mut().remove(&id)) {
             drop(p);
             super::post(Event::Exit(id));
@@ -752,6 +770,23 @@ pub fn run(quick: Option<String>) {
 
     let event_loop = EventLoopBuilder::<Wake>::with_user_event().build();
     let _ = PROXY.set(Mutex::new(event_loop.create_proxy()));
+    // Copying on this Mac while a connection window is in front sends it there at once (it
+    // was sent only when the window came forward).
+    std::thread::spawn(|| {
+        let mut seen = crate::host_mac::clipboard_seq();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            let now = crate::host_mac::clipboard_seq();
+            if now != seen {
+                seen = now;
+                if let Some(p) = PROXY.get() {
+                    if p.lock().unwrap().send_event(Wake::Pasteboard).is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
     MenuEvent::set_event_handler(Some(|e: MenuEvent| {
         if let Some(p) = PROXY.get() {
             let _ = p.lock().unwrap().send_event(Wake::Menu(e.id));
@@ -815,6 +850,11 @@ pub fn run(quick: Option<String>) {
                 crate::log!("all native views released before thread-local teardown");
             },
             TaoEvent::UserEvent(Wake::Drain) => drain(),
+            TaoEvent::UserEvent(Wake::Pasteboard) => {
+                if let Some(id) = FRONT_SESSION.with(|f| f.borrow().clone()) {
+                    offer_clipboard(&id);
+                }
+            }
             TaoEvent::UserEvent(Wake::Quit) => {
                 native_files::release_test_pasteboard();
                 *flow = ControlFlow::Exit;
@@ -858,10 +898,13 @@ pub fn run(quick: Option<String>) {
                     }
                     WindowEvent::Focused(true) => {
                         if let Some((ref owner,_))=mid { offer_clipboard(owner); }
+                        let front = sid.clone().or_else(|| mid.as_ref().map(|(owner, _)| owner.clone()));
+                        FRONT_SESSION.with(|f| *f.borrow_mut() = front);
                         if let Some(id) = sid {
                             offer_clipboard(&id);
                         }
                     }
+                    WindowEvent::Focused(false) if sid.is_some() || mid.is_some() => FRONT_SESSION.with(|f| *f.borrow_mut() = None),
                     WindowEvent::ThemeChanged(_) if is_home => send(json!({"type": "system_theme", "dark": system_dark()})),
                     _ => {}
                 }

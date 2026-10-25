@@ -12,6 +12,8 @@ mod cu_e2e;
 mod h264_mac;
 #[cfg(target_os = "macos")]
 mod host_mac;
+#[cfg(target_os = "macos")]
+mod clip_ssh;
 mod hp_upgrade;
 mod update;
 mod remote_setup;

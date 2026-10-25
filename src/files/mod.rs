@@ -1409,6 +1409,38 @@ fn rename_local(from: &str, to: &str, replace: bool) -> io::Result<()> {
     }
 }
 
+/// Remote files opened in their default app are copied to `file-previews` (read-only, so the
+/// app can't seem to save back). A copy older than a day is removed when Itda starts: the
+/// app it opened in has long had it, and nothing else would ever remove it.
+pub fn sweep_view_copies() {
+    let root = crate::store::dir().join("file-previews");
+    let Ok(entries) = std::fs::read_dir(&root) else { return };
+    let day = std::time::Duration::from_secs(24 * 60 * 60);
+    let mut removed = 0;
+    for e in entries.flatten() {
+        let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > day);
+        if old && e.file_type().is_ok_and(|t| t.is_dir()) && remove_view_copy(&e.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        crate::log!("files: removed {removed} old view-only copies");
+    }
+}
+/// A copy folder, its read-only file made writable first (Windows won't delete it otherwise).
+fn remove_view_copy(dir: &Path) -> io::Result<()> {
+    for e in std::fs::read_dir(dir)?.flatten() {
+        if let Ok(m) = e.metadata() {
+            let mut p = m.permissions();
+            if p.readonly() {
+                #[allow(clippy::permissions_set_readonly_false)]
+                p.set_readonly(false);
+                let _ = std::fs::set_permissions(e.path(), p);
+            }
+        }
+    }
+    std::fs::remove_dir_all(dir)
+}
 pub fn shutdown() {
     let ids: Vec<_> = connections().lock().unwrap().keys().cloned().collect();
     for id in ids {
@@ -1761,3 +1793,30 @@ fn preview_remote_begin<T>(slot: &PreviewSlot<T>, generation: u64, ticket: Optio
 fn mutates_files(op: &str) -> bool { matches!(op,"undo"|"mkdir"|"rename"|"trash") }
 
 pub(crate) fn preview_decode_mode() -> bool { preview_image::decode_mode() }
+
+#[cfg(test)]
+mod sweep_tests {
+    /// An old copy (read-only file inside) is removed, a fresh one stays.
+    #[test]
+    fn old_view_copies_go() {
+        let root = std::env::temp_dir().join(format!("itda-sweep-{}", crate::store::new_id()));
+        let (old, fresh) = (root.join("old"), root.join("fresh"));
+        for d in [&old, &fresh] {
+            std::fs::create_dir_all(d).unwrap();
+            let f = d.join("문서.pdf");
+            std::fs::write(&f, b"x").unwrap();
+            let mut p = std::fs::metadata(&f).unwrap().permissions();
+            p.set_readonly(true);
+            std::fs::set_permissions(&f, p).unwrap();
+        }
+        let two_days = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 86400);
+        std::fs::File::open(&old).unwrap().set_modified(two_days).unwrap_or(());
+        let age = std::fs::metadata(&old).unwrap().modified().unwrap().elapsed().unwrap();
+        if age > std::time::Duration::from_secs(86400) {
+            super::remove_view_copy(&old).unwrap();
+            assert!(!old.exists() && fresh.exists());
+        }
+        super::remove_view_copy(&fresh).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
