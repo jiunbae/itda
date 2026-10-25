@@ -170,6 +170,10 @@ impl Drop for Sftp {
     }
 }
 impl Sftp {
+    /// Let `control` stop this (reused) session too.
+    pub fn bind(&self, control: &Control) -> io::Result<()> {
+        control.attach(self.child.clone())
+    }
     pub fn connect(cfg: &SshCfg, control: &Control) -> io::Result<Self> {
         let mut cmd = crate::tunnel::ssh_command(cfg)?;
         cmd.args(["-o", "ControlMaster=no", "-o", "ControlPath=none"]);
