@@ -101,6 +101,9 @@ pub struct Sftp {
     output: ChildStdout,
     next: u32,
     diagnostics: Arc<Mutex<String>>,
+    /// Requests whose reply is read and dropped when it arrives (a folder's CLOSE): nothing
+    /// waits a round trip for it.
+    deferred: std::collections::VecDeque<u32>,
 }
 // At most WINDOW writes are outstanding. Source reads are already bounded to WINDOW
 // CHUNKs by download(); bytes flow directly to the other SFTP session, never a local file.
@@ -142,6 +145,21 @@ impl<F: FnMut(u64)> Write for RelayWriter<'_, F> {
         (self.progress)(self.offset);
         Ok(())
     }
+}
+/// A READDIR reply's entries. Every field is read; an entry whose name isn't UTF-8 or that
+/// name() refuses (macOS "Icon\r", ':' for a Windows client) is left out instead of failing
+/// the whole folder.
+fn names(r: &mut Packet, out: &mut Vec<Entry>) -> io::Result<()> {
+    let n = r.u32()?;
+    for _ in 0..n {
+        let name = String::from_utf8(r.bytes()?).ok();
+        r.bytes()?;
+        let entry = r.attrs(name.clone().unwrap_or_default())?;
+        if name.is_some_and(|n| n != "." && n != ".." && super::name(&n).is_ok()) {
+            out.push(entry);
+        }
+    }
+    Ok(())
 }
 impl Drop for Sftp {
     fn drop(&mut self) {
@@ -196,6 +214,7 @@ impl Sftp {
             output,
             next: 0,
             diagnostics,
+            deferred: Default::default(),
         };
         s.write_packet(&[1, 0, 0, 0, 3])?;
         let p = s.packet()?;
@@ -205,11 +224,25 @@ impl Sftp {
         Ok(s)
     }
     fn write_packet(&mut self, b: &[u8]) -> io::Result<()> {
-        self.input.write_all(&(b.len() as u32).to_be_bytes())?;
-        self.input.write_all(b)?;
+        // One write per packet (the pipe isn't buffered).
+        let mut out = Vec::with_capacity(4 + b.len());
+        out.extend_from_slice(&(b.len() as u32).to_be_bytes());
+        out.extend_from_slice(b);
+        self.input.write_all(&out)?;
         self.input.flush()
     }
     fn packet(&mut self) -> io::Result<Packet> {
+        loop {
+            let p = self.raw_packet()?;
+            // (Replies come in request order: a deferred one is always next if still due.)
+            if self.deferred.front() == Some(&p.id) {
+                self.deferred.pop_front();
+                continue;
+            }
+            return Ok(p);
+        }
+    }
+    fn raw_packet(&mut self) -> io::Result<Packet> {
         let mut len = [0; 4];
         self.output.read_exact(&mut len).map_err(|_| {
             let log = self.diagnostics.lock().unwrap();
@@ -271,6 +304,15 @@ impl Sftp {
         string(&mut b, h);
         self.status_request(4, &b)
     }
+    /// CLOSE a handle without waiting for its reply (a read-only folder handle: there's
+    /// nothing to confirm).
+    fn close_later(&mut self, h: &[u8]) -> io::Result<()> {
+        let mut b = Vec::new();
+        string(&mut b, h);
+        let id = self.send(4, &b)?;
+        self.deferred.push_back(id);
+        Ok(())
+    }
     pub fn realpath(&mut self, p: &str) -> io::Result<String> {
         let mut b = Vec::new();
         path(&mut b, p);
@@ -308,35 +350,46 @@ impl Sftp {
         let mut out = Vec::new();
         let mut b = Vec::new();
         string(&mut b, &h);
-        loop {
-            let mut r = self.request(12, &b)?;
+        // A few READDIRs ahead, so a large folder costs fewer round trips; the ones still
+        // outstanding at the end are read (they just say "end") before the handle closes.
+        const AHEAD: usize = 3;
+        let mut sent = std::collections::VecDeque::new();
+        for _ in 0..AHEAD {
+            sent.push_back(self.send(12, &b)?);
+        }
+        let mut done = false;
+        let outcome = loop {
+            let Some(id) = sent.pop_front() else { break Ok(()) };
+            let mut r = self.packet()?;
+            if r.id != id {
+                return Err(err("SFTP 요청 순서 불일치"));
+            }
+            if done {
+                continue;
+            }
             if r.t == 101 {
-                if r.status()? == 1 {
-                    break;
+                if r.status().is_ok_and(|s| s == 1) {
+                    done = true;
+                    continue;
                 }
-                return Err(err("폴더 목록을 읽을 수 없습니다"));
+                break Err(err("폴더 목록을 읽을 수 없습니다"));
             }
             if r.t != 104 {
-                return Err(err("SFTP 목록 응답 오류"));
+                break Err(err("SFTP 목록 응답 오류"));
             }
-            let n = r.u32()?;
-            for _ in 0..n {
-                // Every field is read (the reply stays in step); an entry whose name isn't
-                // UTF-8 or that name() refuses (macOS "Icon\r", ':' for a Windows client) is
-                // left out instead of failing the whole folder.
-                let name = String::from_utf8(r.bytes()?).ok();
-                r.bytes()?;
-                let entry = r.attrs(name.clone().unwrap_or_default())?;
-                if name.is_some_and(|n| n != "." && n != ".." && super::name(&n).is_ok()) {
-                    out.push(entry);
-                }
+            sent.push_back(self.send(12, &b)?);
+            // (A malformed reply is refused, but the stream stays in step: it was read whole.)
+            if let Err(e) = names(&mut r, &mut out) {
+                break Err(e);
             }
             if out.len() > 200_000 {
-                return Err(err("폴더가 너무 큽니다. 하위 폴더로 이동하세요"));
+                break Err(err("폴더가 너무 큽니다. 하위 폴더로 이동하세요"));
             }
-        }
-        self.close(&h)?;
-        Ok(out)
+        };
+        // Replies still due on a refused folder are dropped as they arrive, like the CLOSE.
+        self.deferred.extend(sent);
+        self.close_later(&h)?;
+        outcome.map(|()| out)
     }
     pub fn mkdir(&mut self, p: &str) -> io::Result<()> {
         let mut b = Vec::new();
@@ -539,6 +592,33 @@ impl Sftp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A folder of several READDIR batches lists whole with requests sent ahead, a missing
+    /// folder is refused, and the session stays in step afterwards (the CLOSE replies are
+    /// dropped when they arrive).
+    #[test]
+    fn listing_ahead_stays_in_step() {
+        let server = std::env::var_os("ITDA_SFTP_SERVER").map(std::path::PathBuf::from).unwrap_or_else(|| "/usr/libexec/sftp-server".into());
+        if !server.is_file() {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("itda-sftp-list-{}", crate::store::new_id()));
+        std::fs::create_dir(&root).unwrap();
+        for i in 0..450 {
+            std::fs::write(root.join(format!("파일 {i:03}.txt")), b"x").unwrap();
+        }
+        let control = Control::default();
+        let child = std::process::Command::new(server).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+        let mut s = Sftp::start(child, &control).unwrap();
+        let dir = root.to_str().unwrap();
+        for _ in 0..3 {
+            assert_eq!(s.list(dir).unwrap().len(), 450);
+        }
+        assert!(s.list(&format!("{dir}/없는 폴더")).is_err());
+        assert_eq!(s.stat(&format!("{dir}/파일 007.txt")).unwrap().unwrap().size, 1);
+        assert_eq!(s.list(dir).unwrap().len(), 450);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
     #[test]
     fn real_server_relay_streams_and_cancels() {
         let server = std::env::var_os("ITDA_SFTP_SERVER").map(std::path::PathBuf::from).unwrap_or_else(|| "/usr/libexec/sftp-server".into());
