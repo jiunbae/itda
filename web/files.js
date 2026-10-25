@@ -255,10 +255,12 @@
     }
     zoom = null;
     const img = el.querySelector("img");
-    if (img) img.onload = () => {
-      if (d.url) send("files_preview_release", {page:pageToken,url:d.url});
-      if (m.seq === previewSeq) applyZoom();
-    };
+    if (img) {
+      const release = () => { if (d.url) send("files_preview_release", {page:pageToken,url:d.url}); };
+      img.onload = () => { release(); if (m.seq === previewSeq) applyZoom(); };
+      img.onerror = release;
+      if (img.complete) release();
+    }
     applyZoom();
     if (!zoomWatch) {
       zoomWatch = new ResizeObserver(() => { if (zoom === null) applyZoom(); });
