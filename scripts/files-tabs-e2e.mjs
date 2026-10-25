@@ -212,7 +212,8 @@ try{
   assert(completionFocus.expected,'Completed job moved focus onto another transfer: '+JSON.stringify(completionFocus));
   await p.waitForFunction(()=>window.heldListReplies?.length>0);
   const priorList=await layer.locator('[data-pane="remote"] .files-list').elementHandle();
-  await p.evaluate(()=>{window.holdListReplies=false;const replies=window.heldListReplies.splice(0);for(const reply of replies)itda.recv(reply);});
+  // (The refreshed listing has a new file, as after a transfer: an unchanged one isn't repainted.)
+  await p.evaluate(()=>{window.holdListReplies=false;const replies=window.heldListReplies.splice(0);for(const reply of replies){if(reply.op==='list'&&reply.data?.entries)reply.data.entries=[...reply.data.entries,{name:'zz-refreshed.txt',dir:false,link:false,size:1,modified:1}];itda.recv(reply);}});
   const refreshedFocus=await focusSnapshot();
   assert(refreshedFocus.expected,'Listing refresh lost completed-job focus: '+JSON.stringify(refreshedFocus));
   assert(await priorList.evaluate(e=>!e.isConnected&&e!==document.activeElement),'Listing refresh did not replace the old focus target');
