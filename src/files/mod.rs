@@ -1719,7 +1719,8 @@ mod preview_pipeline_tests {
         impl Drop for Cleanup { fn drop(&mut self) { preview::revoke_owner(&self.1); preview_cache::invalidate(&self.1); let _=std::fs::remove_dir_all(&self.0); } }
         let _cleanup=Cleanup(root.clone(),owner.clone());
         let path=root.join("fixture.png");
-        DynamicImage::new_rgba8(2048,1024).save_with_format(&path,ImageFormat::Png).unwrap();
+        // Keep this dispatch/cache test on passthrough; codec and process lifecycle have separate tests.
+        DynamicImage::new_rgba8(32,16).save_with_format(&path,ImageFormat::Png).unwrap();
         preview::bind_page(&page,&owner);
         let ask=|seq| {
             let (tx,rx)=mpsc::channel();
@@ -1729,7 +1730,7 @@ mod preview_pipeline_tests {
         let response=|m:&Value| preview::response(&owner,&wry::http::Request::builder().uri(m["data"]["url"].as_str().unwrap()).body(Vec::new()).unwrap());
         let first=ask(1); assert_eq!(first["ok"],true,"{first}"); assert!(first["data"].get("base64").is_none());
         let bytes=response(&first).into_body().into_owned();
-        assert_eq!(ImageReader::with_format(Cursor::new(&bytes),ImageFormat::Png).into_dimensions().unwrap(),(1600,800));
+        assert_eq!(ImageReader::with_format(Cursor::new(&bytes),ImageFormat::Png).into_dimensions().unwrap(),(32,16));
         let second=ask(2); assert_eq!(second["ok"],true,"{second}");
         assert_ne!(first["data"]["url"],second["data"]["url"]); assert_eq!(response(&second).body().as_ref(),bytes);
         DynamicImage::new_rgba8(8,4).save_with_format(&path,ImageFormat::Png).unwrap();
@@ -1759,5 +1760,4 @@ fn preview_remote_begin<T>(slot: &PreviewSlot<T>, generation: u64, ticket: Optio
 
 fn mutates_files(op: &str) -> bool { matches!(op,"undo"|"mkdir"|"rename"|"trash") }
 
-#[cfg(any(windows,test))]
-pub(crate) fn preview_panic_is_handled() -> bool { preview_image::panic_is_handled() }
+pub(crate) fn preview_decode_mode() -> bool { preview_image::decode_mode() }

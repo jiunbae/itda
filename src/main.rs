@@ -93,6 +93,7 @@ fn askpass_mode() {
 
 #[cfg(not(windows))]
 fn main() {
+    if files::preview_decode_mode() { return; }
     askpass_mode();
     if remote_setup::import_mode() { return; }
     // Read-only check in a fresh instance of the same executable. Do not initialize
@@ -143,6 +144,7 @@ fn main() {
 
 #[cfg(windows)]
 fn main() {
+    if files::preview_decode_mode() { return; }
     askpass_mode();
     if remote_setup::import_mode() { return; }
     let mut args = std::env::args().skip(1).peekable();
@@ -150,7 +152,6 @@ fn main() {
     log::init(if managed { "session" } else { "" });
     std::panic::set_hook(Box::new(|p| {
         crate::log!("PANIC: {p}");
-        if files::preview_panic_is_handled() { return; }
         session::emit(serde_json::json!({"ev": "error", "kind": "other", "msg": format!("내부 오류: {p}")}));
         if !session::managed() {
             ui::message(&format!("내부 오류로 종료합니다:\n{p}\n\n로그: {}", log::path().display()), true);
