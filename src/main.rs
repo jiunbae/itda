@@ -93,6 +93,7 @@ fn askpass_mode() {
 
 #[cfg(not(windows))]
 fn main() {
+    if files::preview_decode_mode() { return; }
     askpass_mode();
     if remote_setup::import_mode() { return; }
     // Read-only check in a fresh instance of the same executable. Do not initialize
@@ -143,6 +144,7 @@ fn main() {
 
 #[cfg(windows)]
 fn main() {
+    if files::preview_decode_mode() { return; }
     askpass_mode();
     if remote_setup::import_mode() { return; }
     let mut args = std::env::args().skip(1).peekable();

@@ -504,6 +504,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
     std::thread::spawn(move || {
         // Top-level names finished (copied, moved, or skipped by the policy) and the one being
         // worked on: after a failure or cancel, a retry offers only what is left.
+        super::preview_cache::invalidate_all();
         let mut completed: Vec<String> = Vec::new();
         let mut partial: Option<(String, bool)> = None;
         let result = (|| -> io::Result<()> {
@@ -713,6 +714,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
             Ok(())
         })();
         jobs().lock().unwrap().remove(&job);
+        super::preview_cache::invalidate_all();
         super::cleanup_retired(&key);
         let cancelled = control.cancel.load(Ordering::Relaxed);
         // A cancel ends the job's SSH sessions, so the error may only be their broken pipe.

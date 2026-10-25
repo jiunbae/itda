@@ -1,6 +1,8 @@
 //! File browsing and transfers, independent of remote screen sessions.
 pub mod locations;
 pub mod preview;
+mod preview_cache;
+mod preview_image;
 #[cfg(any(target_os = "macos", windows))]
 pub mod export;
 #[cfg(any(target_os = "macos", windows))]
@@ -622,6 +624,7 @@ fn retire(key: String) {
 }
 pub fn release_page(page: &str) {
     preview::revoke_page(page);
+    preview_cache::release_page(page);
     if page.is_empty() { return; }
     // Its transfers keep running, now the app's (shown and cancellable from any Itda page).
     background::adopt(page);
@@ -632,6 +635,7 @@ pub fn release_page(page: &str) {
 }
 pub fn disconnect(id: &str) {
     preview::revoke_connection(id);
+    preview_cache::invalidate(id);
     if !id.contains('\x1f') {
         let prefix = format!("{id}\x1f");
         // The device itself is going (deleted, or its files disconnected): a copied selection
@@ -696,6 +700,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
         disconnect(&key);
         return;
     }
+    if mutates_files(&op) { preview_cache::invalidate_all(); }
     let preview_ticket = if op == "preview" && crate::home::binary_previews() {
         preview::begin(window_page(&v), &key).map(Some)
     } else { Ok(None) };
@@ -793,27 +798,36 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                     } else {
                         16 * 1024 * 1024
                     };
+                    let mut cache_key = None;
+                    let _work;
                     let bytes = if v["side"] == "local" {
+                        _work = preview_image::work(ticket.as_ref())?;
                         use std::io::Read;
-                        let mut file = std::fs::File::open(&p)?;
-                        if !file.metadata()?.is_file() {
-                            return Err(error("일반 파일을 선택하세요"));
+                        let canonical = std::fs::canonicalize(&p)?;
+                        let mut file = std::fs::File::open(&canonical)?;
+                        let metadata = file.metadata()?;
+                        if !metadata.is_file() { return Err(error("일반 파일을 선택하세요")); }
+                        if metadata.len() > limit { return Ok(json!({"too_large":true})); }
+                        if mime != "text/plain" {
+                            if let Ok(modified) = metadata.modified().and_then(|m| m.duration_since(UNIX_EPOCH).map_err(io::Error::other)) {
+                                let k = preview_cache::key(&key, canonical.to_string_lossy().into_owned(), metadata.len(), modified.as_nanos());
+                                if let Some(cached) = preview_cache::get(&k) { return preview_prepared(ticket.as_ref(), cached); }
+                                cache_key = Some(k);
+                            }
                         }
-                        let mut bytes = Vec::new();
-                        file.by_ref().take(limit + 1).read_to_end(&mut bytes)?;
-                        bytes
+                        let mut bytes = Vec::new(); file.by_ref().take(limit + 1).read_to_end(&mut bytes)?; bytes
                     } else {
                         let c = connection(&key)?;
                         let p = remote_path(&p, &c.home);
                         // A preview of an older selection still downloading stops; this one,
                         // if a newer selection already asked, doesn't run at all.
                         let generation = v["seq"].as_u64().unwrap_or(u64::MAX);
-                        let Some((control, kept)) = c.previews.begin(generation) else {
-                            return Err(io::Error::new(io::ErrorKind::Interrupted, "더 최근 미리보기가 있습니다"));
-                        };
+                        let (control, kept, permit) = preview_remote_begin(&c.previews, generation, ticket.as_ref())?;
+                        _work = permit;
                         let started = std::time::Instant::now();
                         let reused = kept.is_some();
                         let mut session = kept;
+                        let mut cached_remote = None;
                         let result = (|| {
                             control.check()?;
                             let s = match session.take() {
@@ -830,6 +844,17 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                             if entry.size > limit {
                                 return Ok(None);
                             }
+                            if mime != "text/plain" && entry.modified != 0 {
+                                // Preserve LSTAT refusal of a symlink leaf before canonicalizing.
+                                if let Ok(canonical) = s.realpath(&p) {
+                                    let k = preview_cache::key(&key, canonical, entry.size, entry.modified as u128 * 1_000_000_000);
+                                    if let Some(cached) = preview_cache::get(&k) {
+                                        cached_remote = Some(cached);
+                                        return Ok(Some(Vec::new()));
+                                    }
+                                    cache_key = Some(k);
+                                }
+                            }
                             let mut bytes = Vec::new();
                             s.download(&p, entry.size, &mut bytes, &control, |_| {})?;
                             Ok(Some(bytes))
@@ -842,27 +867,33 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                             Err(e) => [NOT_A_FILE, NO_FILE].contains(&e.to_string().as_str()),
                         };
                         c.previews.finish(&control, session.filter(|_| usable));
-                        if let Ok(Some(bytes)) = &result {
+                        if cached_remote.is_none() { if let Ok(Some(bytes)) = &result {
                             crate::log!("files: preview {} bytes in {} ms ({} session)", bytes.len(), started.elapsed().as_millis(), if reused { "kept" } else { "new" });
                         }
-                        match result? {
+                        }
+                        let bytes = match result? {
                             Some(bytes) => bytes,
                             None => return Ok(json!({"too_large":true})),
-                        }
+                        };
+                        if let Some(cached) = cached_remote { return preview_prepared(ticket.as_ref(), cached); }
+                        bytes
                     };
-                    if bytes.len() as u64 > limit {
-                        return Ok(json!({"too_large":true}));
+                    if bytes.len() as u64 > limit { return Ok(json!({"too_large":true})); }
+                    if mime == "text/plain" { return Ok(json!({"mime":mime,"text":String::from_utf8_lossy(&bytes)})); }
+                    if ticket.as_ref().is_some_and(|t| !preview::current(t)) { return Err(io::Error::new(io::ErrorKind::Interrupted, "이전 미리보기입니다")); }
+                    let prepared = if mime == "application/pdf" {
+                        #[cfg(target_os = "macos")]
+                        { let Some(png) = pdf_preview(&bytes, ticket.as_ref())? else { return Ok(json!({"unsupported":true})); };
+                          preview_cache::Prepared {bytes:Arc::new(png),mime:"image/png".into(),first_page:true} }
+                        #[cfg(not(target_os = "macos"))]
+                        { return Ok(json!({"unsupported":true})); }
+                    } else { preview_image::prepare(bytes, mime, ticket.as_ref())? };
+                    if ticket.as_ref().is_none_or(preview::current) {
+                        if let Some(k) = cache_key { preview_cache::insert(k, prepared.clone()); }
                     }
-                    #[cfg(target_os = "macos")]
-                    if mime == "application/pdf" {
-                        return pdf_preview(&bytes, ticket.as_ref());
-                    }
-                    if mime == "text/plain" {
-                        Ok(json!({"mime":mime,"text":String::from_utf8_lossy(&bytes)}))
-                    } else {
-                        preview_media(ticket.as_ref(), bytes, mime, false)
-                    }
+                    preview_prepared(ticket.as_ref(), prepared)
                 }
+
                 "reveal_folder" => {
                     if v["side"] != "local" {
                         return Err(error("이 컴퓨터의 폴더를 선택하세요"));
@@ -1049,6 +1080,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                 _ => Err(error("지원하지 않는 파일 작업입니다")),
             }
         })();
+        if mutates_files(&op) { preview_cache::invalidate_all(); }
         if op == "connect"
             && host.files.method == "auto"
             && result.as_ref().err().is_some_and(|e| {
@@ -1100,7 +1132,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
 /// Render only the first PDF page to inert pixels; PDF plugins in sandboxed frames are
 /// unavailable in WebKit/WebView2. Keep the source private and remove both files afterward.
 #[cfg(target_os = "macos")]
-fn pdf_preview(bytes: &[u8], ticket: Option<&preview::Ticket>) -> io::Result<Value> {
+fn pdf_preview(bytes: &[u8], ticket: Option<&preview::Ticket>) -> io::Result<Option<Vec<u8>>> {
     use std::{process::{Command, Stdio}, time::{Duration, Instant}};
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::io::Write;
@@ -1115,19 +1147,23 @@ fn pdf_preview(bytes: &[u8], ticket: Option<&preview::Ticket>) -> io::Result<Val
             .arg(&input).arg("--out").arg(&output).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
         let started = Instant::now();
         loop {
+            if ticket.is_some_and(|t| !preview::current(t)) {
+                let _ = child.kill(); let _ = child.wait();
+                return Err(io::Error::new(io::ErrorKind::Interrupted, "이전 미리보기입니다"));
+            }
             if let Some(status) = child.try_wait()? {
-                if !status.success() { return Ok(json!({"unsupported":true})); }
+                if !status.success() { return Ok(None); }
                 break;
             }
             if started.elapsed() > Duration::from_secs(8) {
                 let _ = child.kill(); let _ = child.wait();
-                return Ok(json!({"unsupported":true}));
+                return Ok(None);
             }
             std::thread::sleep(Duration::from_millis(25));
         }
         let png = std::fs::read(output)?;
-        if png.len() > 16 * 1024 * 1024 { return Ok(json!({"too_large":true})); }
-        preview_media(ticket, png, "image/png", true)
+        if png.len() > 16 * 1024 * 1024 { return Ok(None); }
+        Ok(Some(png))
     })();
     let _ = std::fs::remove_dir_all(root);
     result
@@ -1648,3 +1684,80 @@ fn preview_media(ticket: Option<&preview::Ticket>, bytes: Vec<u8>, mime: &str, f
         Ok(json!({"mime":mime,"base64":crate::ws::base64(&bytes),"first_page":first_page}))
     }
 }
+
+fn preview_prepared(ticket: Option<&preview::Ticket>, content: preview_cache::Prepared) -> io::Result<Value> {
+    preview_media(ticket, content.bytes.as_ref().clone(), &content.mime, content.first_page)
+}
+
+#[cfg(test)]
+mod preview_pipeline_tests {
+    use super::*;
+    use image::{DynamicImage, ImageFormat, ImageReader};
+    use std::{io::Cursor, sync::mpsc, time::Duration};
+    #[test]
+    fn newer_remote_preview_cancels_before_waiting_for_memory_budget() {
+        let held: Vec<_> = (0..4).map(|_| preview_image::work(None).unwrap()).collect();
+        let slot=Arc::new(PreviewSlot::<u32>::default());
+        let (old,_) = slot.begin(1).unwrap();
+        let (tx,rx)=mpsc::channel(); let pending=slot.clone();
+        let worker=std::thread::spawn(move || { let _=tx.send(preview_remote_begin(&pending,2,None)); });
+        let by=std::time::Instant::now()+Duration::from_secs(1);
+        while old.check().is_ok() && std::time::Instant::now()<by { std::thread::sleep(Duration::from_millis(10)); }
+        let cancelled_before_capacity=old.check().is_err();
+        drop(held);
+        let (control,kept,permit)=rx.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
+        slot.finish(&control,kept); drop(permit); worker.join().unwrap();
+        assert!(cancelled_before_capacity,"new request waited for capacity before stopping the old download");
+    }
+    #[test]
+    fn local_preview_pipeline_refreshes_metadata_and_never_serves_a_removed_file() {
+        let owner = format!("preview-test-{}", crate::store::new_id());
+        let page = format!("{owner}-page");
+        let host = Host {id:owner.clone(),..Default::default()};
+        let root = std::env::temp_dir().join(&owner); std::fs::create_dir(&root).unwrap();
+        struct Cleanup(PathBuf,String);
+        impl Drop for Cleanup { fn drop(&mut self) { preview::revoke_owner(&self.1); preview_cache::invalidate(&self.1); let _=std::fs::remove_dir_all(&self.0); } }
+        let _cleanup=Cleanup(root.clone(),owner.clone());
+        let path=root.join("fixture.png");
+        // Keep this dispatch/cache test on passthrough; codec and process lifecycle have separate tests.
+        DynamicImage::new_rgba8(32,16).save_with_format(&path,ImageFormat::Png).unwrap();
+        preview::bind_page(&page,&owner);
+        let ask=|seq| {
+            let (tx,rx)=mpsc::channel();
+            dispatch(json!({"op":"preview","window":page,"path":path,"side":"local","seq":seq}),host.clone(),Login::default(),Arc::new(move |m| { let _=tx.send(m); }));
+            rx.recv_timeout(Duration::from_secs(10)).unwrap()
+        };
+        let response=|m:&Value| preview::response(&owner,&wry::http::Request::builder().uri(m["data"]["url"].as_str().unwrap()).body(Vec::new()).unwrap());
+        let first=ask(1); assert_eq!(first["ok"],true,"{first}"); assert!(first["data"].get("base64").is_none());
+        let bytes=response(&first).into_body().into_owned();
+        assert_eq!(ImageReader::with_format(Cursor::new(&bytes),ImageFormat::Png).into_dimensions().unwrap(),(32,16));
+        let second=ask(2); assert_eq!(second["ok"],true,"{second}");
+        assert_ne!(first["data"]["url"],second["data"]["url"]); assert_eq!(response(&second).body().as_ref(),bytes);
+        DynamicImage::new_rgba8(8,4).save_with_format(&path,ImageFormat::Png).unwrap();
+        let changed=ask(3); assert_eq!(changed["ok"],true,"{changed}");
+        assert_eq!(response(&changed).body().as_ref(),std::fs::read(&path).unwrap());
+        // A full image GET is now consumed after delivery. Keep a fresh capability unconsumed
+        // (HEAD only) to prove failed metadata refresh revokes it, rather than relying on GET.
+        let waiting=ask(4); assert_eq!(waiting["ok"],true);
+        let head=|m:&Value| preview::response(&owner,&wry::http::Request::builder().method("HEAD").uri(m["data"]["url"].as_str().unwrap()).body(Vec::new()).unwrap());
+        assert_eq!(head(&waiting).status(),200);
+        std::fs::remove_file(&path).unwrap(); let removed=ask(5); assert_eq!(removed["ok"],false);
+        assert_eq!(head(&waiting).status(),404);
+    }
+}
+
+/// Cancellation must precede waiting for bounded preview memory: an older download may own
+/// the very permit the newer request needs. Return every taken idle session on admission error.
+fn preview_remote_begin<T>(slot: &PreviewSlot<T>, generation: u64, ticket: Option<&preview::Ticket>) -> io::Result<(Arc<Control>, Option<T>, preview_image::Work)> {
+    let Some((control, kept)) = slot.begin(generation) else {
+        return Err(io::Error::new(io::ErrorKind::Interrupted, "더 최근 미리보기가 있습니다"));
+    };
+    match preview_image::work(ticket) {
+        Ok(work) => Ok((control, kept, work)),
+        Err(e) => { slot.finish(&control, kept); Err(e) }
+    }
+}
+
+fn mutates_files(op: &str) -> bool { matches!(op,"undo"|"mkdir"|"rename"|"trash") }
+
+pub(crate) fn preview_decode_mode() -> bool { preview_image::decode_mode() }

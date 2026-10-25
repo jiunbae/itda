@@ -629,3 +629,5 @@ mod tests {
         revoke_owner(&wa);
     }
 }
+
+pub fn current(ticket: &Ticket) -> bool { registry().lock().unwrap().pages.get(&ticket.page).is_some_and(|p| p.nonce == ticket.nonce) }

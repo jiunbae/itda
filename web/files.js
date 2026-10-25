@@ -216,7 +216,7 @@
     el.classList.toggle("quick-look", previewModal);
     if (!show) { if (previewKey) send("files_preview_release", {page:pageToken}); clearTimeout(previewTimer); previewKey = ""; ++previewSeq; return; }
     const details = !MAC && previewKind === "details" && view !== "gallery" && !previewModal;
-    const identity = `${currentTab}:${active}:${panes[active].path}:${entry?.name || ""}:${details}`;
+    const identity = `${currentTab}:${active}:${panes[active].path}:${entry?.name || ""}:${entry?.size || 0}:${entry?.modified || 0}:${details}`;
     if (previewKey === identity) return;
     send("files_preview_release", {page:pageToken});
     previewKey = identity;
