@@ -511,11 +511,20 @@ impl Sftp {
                     broken = true;
                     return Err(err("SFTP 응답 순서 불일치"));
                 }
-                if r.t != 103 {
+                if r.t == 101 {
+                    // The server refusing the read (still in step, unless the STATUS hasn't
+                    // even a code): its reason is passed on.
                     queue.retain(|q| q.0 != id);
-                    // A STATUS is the server refusing the read (still in step); any other kind
-                    // of reply means the transport can't be trusted.
-                    broken |= r.t != 101 || r.status().is_err();
+                    broken |= r.b.len().saturating_sub(r.at) < 4;
+                    return Err(match r.status() {
+                        Err(e) => e,
+                        Ok(_) => err("파일이 전송 중 바뀌었거나 읽을 수 없습니다"),
+                    });
+                }
+                if r.t != 103 {
+                    // Any other kind of reply: the transport can't be trusted.
+                    queue.retain(|q| q.0 != id);
+                    broken = true;
                     return Err(err("파일이 전송 중 바뀌었거나 읽을 수 없습니다"));
                 }
                 match r.bytes() {
