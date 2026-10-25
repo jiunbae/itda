@@ -336,15 +336,15 @@ impl Vault for NativeVault {
 /// in the person's desktop session (started with `open`), over a socket in a private folder.
 /// Each request carries an id its reply must echo; after any transport or framing failure the
 /// channel is poisoned: an outcome that can't be known is never taken as a later answer.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 struct SessionVault {
     app: PathBuf,
-    link: std::cell::RefCell<Option<std::os::unix::net::UnixStream>>,
+    link: std::cell::RefCell<Option<Box<dyn Duplex>>>,
     dir: std::cell::RefCell<Option<PathBuf>>,
     next: std::cell::Cell<u64>,
     poisoned: std::cell::Cell<bool>,
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[derive(Serialize)]
 struct VaultRequest<'a> {
     id: u64,
@@ -352,7 +352,7 @@ struct VaultRequest<'a> {
     key: &'a str,
     value: Option<&'a str>,
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[derive(Deserialize)]
 struct VaultReply {
     id: u64,
@@ -362,9 +362,14 @@ struct VaultReply {
     #[serde(default)]
     error: Option<String>,
 }
+/// The helper connection: a Unix socket on a Mac, a loopback TCP connection on Windows.
+#[cfg(any(target_os = "macos", windows))]
+trait Duplex: Read + Write {}
+#[cfg(any(target_os = "macos", windows))]
+impl<T: Read + Write> Duplex for T {}
 /// One line (without its newline) read byte by byte into wiped memory: no reader buffer keeps
 /// a copy of a password.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn read_line_secret(r: &mut impl Read) -> io::Result<Zeroizing<Vec<u8>>> {
     let mut line = Zeroizing::new(Vec::new());
     let mut b = [0u8; 1];
@@ -381,11 +386,82 @@ fn read_line_secret(r: &mut impl Read) -> io::Result<Zeroizing<Vec<u8>>> {
         line.push(b[0]);
     }
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 impl SessionVault {
     fn new(app: PathBuf) -> SessionVault {
         SessionVault { app, link: Default::default(), dir: Default::default(), next: std::cell::Cell::new(1), poisoned: Default::default() }
     }
+    #[cfg(windows)]
+    fn start(&self) -> io::Result<()> {
+        // A one-time task that runs only in this account's signed-in desktop session
+        // (/IT), where Credential Manager is usable; it proves itself with a token from a file
+        // in this account's private data folder, then answers on a loopback connection.
+        use std::net::TcpListener;
+        let dir = store::dir().join(format!("vault-{}", &random_id()?[..16]));
+        private_dir(&dir)?;
+        *self.dir.borrow_mut() = Some(dir.clone());
+        let token = Zeroizing::new(random_id()?);
+        fs::write(dir.join("t"), token.as_bytes())?;
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        listener.set_nonblocking(true)?;
+        let port = listener.local_addr()?.port();
+        let task = format!("Itda-{}", dir.file_name().unwrap_or_default().to_string_lossy());
+        // The data root goes along (an isolated profile included; empty: the default one).
+        let base = store::override_base().unwrap_or_default();
+        let run = format!("\"{}\" --vault-helper {port} \"{}\" \"{}\"", self.app.display(), base.display(), dir.display());
+        if run.len() > 261 {
+            return Err(error("Itda 설치 경로가 너무 길어 비밀번호 도우미를 시작하지 못했습니다"));
+        }
+        let schtasks = crate::update::system_tool("schtasks.exe");
+        let task_ok = |args: &[&str]| {
+            std::process::Command::new(&schtasks)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        struct Task<'a>(&'a dyn Fn(&[&str]) -> bool, &'a str);
+        impl Drop for Task<'_> {
+            fn drop(&mut self) {
+                if !(self.0)(&["/Delete", "/F", "/TN", self.1]) {
+                    crate::log!("remote setup: couldn't delete the one-time task {}", self.1);
+                }
+            }
+        }
+        if !task_ok(&["/Create", "/F", "/TN", &task, "/SC", "ONCE", "/ST", "00:00", "/IT", "/RL", "LIMITED", "/TR", &run]) {
+            return Err(error("비밀번호 도우미 작업을 만들지 못했습니다"));
+        }
+        let _task = Task(&task_ok, &task);
+        if !task_ok(&["/Run", "/TN", &task]) {
+            return Err(error("비밀번호 도우미를 시작하지 못했습니다. 원격 PC에 이 계정으로 로그인되어 있는지 확인하세요"));
+        }
+        // Any local program could connect: only the one that shows the token is kept, others
+        // are dropped and waiting goes on until the deadline.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let stream = loop {
+            match listener.accept() {
+                Ok((mut s, _)) => {
+                    // Two seconds at most per candidate, never past the overall deadline.
+                    let by = until.min(std::time::Instant::now() + std::time::Duration::from_secs(2));
+                    if s.set_nonblocking(false).is_ok() && proves(&mut s, token.as_bytes(), by) {
+                        break s;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock && std::time::Instant::now() < until => std::thread::sleep(std::time::Duration::from_millis(100)),
+                Err(_) => return Err(error("비밀번호 도우미가 응답하지 않습니다. 원격 PC에 이 계정으로 로그인되어 있는지 확인하세요")),
+            }
+            if std::time::Instant::now() >= until {
+                return Err(error("비밀번호 도우미가 응답하지 않습니다. 원격 PC에 이 계정으로 로그인되어 있는지 확인하세요"));
+            }
+        };
+        stream.set_nonblocking(false)?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
+        *self.link.borrow_mut() = Some(Box::new(stream));
+        Ok(())
+    }
+    #[cfg(target_os = "macos")]
     fn start(&self) -> io::Result<()> {
         use std::os::unix::net::UnixListener;
         let dir = store::dir().join(format!("vault-{}", &random_id()?[..16]));
@@ -418,7 +494,7 @@ impl SessionVault {
         };
         stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
-        *self.link.borrow_mut() = Some(stream);
+        *self.link.borrow_mut() = Some(Box::new(stream));
         Ok(())
     }
     fn call(&self, op: &str, key: &str, value: Option<&str>) -> io::Result<Option<Zeroizing<String>>> {
@@ -458,7 +534,7 @@ impl SessionVault {
         }
     }
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 impl Vault for SessionVault {
     fn get(&self, key: &str) -> io::Result<Option<String>> {
         Ok(self.call("get", key, None)?.map(|v| v.as_str().to_string()))
@@ -467,7 +543,7 @@ impl Vault for SessionVault {
         self.call("set", key, value).map(|_| ())
     }
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 impl Drop for SessionVault {
     fn drop(&mut self) {
         self.link.take(); // the helper leaves when the connection closes
@@ -484,7 +560,9 @@ impl Drop for SessionVault {
 fn vault_helper(base: &str, socket: &Path) -> io::Result<()> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     // Before any store access: the isolated profile, if that's what provisioning used.
-    if !base.is_empty() {
+    if base.is_empty() {
+        std::env::remove_var("ITDA_DATA_DIR");
+    } else {
         std::env::set_var("ITDA_DATA_DIR", base);
     }
     let mine = unsafe { libc_getuid() };
@@ -507,8 +585,51 @@ fn vault_helper(base: &str, socket: &Path) -> io::Result<()> {
     serve_vault(&mut stream, &mut NativeVault)
 }
 
+/// Whether the peer sends `token` and a newline before `by` (an absolute deadline: a peer that
+/// trickles bytes can't hold the wait open), reading no more than that.
+#[cfg(any(windows, test))]
+fn proves(s: &mut std::net::TcpStream, token: &[u8], by: std::time::Instant) -> bool {
+    let mut got = Zeroizing::new(Vec::with_capacity(token.len() + 1));
+    let mut b = [0u8; 1];
+    while got.len() <= token.len() {
+        let left = by.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() || s.set_read_timeout(Some(left)).is_err() {
+            return false;
+        }
+        match s.read(&mut b) {
+            Ok(1) => got.push(b[0]),
+            _ => return false,
+        }
+    }
+    std::time::Instant::now() < by && got.last() == Some(&b'\n') && &got[..token.len()] == token
+}
+
+/// The Windows helper, run by the one-time task in the desktop session: the folder must be a
+/// `vault-` folder directly in this account's data folder; it sends the token found there.
+#[cfg(windows)]
+fn vault_helper(port: &str, base: &str, dir: &Path) -> io::Result<()> {
+    // Before any store access: the profile provisioning used (empty: the default one).
+    if base.is_empty() {
+        std::env::remove_var("ITDA_DATA_DIR");
+    } else {
+        std::env::set_var("ITDA_DATA_DIR", base);
+    }
+    let unsafe_path = || error("비밀번호 도우미의 경로가 안전하지 않습니다");
+    let port: u16 = port.parse().map_err(|_| unsafe_path())?;
+    let root = fs::canonicalize(store::dir())?;
+    let real = fs::canonicalize(dir)?;
+    if real.parent() != Some(root.as_path()) || !real.file_name().is_some_and(|n| n.to_string_lossy().starts_with("vault-")) {
+        return Err(unsafe_path());
+    }
+    let mut token = Zeroizing::new(fs::read(real.join("t"))?);
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))?;
+    token.push(b'\n');
+    stream.write_all(&token)?;
+    serve_vault(&mut stream, &mut NativeVault)
+}
+
 /// Answer the provisioning side's requests with `vault` until it closes the connection.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn serve_vault(stream: &mut (impl Read + Write), vault: &mut impl Vault) -> io::Result<()> {
     #[derive(Deserialize)]
     struct Request {
@@ -901,7 +1022,20 @@ fn other_app_running() -> io::Result<bool> {
     #[cfg(target_os = "windows")]
     {
         let script = format!(
-            r#"$ErrorActionPreference='Stop';$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$n=@(Get-CimInstance Win32_Process -Filter "Name='itda.exe'"|Where-Object {{$_.ProcessId -ne {} -and (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid).Sid -eq $sid}}).Count;[Console]::Write($n)"#,
+            r#"$ProgressPreference='SilentlyContinue';$me={};$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+# Each Itda's owner from its access token: ours, another account's, or unknown (no access).
+Add-Type -TypeDefinition @'
+using System;using System.Runtime.InteropServices;
+public static class ItdaOwner {{
+[DllImport("kernel32",SetLastError=true)] static extern IntPtr OpenProcess(uint a,bool i,uint p);
+[DllImport("advapi32",SetLastError=true)] static extern bool OpenProcessToken(IntPtr h,uint a,out IntPtr t);
+[DllImport("kernel32")] static extern bool CloseHandle(IntPtr h);
+public static string Sid(uint pid){{IntPtr p=OpenProcess(0x1000,false,pid);if(p==IntPtr.Zero)return null;try{{IntPtr t;if(!OpenProcessToken(p,8,out t))return null;try{{using(var id=new System.Security.Principal.WindowsIdentity(t)){{return id.User.Value;}}}}finally{{CloseHandle(t);}}}}finally{{CloseHandle(p);}}}}
+}}
+'@
+$own=0;$unknown=0
+foreach($p in @(Get-Process -Name itda -ErrorAction SilentlyContinue)){{if($p.Id -eq $me){{continue}};$s=$null;try{{$s=[ItdaOwner]::Sid([uint32]$p.Id)}}catch{{}};if($null -eq $s){{$unknown++}}elseif($s -eq $sid){{$own++}}}}
+[Console]::Write("$own $unknown")"#,
             std::process::id()
         );
         let bytes: Vec<_> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
@@ -916,11 +1050,23 @@ fn other_app_running() -> io::Result<bool> {
         if !out.status.success() {
             return Err(error("실행 중인 앱을 확인하지 못했습니다"));
         }
-        let count = String::from_utf8_lossy(&out.stdout)
-            .trim()
-            .parse::<u32>()
-            .map_err(|_| error("실행 중인 앱 응답이 올바르지 않습니다"))?;
-        Ok(count > 0)
+        running_from(&String::from_utf8_lossy(&out.stdout))
+    }
+}
+
+/// `"<ours> <unknown>"` from the Windows check: another account's Itda doesn't count, one whose
+/// owner can't be read is refused rather than taken as someone else's.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn running_from(counts: &str) -> io::Result<bool> {
+    let bad = || error("실행 중인 앱 응답이 올바르지 않습니다");
+    let mut n = counts.split_whitespace().map(|v| v.parse::<u32>());
+    let (own, unknown) = (n.next().ok_or_else(bad)?.map_err(|_| bad())?, n.next().ok_or_else(bad)?.map_err(|_| bad())?);
+    if own > 0 {
+        Ok(true)
+    } else if unknown > 0 {
+        Err(error("이 계정의 것인지 확인할 수 없는 Itda가 실행 중입니다. 원격 PC에서 Itda를 종료한 뒤 다시 시도하세요"))
+    } else {
+        Ok(false)
     }
 }
 
@@ -1063,9 +1209,10 @@ fn provision(root: &Path, p: &Package, close: bool, launch: bool) -> io::Result<
     let config = idle_lock(root, close)?;
     // No mutation until the package, processes, and both locks have been checked.
     let app = install_staged()?;
-    // Over SSH on a Mac the keychain is reached through the desktop session (see SessionVault).
-    #[cfg(target_os = "macos")]
-    let mut result = if std::env::var_os("SSH_CONNECTION").is_some() {
+    // Over SSH the keychain / Credential Manager is reached through the desktop session (see
+    // SessionVault), only when there are passwords to store.
+    #[cfg(any(target_os = "macos", windows))]
+    let mut result = if std::env::var_os("SSH_CONNECTION").is_some() && !p.secrets.is_empty() {
         apply_locked(root, p, &mut SessionVault::new(app.clone()))
     } else {
         apply_locked(root, p, &mut NativeVault)
@@ -1075,7 +1222,7 @@ fn provision(root: &Path, p: &Package, close: bool, launch: bool) -> io::Result<
             "앱 설치는 완료됐지만 설정 공유에 실패했습니다: {e}"
         ))
     })?;
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     let mut result = apply_locked(root, p, &mut NativeVault).map_err(|e| {
         error(&format!(
             "앱 설치는 완료됐지만 설정 공유에 실패했습니다: {e}"
@@ -1119,6 +1266,14 @@ fn provision(root: &Path, p: &Package, close: bool, launch: bool) -> io::Result<
 /// Headless import before GUI/server/log initialization, including on Windows.
 pub fn import_mode() -> bool {
     let mode = std::env::args().nth(1).unwrap_or_default();
+    #[cfg(windows)]
+    if mode == "--vault-helper" {
+        let args: Vec<String> = std::env::args().collect();
+        if let Err(e) = vault_helper(args.get(2).map_or("", String::as_str), args.get(3).map_or("", String::as_str), Path::new(args.get(4).map_or("", String::as_str))) {
+            eprintln!("vault helper: {e}");
+        }
+        return true;
+    }
     #[cfg(target_os = "macos")]
     if mode == "--vault-helper" {
         let args: Vec<String> = std::env::args().collect();
@@ -1500,8 +1655,17 @@ fn check_remote_vault(cfg: &crate::tunnel::SshCfg) -> io::Result<()> {
     {
         return Ok(());
     }
-    Err(error("이 Windows SSH 로그인 세션에서 자격 증명 관리자를 사용할 수 없습니다. 비밀번호 공유를 해제하고, 키 암호가 있는 경우 개인키 공유도 해제해 주세요. 앱과 프로필만 설치할 수 있습니다"))
+    // An SSH session usually can't use Credential Manager; the account's signed-in desktop
+    // session can (provisioning hands the passwords to a helper there).
+    let desktop = run(cfg, &ps(WIN_DESKTOP_PROBE), &[])?;
+    if desktop.lines().filter_map(|s| serde_json::from_str::<Value>(s).ok()).any(|v| v["desktop"] == true) {
+        return Ok(());
+    }
+    Err(error("비밀번호를 저장하려면 원격 PC에 이 계정으로 로그인되어 있어야 합니다. 로그인한 뒤 다시 시도하거나, 비밀번호 공유를 해제하고 앱과 프로필만 설치하세요"))
 }
+
+/// Whether this account has a desktop session on the PC (`quser` lists it, any state).
+const WIN_DESKTOP_PROBE: &str = r#"$ProgressPreference='SilentlyContinue';$u=$env:USERNAME;$n=@(quser 2>$null|Select-Object -Skip 1|Where-Object{(($_ -replace '^>','').Trim() -split '\s+')[0] -ieq $u}).Count;if($n -gt 0){[Console]::Write('{"desktop":true}')}else{[Console]::Write('{"desktop":false}')}"#;
 
 pub fn prepare(
     cfg: crate::tunnel::SshCfg,
@@ -2444,7 +2608,7 @@ mod session_vault_tests {
     fn linked(peer: UnixStream) -> SessionVault {
         let v = SessionVault::new(PathBuf::new());
         peer.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
-        *v.link.borrow_mut() = Some(peer);
+        *v.link.borrow_mut() = Some(Box::new(peer));
         v
     }
 
@@ -2483,5 +2647,80 @@ mod session_vault_tests {
             assert!(v.poisoned.get());
             assert!(v.set("k", None).is_err(), "no request after an unknown outcome");
         }
+    }
+}
+
+/// Live check on a Windows PC over SSH, with this account signed in at the PC: a test entry
+/// goes through the desktop-session helper into Credential Manager and is removed again.
+/// cargo build --release; cargo test --release desktop_helper_round_trip -- --ignored
+#[cfg(all(test, windows))]
+mod windows_vault_live {
+    use super::*;
+    #[test]
+    #[ignore]
+    fn desktop_helper_round_trip() {
+        let exe = std::env::current_dir().unwrap().join("target/release/itda.exe");
+        assert!(exe.exists(), "build the release app first");
+        let mut v = SessionVault::new(exe);
+        let key = format!("provision-live-{}", &random_id().unwrap()[..8]);
+        v.set(&key, Some("비밀 🔑")).unwrap();
+        assert_eq!(v.get(&key).unwrap().as_deref(), Some("비밀 🔑"));
+        v.set(&key, None).unwrap();
+        assert_eq!(v.get(&key).unwrap(), None);
+    }
+}
+
+#[cfg(test)]
+mod running_tests {
+    /// Ours counts, another account's doesn't, an unreadable owner refuses.
+    #[test]
+    fn windows_running_counts() {
+        assert!(super::running_from("1 0").unwrap());
+        assert!(super::running_from("2 1").unwrap());
+        assert!(!super::running_from("0 0").unwrap());
+        assert!(super::running_from("0 1").is_err());
+        assert!(super::running_from("x").is_err());
+    }
+}
+
+#[cfg(test)]
+mod proof_tests {
+    use std::io::Write;
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+
+    fn pair() -> (TcpStream, TcpStream) {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let c = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        (l.accept().unwrap().0, c)
+    }
+
+    /// The right token passes; a wrong one, an overlong one, or one dripped past the
+    /// deadline does not, and the trickle is cut off at the deadline.
+    #[test]
+    fn helper_proof() {
+        let (mut s, mut c) = pair();
+        c.write_all(b"abc\n").unwrap();
+        assert!(super::proves(&mut s, b"abc", Instant::now() + Duration::from_secs(2)));
+        let (mut s, mut c) = pair();
+        c.write_all(b"abd\n").unwrap();
+        assert!(!super::proves(&mut s, b"abc", Instant::now() + Duration::from_secs(2)));
+        let (mut s, mut c) = pair();
+        c.write_all(b"abcabc\n").unwrap();
+        assert!(!super::proves(&mut s, b"abc", Instant::now() + Duration::from_secs(2)));
+        let (mut s, mut c) = pair();
+        let drip = std::thread::spawn(move || {
+            for _ in 0..20 {
+                if c.write_all(b"a").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let start = Instant::now();
+        assert!(!super::proves(&mut s, b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Instant::now() + Duration::from_millis(500)));
+        assert!(start.elapsed() < Duration::from_millis(900));
+        drop(s);
+        drip.join().unwrap();
     }
 }
