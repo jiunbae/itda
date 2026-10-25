@@ -557,14 +557,19 @@ try {
       await page.route('**/ipc*', async route => {
         const body = route.request().postDataJSON();
         if (body.cmd === 'files' && body.op === 'list') await delay(350);
-        await route.continue();
+        // (A delayed listing may outlive this route once cached folders stop waiting on it.)
+        await route.continue().catch(() => {});
       });
       await page.locator('.files-column:last-child [data-index]').filter({ hasText: 'Folder' }).click();
       assert(await page.locator('.files-columns').count() === 1 && await page.locator('.files-column').count() >= 2, "Columns vanished while loading a folder");
-      assert((await page.locator('.files-column:last-child').innerText()).includes('읽는 중'), "Loading feedback escaped its column");
+      // A folder listed before shows its last listing at once; an unseen one says it's reading,
+      // in its own column.
+      const reopened = await page.locator('.files-column:last-child').innerText();
+      assert(reopened.includes('읽는 중') || reopened.includes('nested.txt'), "Loading feedback escaped its column");
 
       await page.locator('.files-column:last-child [data-index]').filter({ hasText: 'nested.txt' }).waitFor();
       await page.locator('.files-column:last-child [data-index]').filter({hasText:'Empty'}).click();
+      assert((await page.locator('.files-column:last-child').innerText()).includes('읽는 중'), "Unseen folder showed no loading feedback in its column");
       await page.locator('.files-column:last-child .files-note').filter({hasText:'표시할 항목이 없습니다'}).waitFor();
       assert(await page.locator('.files-columns').count() === 1 && await page.locator('.files-column').count() >= 3, "Empty folder replaced the column browser");
       await page.locator('.files-column-entry').filter({hasText:'Folder'}).last().click();

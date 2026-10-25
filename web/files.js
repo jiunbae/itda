@@ -48,13 +48,25 @@
     const saved = JSON.parse(localStorage.getItem("itda.file.sort"));
     if (saved && sortKeys.includes(saved.key)) sorting = { key: saved.key, desc: saved.desc === true };
   } catch {}
+  // One collator for every comparison: localeCompare with options builds one per call, which
+  // made sorting a large folder take a noticeable moment.
+  const collator = new Intl.Collator(undefined, { numeric: true });
   function ordered(entries) {
-    const names = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    const names = (a, b) => collator.compare(a.name, b.name) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     return [...entries].sort((a, b) => {
       if (a.dir !== b.dir) return a.dir ? -1 : 1;
-      const n = sorting.key === "name" ? names(a, b) : sorting.key === "kind" ? kind(a).localeCompare(kind(b)) : sorting.key === "size" ? a.size - b.size : a.modified - b.modified;
+      const n = sorting.key === "name" ? names(a, b) : sorting.key === "kind" ? collator.compare(kind(a), kind(b)) : sorting.key === "size" ? a.size - b.size : a.modified - b.modified;
       return (sorting.desc ? -1 : 1) * (n || names(a, b));
     });
+  }
+  // The other columns' folders, sorted once per listing and order (not on every render).
+  const columnOrder = new WeakMap();
+  function orderedColumn(entries) {
+    const key = [hidden, sorting.key, sorting.desc].join("|"), memo = columnOrder.get(entries);
+    if (memo?.key === key) return memo.list;
+    const list = ordered(entries.filter(e => hidden || !e.name.startsWith(".")));
+    columnOrder.set(entries, { key, list });
+    return list;
   }
   // `from_other`: the change came from another file window (don't echo it back).
   function setSort(key, desc = sorting.desc, from_other = false) {
@@ -171,7 +183,7 @@
       const loading = p.busy && path === target;
       const current = path === p.path && !p.busy, k = cacheKey(side, path);
       const entries = loading ? null : current ? visible(side) : folderCache.get(k);
-      const shown = entries && ordered(entries.filter(e => hidden || !e.name.startsWith(".")));
+      const shown = entries && (current ? entries : orderedColumn(entries));
       if (!loading && !entries && ![...columnRequests.values()].some(r => r.key === k)) {
         const seq = ++sequence;
         columnRequests.set(seq, { key: k, side });
@@ -937,13 +949,18 @@
     layer.addEventListener("pointerdown", pointerDown);
     layer.addEventListener("dragstart", e => { if (!e.target.closest("input,textarea")) e.preventDefault(); });
     layer.addEventListener("selectstart", e => { if (!e.target.closest("input,textarea,pre")) e.preventDefault(); });
+    // Re-filter after a short pause in typing, not on every key in a large folder.
+    let searchTimer;
     layer.querySelector("[data-search]").oninput = (e) => {
       search = e.target.value;
-      for (const p of Object.values(panes)) {
-        p.start = 0;
-        p.scroll = 0;
-      }
-      renderPanes();
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        for (const p of Object.values(panes)) {
+          p.start = 0;
+          p.scroll = 0;
+        }
+        renderPanes();
+      }, 100);
     };
     saveTab();
     rememberFolder();
@@ -1150,8 +1167,19 @@
     const p = panes[side];
     folderCache.set(cacheKey(side, p.path), p.entries);
     p.seq = ++sequence;
-    p.busy = true;
-    p.pendingPath = path;
+    // A folder seen before shows at once from its last listing; the fresh one replaces it
+    // when it arrives. Only an unseen folder shows "reading".
+    const seen = folderCache.get(cacheKey(side, path));
+    if (seen && path) {
+      p.path = path;
+      p.entries = seen;
+      p.busy = false;
+      p.pendingPath = null;
+      p.start = Math.min(p.start || 0, Math.max(0, seen.length - 160));
+    } else {
+      p.busy = true;
+      p.pendingPath = path;
+    }
     if (history) {
       p.start = 0;
       p.scroll = 0;
