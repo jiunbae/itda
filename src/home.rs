@@ -314,6 +314,8 @@ fn asset(path: &str) -> Option<(Cow<'static, [u8]>, &'static str)> {
     Some((Cow::Borrowed(body.as_bytes()), mime))
 }
 
+pub(crate) fn binary_previews() -> bool { !test_bridge::active() }
+
 /// Send a message to the page.
 fn send(v: Value) {
     if !home(|m| m.ready) {
@@ -322,7 +324,12 @@ fn send(v: Value) {
     if test_bridge::active() {
         return test_bridge::push(v.to_string());
     }
-    plat::eval(&format!("window.itda&&itda.recv({v})"));
+    let script = format!("window.itda&&itda.recv({v})");
+    if v["type"] == "files_result" {
+        if let Some(owner) = crate::files::preview::result_owner(&v) {
+            plat::eval_files(&owner, &script);
+        }
+    } else { plat::eval(&script); }
 }
 
 fn thumb_version(id: &str) -> u64 {

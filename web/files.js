@@ -169,6 +169,7 @@
   }
   // Point the window at the device of the current tab; the other tabs keep their connections.
   function useHost(h) {
+    send("files_preview_release", {page:pageToken});
     host = h;
     previewKey = "";
     document.title = `${label(h)} — 파일`;
@@ -213,10 +214,11 @@
     const show = previewOn || view === "gallery" || previewModal;
     el.hidden = !show;
     el.classList.toggle("quick-look", previewModal);
-    if (!show) { clearTimeout(previewTimer); previewKey = ""; ++previewSeq; return; }
+    if (!show) { if (previewKey) send("files_preview_release", {page:pageToken}); clearTimeout(previewTimer); previewKey = ""; ++previewSeq; return; }
     const details = !MAC && previewKind === "details" && view !== "gallery" && !previewModal;
     const identity = `${currentTab}:${active}:${panes[active].path}:${entry?.name || ""}:${details}`;
     if (previewKey === identity) return;
+    send("files_preview_release", {page:pageToken});
     previewKey = identity;
     clearTimeout(previewTimer);
     previewSeq = ++sequence;
@@ -236,9 +238,10 @@
     previewTimer = setTimeout(() => call("preview", { side, path, seq }), 180);
   }
   function previewResult(m) {
-    if (m.seq !== previewSeq || !layer) return;
+    const release = () => { if (m.data?.url) send("files_preview_release", {page:pageToken,url:m.data.url}); };
+    if (m.seq !== previewSeq || !layer) { release(); return; }
     const el = layer.querySelector(".files-preview-content");
-    if (!el) return;
+    if (!el) { release(); return; }
     const d = m.data || {};
     const entry = previewTarget();
     if (!m.ok || d.unsupported || d.too_large) {
@@ -247,13 +250,18 @@
       el.innerHTML = '<pre></pre>';
       el.querySelector("pre").textContent = d.text;
     } else {
-      const src = `data:${d.mime};base64,${d.base64}`;
+      const src = d.url?.startsWith("/preview/") ? d.url : `data:${d.mime};base64,${d.base64}`;
       if (d.first_page) layer.querySelector(".files-preview footer").textContent += " · 첫 페이지";
       el.innerHTML = d.mime.startsWith("image/") ? `<img alt="${esc(entry?.name || "미리보기")}" src="${src}">` : `<${d.mime.startsWith("video/") ? "video" : "audio"} controls src="${src}"></${d.mime.startsWith("video/") ? "video" : "audio"}>`;
     }
     zoom = null;
     const img = el.querySelector("img");
-    if (img) img.onload = () => applyZoom();
+    if (img) {
+      const release = () => { if (d.url) send("files_preview_release", {page:pageToken,url:d.url}); };
+      img.onload = () => { release(); if (m.seq === previewSeq) applyZoom(); };
+      img.onerror = release;
+      if (img.complete) release();
+    }
     applyZoom();
     if (!zoomWatch) {
       zoomWatch = new ResizeObserver(() => { if (zoom === null) applyZoom(); });
@@ -524,6 +532,7 @@
     </div>`;
   }
   function renderNetwork() {
+    send("files_preview_release", {page:pageToken});
     previewModal = false; previewKey = ""; ++previewSeq;
     layer.querySelector(".files-preview").hidden = true;
     layer.classList.remove("has-preview", "gallery-view");
@@ -2334,6 +2343,7 @@
     if (!host || m.id !== host.id) {
       // The tab moved to another device; let its folder be asked for again on return.
       if (m.op === "list") columnRequests.delete(m.seq);
+      if (m.op === "preview" && m.data?.url) send("files_preview_release", {page:pageToken,url:m.data.url});
       return true;
     }
     if (m.op === "preview") {

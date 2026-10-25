@@ -499,7 +499,7 @@ fn flush(target: &EventLoopWindowTarget<Wake>) {
     let file_requests = FILE_REQUESTS.with(|q| std::mem::take(&mut *q.borrow_mut()));
     let files_changed = !file_requests.is_empty();
     for (id, close, new, path) in file_requests {
-        if close { if let Some(page) = FILE_PAGES.with(|p| p.borrow_mut().remove(&id)) {crate::files::release_page(&page);}
+        if close { crate::files::preview::revoke_owner(&id); if let Some(page) = FILE_PAGES.with(|p| p.borrow_mut().remove(&id)) {crate::files::release_page(&page);}
             let pane = FILE_PANES.with(|p| p.borrow_mut().remove(&id)); FILE_HOSTS.with(|p| {p.borrow_mut().remove(&id);}); drop(pane); continue; }
         let existing = if new { None } else { FILE_HOSTS.with(|p| p.borrow().iter().find(|(_,host)| *host == &id).map(|(key,_)| key.clone())) };
         let exists = FILE_PANES.with(|p| {
@@ -512,7 +512,7 @@ fn flush(target: &EventLoopWindowTarget<Wake>) {
         match WindowBuilder::new().with_title(title).with_titlebar_transparent(true).with_title_hidden(true).with_fullsize_content_view(true).with_inner_size(LogicalSize::new(1000.0, 700.0)).with_min_inner_size(LogicalSize::new(720.0, 480.0)).build(target) {
             Ok(window) => match home_view(&window, home(|m| is_dark(&m.settings)), Some(&id), Some(&window_id), path.as_deref()) {
                 Ok(view) => { crate::log!("file window up: {id}"); FILE_HOSTS.with(|p| {p.borrow_mut().insert(window_id.clone(), id);}); FILE_PANES.with(|p| { p.borrow_mut().insert(window_id, Pane { window, view }); }); }
-                Err(e) => crate::log!("files webview: {e}"),
+                Err(e) => { crate::files::preview::revoke_owner(&window_id); crate::log!("files webview: {e}"); },
             },
             Err(e) => crate::log!("files window: {e}"),
         }
@@ -651,10 +651,14 @@ fn home_view(window: &Window, dark: bool, file: Option<&str>, file_window: Optio
     let bg = if dark { (32, 32, 32, 255) } else { (243, 243, 243, 255) };
     let drop_id = file_window.map(str::to_string);
     let drag_id = file_window.map(str::to_string);
+    let protocol_owner = file_window.unwrap_or("home").to_string();
+    let ipc_owner = protocol_owner.clone();
+    let navigation_owner = protocol_owner.clone();
     let view = WebViewBuilder::new()
         .with_initialization_script(&format!("window.itdaNativeFiles=true;window.ITDA_FILE_PATH={};", json!(file_path)))
         .with_accept_first_mouse(file.is_some())
-        .with_custom_protocol("itda".into(), |_id, req| {
+        .with_custom_protocol("itda".into(), move |_id, req| {
+            if req.uri().path().starts_with("/preview/") { return crate::files::preview::response(&protocol_owner, &req); }
             let resp = match super::asset(req.uri().path()) {
                 Some((body, mime)) => http::Response::builder().header("Content-Type", mime).header("Cache-Control", "no-store").body(body),
                 None => http::Response::builder().status(404).body(Cow::Borrowed(&b"not found"[..])),
@@ -670,6 +674,7 @@ fn home_view(window: &Window, dark: bool, file: Option<&str>, file_window: Optio
         .with_ipc_handler(move |req| match serde_json::from_str::<Value>(req.body()) {
             // Handled after this callback returns, like every other event.
             Ok(v) => {
+                if !crate::files::preview::admit_ipc(&v, &ipc_owner) { return; }
                 match v["cmd"].as_str() {
                     Some("apple_screen_sharing") => { apple_screen_sharing(v["id"].as_str().unwrap_or("")); return; }
                     Some("files_system_edit") => {native_files::system_edit(v["action"].as_str().unwrap_or(""));return;}
@@ -699,9 +704,10 @@ fn home_view(window: &Window, dark: bool, file: Option<&str>, file_window: Optio
             }
             Err(e) => crate::log!("ipc: bad message {e}"),
         })
-        .with_navigation_handler(|url| {
+        .with_navigation_handler(move |url| {
             // External links open in the browser, never inside the app.
             if url.starts_with("itda://") {
+                crate::files::preview::revoke_owner(&navigation_owner);
                 return true;
             }
             if url.starts_with("https://") {
@@ -928,4 +934,9 @@ mod quit_event {
         std::mem::forget(handler);
         let _ = Handler::class();
     }
+}
+
+pub fn eval_files(owner: &str, js: &str) {
+    if owner == "home" { with_home(|p| { let _ = p.view.evaluate_script(js); }); }
+    else { FILE_PANES.with(|all| { if let Some(p) = all.borrow().get(owner) { let _ = p.view.evaluate_script(js); } }); }
 }
