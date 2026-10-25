@@ -234,9 +234,10 @@ impl Sftp {
     fn packet(&mut self) -> io::Result<Packet> {
         loop {
             let p = self.raw_packet()?;
-            // (Replies come in request order: a deferred one is always next if still due.)
-            if self.deferred.front() == Some(&p.id) {
-                self.deferred.pop_front();
+            // A reply nobody waits for is dropped whenever it arrives (servers may answer
+            // in any order).
+            if let Some(i) = self.deferred.iter().position(|id| *id == p.id) {
+                self.deferred.remove(i);
                 continue;
             }
             return Ok(p);
@@ -350,8 +351,10 @@ impl Sftp {
         let mut out = Vec::new();
         let mut b = Vec::new();
         string(&mut b, &h);
-        // A few READDIRs ahead, so a large folder costs fewer round trips; the ones still
-        // outstanding at the end are read (they just say "end") before the handle closes.
+        // A few READDIRs ahead, so a large folder costs fewer round trips. Replies may come in
+        // any order: each is matched to its request, entries from every NAME reply count (an
+        // "end" for one request doesn't end those already answered), and no new READDIR goes
+        // out after an "end".
         const AHEAD: usize = 3;
         let mut sent = std::collections::VecDeque::new();
         for _ in 0..AHEAD {
@@ -359,14 +362,14 @@ impl Sftp {
         }
         let mut done = false;
         let outcome = loop {
-            let Some(id) = sent.pop_front() else { break Ok(()) };
+            if sent.is_empty() {
+                break Ok(());
+            }
             let mut r = self.packet()?;
-            if r.id != id {
+            let Some(i) = sent.iter().position(|id| *id == r.id) else {
                 return Err(err("SFTP 요청 순서 불일치"));
-            }
-            if done {
-                continue;
-            }
+            };
+            sent.remove(i);
             if r.t == 101 {
                 if r.status().is_ok_and(|s| s == 1) {
                     done = true;
@@ -377,7 +380,9 @@ impl Sftp {
             if r.t != 104 {
                 break Err(err("SFTP 목록 응답 오류"));
             }
-            sent.push_back(self.send(12, &b)?);
+            if !done {
+                sent.push_back(self.send(12, &b)?);
+            }
             // (A malformed reply is refused, but the stream stays in step: it was read whole.)
             if let Err(e) = names(&mut r, &mut out) {
                 break Err(e);
@@ -592,6 +597,55 @@ impl Sftp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A server that answers out of order (as SFTP allows): the first three READDIRs come back
+    /// reversed (two NAME batches and an "end"), and two CLOSE replies come back reversed.
+    /// Every entry is kept and later requests stay in step.
+    const SHUFFLING_SERVER: &str = r#"
+import struct, sys
+i, o = sys.stdin.buffer, sys.stdout.buffer
+def read():
+    n = i.read(4)
+    if len(n) < 4: sys.exit(0)
+    b = i.read(struct.unpack(">I", n)[0]); return b[0], struct.unpack(">I", b[1:5])[0] if len(b) >= 5 else 0, b
+def send(t, id, body=b""):
+    p = bytes([t]) + struct.pack(">I", id) + body; o.write(struct.pack(">I", len(p)) + p); o.flush()
+def s(x): x = x.encode(); return struct.pack(">I", len(x)) + x
+def names(ns): return struct.pack(">I", len(ns)) + b"".join(s(n) + s(n) + struct.pack(">I", 0) for n in ns)
+def status(code): return struct.pack(">I", code) + s("") + s("")
+t, _, b = read(); p = struct.pack(">I", 3); o.write(struct.pack(">I", len(p) + 1) + bytes([2]) + p); o.flush()
+readdirs, closes, batches = [], [], [["a", "b"], ["c"]]
+while True:
+    t, id, b = read()
+    if t == 11: send(102, id, s("h")); readdirs, batches = [], [["a", "b"], ["c"]]
+    elif t == 12:
+        readdirs.append(id)
+        if len(readdirs) == 3:
+            answers = [(104, names(batches[k])) if k < len(batches) else (101, status(1)) for k in range(3)]
+            for rid, (rt, body) in reversed(list(zip(readdirs, answers))): send(rt, rid, body)
+        elif len(readdirs) > 3: send(101, id, status(1))
+    elif t == 4:
+        closes.append(id)
+        if len(closes) == 2:
+            for cid in reversed(closes): send(101, cid, status(0))
+            closes = []
+    elif t in (7, 17): send(105, id, struct.pack(">IQ", 1, 5))
+    else: send(101, id, status(8))
+"#;
+    #[test]
+    fn listing_survives_out_of_order_replies() {
+        let Ok(child) = std::process::Command::new("python3").args(["-c", SHUFFLING_SERVER]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn() else {
+            return;
+        };
+        let control = Control::default();
+        let mut s = Sftp::start(child, &control).unwrap();
+        let mut first: Vec<String> = s.list("/x").unwrap().into_iter().map(|e| e.name).collect();
+        first.sort();
+        assert_eq!(first, ["a", "b", "c"]);
+        assert_eq!(s.list("/y").unwrap().len(), 3);
+        assert_eq!(s.stat("/x/a").unwrap().unwrap().size, 5, "stat after reversed CLOSE replies");
+        assert_eq!(s.stat("/x/b").unwrap().unwrap().size, 5);
+    }
 
     /// A folder of several READDIR batches lists whole with requests sent ahead, a missing
     /// folder is refused, and the session stays in step afterwards (the CLOSE replies are
