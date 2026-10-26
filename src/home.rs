@@ -1658,6 +1658,32 @@ fn probe_now() {
     PROBE_CV.notify_all();
 }
 
+/// When the home window was last brought forward: devices are checked often only around
+/// then. Each check of a Mac without SSH opens a connection to its Screen Sharing, which
+/// logs it; every 20 s from every Itda that lists it came to hundreds an hour per Mac.
+static HOME_LOOKED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+const PROBE_IN_USE: Duration = Duration::from_secs(30);
+const PROBE_IDLE: Duration = Duration::from_secs(10 * 60);
+/// How long the home counts as in use after it came forward.
+const HOME_IN_USE: Duration = Duration::from_secs(3 * 60);
+
+/// The home window came forward: check the devices now (unless just done), then often for a
+/// while.
+pub fn home_looked_at() {
+    let mut looked = HOME_LOOKED.lock().unwrap();
+    let recent = looked.is_some_and(|t| t.elapsed() < Duration::from_secs(15));
+    *looked = Some(std::time::Instant::now());
+    drop(looked);
+    if !recent {
+        probe_now();
+    }
+}
+
+fn probe_interval() -> Duration {
+    let in_use = HOME_LOOKED.lock().unwrap().is_some_and(|t| t.elapsed() < HOME_IN_USE);
+    if in_use { PROBE_IN_USE } else { PROBE_IDLE }
+}
+
 /// A connection saved from the web viewer (a browser signed in with the PIN) must not be able
 /// to send this PC's saved logins somewhere else: pointing an entry at another address (or way
 /// in) drops its saved passwords and shared account, and an account can't be attached from
@@ -1731,7 +1757,7 @@ fn start_probes() {
         });
         post(Event::Online(results));
         let g = PROBE_WAKE.lock().unwrap();
-        let (mut g, _) = PROBE_CV.wait_timeout_while(g, Duration::from_secs(20), |w| !*w).unwrap();
+        let (mut g, _) = PROBE_CV.wait_timeout_while(g, probe_interval(), |w| !*w).unwrap();
         *g = false;
     });
 }

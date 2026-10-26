@@ -908,6 +908,7 @@ pub fn run(quick: Option<String>) {
                         }
                     }
                     WindowEvent::Focused(true) => {
+                        if is_home { crate::home::home_looked_at(); }
                         if let Some((ref owner,_))=mid { offer_clipboard(owner); }
                         let front = sid.clone().or_else(|| mid.as_ref().map(|(owner, _)| owner.clone()));
                         *FRONT_SESSION.lock().unwrap() = front;
