@@ -130,16 +130,17 @@ fn start_with(cfg: SshCfg, copied: impl Fn(String) + Send + 'static) -> Bridge {
 fn watch(cfg: &SshCfg, stop: &AtomicBool, watcher: &Mutex<Option<Child>>, last: &Mutex<String>, copied: &dyn Fn(String)) -> std::io::Result<()> {
     let _reaping = Reaping(watcher);
     let mut cmd = crate::tunnel::ssh_command(cfg)?;
-    cmd.arg(crate::tunnel::ssh_target(cfg)?).arg("/bin/bash -s");
-    let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
-    let input = child.stdin.take();
+    // The script goes in the command itself (as base64), not on ssh's input: Windows' ssh
+    // doesn't reliably deliver what's written to it there.
+    let script = format!("echo {} | base64 -D | /bin/bash", crate::ws::base64(WATCH.as_bytes()));
+    cmd.arg(crate::tunnel::ssh_target(cfg)?).arg(script);
+    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
     let out = child.stdout.take();
     // Kept where the bridge (or this function's return) ends it, before anything can fail.
     *watcher.lock().unwrap() = Some(child);
     if stop.load(Ordering::Relaxed) {
         return Ok(());
     }
-    input.ok_or_else(|| std::io::Error::other("no stdin"))?.write_all(WATCH.as_bytes())?;
     let out = out.ok_or_else(|| std::io::Error::other("no stdout"))?;
     let mut first = true;
     for line in BufReader::new(out).lines() {
