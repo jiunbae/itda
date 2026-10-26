@@ -164,11 +164,18 @@ fn watch(cfg: &SshCfg, stop: &AtomicBool, watcher: &Mutex<Option<Child>>, last: 
     Ok(())
 }
 
+/// The command on the Mac that puts the next `len` bytes of its input on the clipboard.
+fn paste_command(len: usize) -> String {
+    format!("head -c {len} | LANG=en_US.UTF-8 pbcopy")
+}
+
 /// Put `text` on that Mac's clipboard (pbcopy over SSH), stoppable through `sending`.
 fn put(cfg: &SshCfg, text: &str, stop: &AtomicBool, sending: &Mutex<Option<Child>>) -> std::io::Result<()> {
     let _reaping = Reaping(sending);
     let mut cmd = crate::tunnel::ssh_command(cfg)?;
-    cmd.arg(crate::tunnel::ssh_target(cfg)?).arg("LANG=en_US.UTF-8 pbcopy");
+    // The Mac reads exactly the text's length: Windows' ssh doesn't always pass on the end of
+    // its input, and pbcopy would wait for it forever.
+    cmd.arg(crate::tunnel::ssh_target(cfg)?).arg(paste_command(text.len()));
     let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
     let input = child.stdin.take();
     *sending.lock().unwrap() = Some(child);
@@ -178,7 +185,7 @@ fn put(cfg: &SshCfg, text: &str, stop: &AtomicBool, sending: &Mutex<Option<Child
     {
         let mut input = input.ok_or_else(|| std::io::Error::other("no stdin"))?;
         input.write_all(text.as_bytes())?;
-    } // (closed: pbcopy reads to the end)
+    }
     // Wait without holding the slot, so the bridge can still end it.
     loop {
         if let Some(c) = sending.lock().unwrap().as_mut() {
@@ -234,7 +241,8 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let bridge = super::start_with(cfg, move |t| { let _ = tx.send(t); });
         std::thread::sleep(std::time::Duration::from_secs(4)); // the watcher's first look
-        ssh("LANG=en_US.UTF-8 pbcopy", Some("원격 → 이 Mac ✅ 브리지"));
+        let remote = "원격 → 이 Mac ✅ 브리지";
+        ssh(&super::paste_command(remote.len()), Some(remote));
         let got = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("nothing came from the Mac");
         assert_eq!(got, "원격 → 이 Mac ✅ 브리지");
         bridge.send("이 Mac → 원격 🌍 브리지");
@@ -243,7 +251,7 @@ mod tests {
         // (No echo of our own text comes back.)
         assert!(rx.recv_timeout(std::time::Duration::from_secs(3)).is_err(), "own text echoed back");
         drop(bridge);
-        ssh("LANG=en_US.UTF-8 pbcopy", Some(&saved));
+        ssh(&super::paste_command(saved.len()), Some(&saved));
         assert_eq!(there, "이 Mac → 원격 🌍 브리지");
     }
 
