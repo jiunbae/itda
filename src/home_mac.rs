@@ -908,7 +908,7 @@ pub fn run(quick: Option<String>) {
                         }
                     }
                     WindowEvent::Focused(true) => {
-                        if is_home { crate::home::home_looked_at(); }
+                        if is_home { crate::home::home_focus(true); }
                         if let Some((ref owner,_))=mid { offer_clipboard(owner); }
                         let front = sid.clone().or_else(|| mid.as_ref().map(|(owner, _)| owner.clone()));
                         *FRONT_SESSION.lock().unwrap() = front;
@@ -916,6 +916,7 @@ pub fn run(quick: Option<String>) {
                             offer_clipboard(&id);
                         }
                     }
+                    WindowEvent::Focused(false) if is_home => crate::home::home_focus(false),
                     WindowEvent::Focused(false) if sid.is_some() || mid.is_some() => *FRONT_SESSION.lock().unwrap() = None,
                     WindowEvent::ThemeChanged(_) if is_home => send(json!({"type": "system_theme", "dark": system_dark()})),
                     _ => {}
