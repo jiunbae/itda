@@ -161,6 +161,8 @@ fn init(quick: Option<String>) {
 /// The window is up: start the background work.
 fn started() {
     plat::apply_zoom(home(|m| m.settings.zoom));
+    // (Just started: checked often for a while, as after the home comes forward.)
+    *HOME_LOOKED.lock().unwrap() = Some(std::time::Instant::now());
     std::thread::spawn(crate::files::sweep_view_copies);
     start_probes();
     let w = home(|m| m.settings.web.clone());
@@ -1658,6 +1660,40 @@ fn probe_now() {
     PROBE_CV.notify_all();
 }
 
+/// When the home window was last brought forward: devices are checked often only around
+/// then. Each check of a Mac without SSH opens a connection to its Screen Sharing, which
+/// logs it; every 20 s from every Itda that lists it came to hundreds an hour per Mac.
+static HOME_LOOKED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+const PROBE_IN_USE: Duration = Duration::from_secs(30);
+const PROBE_IDLE: Duration = Duration::from_secs(10 * 60);
+/// How long the home counts as in use after it came forward.
+const HOME_IN_USE: Duration = Duration::from_secs(3 * 60);
+
+/// The home window is in front now.
+static HOME_FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The home window came forward (`true`; then devices are checked now, unless just done, and
+/// often while it stays in front and for a while after) or went behind.
+pub fn home_focus(front: bool) {
+    HOME_FOCUSED.store(front, std::sync::atomic::Ordering::Relaxed);
+    let mut looked = HOME_LOOKED.lock().unwrap();
+    let recent = looked.is_some_and(|t| t.elapsed() < Duration::from_secs(15));
+    *looked = Some(std::time::Instant::now());
+    drop(looked);
+    if front && !recent {
+        probe_now();
+        *SCAN_WAKE.lock().unwrap() = true;
+        SCAN_CV.notify_all();
+    }
+}
+
+/// How often devices are checked (and the tailnet looked over, which also connects to each
+/// Mac's Screen Sharing): often while the home is in use, rarely otherwise.
+fn probe_interval() -> Duration {
+    let in_use = HOME_FOCUSED.load(std::sync::atomic::Ordering::Relaxed) || HOME_LOOKED.lock().unwrap().is_some_and(|t| t.elapsed() < HOME_IN_USE);
+    if in_use { PROBE_IN_USE } else { PROBE_IDLE }
+}
+
 /// A connection saved from the web viewer (a browser signed in with the PIN) must not be able
 /// to send this PC's saved logins somewhere else: pointing an entry at another address (or way
 /// in) drops its saved passwords and shared account, and an account can't be attached from
@@ -1731,7 +1767,7 @@ fn start_probes() {
         });
         post(Event::Online(results));
         let g = PROBE_WAKE.lock().unwrap();
-        let (mut g, _) = PROBE_CV.wait_timeout_while(g, Duration::from_secs(20), |w| !*w).unwrap();
+        let (mut g, _) = PROBE_CV.wait_timeout_while(g, probe_interval(), |w| !*w).unwrap();
         *g = false;
     });
 }
@@ -1785,7 +1821,7 @@ fn start_discovery() {
             // Always answer: a scan the page asked for waits for this.
             post(Event::Found(found));
             let g = SCAN_WAKE.lock().unwrap();
-            let (mut g, _) = SCAN_CV.wait_timeout_while(g, Duration::from_secs(30), |w| !*w).unwrap();
+            let (mut g, _) = SCAN_CV.wait_timeout_while(g, probe_interval(), |w| !*w).unwrap();
             *g = false;
         }
     });

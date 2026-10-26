@@ -741,6 +741,9 @@ unsafe fn tray_menu(h: HWND) {
 // ---------------------------------------------------------------- window
 
 unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if m == WM_ACTIVATE && h == hwnd() {
+        crate::home::home_focus((wp & 0xffff) != 0);
+    }
     if (m==WM_KEYDOWN || m==WM_SYSKEYDOWN) && wp==0x1b {
         crate::files_win::gesture::registry().lock().unwrap().cancel_window(h as isize);
     }
