@@ -171,6 +171,8 @@ pub struct Hp {
     pub port: u16,
     /// Sharper: the screen at its native (Retina) pixels rather than in points; slower to encode.
     pub native: bool,
+    /// Cover that Mac's own screens while connected (and lock it after).
+    pub curtain: bool,
 }
 
 impl Host {

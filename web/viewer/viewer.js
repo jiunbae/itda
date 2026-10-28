@@ -614,7 +614,7 @@ function open(h) {
   const size = follow && scr.clientWidth ? `w=${Math.round(scr.clientWidth)}&h=${Math.round(scr.clientHeight)}&` : '';
   // This attempt's own token: its high-performance outcome, not another viewer's.
   const attempt = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
-  S.hpFallback = null; S.hpFallbackSetup = false; S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; S.hpMode = null; S.hpModeContext = null; S.hpQualityFailed = false; S.hpQualityPending = false; renderTools();
+  S.hpFallback = null; S.hpFallbackSetup = false; S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; S.hpMode = null; S.hpModeContext = null; S.hpCurtain = undefined; S.hpCurtainAsked = false; S.hpQualityFailed = false; S.hpQualityPending = false; renderTools();
   const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}?${size}attempt=${attempt}`, ['binary']);
   let closeInfo = null;
   ws.addEventListener('close', (e) => { closeInfo = e; });
@@ -649,7 +649,7 @@ function open(h) {
   rfb.addEventListener('disconnect', () => {
     if (S.rfb !== rfb) return;
     S.rfb = null;
-    S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; S.hpModeContext = null; S.hpMode = null; renderTools();
+    S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; S.hpModeContext = null; S.hpMode = null; S.hpCurtain = undefined; S.hpCurtainAsked = false; renderTools();
     // Only for the attempt still current: a replacement opened meanwhile (the HP toggle, a
     // quality change) owns the window now.
     if (APP) return setTimeout(() => { if (S.gen === gen) appDropped(h, closeInfo, gen); }, 50);
@@ -884,12 +884,27 @@ window.itdaHp = (m) => {
     S.hpQuality = real ? { quality: m.quality, active: !!m.quality_active, w: m.capture_width, h: m.capture_height } : null;
     S.hpQualityFailed = !real && (S.hpStatusTries || 0) >= 4;
     if (real || S.hpQualityFailed) S.hpQualityPending = false;
+    // The curtain there: true/false, or null from an Itda without it.
+    if (m.curtain !== undefined) S.hpCurtain = m.curtain;
+    // This device covers that Mac on every connection once chosen.
+    if (m.curtain === false && S.host.hp?.curtain && !S.hpCurtainAsked) {
+      S.hpCurtainAsked = true; S.hpCurtainBusy = true;
+      post({ ev: 'hp-curtain', on: true });
+    }
     renderTools();
     // Settling (the status file is rewritten every 2 s): ask again a few times, same request.
     if (!real && (S.hpStatusTries = (S.hpStatusTries || 0) + 1) < 5) {
       const req = m.req;
       setTimeout(() => { if (S.hpStatusReq === req && S.rfb && !S.hpQualityFailed) post({ ev: 'hp-status', req }); }, 2500);
     }
+  }
+  if (!m.status && typeof m.curtain === 'boolean') {
+    S.hpCurtainBusy = false;
+    if (!m.ok) { renderTools(); return toast(`화면 가림을 바꾸지 못했습니다 — ${m.error || '원격 Mac에 연결할 수 없습니다'}`); }
+    S.host.hp = { ...(S.host.hp || {}), curtain: m.curtain };
+    S.hpCurtain = m.curtain;
+    toast(m.curtain ? '그 Mac의 화면을 가렸습니다 — 연결을 끝내면 그 Mac의 화면이 잠깁니다' : '화면 가림을 껐습니다 — 그 Mac의 화면이 다시 보입니다');
+    return renderTools();
   }
   if (typeof m.quality === 'boolean') {
     S.hpQualityBusy = false;
@@ -913,12 +928,20 @@ function hpQualityLabel() {
   return '선명하게 (Retina) — 글자가 또렷해지고 프레임은 조금 줄어듭니다';
 }
 
+// Covering that Mac's own screens: the choice saved for this device.
+function hpCurtainLabel() {
+  if (S.hpCurtainBusy) return '화면 가림 바꾸는 중…';
+  if (S.hpCurtain === null) return '화면 가림 — 원격 Mac의 Itda를 업데이트하면 쓸 수 있습니다';
+  if (S.host.hp?.curtain) return '화면 가림 켜짐 — 그 Mac의 화면은 가려지고 키보드·마우스는 막힙니다. 연결을 끝내면 화면이 잠깁니다. 누르면 끕니다';
+  return '화면 가림 — 그 Mac의 화면을 가리고 키보드·마우스를 막습니다. 연결을 끝내면 화면이 잠깁니다';
+}
+
 // ---------------------------------------------------------------- toolbar
 
 // Visible names under the toolbar icons (touch screens show no tooltips); the full
 // description stays the button's accessible name.
 const TOOL_NAME = { back: '목록', keyboard: '키보드', keys: '특수 키', 'mac-actions': '화면 동작', 'apple-screen-sharing': '화면 공유 앱',
-  'hp-quality': '화질', hp: '고성능', 'hp-disable': '고성능 끄기', clip: '클립보드', monitors: '모니터', scale: () => (S.fit ? '실제 크기' : '맞춤'), viewonly: '보기 전용', full: '전체 화면' };
+  'hp-quality': '화질', 'hp-curtain': '화면 가림', hp: '고성능', 'hp-disable': '고성능 끄기', clip: '클립보드', monitors: '모니터', scale: () => (S.fit ? '실제 크기' : '맞춤'), viewonly: '보기 전용', full: '전체 화면' };
 const toolName = (t) => (typeof TOOL_NAME[t] === 'function' ? TOOL_NAME[t]() : TOOL_NAME[t] || '');
 
 function renderTools() {
@@ -930,6 +953,7 @@ function renderTools() {
     ...(macHost(S.host) ? [['mac-actions', 'mission', 'Mac 화면 동작 — Mission Control · Exposé']] : []),
     ...(APP && /Mac/.test(navigator.platform) && !IOS && ['mac', 'macos'].includes(S.host?.os) && S.host?.kind !== 'rdp' ? [['apple-screen-sharing', 'monitor', 'Apple 화면 공유 앱에서 열기 · 별도 앱으로 직접 연결']] : []),
     ...(hpCapable() && S.hpActual ? [['hp-quality', 'sparkle', hpQualityLabel(), hpQualityShown()]] : []),
+    ...(hpCapable() && S.hpActual ? [['hp-curtain', 'lock', hpCurtainLabel(), !!S.host.hp?.curtain && S.hpCurtain !== null]] : []),
     ...(hpCapable() ? [['hp', 'bolt', hpModeLabel(), !!S.hpActual]] : []),
     ...(hpCapable() && S.host.hp?.on && ['unknown', 'checking'].includes(S.hpMode) ? [['hp-disable', 'bolt', '고성능 모드 끄기 — 기본 화면 공유로 다시 연결']] : []),
     ...(APP ? [] : [['clip', 'clip', '클립보드']]),
@@ -976,6 +1000,11 @@ $('#tools').addEventListener('click', (e) => {
       S.hpQualityBusy = true; renderTools();
       // The opposite of what is on screen now (or of the saved choice while that is unknown).
       return post({ ev: 'hp-quality', native: !(S.hpQuality ? hpQualityShown() : !!S.host.hp?.native) });
+    case 'hp-curtain':
+      if (S.hpCurtainBusy) return;
+      if (S.hpCurtain === null) return toast('원격 Mac의 Itda를 업데이트하면 화면 가림을 쓸 수 있습니다');
+      S.hpCurtainBusy = true; renderTools();
+      return post({ ev: 'hp-curtain', on: !S.host.hp?.curtain });
     case 'monitors': return toggleSheet('monitors');
     case 'clip': return toggleSheet('clip');
     case 'scale':
