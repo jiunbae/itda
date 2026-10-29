@@ -40,6 +40,9 @@ const KEY_Q: i64 = 12;
 static UP: AtomicBool = AtomicBool::new(false);
 /// ⌃⌘Q was pressed on this Mac.
 static ESCAPE: AtomicBool = AtomicBool::new(false);
+/// After ⌃⌘Q here, requests are refused for this long (a viewer reconnecting doesn't cover
+/// the Mac again on whoever is in front of it).
+const REFUSE_AFTER_ESCAPE: Duration = Duration::from_secs(600);
 /// Why the last request couldn't be met ("capture", "input"), for hp-status.
 static FAILED: Mutex<&str> = Mutex::new("");
 static GUARD: Mutex<Option<Child>> = Mutex::new(None);
@@ -56,6 +59,8 @@ unsafe impl Send for SendPort {}
 thread_local! {
     /// The curtain's windows (main thread).
     static WINDOWS: RefCell<Vec<Retained<NSWindow>>> = const { RefCell::new(Vec::new()) };
+    /// Windows being replaced (the displays changed): kept until the new ones show.
+    static RETIRING: RefCell<Vec<Retained<NSWindow>>> = const { RefCell::new(Vec::new()) };
 }
 
 /// A lock that a panic elsewhere doesn't make unusable: this code must always come down.
@@ -74,12 +79,15 @@ pub fn state() -> (bool, &'static str) {
 
 /// Follow the request while this app serves high-performance viewers.
 pub fn start() {
+    // (A request left by an app that ended is nobody's now.)
+    let _ = std::fs::remove_file(flag());
     std::thread::spawn(|| {
+        let mut escaped: Option<Instant> = None;
         let mut empty_since: Option<Instant> = None;
         let mut ticks = 0u32;
         loop {
             ticks += 1;
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tick(&mut empty_since, ticks)));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tick(&mut empty_since, &mut escaped, ticks)));
             if r.is_err() {
                 let _ = std::fs::remove_file(flag());
                 if UP.load(Ordering::Relaxed) {
@@ -93,7 +101,11 @@ pub fn start() {
     });
 }
 
-fn tick(empty_since: &mut Option<Instant>, ticks: u32) {
+fn tick(empty_since: &mut Option<Instant>, escaped: &mut Option<Instant>, ticks: u32) {
+    if !UP.load(Ordering::Relaxed) && lock(&TAP).is_some() {
+        // (An input block that started after its curtain had already failed.)
+        unblock_input();
+    }
     let viewers = crate::server::viewers().len();
     if viewers > 0 {
         *empty_since = None;
@@ -104,12 +116,27 @@ fn tick(empty_since: &mut Option<Instant>, ticks: u32) {
     if ESCAPE.swap(false, Ordering::Relaxed) {
         crate::log!("hp curtain: ⌃⌘Q on this Mac");
         let _ = std::fs::remove_file(flag());
+        *escaped = Some(Instant::now());
+        *lock(&FAILED) = "local";
         if UP.load(Ordering::Relaxed) {
             down(true);
+        } else {
+            unblock_input();
         }
         return;
     }
-    let asked = flag().exists();
+    if UP.load(Ordering::Relaxed) && crate::host_mac::exclusion_lost() {
+        crate::log!("hp curtain: a restarted capture shows the curtain, locking");
+        *lock(&FAILED) = "capture";
+        let _ = std::fs::remove_file(flag());
+        down(true);
+        return;
+    }
+    let mut asked = flag().exists();
+    if asked && escaped.is_some_and(|t| t.elapsed() < REFUSE_AFTER_ESCAPE) {
+        let _ = std::fs::remove_file(flag());
+        asked = false;
+    }
     if asked && gone {
         // (A request outlives no session: the next viewer asks for itself.)
         let _ = std::fs::remove_file(flag());
@@ -140,27 +167,47 @@ fn tick(empty_since: &mut Option<Instant>, ticks: u32) {
 
 fn up_now() -> Result<(), &'static str> {
     crate::log!("hp curtain: up");
-    UP.store(true, Ordering::Relaxed);
     *lock(&FAILED) = "";
     *lock(&GUARD) = std::env::current_exe().and_then(|exe| Command::new(exe).arg(GUARD_ARG).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()).map_err(|e| crate::log!("hp curtain: no guard: {e}")).ok();
     if !block_input() {
         return Err("input");
     }
-    cover()
+    cover()?;
+    // (Up once it covers: hp-status says so only then.)
+    UP.store(true, Ordering::Relaxed);
+    Ok(())
 }
 
 /// (Re)make the windows over every display: out of the capture first, then visible, so the
-/// viewers never see them. Shown only once left out of the capture.
+/// viewers never see them. Windows being replaced stay until the new ones show.
 fn cover() -> Result<(), &'static str> {
-    let ids = on_main(Duration::from_secs(3), || {
-        close_windows();
-        show_windows()
+    let (old, new) = on_main(Duration::from_secs(3), || {
+        let old: Vec<u32> = WINDOWS.with(|w| {
+            let mut w = w.borrow_mut();
+            let ids = w.iter().map(|w| w.windowNumber() as u32).collect();
+            RETIRING.with(|r| r.borrow_mut().extend(w.drain(..)));
+            ids
+        });
+        (old, show_windows())
     })
     .unwrap_or_default();
-    if ids.is_empty() || !crate::host_mac::exclude_windows(&ids) {
+    if new.is_empty() {
         return Err("capture");
     }
-    dispatch2::DispatchQueue::main().exec_async(|| WINDOWS.with(|w| w.borrow().iter().for_each(|w| w.setAlphaValue(1.0))));
+    let all: Vec<u32> = old.into_iter().chain(new).collect();
+    // (A window just shown may take a moment to be listed.)
+    if !(0..6).any(|i| {
+        if i > 0 {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        crate::host_mac::exclude_windows(&all)
+    }) {
+        return Err("capture");
+    }
+    dispatch2::DispatchQueue::main().exec_async(|| {
+        WINDOWS.with(|w| w.borrow().iter().for_each(|w| w.setAlphaValue(1.0)));
+        RETIRING.with(|r| r.borrow_mut().drain(..).for_each(|w| w.close()));
+    });
     Ok(())
 }
 
@@ -193,7 +240,9 @@ fn on_main<T: Send + 'static>(wait: Duration, f: impl FnOnce() -> T + Send + 'st
 }
 
 fn close_windows() {
-    WINDOWS.with(|w| w.borrow_mut().drain(..).for_each(|w| w.close()));
+    for list in [&WINDOWS, &RETIRING] {
+        list.with(|w| w.borrow_mut().drain(..).for_each(|w| w.close()));
+    }
 }
 
 /// Whether the displays no longer match the windows (one added, moved or resized).
@@ -302,7 +351,8 @@ unsafe extern "C-unwind" fn on_event(_: CGEventTapProxy, kind: CGEventType, even
         return event.as_ptr();
     }
     let escape = CGEventFlags::MaskCommand | CGEventFlags::MaskControl;
-    if kind == CGEventType::KeyDown && CGEvent::integer_value_field(e, CGEventField::KeyboardEventKeycode) == KEY_Q && CGEvent::flags(e).contains(escape) {
+    let held = CGEvent::flags(e) & (escape | CGEventFlags::MaskShift | CGEventFlags::MaskAlternate);
+    if kind == CGEventType::KeyDown && CGEvent::integer_value_field(e, CGEventField::KeyboardEventKeycode) == KEY_Q && held == escape {
         ESCAPE.store(true, Ordering::Relaxed);
     }
     std::ptr::null_mut()

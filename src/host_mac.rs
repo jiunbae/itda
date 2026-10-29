@@ -1070,9 +1070,8 @@ fn start_stream_once(w: usize, h: usize, latest: Latest, health: Health) -> Resu
             let stream = SendStream(stream.clone());
             std::thread::spawn(move || {
                 let stream = stream;
-                for _ in 0..5 {
-                    if update_filter(&stream.0) { break }
-                    std::thread::sleep(Duration::from_millis(500));
+                if !(0..5).any(|i| { if i > 0 { std::thread::sleep(Duration::from_millis(500)); } update_filter(&stream.0) }) {
+                    EXCLUSION_LOST.store(true, Ordering::Relaxed);
                 }
             });
         }
@@ -1082,10 +1081,17 @@ fn start_stream_once(w: usize, h: usize, latest: Latest, health: Health) -> Resu
 
 /// Windows the capture leaves out (the curtain's), by window number.
 static EXCLUDED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+/// A restarted stream couldn't leave them out.
+static EXCLUSION_LOST: AtomicBool = AtomicBool::new(false);
+
+/// Whether a restarted capture shows windows it should leave out (since last asked).
+pub(crate) fn exclusion_lost() -> bool {
+    EXCLUSION_LOST.swap(false, Ordering::Relaxed)
+}
 
 /// The display's filter, and whether every window to leave out was found.
 fn content_filter(content: &SCShareableContent, display: &SCDisplay) -> (Retained<SCContentFilter>, bool) {
-    let excluded = EXCLUDED.lock().unwrap().clone();
+    let excluded = EXCLUDED.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let windows: Vec<Retained<SCWindow>> = unsafe { content.windows() }.iter().filter(|w| excluded.contains(&unsafe { w.windowID() })).collect();
     let filter = unsafe { SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), display, &NSArray::from_retained_slice(&windows)) };
     (filter, windows.len() == excluded.len())
@@ -1094,7 +1100,8 @@ fn content_filter(content: &SCShareableContent, display: &SCDisplay) -> (Retaine
 /// Leave these windows out of the capture, from the running stream's next frame on (and of
 /// any stream started later). False if the running stream couldn't be updated.
 pub(crate) fn exclude_windows(ids: &[u32]) -> bool {
-    *EXCLUDED.lock().unwrap() = ids.to_vec();
+    *EXCLUDED.lock().unwrap_or_else(|e| e.into_inner()) = ids.to_vec();
+    EXCLUSION_LOST.store(false, Ordering::Relaxed);
     let Some(capture) = SHARED_CAPTURE.lock().unwrap().upgrade() else { return true };
     let Some(stream) = capture.lock().unwrap().stream.clone() else { return true };
     drop(capture);

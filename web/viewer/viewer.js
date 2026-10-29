@@ -905,9 +905,10 @@ window.itdaHp = (m) => {
     S.host.hp = { ...(S.host.hp || {}), curtain: m.curtain };
     S.hpCurtainError = '';
     toast(m.curtain ? '그 Mac의 화면을 가립니다 — 연결을 끝내면 그 Mac의 화면이 잠깁니다' : '화면 가림을 껐습니다 — 그 Mac의 화면이 다시 보입니다');
-    // What that Mac actually did (the request only reached it): checked shortly after.
+    // What that Mac actually did (the request only reached it): checked until it settles.
     const req = S.hpStatusReq;
-    if (req) setTimeout(() => { if (S.hpStatusReq === req && S.rfb) post({ ev: 'hp-status', req }); }, 3000);
+    S.hpCurtainSettling = m.curtain ? Date.now() + 12000 : 0;
+    if (req) for (const ms of [2500, 6000, 12500]) setTimeout(() => { if (S.hpStatusReq === req && S.rfb) post({ ev: 'hp-status', req }); }, ms);
     return renderTools();
   }
   if (typeof m.quality === 'boolean') {
@@ -936,10 +937,14 @@ function hpQualityLabel() {
 function hpCurtainLabel() {
   if (S.hpCurtainBusy) return '화면 가림 바꾸는 중…';
   if (S.hpCurtain === null) return '화면 가림 — 원격 Mac의 Itda를 업데이트하면 쓸 수 있습니다';
-  if (S.host.hp?.curtain && S.hpCurtain === false && S.hpCurtainError) return `화면 가림을 켜지 못함 (${S.hpCurtainError === 'input' ? '그 Mac의 손쉬운 사용 권한 필요' : '화면 캡처에서 가림 창을 뺄 수 없음'}) — 누르면 설정을 끕니다`;
-  if (S.host.hp?.curtain) return '화면 가림 켜짐 — 그 Mac의 화면은 가려지고 키보드·마우스는 막힙니다. 연결을 끝내면 화면이 잠깁니다. 누르면 끕니다';
+  if (S.hpCurtain === true) return '화면 가림 켜짐 — 그 Mac의 화면은 가려지고 키보드·마우스는 막힙니다. 연결을 끝내면 화면이 잠깁니다. 누르면 끕니다';
+  if (S.host.hp?.curtain && S.hpCurtainError === 'local') return '그 Mac 앞에서 ⌃⌘Q로 화면 가림을 해제했습니다 (10분 동안 다시 가릴 수 없음)';
+  if (S.host.hp?.curtain && S.hpCurtainError) return `화면 가림을 켜지 못함 (${S.hpCurtainError === 'input' ? '그 Mac의 손쉬운 사용 권한 필요' : '화면 캡처에서 가림 창을 뺄 수 없음'}) — 누르면 다시 시도합니다`;
+  if (S.host.hp?.curtain && Date.now() < (S.hpCurtainSettling || 0)) return '화면 가림 켜는 중…';
   return '화면 가림 — 그 Mac의 화면을 가리고 키보드·마우스를 막습니다. 연결을 끝내면 화면이 잠깁니다';
 }
+// Pressed: what that Mac reports (the saved choice is asked again on each connection).
+const hpCurtainShown = () => S.hpCurtain === true;
 
 // ---------------------------------------------------------------- toolbar
 
@@ -958,7 +963,7 @@ function renderTools() {
     ...(macHost(S.host) ? [['mac-actions', 'mission', 'Mac 화면 동작 — Mission Control · Exposé']] : []),
     ...(APP && /Mac/.test(navigator.platform) && !IOS && ['mac', 'macos'].includes(S.host?.os) && S.host?.kind !== 'rdp' ? [['apple-screen-sharing', 'monitor', 'Apple 화면 공유 앱에서 열기 · 별도 앱으로 직접 연결']] : []),
     ...(hpCapable() && S.hpActual ? [['hp-quality', 'sparkle', hpQualityLabel(), hpQualityShown()]] : []),
-    ...(hpCapable() && S.hpActual ? [['hp-curtain', 'lock', hpCurtainLabel(), !!S.host.hp?.curtain && S.hpCurtain !== null]] : []),
+    ...(hpCapable() && S.hpActual ? [['hp-curtain', 'lock', hpCurtainLabel(), hpCurtainShown()]] : []),
     ...(hpCapable() ? [['hp', 'bolt', hpModeLabel(), !!S.hpActual]] : []),
     ...(hpCapable() && S.host.hp?.on && ['unknown', 'checking'].includes(S.hpMode) ? [['hp-disable', 'bolt', '고성능 모드 끄기 — 기본 화면 공유로 다시 연결']] : []),
     ...(APP ? [] : [['clip', 'clip', '클립보드']]),
@@ -1009,7 +1014,7 @@ $('#tools').addEventListener('click', (e) => {
       if (S.hpCurtainBusy) return;
       if (S.hpCurtain === null) return toast('원격 Mac의 Itda를 업데이트하면 화면 가림을 쓸 수 있습니다');
       S.hpCurtainBusy = true; renderTools();
-      return post({ ev: 'hp-curtain', on: !S.host.hp?.curtain });
+      return post({ ev: 'hp-curtain', on: !hpCurtainShown() });
     case 'monitors': return toggleSheet('monitors');
     case 'clip': return toggleSheet('clip');
     case 'scale':
