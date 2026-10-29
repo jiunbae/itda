@@ -25,6 +25,11 @@ export class WheelInput {
 }
 
 export const macHost = h => !!h && !h.this && h.kind!=='rdp' && ['mac','macos'].includes(h.os||'mac');
+// On a Mac or iPad noVNC sends ⌘ as Alt and ⌥ as Mode_switch, the way Apple's Screen Sharing
+// reads them. Itda's high-performance server takes keysyms as they are (⌘ Super, ⌥ Alt), so
+// ⌘V arrived as ⌥V ('√'). Matched on the physical key, so a release undoes its own press.
+const HP_MODIFIERS = {MetaLeft:[0xffe9,0xffeb], MetaRight:[0xffeb,0xffec], AltLeft:[0xff7e,0xffe9], AltRight:[0xfe03,0xffea]};
+export const hpKeysym = (sym, code) => HP_MODIFIERS[code]?.[0] === sym ? HP_MODIFIERS[code][1] : sym;
 // [id, label, default shortcut, its keys, macOS symbolic hotkey number]
 export const macActions = [
     ['mission','Mission Control','⌃ ↑',[0xffe3,0xff52],32],

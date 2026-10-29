@@ -4,7 +4,7 @@
 'use strict';
 import './novnc.min.js';
 import { MonitorController, startMirror } from './monitors.js';
-import { WheelInput, macHost, macActions, macMenu, sendChord, sendMacAction } from './interaction.js';
+import { WheelInput, macHost, hpKeysym, macActions, macMenu, sendChord, sendMacAction } from './interaction.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -631,6 +631,10 @@ function open(h) {
   rfb.focusOnClick = true;
   rfb.showDotCursor = true;
   rfb.qualityLevel = 7;
+  // Every key (this window's, a monitor window's) leaves through sendKey: the Mac modifiers go
+  // as Itda's server reads them once the connection is known to be high-performance.
+  const sendKey = rfb.sendKey?.bind(rfb);
+  if (sendKey) rfb.sendKey = (sym, code, down) => sendKey(S.rfb === rfb && S.hpActual && macHost(S.host) ? hpKeysym(sym, code) : sym, code, down);
   let name = '';
   rfb.addEventListener('desktopname', (e) => { name = (e.detail && e.detail.name) || ''; });
   rfb.addEventListener('connect', () => {

@@ -51,6 +51,8 @@ jobs:
         run: node scripts/raw-decoder-test.mjs
       - name: Performance measurement probe regression
         run: node scripts/hp-performance-probe-test.mjs
+      - name: Mac modifier keys for the high-performance server
+        run: node scripts/hp-mac-keys-test.mjs
       - name: Test
         run: cargo test --release
       - name: Signing keychain
