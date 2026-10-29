@@ -12,6 +12,8 @@ mod cu_e2e;
 mod h264_mac;
 #[cfg(target_os = "macos")]
 mod host_mac;
+#[cfg(target_os = "macos")]
+mod curtain_mac;
 #[cfg(any(target_os = "macos", windows))]
 mod clip_ssh;
 mod hp_upgrade;
@@ -96,6 +98,8 @@ fn askpass_mode() {
 #[cfg(not(windows))]
 fn main() {
     if files::preview_decode_mode() { return; }
+    #[cfg(target_os = "macos")]
+    if curtain_mac::guard_mode() { return; }
     askpass_mode();
     if remote_setup::import_mode() { return; }
     // Read-only check in a fresh instance of the same executable. Do not initialize

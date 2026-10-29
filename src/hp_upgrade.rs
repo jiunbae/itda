@@ -135,10 +135,21 @@ pub struct Status {
     /// It takes Mac screen actions as Itda's own keysyms (1.0.2+).
     pub actions: bool,
     pub capture: (u32, u32),
+    /// Its curtain is up; None from an Itda without it.
+    pub curtain: Option<bool>,
+    /// Why its last curtain request failed: "capture" or "input" (else "").
+    pub curtain_error: String,
 }
 /// The picture that Mac's Itda serves from its next capture: native (Retina) pixels, or points.
 pub fn set_quality(cfg: &SshCfg, native: bool) -> io::Result<()> {
     let write = if native { r#"echo native > "$data/hp-quality""# } else { r#"rm -f "$data/hp-quality""# };
+    run(cfg, &format!("set -e\ndata=\"$HOME/Library/Application Support/Itda\"\nmkdir -p \"$data\"\n{write}\n"), None).map(|_| ())
+}
+
+/// Cover that Mac's screens while viewers are connected (the screen locks when they leave),
+/// or uncover them. Its Itda forgets the request when no viewer is left.
+pub fn set_curtain(cfg: &SshCfg, on: bool) -> io::Result<()> {
+    let write = if on { r#"echo on > "$data/hp-curtain""# } else { r#"rm -f "$data/hp-curtain""# };
     run(cfg, &format!("set -e\ndata=\"$HOME/Library/Application Support/Itda\"\nmkdir -p \"$data\"\n{write}\n"), None).map(|_| ())
 }
 
@@ -153,7 +164,7 @@ if [ "$age" -ge 0 ] && [ "$age" -le 15 ] && lsof -nP -a -c itda -iTCP:{port} -sT
     let yes = |k: &str| out.split_whitespace().any(|p| p == format!("{k}=1"));
     let val = |k: &str| out.split_whitespace().find_map(|p| p.strip_prefix(k)?.strip_prefix('=')).unwrap_or("");
     let quality = Some(val("quality")).filter(|q| matches!(*q, "native" | "points")).unwrap_or("").to_string();
-    Ok(Status {screen:yes("screen"),access:yes("access"),running:yes("running"),quality,quality_active:yes("quality_active"),actions:yes("actions"),capture:(val("capture_width").parse().unwrap_or(0),val("capture_height").parse().unwrap_or(0))})
+    Ok(Status {screen:yes("screen"),access:yes("access"),running:yes("running"),quality,quality_active:yes("quality_active"),actions:yes("actions"),capture:(val("capture_width").parse().unwrap_or(0),val("capture_height").parse().unwrap_or(0)),curtain:out.split_whitespace().any(|p| p.starts_with("curtain=")).then(|| yes("curtain")),curtain_error:val("curtain_error").to_string()})
 }
 
 /// The guide and system settings open on the remote Mac, never on the viewer's computer.
@@ -309,7 +320,7 @@ mod tests {
 
         // Then the viewer's way in: the gateway's SSH tunnel + VNC password, asking for H.264.
         use std::io::{Read, Write};
-        let host = crate::store::Host { id: format!("hp-test-{}", crate::store::new_id()), host: host.into(), os: "mac".into(), ssh: crate::store::Ssh { on: false, user: user.into(), port: 0 }, hp: crate::store::Hp { on: true, port: 0, native: false }, ..Default::default() };
+        let host = crate::store::Host { id: format!("hp-test-{}", crate::store::new_id()), host: host.into(), os: "mac".into(), ssh: crate::store::Ssh { on: false, user: user.into(), port: 0 }, hp: crate::store::Hp { on: true, port: 0, native: false, curtain: false }, ..Default::default() };
         crate::store::set_password(&password_key(&host.id), Some(&password));
         let opened = crate::gateway::open_hp(&host, &crate::store::Login::default(), "");
         crate::store::set_password(&password_key(&host.id), None);

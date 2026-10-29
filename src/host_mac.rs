@@ -25,7 +25,7 @@ use objc2_core_graphics::{CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMo
 use objc2_core_media::CMSampleBuffer;
 use objc2_core_video::{CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight, CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress};
 use objc2_foundation::{NSArray, NSError, NSProcessInfo, NSString};
-use objc2_screen_capture_kit::{SCContentFilter, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamDelegate, SCStreamErrorCode, SCStreamErrorDomain, SCStreamOutput, SCStreamOutputType};
+use objc2_screen_capture_kit::{SCContentFilter, SCDisplay, SCShareableContent, SCWindow, SCStream, SCStreamConfiguration, SCStreamDelegate, SCStreamErrorCode, SCStreamErrorDomain, SCStreamOutput, SCStreamOutputType};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::io;
@@ -1037,7 +1037,7 @@ fn start_stream_once(w: usize, h: usize, latest: Latest, health: Health) -> Resu
     let displays = unsafe { content.displays() };
     let display = displays.iter().find(|d| unsafe { d.displayID() } == main).or_else(|| displays.iter().next()).ok_or("no display")?;
     unsafe {
-        let filter = SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), &display, &NSArray::new());
+        let (filter, found) = content_filter(&content, &display);
         let config = stream_configuration(w, h);
         let output = Output::new(latest, health);
         let stream = SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), &filter, &config, Some(ProtocolObject::from_ref(&*output)));
@@ -1065,8 +1065,87 @@ fn start_stream_once(w: usize, h: usize, latest: Latest, health: Health) -> Resu
                 return Err(e);
             }
         }
+        if !found {
+            // (A curtain window made while this stream started: leave it out now.)
+            let stream = SendStream(stream.clone());
+            std::thread::spawn(move || {
+                let stream = stream;
+                if !(0..5).any(|i| { if i > 0 { std::thread::sleep(Duration::from_millis(500)); } update_filter(&stream.0) }) {
+                    EXCLUSION_LOST.store(true, Ordering::Relaxed);
+                }
+            });
+        }
         Ok((stream, output))
     }
+}
+
+/// Windows the capture leaves out (the curtain's), by window number.
+static EXCLUDED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+/// A restarted stream couldn't leave them out.
+static EXCLUSION_LOST: AtomicBool = AtomicBool::new(false);
+
+/// Whether a restarted capture shows windows it should leave out (since last asked).
+pub(crate) fn exclusion_lost() -> bool {
+    EXCLUSION_LOST.swap(false, Ordering::Relaxed)
+}
+
+/// The display's filter, and whether every window to leave out was found.
+fn content_filter(content: &SCShareableContent, display: &SCDisplay) -> (Retained<SCContentFilter>, bool) {
+    let excluded = EXCLUDED.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let windows: Vec<Retained<SCWindow>> = unsafe { content.windows() }.iter().filter(|w| excluded.contains(&unsafe { w.windowID() })).collect();
+    let filter = unsafe { SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), display, &NSArray::from_retained_slice(&windows)) };
+    (filter, windows.len() == excluded.len())
+}
+
+/// Leave these windows out of the capture, from the running stream's next frame on (and of
+/// any stream started later). False if the running stream couldn't be updated.
+pub(crate) fn exclude_windows(ids: &[u32]) -> bool {
+    *EXCLUDED.lock().unwrap_or_else(|e| e.into_inner()) = ids.to_vec();
+    EXCLUSION_LOST.store(false, Ordering::Relaxed);
+    let Some(capture) = SHARED_CAPTURE.lock().unwrap().upgrade() else { return true };
+    let Some(stream) = capture.lock().unwrap().stream.clone() else { return true };
+    drop(capture);
+    update_filter(&stream)
+}
+
+struct SendStream(Retained<SCStream>);
+// (ScreenCaptureKit's stream may be updated from any thread.)
+unsafe impl Send for SendStream {}
+
+/// Give `stream` the filter leaving out the windows in EXCLUDED.
+fn update_filter(stream: &SCStream) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel::<Option<Retained<SCShareableContent>>>();
+    let handler = RcBlock::new(move |content: *mut SCShareableContent, _: *mut NSError| {
+        let _ = tx.send(unsafe { content.as_ref() }.map(|c| c.retain()));
+    });
+    unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&handler) };
+    let Ok(Some(content)) = rx.recv_timeout(START_WAIT) else {
+        crate::log!("hp: no shareable content to update the capture");
+        return false;
+    };
+    let main = CGMainDisplayID();
+    let displays = unsafe { content.displays() };
+    let Some(display) = displays.iter().find(|d| unsafe { d.displayID() } == main).or_else(|| displays.iter().next()) else { return false };
+    let (filter, found) = content_filter(&content, &display);
+    if !found {
+        crate::log!("hp: windows to leave out of the capture aren't listed yet");
+        return false;
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+    let done = RcBlock::new(move |error: *mut NSError| {
+        let _ = tx.send(unsafe { error.as_ref() }.map(capture_error));
+    });
+    unsafe { stream.updateContentFilter_completionHandler(&filter, Some(&done)) };
+    match rx.recv_timeout(START_WAIT) {
+        Ok(None) => true,
+        Ok(Some(e)) => { crate::log!("hp: couldn't update the capture: {e}"); false }
+        Err(_) => { crate::log!("hp: the capture update didn't answer"); false }
+    }
+}
+
+/// Whether this Mac's screen is locked now.
+pub(crate) fn screen_locked() -> bool {
+    session_state().is_some_and(|(locked, _)| locked)
 }
 
 /// Poll intent as well as the bounded framework deadline; a user stop cancels pending startup.
@@ -1260,6 +1339,8 @@ fn screen_action(id: u32) {
 }
 
 fn post(e: Option<CFRetained<CGEvent>>) {
+    // (Marked as the viewer's: it passes the curtain, which stops this Mac's own input.)
+    CGEvent::set_integer_value_field(e.as_deref(), CGEventField::EventSourceUserData, crate::curtain_mac::VIEWER_EVENT);
     CGEvent::post(CGEventTapLocation::HIDEventTap, e.as_deref());
 }
 
@@ -1443,7 +1524,7 @@ fn write_status(screen: bool, access: bool) {
     let (native, dimensions) = current.as_ref().map(|c| { let c = c.lock().unwrap(); (c.native_pixels, (c.w, c.h)) })
         .unwrap_or_else(|| { let native = native_pixels_requested(); (native, display_dimensions(native)) });
     let quality = if native { "native" } else { "points" };
-    let _ = std::fs::write(crate::store::dir().join("hp-status"), format!("screen={} access={} port={PORT} quality={quality} quality_active={} capture_width={} capture_height={} actions=1\n", screen as u8, access as u8, current.is_some() as u8, dimensions.0, dimensions.1));
+    let _ = std::fs::write(crate::store::dir().join("hp-status"), format!("screen={} access={} port={PORT} quality={quality} quality_active={} capture_width={} capture_height={} actions=1 curtain={} curtain_error={}\n", screen as u8, access as u8, current.is_some() as u8, dimensions.0, dimensions.1, crate::curtain_mac::state().0 as u8, crate::curtain_mac::state().1));
 }
 
 /// Start serving in the background of the running app (when `enabled`).
@@ -1461,6 +1542,7 @@ pub fn start_background() {
             return;
         }
         write_status(screen, access);
+        crate::curtain_mac::start();
         // Rewritten every 2 s while it serves: an Itda setting this up over SSH waits for a
         // fresh one (also when sharing was already running), and sees permissions granted.
         std::thread::spawn(|| loop {

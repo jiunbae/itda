@@ -1112,7 +1112,7 @@ fn on_ipc(v: Value) {
         "hp_ready" | "hp_off" => {
             let on = s(&v, "cmd") == "hp_ready";
             let port = v["port"].as_u64().unwrap_or(0) as u16;
-            let changed = home(|m| m.hosts.iter_mut().find(|h| h.id == id).map(|h| h.hp = store::Hp { on, port: if on { port } else { h.hp.port }, native: h.hp.native }).is_some());
+            let changed = home(|m| m.hosts.iter_mut().find(|h| h.id == id).map(|h| h.hp = store::Hp { on, port: if on { port } else { h.hp.port }, native: h.hp.native, curtain: h.hp.curtain }).is_some());
             if changed {
                 save_hosts();
                 send_hosts();
@@ -1392,7 +1392,7 @@ fn hp_status(id: &str, req: String) {
         let pass = crate::gateway::typed(&host.id).or_else(|| login.pass.clone()).unwrap_or_default();
         let r = crate::hp_upgrade::status(&crate::hp_upgrade::ssh_cfg_with(&host, &login, pass));
         post(Event::Page(match r {
-            Ok(status) => json!({"type":"hp","id":host.id,"req":req,"status":true,"screen":status.screen,"access":status.access,"running":status.running,"quality":status.quality,"quality_active":status.quality_active,"capture_width":status.capture.0,"capture_height":status.capture.1,"actions":status.actions}),
+            Ok(status) => json!({"type":"hp","id":host.id,"req":req,"status":true,"screen":status.screen,"access":status.access,"running":status.running,"quality":status.quality,"quality_active":status.quality_active,"capture_width":status.capture.0,"capture_height":status.capture.1,"actions":status.actions,"curtain":status.curtain,"curtain_error":status.curtain_error}),
             Err(e) => json!({"type":"hp","id":host.id,"req":req,"status":true,"error":e.to_string()}),
         }));
     });
@@ -1418,12 +1418,23 @@ fn hp_quality(id: &str, native: bool) {
     });
 }
 
+/// Cover (or uncover) that Mac's screens while this device is connected.
+fn hp_curtain(id: &str, on: bool) {
+    let Some((host, login)) = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| (h.clone(), store::resolve(h, &m.accounts)))) else { return };
+    std::thread::spawn(move || {
+        let pass = crate::gateway::typed(&host.id).or_else(|| login.pass.clone()).unwrap_or_default();
+        let r = crate::hp_upgrade::set_curtain(&crate::hp_upgrade::ssh_cfg_with(&host, &login, pass), on);
+        post(Event::Page(json!({"type": "hp", "id": host.id, "curtain": on, "ok": r.is_ok(), "error": r.err().map(|e| e.to_string())})));
+    });
+}
+
 fn on_session(id: &str, v: Value) {
     match s(&v, "ev").as_str() {
         "hp-upgrade" => hp_upgrade(id),
         "hp-status" => hp_status(id, v["req"].as_str().unwrap_or("").to_string()),
         "hp-permissions" => hp_permissions(id,v["permission"].as_str().map(str::to_string)),
         "hp-quality" => hp_quality(id, v["native"] == true),
+        "hp-curtain" => hp_curtain(id, v["on"] == true),
         "hp-off" => on_ipc(json!({"cmd":"hp_off","id":id})),
         "stage" => {
             home(|m| {
@@ -1608,6 +1619,14 @@ fn drain() {
                     if v["ok"] == true && v["quality"].is_boolean() {
                         let (id, native) = (v["id"].as_str().unwrap_or("").to_string(), v["quality"] == true);
                         if home(|m| m.hosts.iter_mut().find(|h| h.id == id).map(|h| h.hp.native = native).is_some()) {
+                            save_hosts();
+                            send_hosts();
+                        }
+                    }
+                    // So is the curtain (asked for again on each connection).
+                    if v["ok"] == true && v["curtain"].is_boolean() {
+                        let (id, on) = (v["id"].as_str().unwrap_or("").to_string(), v["curtain"] == true);
+                        if home(|m| m.hosts.iter_mut().find(|h| h.id == id).map(|h| h.hp.curtain = on).is_some()) {
                             save_hosts();
                             send_hosts();
                         }

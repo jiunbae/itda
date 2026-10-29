@@ -37,16 +37,16 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 objc2-video-toolbox = { version = "0.3.2", default-features = false, features = ["std", "VTCompressionSession", "VTSession", "VTCompressionProperties", "VTVideoEncoderList", "VTErrors", "objc2-core-media", "objc2-core-video", "block2"] }
 objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMSampleBuffer", "objc2-core-video", "CMBlockBuffer", "CMFormatDescription", "CMTime", "CMBase", "CMSync", "objc2-core-video"] }
 objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBase", "CVPixelBuffer", "CVImageBuffer", "CVBuffer", "CVReturn", "CVPixelBufferPool", "objc2-io-surface"] }
-objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFDictionary", "CFNumber", "CFString", "CFBase", "CFArray"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFDictionary", "CFNumber", "CFString", "CFBase", "CFArray", "CFMachPort", "CFRunLoop"] }
 objc2-screen-capture-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "dispatch2", "objc2-core-media", "objc2-core-graphics", "SCStream", "SCShareableContent", "SCError"] }
-objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation", "CGDirectDisplay", "CGError", "CGWindow", "CGSession"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation", "CGDirectDisplay", "CGError", "CGWindow", "CGWindowLevel", "CGSession"] }
 dispatch2 = { version = "0.3", default-features = false, features = ["std", "objc2"] }
 tao = "0.34"
 muda = "0.17"
 objc2 = "0.6"
 block2 = "0.6"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSObject", "NSOperation", "NSProcessInfo", "NSString", "NSURL", "NSValue"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSApplication", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSEvent", "NSFilePromiseProvider", "NSGraphicsContext", "NSImage", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSRunningApplication", "NSView", "NSWindow", "NSWorkspace", "libc"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSApplication", "NSColor", "NSControl", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSEvent", "NSFilePromiseProvider", "NSGraphicsContext", "NSImage", "NSPasteboard", "NSPasteboardItem", "NSFont", "NSResponder", "NSRunningApplication", "NSScreen", "NSText", "NSTextField", "NSView", "NSWindow", "NSWorkspace", "libc"] }
 
 # Desktop Duplication (Share this PC); the same version ironrdp's sspi already builds.
 [target.'cfg(windows)'.dependencies.windows]
