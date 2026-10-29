@@ -4,14 +4,16 @@
 //! the curtain's windows are left out of the capture.
 //!
 //! The viewer's Itda asks over SSH, with the file `hp-curtain` (as with `hp-quality`); it is
-//! removed when no viewer is left. Safety net: a guard process locks the screen if this app
-//! ends while the curtain is up (its windows and the input block end with the app).
+//! removed when no viewer is left. Safety nets: a guard process locks the screen if this app
+//! ends while the curtain is up (its windows and the input block end with the app), and
+//! ⌃⌘Q here (the system's Lock Screen) takes the curtain down and locks, so a viewer that
+//! vanished without its connection closing can't keep anyone out of this Mac.
 
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSBackingStoreType, NSColor, NSFont, NSScreen, NSTextAlignment, NSTextField, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask};
 use objc2_core_foundation::{kCFRunLoopCommonModes, CFMachPort, CFRetained, CFRunLoop};
-use objc2_core_graphics::{CGEvent, CGEventField, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType, CGShieldingWindowLevel};
+use objc2_core_graphics::{CGEvent, CGEventField, CGEventFlags, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use std::cell::RefCell;
 use std::io::{Read, Write};
@@ -19,7 +21,7 @@ use std::process::{Child, Command, Stdio};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Marks the events Itda posts for a viewer (kCGEventSourceUserData), which pass the curtain.
 pub(crate) const VIEWER_EVENT: i64 = 0x4974_6461; // "Itda"
@@ -27,8 +29,19 @@ pub(crate) const VIEWER_EVENT: i64 = 0x4974_6461; // "Itda"
 /// The guard's argument, and what it is told when the curtain comes down on purpose.
 const GUARD_ARG: &str = "--curtain-guard";
 const GUARD_OK: &[u8] = b"ok";
+/// A viewer reconnecting (another quality, a network blip) within this keeps the curtain up
+/// without locking.
+const GRACE: Duration = Duration::from_secs(8);
+/// Above the menu bar, the Dock and other apps' windows; below the lock screen.
+const LEVEL: isize = 1000; // NSScreenSaverWindowLevel
+/// ⌃⌘Q's key (Q).
+const KEY_Q: i64 = 12;
 
 static UP: AtomicBool = AtomicBool::new(false);
+/// ⌃⌘Q was pressed on this Mac.
+static ESCAPE: AtomicBool = AtomicBool::new(false);
+/// Why the last request couldn't be met ("capture", "input"), for hp-status.
+static FAILED: Mutex<&str> = Mutex::new("");
 static GUARD: Mutex<Option<Child>> = Mutex::new(None);
 /// The input block's run loop (its thread runs until that stops).
 static TAP: Mutex<Option<SendLoop>> = Mutex::new(None);
@@ -45,67 +58,158 @@ thread_local! {
     static WINDOWS: RefCell<Vec<Retained<NSWindow>>> = const { RefCell::new(Vec::new()) };
 }
 
+/// A lock that a panic elsewhere doesn't make unusable: this code must always come down.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn flag() -> std::path::PathBuf {
     crate::store::dir().join("hp-curtain")
 }
 
-/// Whether the curtain is up now (reported in hp-status).
-pub fn active() -> bool {
-    UP.load(Ordering::Relaxed)
+/// Whether the curtain is up now, and why the last request failed (reported in hp-status).
+pub fn state() -> (bool, &'static str) {
+    (UP.load(Ordering::Relaxed), *lock(&FAILED))
 }
 
 /// Follow the request while this app serves high-performance viewers.
 pub fn start() {
-    std::thread::spawn(|| loop {
-        let viewers = crate::server::viewers().len();
-        let asked = flag().exists();
-        if asked && viewers == 0 {
-            // (A request outlives no session: the next viewer asks for itself.)
-            let _ = std::fs::remove_file(flag());
+    std::thread::spawn(|| {
+        let mut empty_since: Option<Instant> = None;
+        let mut ticks = 0u32;
+        loop {
+            ticks += 1;
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tick(&mut empty_since, ticks)));
+            if r.is_err() {
+                let _ = std::fs::remove_file(flag());
+                if UP.load(Ordering::Relaxed) {
+                    crate::log!("hp curtain: failed, taking it down");
+                    let _ = std::panic::catch_unwind(|| down(true));
+                }
+                UP.store(false, Ordering::Relaxed);
+            }
+            std::thread::sleep(Duration::from_millis(400));
         }
-        let want = asked && viewers > 0;
-        if want != active() {
-            if want { up() } else { down(viewers == 0) }
-        }
-        std::thread::sleep(Duration::from_millis(400));
     });
 }
 
-fn up() {
+fn tick(empty_since: &mut Option<Instant>, ticks: u32) {
+    let viewers = crate::server::viewers().len();
+    if viewers > 0 {
+        *empty_since = None;
+    } else {
+        empty_since.get_or_insert_with(Instant::now);
+    }
+    let gone = empty_since.is_some_and(|t| t.elapsed() >= GRACE);
+    if ESCAPE.swap(false, Ordering::Relaxed) {
+        crate::log!("hp curtain: ⌃⌘Q on this Mac");
+        let _ = std::fs::remove_file(flag());
+        if UP.load(Ordering::Relaxed) {
+            down(true);
+        }
+        return;
+    }
+    let asked = flag().exists();
+    if asked && gone {
+        // (A request outlives no session: the next viewer asks for itself.)
+        let _ = std::fs::remove_file(flag());
+    }
+    let up = UP.load(Ordering::Relaxed);
+    let want = asked && !gone;
+    if want && !up {
+        if viewers > 0 {
+            if let Err(why) = up_now() {
+                crate::log!("hp curtain: couldn't cover this Mac ({why}), taking it down");
+                *lock(&FAILED) = why;
+                let _ = std::fs::remove_file(flag());
+                down(false);
+            }
+        }
+    } else if !want && up {
+        down(gone);
+    } else if up && ticks.is_multiple_of(5) && screens_changed() {
+        crate::log!("hp curtain: the displays changed, covering them again");
+        if let Err(why) = cover() {
+            crate::log!("hp curtain: couldn't cover the displays again ({why}), locking");
+            *lock(&FAILED) = why;
+            let _ = std::fs::remove_file(flag());
+            down(true);
+        }
+    }
+}
+
+fn up_now() -> Result<(), &'static str> {
     crate::log!("hp curtain: up");
     UP.store(true, Ordering::Relaxed);
-    *GUARD.lock().unwrap() = std::env::current_exe().and_then(|exe| Command::new(exe).arg(GUARD_ARG).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()).map_err(|e| crate::log!("hp curtain: no guard: {e}")).ok();
-    block_input();
-    let (tx, rx) = std::sync::mpsc::channel();
-    dispatch2::DispatchQueue::main().exec_async(move || {
-        let _ = tx.send(show_windows());
-    });
-    let ids = rx.recv_timeout(Duration::from_secs(3)).unwrap_or_default();
-    // Out of the capture first, then visible: the viewers never see the curtain.
-    crate::host_mac::exclude_windows(&ids);
-    dispatch2::DispatchQueue::main().exec_async(|| WINDOWS.with(|w| w.borrow().iter().for_each(|w| w.setAlphaValue(1.0))));
+    *lock(&FAILED) = "";
+    *lock(&GUARD) = std::env::current_exe().and_then(|exe| Command::new(exe).arg(GUARD_ARG).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()).map_err(|e| crate::log!("hp curtain: no guard: {e}")).ok();
+    if !block_input() {
+        return Err("input");
+    }
+    cover()
 }
 
-/// Take the curtain down; `lock` (the last viewer left): lock the screen before it shows.
-fn down(lock: bool) {
-    crate::log!("hp curtain: down{}", if lock { ", locking" } else { "" });
-    if lock {
-        lock_screen();
-        std::thread::sleep(Duration::from_millis(800));
+/// (Re)make the windows over every display: out of the capture first, then visible, so the
+/// viewers never see them. Shown only once left out of the capture.
+fn cover() -> Result<(), &'static str> {
+    let ids = on_main(Duration::from_secs(3), || {
+        close_windows();
+        show_windows()
+    })
+    .unwrap_or_default();
+    if ids.is_empty() || !crate::host_mac::exclude_windows(&ids) {
+        return Err("capture");
     }
-    dispatch2::DispatchQueue::main().exec_async(|| WINDOWS.with(|w| w.borrow_mut().drain(..).for_each(|w| w.close())));
+    dispatch2::DispatchQueue::main().exec_async(|| WINDOWS.with(|w| w.borrow().iter().for_each(|w| w.setAlphaValue(1.0))));
+    Ok(())
+}
+
+/// Take the curtain down; `lock`: lock the screen first (the last viewer left).
+fn down(lock_first: bool) {
+    crate::log!("hp curtain: down{}", if lock_first { ", locking" } else { "" });
+    // Down from here (hp-status says so, and a viewer that comes back asks again).
+    UP.store(false, Ordering::Relaxed);
+    if lock_first {
+        lock_screen();
+    }
+    dispatch2::DispatchQueue::main().exec_async(close_windows);
     unblock_input();
-    if let Some(mut guard) = GUARD.lock().unwrap().take() {
+    if let Some(mut guard) = lock(&GUARD).take() {
         if let Some(mut input) = guard.stdin.take() {
             let _ = input.write_all(GUARD_OK);
         }
         let _ = guard.wait();
     }
     crate::host_mac::exclude_windows(&[]);
-    UP.store(false, Ordering::Relaxed);
 }
 
-/// A black window over each screen, transparent to the mouse (a viewer's clicks reach the
+/// Run `f` on the main thread and wait (up to `wait`) for its result.
+fn on_main<T: Send + 'static>(wait: Duration, f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    dispatch2::DispatchQueue::main().exec_async(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(wait).ok()
+}
+
+fn close_windows() {
+    WINDOWS.with(|w| w.borrow_mut().drain(..).for_each(|w| w.close()));
+}
+
+/// Whether the displays no longer match the windows (one added, moved or resized).
+fn screens_changed() -> bool {
+    on_main(Duration::from_secs(2), || {
+        let Some(mtm) = MainThreadMarker::new() else { return false };
+        let screens: Vec<NSRect> = NSScreen::screens(mtm).iter().map(|s| s.frame()).collect();
+        WINDOWS.with(|w| {
+            let w = w.borrow();
+            w.len() != screens.len() || w.iter().zip(&screens).any(|(w, s)| w.frame() != *s)
+        })
+    })
+    .unwrap_or(false)
+}
+
+/// A black window over each display, transparent to the mouse (a viewer's clicks reach the
 /// apps beneath), shown with alpha 0 until the capture leaves it out. Returns their numbers.
 fn show_windows() -> Vec<u32> {
     let Some(mtm) = MainThreadMarker::new() else { return Vec::new() };
@@ -116,21 +220,23 @@ fn show_windows() -> Vec<u32> {
             let frame = screen.frame();
             let w = unsafe { NSWindow::initWithContentRect_styleMask_backing_defer(NSWindow::alloc(mtm), frame, NSWindowStyleMask::Borderless, NSBackingStoreType::Buffered, false) };
             unsafe { w.setReleasedWhenClosed(false) };
-            w.setLevel(CGShieldingWindowLevel() as isize);
+            w.setLevel(LEVEL);
             w.setBackgroundColor(Some(&NSColor::blackColor()));
             w.setOpaque(true);
             w.setIgnoresMouseEvents(true);
             w.setHasShadow(false);
             w.setCollectionBehavior(NSWindowCollectionBehavior::CanJoinAllSpaces | NSWindowCollectionBehavior::Stationary | NSWindowCollectionBehavior::FullScreenAuxiliary | NSWindowCollectionBehavior::IgnoresCycle);
             w.setAlphaValue(0.0);
-            let label = NSTextField::labelWithString(&NSString::from_str("원격으로 사용 중"), mtm);
-            label.setFont(Some(&NSFont::systemFontOfSize(28.0)));
-            label.setTextColor(Some(&NSColor::colorWithWhite_alpha(0.6, 1.0)));
-            label.setAlignment(NSTextAlignment::Center);
-            let size = NSSize::new(frame.size.width, 40.0);
-            label.setFrame(NSRect::new(NSPoint::new(0.0, (frame.size.height - size.height) / 2.0), size));
             if let Some(view) = w.contentView() {
-                view.addSubview(&label);
+                for (text, size, white, y) in [("원격으로 사용 중", 28.0, 0.6, 10.0), ("이 Mac에서 ⌃⌘Q를 누르면 가림을 끝내고 화면을 잠급니다", 13.0, 0.4, -30.0)] {
+                    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+                    label.setFont(Some(&NSFont::systemFontOfSize(size)));
+                    label.setTextColor(Some(&NSColor::colorWithWhite_alpha(white, 1.0)));
+                    label.setAlignment(NSTextAlignment::Center);
+                    let box_size = NSSize::new(frame.size.width, size + 12.0);
+                    label.setFrame(NSRect::new(NSPoint::new(0.0, frame.size.height / 2.0 + y), box_size));
+                    view.addSubview(&label);
+                }
             }
             w.orderFrontRegardless();
             ids.push(w.windowNumber() as u32);
@@ -142,81 +248,105 @@ fn show_windows() -> Vec<u32> {
 
 // ---------------------------------------------------------------- input
 
-/// Drop this Mac's own keyboard and mouse (everything not posted for a viewer).
-fn block_input() {
+/// Drop this Mac's own keyboard, mouse, trackpad and tablet (everything not posted for a
+/// viewer). False if the tap couldn't be made (no Accessibility permission).
+fn block_input() -> bool {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let mask = [
+        let typed = [
             CGEventType::KeyDown, CGEventType::KeyUp, CGEventType::FlagsChanged,
             CGEventType::LeftMouseDown, CGEventType::LeftMouseUp, CGEventType::RightMouseDown, CGEventType::RightMouseUp,
             CGEventType::OtherMouseDown, CGEventType::OtherMouseUp, CGEventType::LeftMouseDragged, CGEventType::RightMouseDragged,
             CGEventType::OtherMouseDragged, CGEventType::MouseMoved, CGEventType::ScrollWheel,
-        ]
-        .iter()
-        .fold(1u64 << 14, |m, t| m | 1 << t.0); // (14: system-defined, such as media keys)
+            CGEventType::TabletPointer, CGEventType::TabletProximity,
+        ];
+        // Also system-defined (media keys) 14, and the trackpad's gestures: rotate 18, begin
+        // and end 19–20, gesture 29, magnify 30, swipe 31, smart magnify 32, pressure 34.
+        let mask = typed.iter().map(|t| t.0).chain([14, 18, 19, 20, 29, 30, 31, 32, 34]).fold(0u64, |m, t| m | 1 << t);
         let Some(port) = (unsafe { CGEvent::tap_create(CGEventTapLocation::SessionEventTap, CGEventTapPlacement::HeadInsertEventTap, CGEventTapOptions::Default, mask, Some(on_event), std::ptr::null_mut()) }) else {
-            crate::log!("hp curtain: no event tap (accessibility?), this Mac's keyboard and mouse still work");
-            let _ = tx.send(());
+            crate::log!("hp curtain: no event tap (Accessibility permission?)");
+            let _ = tx.send(false);
             return;
         };
-        let Some(source) = CFMachPort::new_run_loop_source(None, Some(&port), 0) else {
-            let _ = tx.send(());
-            return;
-        };
-        let Some(run_loop) = CFRunLoop::current() else {
-            let _ = tx.send(());
+        let (Some(source), Some(run_loop)) = (CFMachPort::new_run_loop_source(None, Some(&port), 0), CFRunLoop::current()) else {
+            CFMachPort::invalidate(&port);
+            let _ = tx.send(false);
             return;
         };
         run_loop.add_source(Some(&source), unsafe { kCFRunLoopCommonModes });
-        *TAP_PORT.lock().unwrap() = Some(SendPort(port.clone()));
-        *TAP.lock().unwrap() = Some(SendLoop(run_loop));
-        let _ = tx.send(());
+        *lock(&TAP_PORT) = Some(SendPort(port.clone()));
+        *lock(&TAP) = Some(SendLoop(run_loop));
+        let _ = tx.send(true);
         CFRunLoop::run();
         CFMachPort::invalidate(&port);
     });
-    let _ = rx.recv_timeout(Duration::from_secs(2));
+    rx.recv_timeout(Duration::from_secs(2)).unwrap_or(false)
 }
 
 fn unblock_input() {
-    TAP_PORT.lock().unwrap().take();
-    if let Some(run_loop) = TAP.lock().unwrap().take() {
+    lock(&TAP_PORT).take();
+    if let Some(run_loop) = lock(&TAP).take() {
         run_loop.0.stop();
     }
 }
 
 unsafe extern "C-unwind" fn on_event(_: CGEventTapProxy, kind: CGEventType, event: NonNull<CGEvent>, _: *mut std::ffi::c_void) -> *mut CGEvent {
     if kind == CGEventType::TapDisabledByTimeout || kind == CGEventType::TapDisabledByUserInput {
-        if let Some(port) = TAP_PORT.lock().unwrap().as_ref() {
+        if let Some(port) = lock(&TAP_PORT).as_ref() {
             CGEvent::tap_enable(&port.0, true);
         }
         return event.as_ptr();
     }
-    if CGEvent::integer_value_field(Some(unsafe { event.as_ref() }), CGEventField::EventSourceUserData) == VIEWER_EVENT {
-        event.as_ptr()
-    } else {
-        std::ptr::null_mut()
+    let e = Some(unsafe { event.as_ref() });
+    if CGEvent::integer_value_field(e, CGEventField::EventSourceUserData) == VIEWER_EVENT {
+        return event.as_ptr();
     }
+    let escape = CGEventFlags::MaskCommand | CGEventFlags::MaskControl;
+    if kind == CGEventType::KeyDown && CGEvent::integer_value_field(e, CGEventField::KeyboardEventKeycode) == KEY_Q && CGEvent::flags(e).contains(escape) {
+        ESCAPE.store(true, Ordering::Relaxed);
+    }
+    std::ptr::null_mut()
 }
 
 // ---------------------------------------------------------------- lock
 
-/// Lock this Mac's screen now (as the menu's "Lock Screen").
+/// Lock this Mac's screen now (as the menu's "Lock Screen"), waiting until it is.
 pub fn lock_screen() {
     extern "C" {
         fn dlopen(path: *const std::ffi::c_char, mode: i32) -> *mut std::ffi::c_void;
         fn dlsym(handle: *mut std::ffi::c_void, name: *const std::ffi::c_char) -> *mut std::ffi::c_void;
     }
+    let locked = |wait: Duration| {
+        let until = Instant::now() + wait;
+        while Instant::now() < until {
+            if crate::host_mac::screen_locked() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    };
     unsafe {
         let login = dlopen(c"/System/Library/PrivateFrameworks/login.framework/Versions/Current/login".as_ptr(), 2);
-        let lock = if login.is_null() { std::ptr::null_mut() } else { dlsym(login, c"SACLockScreenImmediate".as_ptr()) };
-        if !lock.is_null() {
-            let lock: unsafe extern "C" fn() -> i32 = std::mem::transmute(lock);
-            if lock() == 0 {
+        let sac = if login.is_null() { std::ptr::null_mut() } else { dlsym(login, c"SACLockScreenImmediate".as_ptr()) };
+        if !sac.is_null() {
+            let sac: unsafe extern "C" fn() -> i32 = std::mem::transmute(sac);
+            if sac() == 0 && locked(Duration::from_secs(3)) {
                 return;
             }
         }
     }
-    crate::log!("hp curtain: no SACLockScreenImmediate, sleeping the display");
+    crate::log!("hp curtain: locking with ⌃⌘Q");
+    for down in [true, false] {
+        let e = CGEvent::new_keyboard_event(None, KEY_Q as u16, down);
+        CGEvent::set_flags(e.as_deref(), CGEventFlags::MaskCommand | CGEventFlags::MaskControl);
+        CGEvent::set_integer_value_field(e.as_deref(), CGEventField::EventSourceUserData, VIEWER_EVENT);
+        CGEvent::post(CGEventTapLocation::HIDEventTap, e.as_deref());
+    }
+    if locked(Duration::from_secs(3)) {
+        return;
+    }
+    crate::log!("hp curtain: couldn't lock the screen, sleeping the display");
     let _ = Command::new("/usr/bin/pmset").arg("displaysleepnow").status();
 }
 
@@ -225,6 +355,15 @@ pub fn lock_screen() {
 pub fn guard_mode() -> bool {
     if std::env::args().nth(1).as_deref() != Some(GUARD_ARG) {
         return false;
+    }
+    extern "C" {
+        fn signal(sig: i32, handler: usize) -> usize;
+    }
+    // Ended only by the app's end (an update's pkill of the app's processes included): then
+    // it still locks.
+    unsafe {
+        signal(1, 1); // SIGHUP: ignored
+        signal(15, 1); // SIGTERM: ignored
     }
     let mut said = Vec::new();
     let _ = std::io::stdin().take(16).read_to_end(&mut said);

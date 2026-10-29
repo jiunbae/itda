@@ -1392,7 +1392,7 @@ fn hp_status(id: &str, req: String) {
         let pass = crate::gateway::typed(&host.id).or_else(|| login.pass.clone()).unwrap_or_default();
         let r = crate::hp_upgrade::status(&crate::hp_upgrade::ssh_cfg_with(&host, &login, pass));
         post(Event::Page(match r {
-            Ok(status) => json!({"type":"hp","id":host.id,"req":req,"status":true,"screen":status.screen,"access":status.access,"running":status.running,"quality":status.quality,"quality_active":status.quality_active,"capture_width":status.capture.0,"capture_height":status.capture.1,"actions":status.actions,"curtain":status.curtain}),
+            Ok(status) => json!({"type":"hp","id":host.id,"req":req,"status":true,"screen":status.screen,"access":status.access,"running":status.running,"quality":status.quality,"quality_active":status.quality_active,"capture_width":status.capture.0,"capture_height":status.capture.1,"actions":status.actions,"curtain":status.curtain,"curtain_error":status.curtain_error}),
             Err(e) => json!({"type":"hp","id":host.id,"req":req,"status":true,"error":e.to_string()}),
         }));
     });

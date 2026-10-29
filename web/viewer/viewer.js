@@ -885,9 +885,10 @@ window.itdaHp = (m) => {
     S.hpQualityFailed = !real && (S.hpStatusTries || 0) >= 4;
     if (real || S.hpQualityFailed) S.hpQualityPending = false;
     // The curtain there: true/false, or null from an Itda without it.
-    if (m.curtain !== undefined) S.hpCurtain = m.curtain;
-    // This device covers that Mac on every connection once chosen.
-    if (m.curtain === false && S.host.hp?.curtain && !S.hpCurtainAsked) {
+    if (m.curtain !== undefined) { S.hpCurtain = m.curtain; S.hpCurtainError = m.curtain_error || ''; }
+    // This device covers that Mac on every connection once chosen (asked again even when it
+    // says covered: that may be the previous connection's curtain on its way down).
+    if (typeof m.curtain === 'boolean' && S.host.hp?.curtain && !S.hpCurtainAsked && !S.hpCurtainBusy) {
       S.hpCurtainAsked = true; S.hpCurtainBusy = true;
       post({ ev: 'hp-curtain', on: true });
     }
@@ -902,8 +903,11 @@ window.itdaHp = (m) => {
     S.hpCurtainBusy = false;
     if (!m.ok) { renderTools(); return toast(`화면 가림을 바꾸지 못했습니다 — ${m.error || '원격 Mac에 연결할 수 없습니다'}`); }
     S.host.hp = { ...(S.host.hp || {}), curtain: m.curtain };
-    S.hpCurtain = m.curtain;
-    toast(m.curtain ? '그 Mac의 화면을 가렸습니다 — 연결을 끝내면 그 Mac의 화면이 잠깁니다' : '화면 가림을 껐습니다 — 그 Mac의 화면이 다시 보입니다');
+    S.hpCurtainError = '';
+    toast(m.curtain ? '그 Mac의 화면을 가립니다 — 연결을 끝내면 그 Mac의 화면이 잠깁니다' : '화면 가림을 껐습니다 — 그 Mac의 화면이 다시 보입니다');
+    // What that Mac actually did (the request only reached it): checked shortly after.
+    const req = S.hpStatusReq;
+    if (req) setTimeout(() => { if (S.hpStatusReq === req && S.rfb) post({ ev: 'hp-status', req }); }, 3000);
     return renderTools();
   }
   if (typeof m.quality === 'boolean') {
@@ -932,6 +936,7 @@ function hpQualityLabel() {
 function hpCurtainLabel() {
   if (S.hpCurtainBusy) return '화면 가림 바꾸는 중…';
   if (S.hpCurtain === null) return '화면 가림 — 원격 Mac의 Itda를 업데이트하면 쓸 수 있습니다';
+  if (S.host.hp?.curtain && S.hpCurtain === false && S.hpCurtainError) return `화면 가림을 켜지 못함 (${S.hpCurtainError === 'input' ? '그 Mac의 손쉬운 사용 권한 필요' : '화면 캡처에서 가림 창을 뺄 수 없음'}) — 누르면 설정을 끕니다`;
   if (S.host.hp?.curtain) return '화면 가림 켜짐 — 그 Mac의 화면은 가려지고 키보드·마우스는 막힙니다. 연결을 끝내면 화면이 잠깁니다. 누르면 끕니다';
   return '화면 가림 — 그 Mac의 화면을 가리고 키보드·마우스를 막습니다. 연결을 끝내면 화면이 잠깁니다';
 }

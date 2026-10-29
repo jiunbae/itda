@@ -98,6 +98,7 @@ fn askpass_mode() {
 #[cfg(not(windows))]
 fn main() {
     if files::preview_decode_mode() { return; }
+    #[cfg(target_os = "macos")]
     if curtain_mac::guard_mode() { return; }
     askpass_mode();
     if remote_setup::import_mode() { return; }

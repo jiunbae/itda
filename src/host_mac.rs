@@ -1037,7 +1037,7 @@ fn start_stream_once(w: usize, h: usize, latest: Latest, health: Health) -> Resu
     let displays = unsafe { content.displays() };
     let display = displays.iter().find(|d| unsafe { d.displayID() } == main).or_else(|| displays.iter().next()).ok_or("no display")?;
     unsafe {
-        let filter = content_filter(&content, &display);
+        let (filter, found) = content_filter(&content, &display);
         let config = stream_configuration(w, h);
         let output = Output::new(latest, health);
         let stream = SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), &filter, &config, Some(ProtocolObject::from_ref(&*output)));
@@ -1065,6 +1065,17 @@ fn start_stream_once(w: usize, h: usize, latest: Latest, health: Health) -> Resu
                 return Err(e);
             }
         }
+        if !found {
+            // (A curtain window made while this stream started: leave it out now.)
+            let stream = SendStream(stream.clone());
+            std::thread::spawn(move || {
+                let stream = stream;
+                for _ in 0..5 {
+                    if update_filter(&stream.0) { break }
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            });
+        }
         Ok((stream, output))
     }
 }
@@ -1072,38 +1083,62 @@ fn start_stream_once(w: usize, h: usize, latest: Latest, health: Health) -> Resu
 /// Windows the capture leaves out (the curtain's), by window number.
 static EXCLUDED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
-fn content_filter(content: &SCShareableContent, display: &SCDisplay) -> Retained<SCContentFilter> {
+/// The display's filter, and whether every window to leave out was found.
+fn content_filter(content: &SCShareableContent, display: &SCDisplay) -> (Retained<SCContentFilter>, bool) {
     let excluded = EXCLUDED.lock().unwrap().clone();
     let windows: Vec<Retained<SCWindow>> = unsafe { content.windows() }.iter().filter(|w| excluded.contains(&unsafe { w.windowID() })).collect();
-    unsafe { SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), display, &NSArray::from_retained_slice(&windows)) }
+    let filter = unsafe { SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), display, &NSArray::from_retained_slice(&windows)) };
+    (filter, windows.len() == excluded.len())
 }
 
-/// Leave these windows out of the capture, from the next frame of the running stream on
-/// (waits up to a few seconds for that).
-pub(crate) fn exclude_windows(ids: &[u32]) {
+/// Leave these windows out of the capture, from the running stream's next frame on (and of
+/// any stream started later). False if the running stream couldn't be updated.
+pub(crate) fn exclude_windows(ids: &[u32]) -> bool {
     *EXCLUDED.lock().unwrap() = ids.to_vec();
-    let Some(capture) = SHARED_CAPTURE.lock().unwrap().upgrade() else { return };
-    let Some(stream) = capture.lock().unwrap().stream.clone() else { return };
+    let Some(capture) = SHARED_CAPTURE.lock().unwrap().upgrade() else { return true };
+    let Some(stream) = capture.lock().unwrap().stream.clone() else { return true };
+    drop(capture);
+    update_filter(&stream)
+}
+
+struct SendStream(Retained<SCStream>);
+// (ScreenCaptureKit's stream may be updated from any thread.)
+unsafe impl Send for SendStream {}
+
+/// Give `stream` the filter leaving out the windows in EXCLUDED.
+fn update_filter(stream: &SCStream) -> bool {
     let (tx, rx) = std::sync::mpsc::channel::<Option<Retained<SCShareableContent>>>();
     let handler = RcBlock::new(move |content: *mut SCShareableContent, _: *mut NSError| {
         let _ = tx.send(unsafe { content.as_ref() }.map(|c| c.retain()));
     });
     unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&handler) };
-    let Ok(Some(content)) = rx.recv_timeout(START_WAIT) else { return crate::log!("hp: no shareable content to update the capture") };
+    let Ok(Some(content)) = rx.recv_timeout(START_WAIT) else {
+        crate::log!("hp: no shareable content to update the capture");
+        return false;
+    };
     let main = CGMainDisplayID();
     let displays = unsafe { content.displays() };
-    let Some(display) = displays.iter().find(|d| unsafe { d.displayID() } == main).or_else(|| displays.iter().next()) else { return };
-    let filter = content_filter(&content, &display);
+    let Some(display) = displays.iter().find(|d| unsafe { d.displayID() } == main).or_else(|| displays.iter().next()) else { return false };
+    let (filter, found) = content_filter(&content, &display);
+    if !found {
+        crate::log!("hp: windows to leave out of the capture aren't listed yet");
+        return false;
+    }
     let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
     let done = RcBlock::new(move |error: *mut NSError| {
         let _ = tx.send(unsafe { error.as_ref() }.map(capture_error));
     });
     unsafe { stream.updateContentFilter_completionHandler(&filter, Some(&done)) };
     match rx.recv_timeout(START_WAIT) {
-        Ok(None) => {}
-        Ok(Some(e)) => crate::log!("hp: couldn't update the capture: {e}"),
-        Err(_) => crate::log!("hp: the capture update didn't answer"),
+        Ok(None) => true,
+        Ok(Some(e)) => { crate::log!("hp: couldn't update the capture: {e}"); false }
+        Err(_) => { crate::log!("hp: the capture update didn't answer"); false }
     }
+}
+
+/// Whether this Mac's screen is locked now.
+pub(crate) fn screen_locked() -> bool {
+    session_state().is_some_and(|(locked, _)| locked)
 }
 
 /// Poll intent as well as the bounded framework deadline; a user stop cancels pending startup.
@@ -1482,7 +1517,7 @@ fn write_status(screen: bool, access: bool) {
     let (native, dimensions) = current.as_ref().map(|c| { let c = c.lock().unwrap(); (c.native_pixels, (c.w, c.h)) })
         .unwrap_or_else(|| { let native = native_pixels_requested(); (native, display_dimensions(native)) });
     let quality = if native { "native" } else { "points" };
-    let _ = std::fs::write(crate::store::dir().join("hp-status"), format!("screen={} access={} port={PORT} quality={quality} quality_active={} capture_width={} capture_height={} actions=1 curtain={}\n", screen as u8, access as u8, current.is_some() as u8, dimensions.0, dimensions.1, crate::curtain_mac::active() as u8));
+    let _ = std::fs::write(crate::store::dir().join("hp-status"), format!("screen={} access={} port={PORT} quality={quality} quality_active={} capture_width={} capture_height={} actions=1 curtain={} curtain_error={}\n", screen as u8, access as u8, current.is_some() as u8, dimensions.0, dimensions.1, crate::curtain_mac::state().0 as u8, crate::curtain_mac::state().1));
 }
 
 /// Start serving in the background of the running app (when `enabled`).
