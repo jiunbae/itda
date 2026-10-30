@@ -4,7 +4,7 @@
 'use strict';
 import './novnc.min.js';
 import { MonitorController, startMirror } from './monitors.js';
-import { WheelInput, macHost, hpKeysym, macActions, macMenu, sendChord, sendMacAction } from './interaction.js';
+import { WheelInput, macHost, hpKeys, macActions, macMenu, sendChord, sendMacAction } from './interaction.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -632,9 +632,10 @@ function open(h) {
   rfb.showDotCursor = true;
   rfb.qualityLevel = 7;
   // Every key (this window's, a monitor window's) leaves through sendKey: the Mac modifiers go
-  // as Itda's server reads them once the connection is known to be high-performance.
+  // as Itda's server reads them, unless this connection is known to have fallen back to Screen
+  // Sharing (before the mode is known too: the first ⌘C mustn't go as ⌥C).
   const sendKey = rfb.sendKey?.bind(rfb);
-  if (sendKey) rfb.sendKey = (sym, code, down) => sendKey(S.rfb === rfb && S.hpActual && macHost(S.host) ? hpKeysym(sym, code) : sym, code, down);
+  if (sendKey) rfb.sendKey = hpKeys(sendKey, () => S.rfb === rfb && macHost(S.host) && (S.hpActual || (!!S.host.hp?.on && S.hpMode !== 'fallback')));
   let name = '';
   rfb.addEventListener('desktopname', (e) => { name = (e.detail && e.detail.name) || ''; });
   rfb.addEventListener('connect', () => {
@@ -644,6 +645,8 @@ function open(h) {
     dimToolsSoon();
     // High-performance mode is the saved choice; say so when this connection didn't get it.
     if (APP && S.host?.hp?.on) refreshHpMode(h, rfb, attempt);
+    // A browser has no mode button, but its keys still depend on what this connection got.
+    else if (S.host?.hp?.on && macHost(S.host)) fetch(`/api/mode/${encodeURIComponent(h.id)}?attempt=${attempt}`).then((r) => r.json()).then((m) => { if (S.rfb === rfb && typeof m?.hp === 'boolean') S.hpMode = m.hp ? 'active' : 'fallback'; }).catch(() => {});
     if (!APP) return toast(`${h.label}에 연결했습니다`);
     post(S.tries ? { ev: 'reconnected' } : { ev: 'connected', name, w: rfb._fbWidth || 0, h: rfb._fbHeight || 0 });
     S.ever = true;

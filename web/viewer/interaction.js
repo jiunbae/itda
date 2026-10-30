@@ -30,6 +30,18 @@ export const macHost = h => !!h && !h.this && h.kind!=='rdp' && ['mac','macos'].
 // ⌘V arrived as ⌥V ('√'). Matched on the physical key, so a release undoes its own press.
 const HP_MODIFIERS = {MetaLeft:[0xffe9,0xffeb], MetaRight:[0xffeb,0xffec], AltLeft:[0xff7e,0xffe9], AltRight:[0xfe03,0xffea]};
 export const hpKeysym = (sym, code) => HP_MODIFIERS[code]?.[0] === sym ? HP_MODIFIERS[code][1] : sym;
+// A connection's sendKey, mapping while `hp()` holds. A modifier is released as it was pressed,
+// even if the mode became known while it was held (else the server keeps Alt down).
+export function hpKeys(send, hp) {
+    const held = new Map();
+    return (sym, code, down) => {
+        if (!(code in HP_MODIFIERS)) return send(sym, code, down);
+        let out;
+        if (down === false && held.has(code)) { out = held.get(code); held.delete(code); }
+        else { out = hp() ? hpKeysym(sym, code) : sym; if (down) held.set(code, out); }
+        return send(out, code, down);
+    };
+}
 // [id, label, default shortcut, its keys, macOS symbolic hotkey number]
 export const macActions = [
     ['mission','Mission Control','⌃ ↑',[0xffe3,0xff52],32],

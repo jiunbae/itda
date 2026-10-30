@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 const source=fs.readFileSync(new URL('../web/viewer/interaction.js',import.meta.url));
-const {hpKeysym}=await import('data:text/javascript;base64,'+source.toString('base64'));
+const {hpKeysym,hpKeys}=await import('data:text/javascript;base64,'+source.toString('base64'));
 // What the bundled noVNC sends on a Mac or iPad (Keyboard._handleKeyDown's Apple remap).
 const novnc=fs.readFileSync(new URL('../web/viewer/novnc.min.js',import.meta.url),'utf8');
 assert.match(novnc,/case f\.XK_Super_L:s=f\.XK_Alt_L;break;case f\.XK_Super_R:s=f\.XK_Super_L;break;case f\.XK_Alt_L:s=f\.XK_Mode_switch;break;case f\.XK_Alt_R:s=f\.XK_ISO_Level3_Shift/,
@@ -16,4 +16,10 @@ assert.equal(hpKeysym(ISO_Level3_Shift,'AltRight'),Alt_R,'⌥ right is Option');
 // Windows/Linux browsers already send these as is; plain keys and toolbar chords (no code) too.
 for(const [sym,code] of [[Super_L,'MetaLeft'],[Alt_L,'AltLeft'],[Alt_R,'AltRight'],[v,'KeyV'],[Super_L,null],[Alt_L,null],[Alt_L,undefined]])
     assert.equal(hpKeysym(sym,code),sym,`${sym.toString(16)} ${code}`);
+// A ⌘ pressed before the mode was known is released as pressed (no Alt left down there).
+const sent=[];let hp=false;const send=hpKeys((s,c,d)=>sent.push([s,c,d]),()=>hp);
+send(Alt_L,'MetaLeft',true);hp=true;send(v,'KeyV',true);send(v,'KeyV',false);send(Alt_L,'MetaLeft',false);
+send(Alt_L,'MetaLeft',true);send(Alt_L,'MetaLeft',false);send(Mode_switch,'AltLeft');
+assert.deepEqual(sent,[[Alt_L,'MetaLeft',true],[v,'KeyV',true],[v,'KeyV',false],[Alt_L,'MetaLeft',false],
+    [Super_L,'MetaLeft',true],[Super_L,'MetaLeft',false],[Alt_L,'AltLeft',undefined]]);
 console.log('hp mac modifier keysyms: ok');
