@@ -1224,6 +1224,10 @@ fn keycode(sym: u32) -> Option<(u16, Option<CGEventFlags>)> {
         0xffe4 => m(62, CGEventFlags::MaskControl),
         0xffe9 | 0xffe7 if sym == 0xffe9 => m(58, CGEventFlags::MaskAlternate),
         0xffea => m(61, CGEventFlags::MaskAlternate),
+        // What a Mac's noVNC sends for ⌥ (Mode_switch, ISO_Level3_Shift), from viewers that
+        // don't map it back; it typed 'ｾ' before. (Their ⌘ as Alt stays ambiguous here.)
+        0xff7e => m(58, CGEventFlags::MaskAlternate),
+        0xfe03 => m(61, CGEventFlags::MaskAlternate),
         0xffeb | 0xffe7 => m(55, CGEventFlags::MaskCommand),
         0xffec | 0xffe8 => m(54, CGEventFlags::MaskCommand),
         0xffe5 => k(57), // Caps Lock
@@ -1592,5 +1596,14 @@ mod action_tests {
         assert_eq!(super::hotkey_in(&v, 32, (126, 0x84_0000)), Some((4, 0x4_0000)));
         assert_eq!(super::hotkey_in(&v, 36, (103, 0x80_0000)), None);
         assert_eq!(super::hotkey_in(&v, 33, (125, 0x84_0000)), Some((125, 0x84_0000)));
+    }
+
+    /// ⌘ is Super and ⌥ Alt; a Mac noVNC's own ⌥ keysyms are Option too.
+    #[test]
+    fn mac_modifier_keysyms() {
+        let code = |sym| super::keycode(sym).map(|k| k.0);
+        assert_eq!((code(0xffeb), code(0xffec)), (Some(55), Some(54)));
+        assert_eq!((code(0xffe9), code(0xffea)), (Some(58), Some(61)));
+        assert_eq!((code(0xff7e), code(0xfe03)), (Some(58), Some(61)));
     }
 }
