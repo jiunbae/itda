@@ -238,7 +238,9 @@ mod tests {
             String::from_utf8(c.wait_with_output().unwrap().stdout).unwrap()
         };
         let saved = ssh("pbpaste", None);
-        let cfg = super::SshCfg { host: host.clone(), port: 22, user: String::new(), pass: String::new(), vnc_port: 5900, key: String::new(), key_pass: String::new(), key_alias: String::new() };
+        // ("user@host": the account goes on its own, as the app passes it.)
+        let (user, addr) = host.rsplit_once('@').map(|(u, h)| (u.to_string(), h.to_string())).unwrap_or((String::new(), host.clone()));
+        let cfg = super::SshCfg { host: addr, port: 22, user, pass: String::new(), vnc_port: 5900, key: String::new(), key_pass: String::new(), key_alias: String::new() };
         let (tx, rx) = std::sync::mpsc::channel();
         let bridge = super::start_with(cfg, move |t| { let _ = tx.send(t); });
         std::thread::sleep(std::time::Duration::from_secs(4)); // the watcher's first look
@@ -252,7 +254,8 @@ mod tests {
         // (No echo of our own text comes back.)
         assert!(rx.recv_timeout(std::time::Duration::from_secs(3)).is_err(), "own text echoed back");
         drop(bridge);
-        ssh(&super::paste_command(saved.len()), Some(&saved));
+        // (An empty clipboard is put back as empty: `head -c 0` isn't accepted there.)
+        ssh(&if saved.is_empty() { "pbcopy < /dev/null".to_string() } else { super::paste_command(saved.len()) }, Some(&saved));
         assert_eq!(there, "이 Mac → 원격 🌍 브리지");
     }
 
