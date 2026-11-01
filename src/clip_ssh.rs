@@ -239,7 +239,7 @@ mod tests {
         };
         let saved = ssh("pbpaste", None);
         // ("user@host": the account goes on its own, as the app passes it.)
-        let (user, addr) = host.split_once('@').map(|(u, h)| (u.to_string(), h.to_string())).unwrap_or((String::new(), host.clone()));
+        let (user, addr) = host.rsplit_once('@').map(|(u, h)| (u.to_string(), h.to_string())).unwrap_or((String::new(), host.clone()));
         let cfg = super::SshCfg { host: addr, port: 22, user, pass: String::new(), vnc_port: 5900, key: String::new(), key_pass: String::new(), key_alias: String::new() };
         let (tx, rx) = std::sync::mpsc::channel();
         let bridge = super::start_with(cfg, move |t| { let _ = tx.send(t); });
