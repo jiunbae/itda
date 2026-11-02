@@ -810,6 +810,9 @@ function refreshHpMode(h, rfb, attempt) {
     renderTools();
     if (m.hp) {
       requestHpQuality();
+    } else if (m.locked) {
+      toast('그 Mac의 화면이 잠겨 있어 기본 화면 공유로 연결했습니다 — 잠금을 풀면 고성능 모드로 바꿉니다');
+      watchUnlock(context);
     } else {
       toast(`고성능 모드로 연결하지 못해 기본 화면 공유로 연결했습니다 — ${S.hpFallback}`);
     }
@@ -820,6 +823,25 @@ function refreshHpMode(h, rfb, attempt) {
     renderTools();
     toast('현재 연결 모드를 확인하지 못했습니다. 고성능 모드 버튼을 눌러 다시 확인하세요. 화면 연결은 유지됩니다.');
   }).finally(() => clearTimeout(timeout));
+}
+// Screen Sharing stood in because that Mac was locked: once it's unlocked there (often through
+// this very window), switch to high-performance. The app keeps this Screen Sharing session a
+// few seconds past the switch, so the Mac doesn't lock again before the new connection is in.
+function watchUnlock(context, tries = 0) {
+  const live = () => S.hpModeContext === context && S.rfb === context.rfb && S.host?.id === context.h.id && S.host.hp?.on && S.hpMode === 'fallback';
+  if (!live() || tries >= 225) return; // (15 minutes)
+  setTimeout(() => {
+    if (!live()) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    fetch(`/api/hp-ready/${encodeURIComponent(context.h.id)}`, { signal: controller.signal }).then((r) => r.json()).then((m) => {
+      if (!live()) return;
+      if (!m?.ready) return watchUnlock(context, tries + 1);
+      S.hpFallback = null; S.hpFallbackSetup = false;
+      toast('잠금이 풀려 고성능 모드로 바꿉니다');
+      open(S.host);
+    }).catch(() => watchUnlock(context, tries + 1)).finally(() => clearTimeout(timeout));
+  }, 4000);
 }
 function requestHpQuality() {
   if (!S.rfb || !S.hpActual || !S.hpModeContext || (S.hpQualityPending && !S.hpQualityFailed)) return;

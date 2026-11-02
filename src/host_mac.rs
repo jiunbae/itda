@@ -108,7 +108,7 @@ pub(crate) fn ready() -> Result<(), String> {
         return Err("이 Mac에서 화면 기록 권한이 아직 허용되지 않았습니다".into());
     }
     match session_state() {
-        Some((true, _)) => Err("화면이 잠겨 있어 고성능 모드로 보여 줄 수 없습니다".into()),
+        Some((true, _)) => Err(crate::hp_upgrade::SCREEN_LOCKED.into()),
         Some((_, false)) => Err("다른 사용자가 이 Mac 화면을 쓰고 있어 고성능 모드로 보여 줄 수 없습니다".into()),
         _ => Ok(()),
     }
