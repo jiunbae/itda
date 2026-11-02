@@ -55,6 +55,10 @@ pub fn password_key(id: &str) -> String {
     format!("hp-{id}")
 }
 
+/// What a Mac's high-performance sharing answers while its screen is locked (the viewer then
+/// gets Screen Sharing, where it can be unlocked). Matched by the connecting side.
+pub const SCREEN_LOCKED: &str = "화면이 잠겨 있어 고성능 모드로 보여 줄 수 없습니다";
+
 const RELEASES: &str = "https://github.com/jiunbae/itda/releases/download";
 const BUNDLE_ID: &str = "dev.jiun.itda";
 /// Sets `bg` for `open`: Itda from 0.9.20 starts in the background when asked to (only the

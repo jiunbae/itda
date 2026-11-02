@@ -7,12 +7,13 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const pw=await import(process.env.PLAYWRIGHT?pathToFileURL(process.env.PLAYWRIGHT).href:'playwright');
 const host={id:'studio',label:'Studio',host:'studio.local',os:'mac',kind:'vnc',hp:{on:true,native:false}};
-let mode={hp:true},httpStatus=500;
+let mode={hp:true},httpStatus=500,hpReady=false,readyRequests=0;
 const requests=[];
 const server=http.createServer((req,res)=>{
  const url=new URL(req.url,'http://localhost');
  if(url.pathname.startsWith('/api/')){
   res.setHeader('Content-Type','application/json');
+  if(url.pathname.startsWith('/api/hp-ready/')){readyRequests++;return res.end(JSON.stringify({ready:hpReady}));}
   if(url.pathname.startsWith('/api/mode/')){requests.push(url.searchParams.get('attempt'));res.writeHead(httpStatus);return res.end(JSON.stringify(mode));}
   return res.end(JSON.stringify(url.pathname==='/api/hosts'?[host]:url.pathname==='/api/accounts'?[]:{local:true,ok:true}));
  }
@@ -123,6 +124,19 @@ try{
  {const now=await app();assert(now.sessions===replaced.sessions,'a superseded retry opened before the current retry deadline: '+JSON.stringify(now));}
  await p.clock.runFor(900);
  {const now=await app();assert(now.sessions===replaced.sessions+1&&!now.status,'the current retry did not open once at its own deadline: '+JSON.stringify(now));}
+ // Screen Sharing stood in for a locked Mac: ask until it's unlocked, then switch once.
+ mode={hp:false,locked:true,reason:'화면이 잠겨 있어 고성능 모드로 보여 줄 수 없습니다'};hpReady=false;readyRequests=0;
+ await p.goto(before);
+ await p.waitForFunction(()=>document.querySelector('[data-t=hp]')?.title.includes('연결되지 않음'));
+ assert(await p.evaluate(()=>[...document.querySelectorAll('.toast')].some(t=>t.textContent.includes('잠금을 풀면'))),'locked fallback did not say it will switch');
+ const lockedSessions=await p.evaluate(()=>fixtureSessions);
+ await p.clock.runFor(4100);await p.waitForTimeout(50);await p.clock.runFor(4100);await p.waitForTimeout(50);
+ assert(readyRequests>=2&&await p.evaluate(()=>fixtureSessions)===lockedSessions,'still-locked checks reconnected or never asked: '+readyRequests);
+ hpReady=true;mode={hp:true};
+ await p.clock.runFor(4100);await p.waitForTimeout(100);
+ assert(await p.evaluate(()=>fixtureSessions)===lockedSessions+1,'unlock did not switch to high-performance');
+ const asked=readyRequests;await p.clock.runFor(20000);await p.waitForTimeout(50);
+ assert(readyRequests===asked,'kept asking after switching: '+(readyRequests-asked));
  assert(errors.length===0,errors.join('\n'));
- console.log('PASS: HTTP500 and null mode unknown/retry; active capture and stale status guards; diagnostic retries preserve session, settings and per-attempt token');
+ console.log('PASS: HTTP500 and null mode unknown/retry; locked fallback switches once unlocked; active capture and stale status guards; diagnostic retries preserve session, settings and per-attempt token');
 }finally{await browser.close();await new Promise(r=>server.close(r));}

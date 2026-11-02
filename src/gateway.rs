@@ -691,7 +691,13 @@ static MODES: Mutex<std::collections::BTreeMap<String, (Instant, serde_json::Val
 thread_local! {
     /// The attempt this connection thread is opening (from the viewer's ?attempt=).
     static ATTEMPT: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    /// This connection is Screen Sharing standing in for a Mac whose screen was locked.
+    static LOCKED_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
+/// How long Screen Sharing standing in for a locked Mac outlives its viewer: the viewer switches
+/// to high-performance once it's unlocked there, and that Mac may lock again as the Screen
+/// Sharing session ends. Its new connection gets in first.
+const LOCKED_FALLBACK_LINGER: Duration = Duration::from_secs(10);
 fn record_mode(id: &str, v: serde_json::Value) {
     let attempt = ATTEMPT.with(|a| a.borrow().clone());
     if attempt.is_empty() {
@@ -829,6 +835,25 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             let mode = MODES.lock().unwrap().get(&format!("{id}\x1f{attempt}")).map(|(_, v)| v.clone());
             json_resp(&mut c, "200 OK", mode.unwrap_or(serde_json::Value::Null))
         }
+        // Whether that Mac's high-performance sharing would take a connection now (a viewer on
+        // Screen Sharing because the screen was locked asks until it's unlocked).
+        ("GET", _) if ok && p.starts_with("/api/hp-ready/") => {
+            let id = p.trim_start_matches("/api/hp-ready/");
+            let ready = match store::load_hosts().into_iter().find(|h| h.id == id && h.hp.on) {
+                None => json!({"ready": false}),
+                Some(host) => {
+                    let login = store::resolve(&host, &store::load_accounts());
+                    match local.then(|| typed(id)).flatten().or_else(|| login.pass.clone()) {
+                        None => json!({"ready": false}),
+                        Some(pass) => match open_hp(&host.reachable(), &login, &pass) {
+                            Ok(_) => json!({"ready": true}),
+                            Err(e) => json!({"ready": false, "locked": e.to_string().contains(crate::hp_upgrade::SCREEN_LOCKED)}),
+                        },
+                    }
+                }
+            };
+            json_resp(&mut c, "200 OK", ready)
+        }
         ("POST", "/api/edit") if ok && same_origin(&req) => edit(&mut c, &req),
         ("GET", _) if ok && p.starts_with("/thumb/") => {
             let id = p.trim_start_matches("/thumb/").trim_end_matches(".png");
@@ -864,6 +889,7 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             // (Tells this attempt's high-performance outcome apart from another viewer's.)
             let attempt: String = req.query.split('&').find_map(|kv| kv.strip_prefix("attempt=")).unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(64).collect();
             ATTEMPT.with(|a| *a.borrow_mut() = attempt);
+            LOCKED_FALLBACK.with(|l| l.set(false));
             proxy(c, &id, peer, local, size)
         }
         (_, _) if p.starts_with("/api/") || p.starts_with("/thumb/") => {
@@ -948,7 +974,9 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
                 // Set up again (not retried) when it's high-performance sharing itself that is off
                 // or no longer matches; SSH problems keep their own message.
                 let setup = e.get_ref().is_some_and(|r| r.is::<HpSetup>());
-                record_mode(&host.id, json!({"hp": false, "setup": setup, "reason": e.to_string()}));
+                let locked = e.to_string().contains(crate::hp_upgrade::SCREEN_LOCKED);
+                LOCKED_FALLBACK.with(|l| l.set(locked));
+                record_mode(&host.id, json!({"hp": false, "setup": setup, "locked": locked, "reason": e.to_string()}));
             }
         }
     }
@@ -1065,9 +1093,21 @@ fn relay(c: TcpStream, raw: rfb::Raw, tx: ws::Sender, id: &str, tunnel: Option<A
             }
         }
     }
-    let _ = mac_sock.shutdown(Shutdown::Both);
-    let _ = pump.join();
-    drop(tunnel);
+    let end = move || {
+        let _ = mac_sock.shutdown(Shutdown::Both);
+        let _ = pump.join();
+        drop(tunnel);
+    };
+    if LOCKED_FALLBACK.with(|l| l.get()) {
+        // (The viewer may be switching to high-performance now that it's unlocked.)
+        crate::log!("web viewer {id}: closed; Screen Sharing kept {}s for the switch", LOCKED_FALLBACK_LINGER.as_secs());
+        std::thread::spawn(move || {
+            std::thread::sleep(LOCKED_FALLBACK_LINGER);
+            end();
+        });
+        return Ok(());
+    }
+    end();
     crate::log!("web viewer {id}: closed");
     Ok(())
 }
