@@ -29,3 +29,29 @@ needle='''        this._display.resize(this._fbWidth, this._fbHeight);'''
 assert s.count(needle)==1
 s=s.replace(needle,needle+'''\n        this.dispatchEvent(new CustomEvent("desktopresize", {detail: {width, height}}));''',1)
 p.write_text(s)
+
+# A frame can arrive in several slices (Intel Macs' hardware encoder: 4 per frame); noVNC cut
+# the frame after the first one, and the decoder failed on the rest ("Decoder failure").
+p=Path(sys.argv[1])/'package/core/decoders/h264.js'
+s=p.read_text()
+needle='''            if (slice) {
+                break;
+            }'''
+assert s.count(needle)==1
+s=s.replace(needle,'''            if (slice) {
+                // The rest of this frame's slices (first_mb_in_slice > 0) go in the same chunk.
+                while (this._index < this._data.length) {
+                    const len = this._getStartSequenceLen(this._index);
+                    const type = this._data[this._index + len] & 0x1f;
+                    if (len == 0 || (type !== 1 && type !== 5) || (this._data[this._index + len + 1] & 0x80)) {
+                        break;
+                    }
+                    if (type === 5) {
+                        isKey = true;
+                    }
+                    const next = this._indexOfNextNalUnit(this._index + len);
+                    this._index = next == -1 ? this._data.length : next;
+                }
+                break;
+            }''',1)
+p.write_text(s)
