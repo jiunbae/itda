@@ -693,11 +693,40 @@ thread_local! {
     static ATTEMPT: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
     /// This connection is Screen Sharing standing in for a Mac whose screen was locked.
     static LOCKED_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// That Screen Sharing session, taken over by this high-performance connection.
+    static ADOPTED: std::cell::RefCell<Option<Box<dyn FnOnce() + Send>>> = const { std::cell::RefCell::new(None) };
 }
 /// How long Screen Sharing standing in for a locked Mac outlives its viewer: the viewer switches
-/// to high-performance once it's unlocked there, and that Mac may lock again as the Screen
-/// Sharing session ends. Its new connection gets in first.
+/// to high-performance once it's unlocked there.
 const LOCKED_FALLBACK_LINGER: Duration = Duration::from_secs(10);
+/// Screen Sharing sessions kept past their viewer, by device: how each one ends. macOS locks a
+/// screen again when the Screen Sharing session that unlocked it ends (seen on jiun-iMac: the
+/// high-performance capture lost its display seconds later), so a high-performance connection
+/// to that Mac takes it over and ends it only when it ends itself.
+static KEPT: Mutex<Vec<(String, u64, Box<dyn FnOnce() + Send>)>> = Mutex::new(Vec::new());
+fn keep_unlocked(id: &str, end: Box<dyn FnOnce() + Send>) {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let token = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    KEPT.lock().unwrap().push((id.to_string(), token, end));
+    std::thread::spawn(move || {
+        std::thread::sleep(LOCKED_FALLBACK_LINGER);
+        let mut kept = KEPT.lock().unwrap();
+        let end = kept.iter().position(|k| k.1 == token).map(|i| kept.remove(i).2);
+        drop(kept);
+        if let Some(end) = end {
+            end();
+        }
+    });
+}
+/// The Screen Sharing session(s) kept for device `id`, ending as one.
+fn take_kept(id: &str) -> Option<Box<dyn FnOnce() + Send>> {
+    let mut kept = KEPT.lock().unwrap();
+    let mut ends = Vec::new();
+    while let Some(i) = kept.iter().position(|k| k.0 == id) {
+        ends.push(kept.remove(i).2);
+    }
+    (!ends.is_empty()).then(|| Box::new(move || ends.into_iter().for_each(|end| end())) as Box<dyn FnOnce() + Send>)
+}
 fn record_mode(id: &str, v: serde_json::Value) {
     let attempt = ATTEMPT.with(|a| a.borrow().clone());
     if attempt.is_empty() {
@@ -890,6 +919,9 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             let attempt: String = req.query.split('&').find_map(|kv| kv.strip_prefix("attempt=")).unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(64).collect();
             ATTEMPT.with(|a| *a.borrow_mut() = attempt);
             LOCKED_FALLBACK.with(|l| l.set(false));
+            if let Some(left) = ADOPTED.with(|a| a.borrow_mut().take()) {
+                left();
+            }
             proxy(c, &id, peer, local, size)
         }
         (_, _) if p.starts_with("/api/") || p.starts_with("/thumb/") => {
@@ -939,7 +971,14 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u3
     if id != THIS_PC {
         mark_used(id, &raw);
     }
-    relay(c, raw, tx, id, tunnel, local)
+    let result = relay(c, raw, tx, id, tunnel, local);
+    // However it ended, the Screen Sharing session this connection kept ends with it (and that
+    // Mac locks again, as it was).
+    if let Some(adopted) = ADOPTED.with(|a| a.borrow_mut().take()) {
+        adopted();
+        crate::log!("web viewer {id}: ended the Screen Sharing session it kept");
+    }
+    result
 }
 
 fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mut Option<Arc<Tunnel>>, size: Option<(u32, u32)>) -> io::Result<rfb::Raw> {
@@ -965,6 +1004,11 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
             Ok((t, raw)) => {
                 *tunnel = Some(t);
                 record_mode(&host.id, json!({"hp": true}));
+                // Screen Sharing kept from unlocking this Mac lasts as long as this connection.
+                if let Some(end) = take_kept(&host.id) {
+                    crate::log!("high-performance sharing on {}: keeping the Screen Sharing session that unlocked it", host.host);
+                    ADOPTED.with(|a| *a.borrow_mut() = Some(end));
+                }
                 return Ok(raw);
             }
             Err(e) if at_lan && !host.ssh.on => return Err(e), // (plain VNC can't check the device there)
@@ -1101,10 +1145,7 @@ fn relay(c: TcpStream, raw: rfb::Raw, tx: ws::Sender, id: &str, tunnel: Option<A
     if LOCKED_FALLBACK.with(|l| l.get()) {
         // (The viewer may be switching to high-performance now that it's unlocked.)
         crate::log!("web viewer {id}: closed; Screen Sharing kept {}s for the switch", LOCKED_FALLBACK_LINGER.as_secs());
-        std::thread::spawn(move || {
-            std::thread::sleep(LOCKED_FALLBACK_LINGER);
-            end();
-        });
+        keep_unlocked(id, Box::new(end));
         return Ok(());
     }
     end();
@@ -1130,6 +1171,26 @@ fn kind_code(kind: &str) -> u16 {
 
 #[cfg(test)]
 mod tests {
+    /// A kept Screen Sharing session goes to the next high-performance connection to that Mac
+    /// (all of them, once), and ends only when that one says so; another Mac's stays kept.
+    #[test]
+    fn kept_screen_sharing_goes_to_the_next_connection() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let ended = Arc::new(AtomicUsize::new(0));
+        let end = |n: usize| { let e = ended.clone(); Box::new(move || { e.fetch_add(n, Ordering::SeqCst); }) as Box<dyn FnOnce() + Send> };
+        super::keep_unlocked("kept-mac", end(1));
+        super::keep_unlocked("kept-mac", end(10));
+        super::keep_unlocked("other-mac", end(100));
+        let adopted = super::take_kept("kept-mac").expect("kept session not handed over");
+        assert!(super::take_kept("kept-mac").is_none(), "handed over twice");
+        assert_eq!(ended.load(Ordering::SeqCst), 0, "ended before the connection did");
+        adopted();
+        assert_eq!(ended.load(Ordering::SeqCst), 11);
+        super::take_kept("other-mac").expect("another Mac's session was taken")();
+        assert_eq!(ended.load(Ordering::SeqCst), 111);
+    }
+
     #[test]
     fn wrong_pins_count_per_source() {
         let req = |xff: Option<&str>| super::Req { method: "POST".into(), path: "/api/login".into(), query: String::new(), headers: xff.map(|v| [("x-forwarded-for".to_string(), v.to_string())].into_iter().collect()).unwrap_or_default(), body: Vec::new() };
