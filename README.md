@@ -80,7 +80,7 @@ Installation requires an existing trusted SSH host key and uses strict checking;
 
 ### Start at login
 
-Enable **설정 → 로그인하면 Itda 실행** to start Itda after signing into your OS account. If macOS Login Items or Windows Startup Apps disables it, Itda shows that state and a shortcut to the system setting. This does not start a desktop session before login or grant capture/input permissions.
+Enable **설정 → 로그인하면 Itda 실행** to start Itda after signing into your OS account. If macOS Login Items or Windows Startup Apps disables it, Itda shows that state and a shortcut to the system setting. This does not start a desktop session before login or grant capture/input permissions. On macOS, the notification and **Allow in the Background** list name the item after Itda's signing developer, **Jiun Bae**, rather than the app.
 
 ### Update Itda
 

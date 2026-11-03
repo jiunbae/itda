@@ -1027,6 +1027,7 @@ fn on_ipc(v: Value) {
                 if st.login_start != home(|m| m.settings.login_start) && store::isolated() {
                     st.login_start = home(|m| m.settings.login_start);
                     send(json!({"type":"toast","text":"별도 설정으로 실행한 앱에서는 로그인 시 실행을 변경할 수 없습니다","err":true}));
+                    send(json!({"type": "login_item", "state": if st.login_start { "on" } else { "off" }}));
                 } else if st.login_start != home(|m| m.settings.login_start) {
                     let (login, err) = crate::autostart::apply(st.login_start, crate::autostart::set, crate::autostart::state);
                     st.login_start = login.on();
