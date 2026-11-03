@@ -156,6 +156,9 @@ function onMessage(m) {
       else if (!S.settings.onboarded && !S.hosts.length && !topModal()) showOnboarding();
       break;
     case 'login_item':
+      // macOS names the new background item after the app's signer, not the app.
+      if (S.loginAsked && m.state !== 'off') toast('macOS 알림에 ‘Jiun Bae’로 표시되는 항목이 Itda입니다');
+      S.loginAsked = false;
       S.loginItem = m.state;
       if (S.settings) S.settings.login_start = m.state !== 'off';
       if (S.page === 'settings') render();
@@ -843,7 +846,7 @@ function renderSettings() {
     ${MAC ? '' : setting('E8A5', '창을 닫으면 알림 영역에서 계속 실행', '알림 영역 아이콘으로 빠르게 다시 연결할 수 있습니다', toggle('tray', st.tray))}
     ${S.loginItem === 'approval' || S.loginItem === 'disabled'
       ? setting('E7E8', S.loginItem === 'approval' ? '로그인하면 Itda 실행 — 허용 필요' : '로그인하면 Itda 실행 — 시작 앱에서 꺼짐', S.loginItem === 'approval' ? '시스템 설정 › 일반 › 로그인 항목에서 Itda를 허용해야 로그인할 때 열립니다' : 'Windows 설정 › 앱 › 시작 프로그램(또는 작업 관리자)에서 Itda가 꺼져 있습니다. 거기서 켜야 로그인할 때 시작합니다', `<button class="btn" data-act="login-item-settings">${S.loginItem === 'approval' ? '로그인 항목 열기' : '시작 앱 설정 열기'}</button>${toggle('login_start', true)}`)
-      : setting('E7E8', '로그인하면 Itda 실행', MAC ? '이 Mac에 로그인하면 Itda가 열립니다. 시스템 설정 › 일반 › 로그인 항목에서도 바꿀 수 있습니다. macOS 알림과 ‘백그라운드에서 허용’ 목록에는 Itda를 서명한 개발자 이름 ‘Jiun Bae’로 표시됩니다' : '이 PC에 로그인하면 알림 영역에서 시작합니다. 이 PC 공유가 켜져 있으면 바로 다른 기기에서 접속할 수 있습니다', toggle('login_start', !!st.login_start))}
+      : setting('E7E8', '로그인하면 Itda 실행', MAC ? '이 Mac에 로그인하면 Itda가 열립니다. 시스템 설정 › 일반 › 로그인 항목에서도 바꿀 수 있습니다. macOS에는 서명한 개발자 이름 ‘Jiun Bae’로 표시됩니다' : '이 PC에 로그인하면 알림 영역에서 시작합니다. 이 PC 공유가 켜져 있으면 바로 다른 기기에서 접속할 수 있습니다', toggle('login_start', !!st.login_start))}
     ${setting('EA8F', '알림', '연결이 끊기거나 다시 연결될 때 알려 줍니다', toggle('notify', st.notify))}
     ${setting('E91B', '미리보기 저장', `마지막 화면을 ${HERE}에만 작게 저장해 주소록에 표시합니다`, toggle('thumbnails', st.thumbnails), true)}
 
@@ -1971,8 +1974,8 @@ document.addEventListener('change', (e) => {
     else if (t.dataset.path === 'web') { S.settings.web = { port: 8780, ...S.settings.web, [t.dataset.set]: t.checked }; S.web = {}; }
     else S.settings[t.dataset.set] = t.checked;
     saveSettings();
-    // macOS names the new background item after the app's signer, not the app.
-    if (MAC && t.dataset.set === 'login_start' && t.checked) toast('macOS에 ‘Jiun Bae’ 이름으로 뜨는 백그라운드 항목 알림은 Itda입니다');
+    // (Said once macOS took it: see 'login_item'.)
+    if (MAC && t.dataset.set === 'login_start') S.loginAsked = t.checked;
   } else if (t.id === 'share-port') {
     const p = parseInt(t.value, 10);
     if (p >= 1024 && p < 65536) { S.settings.share = { ...S.settings.share, port: p }; S.share = {}; saveSettings(); }
