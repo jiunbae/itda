@@ -1828,15 +1828,17 @@ fn scan() {
 fn start_discovery() {
     let me = crate::mdns::this_name().to_ascii_lowercase();
     std::thread::spawn(move || {
-        let mut last: Option<Vec<crate::mdns::Found>> = None;
+        // host -> scans in a row it was missing. A single 1.5 s browse often misses a host
+        // that is still there, so it only counts as gone after a few misses.
+        let mut seen = std::collections::BTreeMap::<String, u32>::new();
         loop {
             scan_tailnet();
             let mut found = crate::mdns::browse(Duration::from_millis(1500));
             found.retain(|f| f.name.to_ascii_lowercase() != me && !f.hostname.to_ascii_lowercase().starts_with(&format!("{me}.")));
             found.sort_by(|a, b| a.name.cmp(&b.name));
-            if last.as_ref() != Some(&found) {
-                crate::log!("bonjour: {} found {:?}", found.len(), found.iter().map(|f| &f.host).collect::<Vec<_>>());
-                last = Some(found.clone());
+            let (added, gone) = bonjour_changes(&mut seen, found.iter().map(|f| f.host.as_str()));
+            if !added.is_empty() || !gone.is_empty() {
+                crate::log!("bonjour: {} known, +{added:?} -{gone:?}", seen.len());
             }
             // Always answer: a scan the page asked for waits for this.
             post(Event::Found(found));
@@ -1845,6 +1847,25 @@ fn start_discovery() {
             *g = false;
         }
     });
+}
+
+/// Fold one browse into `seen`; returns hosts that appeared and hosts missed 3 scans in a row.
+fn bonjour_changes<'a>(seen: &mut std::collections::BTreeMap<String, u32>, found: impl Iterator<Item = &'a str>) -> (Vec<String>, Vec<String>) {
+    const GONE_AFTER: u32 = 3;
+    let found: std::collections::BTreeSet<&str> = found.collect();
+    let added: Vec<String> = found.iter().filter(|h| !seen.contains_key(**h)).map(|h| h.to_string()).collect();
+    let mut gone = Vec::new();
+    seen.retain(|h, misses| {
+        *misses = if found.contains(h.as_str()) { 0 } else { *misses + 1 };
+        if *misses >= GONE_AFTER {
+            gone.push(h.clone());
+        }
+        *misses < GONE_AFTER
+    });
+    for h in &added {
+        seen.insert(h.clone(), 0);
+    }
+    (added, gone)
 }
 
 /// Devices on the user's tailnet: reachable from anywhere, not just this Wi-Fi.
@@ -1992,6 +2013,22 @@ mod lan_tests {
         assert!(!super::learn_lan(&mut hosts, &peers2));
         assert_eq!(hosts[0].lan, "192.168.32.32");
         assert!(!super::learn_lan(&mut hosts, &peers), "nothing new");
+    }
+}
+
+#[cfg(test)]
+mod bonjour_tests {
+    #[test]
+    fn a_host_missing_from_one_browse_is_not_gone() {
+        let mut seen = Default::default();
+        let mut scan = |hosts: &[&str]| super::bonjour_changes(&mut seen, hosts.iter().copied());
+        assert_eq!(scan(&["a.local", "b.local"]), (vec!["a.local".into(), "b.local".into()], vec![]));
+        assert_eq!(scan(&["a.local"]), (vec![], vec![]));
+        assert_eq!(scan(&["a.local", "b.local"]), (vec![], vec![]), "flapping stays quiet");
+        assert_eq!(scan(&["a.local"]), (vec![], vec![]));
+        assert_eq!(scan(&["a.local"]), (vec![], vec![]));
+        assert_eq!(scan(&["a.local"]), (vec![], vec!["b.local".into()]), "gone after 3 misses");
+        assert_eq!(scan(&["a.local", "b.local"]), (vec!["b.local".into()], vec![]));
     }
 }
 
