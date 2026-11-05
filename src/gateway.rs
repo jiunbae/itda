@@ -1053,7 +1053,9 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
                 *tunnel = Some(t);
                 record_mode(&host.id, json!({"hp": true}));
                 // Screen Sharing kept from unlocking this Mac lasts as long as this connection.
-                if let Some(end) = take_kept(&host.id) {
+                // (The connection this replaces, e.g. Screen Sharing standing in after video this
+                // viewer couldn't decode, may still be handing it back.)
+                if let Some(end) = take_kept_handed_back(&host.id, Duration::from_secs(3)) {
                     crate::log!("high-performance sharing on {}: keeping the Screen Sharing session that unlocked it", host.host);
                     adopt(&host.id, end);
                 }
