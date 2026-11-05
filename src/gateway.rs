@@ -751,7 +751,9 @@ fn take_kept_handed_back(id: &str, wait: Duration) -> Option<Box<dyn FnOnce() + 
         match take_kept(id) {
             Some(end) => return Some(end),
             None if Instant::now() < until && HOLDING.lock().unwrap().iter().any(|h| h == id) => std::thread::sleep(Duration::from_millis(50)),
-            None => return None,
+            // No holder now: one may have handed it back (it does so before it stops holding)
+            // since the first look.
+            None => return take_kept(id),
         }
     }
 }
