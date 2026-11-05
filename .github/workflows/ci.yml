@@ -53,6 +53,8 @@ jobs:
         run: node scripts/hp-performance-probe-test.mjs
       - name: Mac modifier keys for the high-performance server
         run: node scripts/hp-mac-keys-test.mjs
+      - name: H.264 frames in several slices (Intel Macs)
+        run: node scripts/h264-slices-test.mjs
       - name: Test
         run: cargo test --release
       - name: Signing keychain

@@ -839,6 +839,7 @@ function watchUnlock(context, tries = 0) {
       if (!m?.ready) return watchUnlock(context, tries + 1);
       S.hpFallback = null; S.hpFallbackSetup = false;
       toast('잠금이 풀려 고성능 모드로 바꿉니다');
+      S.unlockSwitchAt = Date.now();
       open(S.host);
     }).catch(() => watchUnlock(context, tries + 1)).finally(() => clearTimeout(timeout));
   }, 4000);
@@ -885,6 +886,12 @@ function hpToggle() {
     S.hpFallback = null; S.hpFallbackSetup = false;
     toast('고성능 모드로 다시 연결합니다');
     return open(S.host);
+  }
+  // The switch after unlocking can land just as the person presses this button to try again:
+  // that press must not turn high-performance off.
+  if (S.host.hp?.on && !S.hpFallback && Date.now() - (S.unlockSwitchAt || 0) < 3000) {
+    toast('잠금이 풀려 고성능 모드로 바꾸는 중입니다');
+    return;
   }
   if (S.host.hp?.on && !S.hpFallback) {
     return hpDisable();

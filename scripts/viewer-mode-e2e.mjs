@@ -135,8 +135,13 @@ try{
  hpReady=true;mode={hp:true};
  await p.clock.runFor(4100);await p.waitForTimeout(100);
  assert(await p.evaluate(()=>fixtureSessions)===lockedSessions+1,'unlock did not switch to high-performance');
+ // A press meant as "try again" landing just after the switch must not turn it off.
+ await hp.click();
+ assert(!await p.evaluate(()=>ipcEvents.some(m=>m.ev==='hp-off')),'a press during the unlock switch turned high-performance off');
  const asked=readyRequests;await p.clock.runFor(20000);await p.waitForTimeout(50);
  assert(readyRequests===asked,'kept asking after switching: '+(readyRequests-asked));
+ await hp.click();
+ assert(await p.evaluate(()=>ipcEvents.some(m=>m.ev==='hp-off')),'after the switch settled the button no longer turns high-performance off');
  assert(errors.length===0,errors.join('\n'));
  console.log('PASS: HTTP500 and null mode unknown/retry; locked fallback switches once unlocked; active capture and stale status guards; diagnostic retries preserve session, settings and per-attempt token');
 }finally{await browser.close();await new Promise(r=>server.close(r));}
