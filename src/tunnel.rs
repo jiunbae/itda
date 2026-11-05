@@ -160,6 +160,27 @@ pub fn split_host(s: &str, default: u16) -> (String, u16) {
     }
 }
 
+/// ssh runs with -v so `start` can see "Local forwarding listening on" (and `classify` the
+/// whole story), but its dozens of debug1 lines per tunnel stay out of the log unless the
+/// tunnel fails. Warnings/errors and a few milestones are logged as they come.
+fn log_now(line: &str) -> bool {
+    match line.strip_prefix("debug1: ") {
+        None => !line.starts_with("debug"),
+        Some(d) => ["Connecting to ", "Connection established", "Local forwarding listening on"]
+            .iter()
+            .any(|m| d.starts_with(m)),
+    }
+}
+
+/// The tunnel failed: write the debug lines `log_now` held back.
+fn log_debug(log: &str) {
+    for line in log.lines().filter(|l| l.starts_with("debug") && !log_now(l)) {
+        if !line.starts_with("debug1: Reading configuration") && !line.contains("identity file") {
+            crate::log!("ssh: {line}");
+        }
+    }
+}
+
 fn err(kind: io::ErrorKind, msg: &str) -> io::Error {
     io::Error::new(kind, msg.to_string())
 }
@@ -248,7 +269,7 @@ impl Tunnel {
         let (log, err_pipe) = (self.log.clone(), child.stderr.take().unwrap());
         std::thread::spawn(move || {
             for line in BufReader::new(err_pipe).lines().map_while(Result::ok) {
-                if !line.starts_with("debug1: Reading configuration") && !line.contains("identity file") {
+                if log_now(&line) {
                     crate::log!("ssh: {line}");
                 }
                 let mut l = log.lock().unwrap();
@@ -263,12 +284,16 @@ impl Tunnel {
             }
             if let Some(st) = child.try_wait()? {
                 std::thread::sleep(Duration::from_millis(100)); // let the reader drain
-                let e = classify(&self.log.lock().unwrap());
+                let log = self.log.lock().unwrap();
+                log_debug(&log);
+                let e = classify(&log);
                 crate::log!("ssh exited ({st}): {e}");
                 return Err(e);
             }
             if Instant::now() > end {
                 let _ = child.kill();
+                log_debug(&self.log.lock().unwrap());
+                crate::log!("ssh timed out");
                 return Err(err(io::ErrorKind::TimedOut, "SSH 연결 시간 초과"));
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -330,6 +355,17 @@ pub fn forget_host_key(host: &str, port: u16) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ssh_debug_lines_wait_for_failure() {
+        use super::log_now;
+        assert!(log_now("Authenticated to h ([1.2.3.4]:22) using \"publickey\"."));
+        assert!(log_now("channel 1: open failed: connect failed: Connection refused"));
+        assert!(log_now("debug1: Local forwarding listening on 127.0.0.1 port 52117."));
+        assert!(!log_now("debug1: kex: algorithm: ecdh-sha2-nistp256"));
+        assert!(!log_now("debug1: Authentications that can continue: publickey,password"));
+        assert!(!log_now("debug2: channel 0: rcvd adjust"));
+    }
+
     #[test]
     fn host_key_alias_names_the_port_like_known_hosts() {
         assert_eq!(super::host_key_name("jiun-home.tail.ts.net", 22), "jiun-home.tail.ts.net");
