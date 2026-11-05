@@ -599,6 +599,27 @@ $('#status').addEventListener('click', (e) => {
 const KIND_OF = { 4010: 'auth', 4011: 'need_user', 4012: 'refused', 4013: 'unreachable', 4014: 'dns', 4020: 'ssh_auth', 4021: 'ssh_hostkey', 4022: 'ssh_refused', 4023: 'ssh_missing' };
 const RETRIES = 10;
 
+// High-performance video this browser can't decode (some Mac's encoder output it rejects) left
+// the screen black until that Mac gave up on the frames nobody acknowledged (30 s). Instead,
+// reconnect this window at once through Screen Sharing; the saved choice stays on, and the
+// mode button tries high-performance again.
+if (window.VideoDecoder) {
+  const Base = window.VideoDecoder;
+  window.VideoDecoder = class extends Base {
+    constructor(init) {
+      super({ ...init, error: (e) => { try { hpUndecodable(e); } finally { init.error(e); } } });
+    }
+  };
+}
+function hpUndecodable(e) {
+  const h = S.host;
+  if (!S.rfb || !h?.hp?.on || S.hpMode === 'fallback' || S.hpNoDecode === h.id) return;
+  console.warn('high-performance video could not be decoded:', e?.message || e);
+  S.hpNoDecode = h.id;
+  toast('이 기기에서 고성능 영상을 표시하지 못해 기본 화면 공유로 다시 연결합니다');
+  open(h);
+}
+
 function open(h) {
   if (!h) return;
   close();
@@ -615,7 +636,8 @@ function open(h) {
   // This attempt's own token: its high-performance outcome, not another viewer's.
   const attempt = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
   S.hpFallback = null; S.hpFallbackSetup = false; S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; S.hpMode = null; S.hpModeContext = null; S.hpCurtain = undefined; S.hpCurtainAsked = false; S.hpQualityFailed = false; S.hpQualityPending = false; renderTools();
-  const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}?${size}attempt=${attempt}`, ['binary']);
+  const nohp = S.hpNoDecode === h.id ? 'nohp=1&' : '';
+  const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}?${size}${nohp}attempt=${attempt}`, ['binary']);
   let closeInfo = null;
   ws.addEventListener('close', (e) => { closeInfo = e; });
   S.ws = ws;
@@ -883,7 +905,7 @@ function hpToggle() {
   // Saved on but this connection fell back: try high-performance again (e.g. after unlocking),
   // or, when it isn't on there at all (e.g. Itda reinstalled), set it up again below.
   if (S.host.hp?.on && S.hpFallback && !S.hpFallbackSetup) {
-    S.hpFallback = null; S.hpFallbackSetup = false;
+    S.hpFallback = null; S.hpFallbackSetup = false; S.hpNoDecode = null;
     toast('고성능 모드로 다시 연결합니다');
     return open(S.host);
   }
@@ -899,7 +921,7 @@ function hpToggle() {
   S.hpBusy = true; renderTools();
   const id=S.host.id;
   window.ItdaHpSetup.begin({id,name:S.host.label||S.host.name||S.host.remote_name||S.host.host,send:(op,extra={})=>post({ev:`hp-${op}`,...extra}),
-    done:()=>{if(S.host?.id!==id)return;S.hpBusy=false;S.host.hp={...(S.host.hp||{}),on:true};toast('고성능 모드로 전환합니다');open(S.host);},
+    done:()=>{if(S.host?.id!==id)return;S.hpBusy=false;S.hpNoDecode=null;S.host.hp={...(S.host.hp||{}),on:true};toast('고성능 모드로 전환합니다');open(S.host);},
     cancel:()=>{S.hpBusy=false;renderTools();}
   });
   post({ ev: 'hp-upgrade' });

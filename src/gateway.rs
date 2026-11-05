@@ -693,11 +693,16 @@ thread_local! {
     static ATTEMPT: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
     /// This connection is Screen Sharing standing in for a Mac whose screen was locked.
     static LOCKED_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The viewer couldn't show this device's high-performance video (?nohp=1): this attempt
+    /// uses Screen Sharing whatever the saved choice.
+    static NO_HP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// That Screen Sharing session, taken over by this high-performance connection.
     static ADOPTED: std::cell::RefCell<Option<Box<dyn FnOnce() + Send>>> = const { std::cell::RefCell::new(None) };
 }
 /// How long Screen Sharing standing in for a locked Mac outlives its viewer: the viewer switches
 /// to high-performance once it's unlocked there.
+/// Why a connection used Screen Sharing after the viewer asked (?nohp=1).
+const HP_UNDECODABLE: &str = "이 기기에서 그 Mac의 고성능 영상을 표시하지 못했습니다";
 const LOCKED_FALLBACK_LINGER: Duration = Duration::from_secs(10);
 /// Screen Sharing sessions kept past their viewer, by device: how each one ends. macOS locks a
 /// screen again when the Screen Sharing session that unlocked it ends (seen on jiun-iMac: the
@@ -919,6 +924,7 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             let attempt: String = req.query.split('&').find_map(|kv| kv.strip_prefix("attempt=")).unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(64).collect();
             ATTEMPT.with(|a| *a.borrow_mut() = attempt);
             LOCKED_FALLBACK.with(|l| l.set(false));
+            NO_HP.with(|n| n.set(req.query.split('&').any(|kv| kv == "nohp=1")));
             if let Some(left) = ADOPTED.with(|a| a.borrow_mut().take()) {
                 left();
             }
@@ -974,9 +980,11 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u3
     let result = relay(c, raw, tx, id, tunnel, local);
     // However it ended, the Screen Sharing session this connection kept ends with it (and that
     // Mac locks again, as it was).
+    // (Kept a few seconds more: the viewer may be reconnecting the other way, e.g. to Screen
+    // Sharing after high-performance video it couldn't decode, and takes it over.)
     if let Some(adopted) = ADOPTED.with(|a| a.borrow_mut().take()) {
-        adopted();
-        crate::log!("web viewer {id}: ended the Screen Sharing session it kept");
+        crate::log!("web viewer {id}: the Screen Sharing session it kept ends in {}s", LOCKED_FALLBACK_LINGER.as_secs());
+        keep_unlocked(id, adopted);
     }
     result
 }
@@ -999,7 +1007,15 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
     }
     // Itda's high-performance sharing on this Mac: through SSH to its loopback port. If it
     // can't be reached (Itda not running there, SSH refused), fall back to the usual way.
-    if host.hp.on {
+    if host.hp.on && NO_HP.with(|n| n.get()) {
+        crate::log!("high-performance sharing on {}: the viewer couldn't decode its video, using Screen Sharing", host.host);
+        record_mode(&host.id, json!({"hp": false, "setup": false, "locked": false, "reason": HP_UNDECODABLE}));
+        // A Screen Sharing session kept from unlocking this Mac stays with this connection, so
+        // the Mac doesn't lock again under it.
+        if let Some(end) = take_kept(&host.id) {
+            ADOPTED.with(|a| *a.borrow_mut() = Some(end));
+        }
+    } else if host.hp.on {
         match open_hp(host, login, &pass) {
             Ok((t, raw)) => {
                 *tunnel = Some(t);
