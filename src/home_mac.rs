@@ -112,7 +112,9 @@ impl Drop for Proc {
     fn drop(&mut self) {
         crate::gateway::set_typed(&self.id, None);
         crate::gateway::close_local(&self.id);
-        TO_CLOSE.with(|c| c.borrow_mut().push(self.id.clone()));
+        // A Proc still held by HOME at exit drops during thread-local teardown, when
+        // TO_CLOSE may already be gone (`with` would panic): there is no window to close then.
+        let _ = TO_CLOSE.try_with(|c| c.borrow_mut().push(self.id.clone()));
     }
 }
 
@@ -857,7 +859,9 @@ pub fn run(quick: Option<String>) {
                 let mirrors=MONITOR_PANES.with(|p| std::mem::take(&mut *p.borrow_mut()));drop(mirrors);
                 let sessions=SESSIONS.with(|p| std::mem::take(&mut *p.borrow_mut()));drop(sessions);
                 let files=FILE_PANES.with(|p| std::mem::take(&mut *p.borrow_mut()));drop(files);
-                let home=HOME_PANE.with(|p| p.borrow_mut().take());drop(home);
+                let pane=HOME_PANE.with(|p| p.borrow_mut().take());drop(pane);
+                // Open connections' Procs live in HOME; end them now, not in its TLS destructor.
+                let procs=home(|m| std::mem::take(&mut m.sessions));drop(procs);
                 crate::log!("all native views released before thread-local teardown");
             },
             TaoEvent::UserEvent(Wake::Drain) => drain(),
