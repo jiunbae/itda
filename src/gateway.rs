@@ -693,11 +693,16 @@ thread_local! {
     static ATTEMPT: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
     /// This connection is Screen Sharing standing in for a Mac whose screen was locked.
     static LOCKED_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The viewer couldn't show this device's high-performance video (?nohp=1): this attempt
+    /// uses Screen Sharing whatever the saved choice.
+    static NO_HP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// That Screen Sharing session, taken over by this high-performance connection.
     static ADOPTED: std::cell::RefCell<Option<Box<dyn FnOnce() + Send>>> = const { std::cell::RefCell::new(None) };
 }
 /// How long Screen Sharing standing in for a locked Mac outlives its viewer: the viewer switches
 /// to high-performance once it's unlocked there.
+/// Why a connection used Screen Sharing after the viewer asked (?nohp=1).
+const HP_UNDECODABLE: &str = "이 기기에서 그 Mac의 고성능 영상을 표시하지 못했습니다";
 const LOCKED_FALLBACK_LINGER: Duration = Duration::from_secs(10);
 /// Screen Sharing sessions kept past their viewer, by device: how each one ends. macOS locks a
 /// screen again when the Screen Sharing session that unlocked it ends (seen on jiun-iMac: the
@@ -717,6 +722,40 @@ fn keep_unlocked(id: &str, end: Box<dyn FnOnce() + Send>) {
             end();
         }
     });
+}
+/// Devices whose kept Screen Sharing session a live connection holds (one entry per connection).
+static HOLDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// This connection takes over the Screen Sharing session that unlocked device `id`.
+fn adopt(id: &str, end: Box<dyn FnOnce() + Send>) {
+    HOLDING.lock().unwrap().push(id.to_string());
+    ADOPTED.with(|a| *a.borrow_mut() = Some(end));
+}
+/// The connection is over: the session it took over is kept a few seconds more (the viewer may
+/// be reconnecting the other way, e.g. to Screen Sharing after high-performance video it
+/// couldn't decode, and takes it over), then ends.
+fn release_adopted(id: &str) {
+    if let Some(adopted) = ADOPTED.with(|a| a.borrow_mut().take()) {
+        crate::log!("web viewer {id}: the Screen Sharing session it kept ends in {}s", LOCKED_FALLBACK_LINGER.as_secs());
+        keep_unlocked(id, adopted);
+        let mut holding = HOLDING.lock().unwrap();
+        if let Some(i) = holding.iter().position(|h| h == id) {
+            holding.remove(i);
+        }
+    }
+}
+/// Like `take_kept`, but waits (up to `wait`) for a connection that still holds it to hand it
+/// back: the connection being replaced may not have finished yet.
+fn take_kept_handed_back(id: &str, wait: Duration) -> Option<Box<dyn FnOnce() + Send>> {
+    let until = Instant::now() + wait;
+    loop {
+        match take_kept(id) {
+            Some(end) => return Some(end),
+            None if Instant::now() < until && HOLDING.lock().unwrap().iter().any(|h| h == id) => std::thread::sleep(Duration::from_millis(50)),
+            // No holder now: one may have handed it back (it does so before it stops holding)
+            // since the first look.
+            None => return take_kept(id),
+        }
+    }
 }
 /// The Screen Sharing session(s) kept for device `id`, ending as one.
 fn take_kept(id: &str) -> Option<Box<dyn FnOnce() + Send>> {
@@ -919,6 +958,7 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             let attempt: String = req.query.split('&').find_map(|kv| kv.strip_prefix("attempt=")).unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(64).collect();
             ATTEMPT.with(|a| *a.borrow_mut() = attempt);
             LOCKED_FALLBACK.with(|l| l.set(false));
+            NO_HP.with(|n| n.set(req.query.split('&').any(|kv| kv == "nohp=1")));
             if let Some(left) = ADOPTED.with(|a| a.borrow_mut().take()) {
                 left();
             }
@@ -966,18 +1006,18 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u3
     };
     let raw = match raw {
         Ok(r) => r,
-        Err(e) => return fail(4000 + kind_code(rfb::classify(&e)), e.to_string()),
+        Err(e) => {
+            release_adopted(id);
+            return fail(4000 + kind_code(rfb::classify(&e)), e.to_string());
+        }
     };
     if id != THIS_PC {
         mark_used(id, &raw);
     }
     let result = relay(c, raw, tx, id, tunnel, local);
-    // However it ended, the Screen Sharing session this connection kept ends with it (and that
-    // Mac locks again, as it was).
-    if let Some(adopted) = ADOPTED.with(|a| a.borrow_mut().take()) {
-        adopted();
-        crate::log!("web viewer {id}: ended the Screen Sharing session it kept");
-    }
+    // However it ended, the Screen Sharing session this connection kept ends shortly after it
+    // (and that Mac locks again, as it was) unless the next connection takes it over.
+    release_adopted(id);
     result
 }
 
@@ -999,15 +1039,25 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
     }
     // Itda's high-performance sharing on this Mac: through SSH to its loopback port. If it
     // can't be reached (Itda not running there, SSH refused), fall back to the usual way.
-    if host.hp.on {
+    if host.hp.on && NO_HP.with(|n| n.get()) {
+        crate::log!("high-performance sharing on {}: the viewer couldn't decode its video, using Screen Sharing", host.host);
+        record_mode(&host.id, json!({"hp": false, "setup": false, "locked": false, "reason": HP_UNDECODABLE}));
+        // A Screen Sharing session kept from unlocking this Mac stays with this connection, so
+        // the Mac doesn't lock again under it.
+        if let Some(end) = take_kept_handed_back(&host.id, Duration::from_secs(3)) {
+            adopt(&host.id, end);
+        }
+    } else if host.hp.on {
         match open_hp(host, login, &pass) {
             Ok((t, raw)) => {
                 *tunnel = Some(t);
                 record_mode(&host.id, json!({"hp": true}));
                 // Screen Sharing kept from unlocking this Mac lasts as long as this connection.
-                if let Some(end) = take_kept(&host.id) {
+                // (The connection this replaces, e.g. Screen Sharing standing in after video this
+                // viewer couldn't decode, may still be handing it back.)
+                if let Some(end) = take_kept_handed_back(&host.id, Duration::from_secs(3)) {
                     crate::log!("high-performance sharing on {}: keeping the Screen Sharing session that unlocked it", host.host);
-                    ADOPTED.with(|a| *a.borrow_mut() = Some(end));
+                    adopt(&host.id, end);
                 }
                 return Ok(raw);
             }
@@ -1189,6 +1239,33 @@ mod tests {
         assert_eq!(ended.load(Ordering::SeqCst), 11);
         super::take_kept("other-mac").expect("another Mac's session was taken")();
         assert_eq!(ended.load(Ordering::SeqCst), 111);
+    }
+
+    /// A connection replacing one that still holds the kept session (it hasn't finished yet)
+    /// waits for it to be handed back instead of missing it; with no holder it doesn't wait.
+    #[test]
+    fn kept_screen_sharing_waits_for_the_connection_handing_it_back() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+        let ended = Arc::new(AtomicBool::new(false));
+        let e = ended.clone();
+        let holder = std::thread::spawn(move || {
+            super::adopt("handoff-mac", Box::new(move || e.store(true, Ordering::SeqCst)));
+            std::thread::sleep(Duration::from_millis(300));
+            super::release_adopted("handoff-mac");
+        });
+        while !super::HOLDING.lock().unwrap().iter().any(|h| h == "handoff-mac") {
+            std::thread::yield_now();
+        }
+        let got = super::take_kept_handed_back("handoff-mac", Duration::from_secs(3)).expect("missed the session being handed back");
+        holder.join().unwrap();
+        assert!(!ended.load(Ordering::SeqCst), "ended during the handoff");
+        got();
+        assert!(ended.load(Ordering::SeqCst));
+        let t = Instant::now();
+        assert!(super::take_kept_handed_back("nobody-mac", Duration::from_secs(3)).is_none());
+        assert!(t.elapsed() < Duration::from_millis(500), "waited with nothing to hand back");
     }
 
     #[test]

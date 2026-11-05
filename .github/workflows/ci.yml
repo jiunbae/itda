@@ -146,6 +146,8 @@ jobs:
         run: node scripts/monitors-e2e.mjs
       - name: Viewer mode diagnostics and drop/reconnect ownership
         run: node scripts/viewer-mode-e2e.mjs
+      - name: Undecodable high-performance video falls back at once
+        run: node scripts/hp-undecodable-e2e.mjs
       - name: Device card and list action names, keyboard
         run: node scripts/device-actions-a11y-e2e.mjs
       - name: Phone web viewer (sign-in, lockout, expiry, login fix, toolbar)
