@@ -607,13 +607,16 @@ if (window.VideoDecoder) {
   const Base = window.VideoDecoder;
   window.VideoDecoder = class extends Base {
     constructor(init) {
-      super({ ...init, error: (e) => { try { hpUndecodable(e); } finally { init.error(e); } } });
+      // noVNC makes a connection's decoder while that connection is the current one, and may
+      // leave it alive past it: a late error from an old one is not this connection's.
+      const owner = S.rfb;
+      super({ ...init, error: (e) => { try { hpUndecodable(owner, e); } finally { init.error(e); } } });
     }
   };
 }
-function hpUndecodable(e) {
+function hpUndecodable(owner, e) {
   const h = S.host;
-  if (!S.rfb || !h?.hp?.on || S.hpMode === 'fallback' || S.hpNoDecode === h.id) return;
+  if (!S.rfb || owner !== S.rfb || !h?.hp?.on || S.hpMode === 'fallback' || S.hpNoDecode === h.id) return;
   console.warn('high-performance video could not be decoded:', e?.message || e);
   S.hpNoDecode = h.id;
   toast('이 기기에서 고성능 영상을 표시하지 못해 기본 화면 공유로 다시 연결합니다');

@@ -22,9 +22,9 @@ const server=http.createServer((req,res)=>{
   res.setHeader('Content-Type','text/javascript');
   return res.end(`window.RFB=class extends EventTarget {
    constructor(){super();window.fixtureSessions=(window.fixtureSessions||0)+1;window.fixtureRfb=this;this._fbWidth=640;this._fbHeight=480;this._rfbConnectionState='connected';this._display={_backbuffer:document.createElement('canvas'),itdaFrame:1};
-    // noVNC's H.264 decoder: its error callback throws, as noVNC's does.
-    this.decoder=new VideoDecoder({output(){},error(e){throw Error('Failed to decode frame: '+e.message);}});
-    setTimeout(()=>this.dispatchEvent(new Event('connect')),0);}
+    // noVNC's H.264 decoder, made when the first H.264 rectangle arrives; its error callback
+    // throws, as noVNC's does.
+    setTimeout(()=>{this.decoder=new VideoDecoder({output(){},error(e){throw Error('Failed to decode frame: '+e.message);}});this.dispatchEvent(new Event('connect'));},0);}
    focus(){} itdaViewport(){} disconnect(){this._rfbConnectionState='disconnected';this.dispatchEvent(new Event('disconnect'));}
   };`);
  }
@@ -41,7 +41,7 @@ try{
   window.ipcEvents=[];window.ipc={postMessage:m=>ipcEvents.push(JSON.parse(m))};
   window.wsUrls=[];
   window.WebSocket=class extends EventTarget {constructor(url){super();this.url=url;wsUrls.push(url);}close(){}send(){}};
-  window.VideoDecoder=class {constructor(init){this.init=init;window.fixtureDecoder=this;}fail(){this.init.error(new DOMException('Decoder failure','EncodingError'));}};
+  window.VideoDecoder=class {constructor(init){this.init=init;(window.decoders??=[]).push(this);window.fixtureDecoder=this;}fail(){this.init.error(new DOMException('Decoder failure','EncodingError'));}};
  });
  await p.goto(`http://127.0.0.1:${server.address().port}/?open=imac`);
  const hp=p.locator('[data-t=hp]');
@@ -64,6 +64,15 @@ try{
  await p.waitForFunction(()=>wsUrls.length===3);
  assert(!(await p.evaluate(()=>wsUrls[2])).includes('nohp'),'retry still skipped high-performance');
  await p.waitForFunction(()=>document.querySelector('[data-t=hp]')?.classList.contains('on'));
+ // A late error from an earlier connection's decoder (noVNC can leave it alive) is not this
+ // connection's: it stays on high-performance.
+ await p.evaluate(()=>{try{decoders[1].fail();}catch(_){}});
+ await p.waitForTimeout(300);
+ assert(await p.evaluate(()=>wsUrls.length)===3,'an old connection\'s decoder error reconnected the current one');
+ // The new connection's own decoder still falls back.
+ await p.evaluate(()=>{try{fixtureDecoder.fail();}catch(_){}});
+ await p.waitForFunction(()=>wsUrls.length===4);
+ assert((await p.evaluate(()=>wsUrls[3])).includes('nohp=1'),'the new connection\'s decoder error did not fall back');
  assert(!errors.length,'page errors: '+errors.join('; '));
  console.log('hp-undecodable e2e: ok');
 }finally{await browser.close();server.close();}
