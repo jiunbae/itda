@@ -705,7 +705,7 @@ const HP_UNDECODABLE: &str = "이 기기에서 그 Mac의 고성능 영상을 �
 #[cfg(not(test))]
 const LOCKED_FALLBACK_LINGER: Duration = Duration::from_secs(10);
 #[cfg(test)]
-const LOCKED_FALLBACK_LINGER: Duration = Duration::from_millis(300);
+const LOCKED_FALLBACK_LINGER: Duration = Duration::from_millis(500);
 /// Per device: connections open to it now, and the Screen Sharing sessions kept from unlocking
 /// it (how each ends). macOS locks a screen again when the Screen Sharing session that unlocked
 /// it ends (seen on jiun-iMac: the high-performance capture lost its display seconds later), so
@@ -716,7 +716,8 @@ const LOCKED_FALLBACK_LINGER: Duration = Duration::from_millis(300);
 struct Device {
     conns: usize,
     kept: Vec<Box<dyn FnOnce() + Send>>,
-    /// Bumped whenever a connection begins: a pending end from before is called off.
+    /// New whenever a connection begins (unique across devices and their entries coming and
+    /// going): a pending end from before is called off.
     epoch: u64,
 }
 static DEVICES: Mutex<std::collections::BTreeMap<String, Device>> = Mutex::new(std::collections::BTreeMap::new());
@@ -727,8 +728,9 @@ impl Conn {
     fn begin(id: &str) -> Conn {
         let mut d = DEVICES.lock().unwrap();
         let dev = d.entry(id.to_string()).or_default();
+        static EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         dev.conns += 1;
-        dev.epoch += 1;
+        dev.epoch = EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Conn(id.to_string())
     }
 }
@@ -745,6 +747,7 @@ impl Drop for Conn {
             return;
         }
         let (id, epoch) = (self.0.clone(), dev.epoch);
+        drop(d);
         crate::log!("web viewer {id}: the Screen Sharing session that unlocked it ends in {}s unless a viewer comes back", LOCKED_FALLBACK_LINGER.as_secs());
         std::thread::spawn(move || {
             std::thread::sleep(LOCKED_FALLBACK_LINGER);
@@ -1217,8 +1220,16 @@ mod tests {
         let linger = super::LOCKED_FALLBACK_LINGER;
         let ended = Arc::new(AtomicUsize::new(0));
         let end = |n: usize| { let e = ended.clone(); Box::new(move || { e.fetch_add(n, Ordering::SeqCst); }) as Box<dyn FnOnce() + Send> };
-        let wait = || std::thread::sleep(linger * 3);
+        let wait = || std::thread::sleep(linger * 2);
         let now = || ended.load(Ordering::SeqCst);
+        // (Timer threads may run late on a busy machine: wait for an end, don't assume it.)
+        let ends_to = |n: usize| {
+            let until = std::time::Instant::now() + linger * 20;
+            while now() != n && std::time::Instant::now() < until {
+                std::thread::sleep(linger / 10);
+            }
+            assert_eq!(now(), n);
+        };
         // Screen Sharing for the locked Mac; a second viewer (high-performance) joins.
         let fallback = super::Conn::begin("dev-mac");
         let second = super::Conn::begin("dev-mac");
@@ -1246,12 +1257,10 @@ mod tests {
         // Gone for good: it ends a moment later, once; the other Mac's stays.
         drop(back);
         assert_eq!(now(), 0, "ended at once, with no time to come back");
-        wait();
-        assert_eq!(now(), 1);
+        ends_to(1);
         assert!(!super::keeps_unlocked("dev-mac"));
         drop(other);
-        wait();
-        assert_eq!(now(), 101);
+        ends_to(101);
     }
 
     #[test]
