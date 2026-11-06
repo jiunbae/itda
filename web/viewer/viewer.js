@@ -671,7 +671,18 @@ function open(h) {
     // High-performance mode is the saved choice; say so when this connection didn't get it.
     if (APP && S.host?.hp?.on) refreshHpMode(h, rfb, attempt);
     // A browser has no mode button, but its keys still depend on what this connection got.
-    else if (S.host?.hp?.on && macHost(S.host)) fetch(`/api/mode/${encodeURIComponent(h.id)}?attempt=${attempt}`).then((r) => r.json()).then((m) => { if (S.rfb === rfb && typeof m?.hp === 'boolean') S.hpMode = m.hp ? 'active' : 'fallback'; }).catch(() => {});
+    // Screen Sharing standing in for a locked Mac switches to high-performance once it's
+    // unlocked, as in the app.
+    else if (S.host?.hp?.on && macHost(S.host)) fetch(`/api/mode/${encodeURIComponent(h.id)}?attempt=${attempt}`).then((r) => r.json()).then((m) => {
+      if (S.rfb !== rfb || typeof m?.hp !== 'boolean') return;
+      S.hpMode = m.hp ? 'active' : 'fallback';
+      if (!m.hp && m.locked) {
+        const context = { h, rfb, attempt };
+        S.hpModeContext = context;
+        toast('그 Mac의 화면이 잠겨 있어 기본 화면 공유로 연결했습니다 — 잠금을 풀면 고성능 모드로 바꿉니다');
+        watchUnlock(context);
+      }
+    }).catch(() => {});
     if (!APP) return toast(`${h.label}에 연결했습니다`);
     post(S.tries ? { ev: 'reconnected' } : { ev: 'connected', name, w: rfb._fbWidth || 0, h: rfb._fbHeight || 0 });
     S.ever = true;

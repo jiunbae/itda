@@ -148,6 +148,8 @@ jobs:
         run: node scripts/viewer-mode-e2e.mjs
       - name: Undecodable high-performance video falls back at once
         run: node scripts/hp-undecodable-e2e.mjs
+      - name: Browser viewer switches to high-performance after unlocking
+        run: node scripts/viewer-browser-unlock-e2e.mjs
       - name: Device card and list action names, keyboard
         run: node scripts/device-actions-a11y-e2e.mjs
       - name: Phone web viewer (sign-in, lockout, expiry, login fix, toolbar)

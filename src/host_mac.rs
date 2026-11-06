@@ -117,9 +117,91 @@ pub(crate) fn ready() -> Result<(), String> {
 /// session on the display (fast user switching).
 fn screen_unavailable() -> Option<&'static str> {
     match session_state() {
-        Some((true, _)) => Some(crate::hp_upgrade::SCREEN_LOCKED),
+        Some((true, _)) if !saver_without_password() => Some(crate::hp_upgrade::SCREEN_LOCKED),
         Some((_, false)) => Some("다른 사용자가 이 Mac 화면을 쓰고 있어 고성능 모드로 보여 줄 수 없습니다"),
         _ => None,
+    }
+}
+
+/// The session reads as locked while a screen saver runs, also one that doesn't (or doesn't yet)
+/// ask for the password: moving the pointer through the viewer dismisses that one, so it isn't
+/// a lock. Only asked when the session reads as locked.
+fn saver_without_password() -> bool {
+    let Some(ran) = saver_running_for() else { return false };
+    let status = std::process::Command::new("/usr/sbin/sysadminctl").arg("-screenLock").arg("status").output();
+    // (It writes the answer to its log stream, stderr.)
+    let delay = status.ok().map(|o| String::from_utf8_lossy(&o.stderr).into_owned() + &String::from_utf8_lossy(&o.stdout)).and_then(|t| screen_lock_delay(&t));
+    match delay {
+        Some(None) => true,             // screen lock off: the saver never asks
+        Some(Some(after)) => ran < after, // asks only once it has run this long
+        None => false,                  // can't tell: locked, as before
+    }
+}
+
+/// `sysadminctl -screenLock status`: Some(None) when off, Some(Some(delay)) when the password is
+/// asked that long after the saver starts, None when the answer isn't understood.
+fn screen_lock_delay(status: &str) -> Option<Option<Duration>> {
+    let line = status.lines().find(|l| l.contains("screenLock"))?;
+    if line.contains("screenLock is off") {
+        return Some(None);
+    }
+    let rest = line.split("screenLock delay is ").nth(1)?.trim();
+    if rest.starts_with("immediate") {
+        return Some(Some(Duration::ZERO));
+    }
+    let secs: u64 = rest.split_whitespace().next()?.parse().ok()?;
+    Some(Some(Duration::from_secs(secs)))
+}
+
+/// How long this user's screen saver has been running, if it is.
+fn saver_running_for() -> Option<Duration> {
+    let out = std::process::Command::new("/bin/ps").args(["-x", "-o", "etime=,comm="]).output().ok()?;
+    String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| {
+        let (etime, comm) = l.trim().split_once(' ')?;
+        let name = comm.trim().rsplit('/').next()?;
+        matches!(name, "ScreenSaverEngine" | "legacyScreenSaver").then(|| parse_etime(etime)).flatten()
+    }).max()
+}
+
+/// `ps`'s elapsed time: [[dd-]hh:]mm:ss.
+fn parse_etime(t: &str) -> Option<Duration> {
+    let (days, rest) = match t.split_once('-') { Some((d, r)) => (d.parse::<u64>().ok()?, r), None => (0, t) };
+    let parts: Vec<u64> = rest.split(':').map(|p| p.parse().ok()).collect::<Option<_>>()?;
+    let secs = match parts[..] { [m, s] => m * 60 + s, [h, m, s] => h * 3600 + m * 60 + s, _ => return None };
+    Some(Duration::from_secs(days * 86400 + secs))
+}
+
+#[cfg(test)]
+mod saver_tests {
+    use super::*;
+
+    #[test]
+    fn screen_lock_settings_are_read() {
+        let log = |l: &str| format!("2026-11-06 11:38:43.927 sysadminctl[28073:16179599] {l}\n");
+        assert_eq!(screen_lock_delay(&log("screenLock delay is immediate")), Some(Some(Duration::ZERO)));
+        assert_eq!(screen_lock_delay(&log("screenLock delay is 300 seconds")), Some(Some(Duration::from_secs(300))));
+        assert_eq!(screen_lock_delay(&log("screenLock is off")), Some(None));
+        assert_eq!(screen_lock_delay("something else"), None, "not understood: treated as locked");
+    }
+
+    #[test]
+    fn elapsed_times_are_read() {
+        assert_eq!(parse_etime("00:07"), Some(Duration::from_secs(7)));
+        assert_eq!(parse_etime("12:34"), Some(Duration::from_secs(754)));
+        assert_eq!(parse_etime("01:02:03"), Some(Duration::from_secs(3723)));
+        assert_eq!(parse_etime("2-01:02:03"), Some(Duration::from_secs(2 * 86400 + 3723)));
+        assert_eq!(parse_etime("x"), None);
+    }
+
+    /// Reads this Mac's state without changing it: this macOS's screen lock answer is
+    /// understood. (Needs a logged-in Mac, not a CI runner: `cargo test -- --ignored`.)
+    #[test]
+    #[ignore]
+    fn this_macs_saver_state_reads() {
+        eprintln!("saver running for {:?}", saver_running_for());
+        let out = std::process::Command::new("/usr/sbin/sysadminctl").args(["-screenLock", "status"]).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stderr).into_owned() + &String::from_utf8_lossy(&out.stdout);
+        assert!(screen_lock_delay(&text).is_some(), "this macOS's answer isn't understood: {text}");
     }
 }
 
