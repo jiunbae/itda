@@ -110,7 +110,8 @@ pub struct Sender(Arc<Mutex<TcpStream>>);
 
 impl Sender {
     pub fn new(s: TcpStream) -> Sender {
-        // (Shared by every handle to this socket: the reader's clone included.)
+        // (On this handle, the one every frame goes out through: a clone made with try_clone
+        // shares it on Unix but not on Windows.)
         let _ = s.set_write_timeout(Some(WRITE_TIMEOUT));
         Sender(Arc::new(Mutex::new(s)))
     }
@@ -254,8 +255,9 @@ mod tests {
         let _peer = TcpStream::connect(l.local_addr().unwrap()).unwrap(); // never reads
         let (s, _) = l.accept().unwrap();
         let tx = Sender::new(s.try_clone().unwrap());
-        assert_eq!(s.write_timeout().unwrap(), Some(WRITE_TIMEOUT));
-        s.set_write_timeout(Some(Duration::from_millis(200))).unwrap(); // (same socket)
+        // (The sender's own handle: on Windows a clone doesn't share the timeout.)
+        assert_eq!(tx.0.lock().unwrap().write_timeout().unwrap(), Some(WRITE_TIMEOUT));
+        tx.0.lock().unwrap().set_write_timeout(Some(Duration::from_millis(200))).unwrap();
         let big = vec![0u8; 1 << 20];
         let until = Instant::now() + Duration::from_secs(20);
         while tx.binary(&big).is_ok() {
