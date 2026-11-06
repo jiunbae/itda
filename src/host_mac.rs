@@ -118,7 +118,7 @@ pub(crate) fn ready() -> Result<(), String> {
 fn screen_unavailable() -> Option<&'static str> {
     match session_state() {
         Some((true, _)) => Some(crate::hp_upgrade::SCREEN_LOCKED),
-        Some((_, false)) => Some("다른 사용자가 이 Mac 화면을 쓰고 있어 고성능 모드로 보여 줄 수 없습니다"),
+        Some((_, false)) => Some(crate::hp_upgrade::OTHER_USER),
         _ => None,
     }
 }
