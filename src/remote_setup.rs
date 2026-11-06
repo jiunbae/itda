@@ -1849,18 +1849,39 @@ mod tests {
         assert!(unknown.version.is_empty());
     }
 
+    /// The process `mac_probe_finds_a_running_portable_bundle` runs from its bundle copy.
+    #[test]
+    #[ignore]
+    fn portable_probe_sleeper() {
+        if std::env::var_os("ITDA_PROBE_SLEEPER").is_some() {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn mac_probe_finds_a_running_portable_bundle() {
-        // A plain sleep executable, not Itda's GUI: no profile, clipboard, TCC or
-        // LaunchServices registration. The probe only reads plist/process metadata.
+        // Not Itda's GUI: no profile, clipboard, TCC or LaunchServices registration. The probe
+        // only reads plist/process metadata. The process is this test binary waiting in
+        // `portable_probe_sleeper`: a copied /bin/sleep is arm64e, which macOS runs only with
+        // Apple's own signature, so on Apple silicon it was killed ("Code Signature Invalid")
+        // before the probe could see it.
         let root = std::env::temp_dir().join(format!("itda-portable-probe-{}", store::new_id()));
         let app = root.join("Portable Itda.app");
         let executable = app.join("Contents/MacOS/itda");
         fs::create_dir_all(executable.parent().unwrap()).unwrap();
-        fs::copy("/bin/sleep", &executable).unwrap();
+        fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
         fs::write(app.join("Contents/Info.plist"), br#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.jiun.itda</string><key>CFBundleShortVersionString</key><string>99.98.97</string></dict></plist>"#).unwrap();
-        let mut child = std::process::Command::new(&executable).arg("30").spawn().unwrap();
+        let signed = std::process::Command::new("/usr/bin/codesign").args(["--force", "--sign", "-"]).arg(&app).output().unwrap();
+        assert!(signed.status.success(), "{}", String::from_utf8_lossy(&signed.stderr));
+        let mut child = std::process::Command::new(&executable)
+            .args(["--ignored", "--exact", "remote_setup::tests::portable_probe_sleeper", "--test-threads=1", "-q"])
+            .env("ITDA_PROBE_SLEEPER", "1")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        // (Up and waiting before the probe looks.)
+        std::thread::sleep(std::time::Duration::from_millis(300));
         let result = std::process::Command::new("/bin/bash").arg("-c").arg(MAC_PROBE).output();
         // Terminate only this owned synthetic process, never a discovered Itda.
         let _ = child.kill();
