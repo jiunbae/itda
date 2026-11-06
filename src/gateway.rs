@@ -785,24 +785,24 @@ impl Drop for Conn {
     }
 }
 /// This connection's Screen Sharing session unlocked device `id` (or may yet): keep it for the
-/// device. Called while the connection (which `began` then, on a locked Mac) still counts.
-///
-/// One kept before it began is over now: the Mac locked again after that one, so it holds no
-/// unlock, and the new one is what unlocks it now. It ends here rather than piling up while a
-/// window stays open through lock after lock. (One kept after this connection began, by a
-/// second viewer that unlocked the Mac meanwhile, may be the one holding it, and stays.)
-fn keep_unlocked(id: &str, began: u64, end: Box<dyn FnOnce() + Send>) {
-    let stale = {
+/// device. Called while the connection still counts.
+fn keep_unlocked(id: &str, end: Box<dyn FnOnce() + Send>) {
+    DEVICES.lock().unwrap().entry(id.to_string()).or_default().kept.push((seq(), end));
+}
+/// A high-performance session that `began` then (so the Mac was unlocked then) ended because the
+/// Mac locked: what was kept before it began holds no unlock any more. End it now rather than
+/// let it pile up while a window stays open through lock after lock. (Anything kept after that
+/// session began, e.g. by a second viewer, may be what unlocks it next, and stays.)
+fn relocked_since(id: &str, began: u64) {
+    let stale: Vec<(u64, Box<dyn FnOnce() + Send>)> = {
         let mut d = DEVICES.lock().unwrap();
-        let dev = d.entry(id.to_string()).or_default();
+        let Some(dev) = d.get_mut(id) else { return };
         let (stale, keep) = std::mem::take(&mut dev.kept).into_iter().partition(|(at, _)| *at < began);
         dev.kept = keep;
-        dev.kept.push((seq(), end));
         stale
     };
-    let stale: Vec<(u64, Box<dyn FnOnce() + Send>)> = stale;
     if !stale.is_empty() {
-        crate::log!("web viewer {id}: ended {} earlier Screen Sharing session(s) that unlocked it before it locked again", stale.len());
+        crate::log!("web viewer {id}: ended {} Screen Sharing session(s) that unlocked it before it locked again", stale.len());
     }
     stale.into_iter().for_each(|(_, end)| end());
 }
@@ -1223,10 +1223,10 @@ fn hp_unavailable(t: &Tunnel, id: &str) -> Option<Unavailable> {
 /// How long the gateway waits for that answer.
 const HP_LOCKED_PROBE: Duration = Duration::from_secs(3);
 
-/// How to close the viewer's side once the device ended the session: `probe` (high-performance
-/// only) says whether that Mac can't show its screen now.
-fn device_closed(probe: Option<Probe>) -> (u16, &'static str) {
-    match probe.and_then(|p| p()) {
+/// How to close the viewer's side once the device ended the session, given why that Mac can't
+/// show its screen now (asked of high-performance sharing only).
+fn device_closed(why: Option<Unavailable>) -> (u16, &'static str) {
+    match why {
         Some(u) => (LOCKED_CLOSE, unavailable_close_text(u)),
         None => (1000, "원격 기기와의 연결이 끊겼습니다"),
     }
@@ -1276,9 +1276,13 @@ fn relay(c: TcpStream, raw: rfb::Raw, tx: ws::Sender, id: &str, tunnel: Option<A
         };
         let viewer_gone = !device_ended || left.load(std::sync::atomic::Ordering::Acquire);
         // (Asked only when the device ended it: a viewer that left needs no reason.)
-        let (code, why) = device_closed(probe.filter(|_| !viewer_gone));
+        let unavailable = probe.filter(|_| !viewer_gone).and_then(|p| p());
+        let (code, why) = device_closed(unavailable);
         if code == LOCKED_CLOSE {
             crate::log!("web viewer {who}: that Mac's screen became unavailable during high-performance sharing ({why}); the viewer reconnects through Screen Sharing");
+        }
+        if unavailable == Some(Unavailable::Locked) {
+            relocked_since(&who, began);
         }
         down.close(code, why);
     });
@@ -1304,7 +1308,7 @@ fn relay(c: TcpStream, raw: rfb::Raw, tx: ws::Sender, id: &str, tunnel: Option<A
     if LOCKED_FALLBACK.with(|l| l.get()) {
         // (The viewer may be switching to high-performance now that it's unlocked.)
         crate::log!("web viewer {id}: closed; its Screen Sharing session stays for the switch");
-        keep_unlocked(id, began, Box::new(end));
+        keep_unlocked(id, Box::new(end));
         return Ok(());
     }
     end();
@@ -1349,10 +1353,9 @@ mod tests {
     #[test]
     fn a_device_ended_session_says_locked_only_when_the_mac_refuses_for_its_lock() {
         use super::{device_closed, LOCKED_CLOSE};
-        assert_eq!(device_closed(None).0, 1000, "Screen Sharing (no probe) ended as before");
-        assert_eq!(device_closed(Some(Box::new(|| None))).0, 1000, "an unlocked Mac's end is an ordinary drop");
+        assert_eq!(device_closed(None).0, 1000, "an ordinary drop (Screen Sharing, or an unlocked Mac's end)");
         for u in [super::Unavailable::Locked, super::Unavailable::OtherUser] {
-            let (code, why) = device_closed(Some(Box::new(move || Some(u))));
+            let (code, why) = device_closed(Some(u));
             assert_eq!(code, LOCKED_CLOSE);
             // A WebSocket close reason carries at most 123 bytes; ws::Sender::close cuts at 120.
             assert!(why.len() <= 120, "close reason cut short: {} bytes", why.len());
@@ -1392,9 +1395,9 @@ mod tests {
         // Screen Sharing for the locked Mac; a second viewer (high-performance) joins.
         let fallback = super::Conn::begin("dev-mac");
         let second = super::Conn::begin("dev-mac");
-        super::keep_unlocked("dev-mac", fallback.1, end(1));
+        super::keep_unlocked("dev-mac", end(1));
         let other = super::Conn::begin("other-mac");
-        super::keep_unlocked("other-mac", other.1, end(100));
+        super::keep_unlocked("other-mac", end(100));
         drop(fallback);
         wait();
         assert_eq!(now(), 0, "ended while another viewer of that Mac was still connected");
@@ -1422,9 +1425,10 @@ mod tests {
         ends_to(101);
     }
 
-    /// A window that stays open through lock after lock keeps only the session that unlocked
-    /// the Mac last: one kept before the Mac locked again ends when the next is kept. One kept
-    /// meanwhile by a second viewer (that may be what unlocked it) stays.
+    /// A window that stays open through lock after lock keeps only what may still hold an
+    /// unlock: once a high-performance session (so the Mac was unlocked when it began) ends
+    /// because it locked, what was kept before that session began ends; what was kept after
+    /// (a second viewer, perhaps unlocking it now) stays, and nothing ends before that's known.
     #[test]
     fn kept_screen_sharing_does_not_pile_up_across_locks() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1432,27 +1436,26 @@ mod tests {
         let ended = Arc::new(AtomicUsize::new(0));
         let end = |n: usize| { let e = ended.clone(); Box::new(move || { e.fetch_add(n, Ordering::SeqCst); }) as Box<dyn FnOnce() + Send> };
         let now = || ended.load(Ordering::SeqCst);
-        let hp = super::Conn::begin("cycle-mac");
-        // Locked: Screen Sharing, unlocked through it, switched back (kept).
+        // Locked: Screen Sharing, unlocked through it, switched to high-performance (kept).
         let first = super::Conn::begin("cycle-mac");
-        super::keep_unlocked("cycle-mac", first.1, end(1));
+        super::keep_unlocked("cycle-mac", end(1));
+        let hp = super::Conn::begin("cycle-mac");
         drop(first);
-        // Two windows on Screen Sharing for the next lock; the second unlocks it and switches
-        // first: the first window's kept later must not end the second's.
-        let a = super::Conn::begin("cycle-mac");
-        let b = super::Conn::begin("cycle-mac");
-        super::keep_unlocked("cycle-mac", b.1, end(10));
-        assert_eq!(now(), 1, "the session kept before this lock ended");
-        super::keep_unlocked("cycle-mac", a.1, end(100));
-        assert_eq!(now(), 1, "a session kept after this connection began ended (it may hold the unlock)");
-        drop((a, b));
-        assert!(super::keeps_unlocked("cycle-mac"));
+        // A second window's Screen Sharing, kept while high-performance is on.
+        let other = super::Conn::begin("cycle-mac");
+        super::keep_unlocked("cycle-mac", end(10));
+        drop(other);
+        assert_eq!(now(), 0, "ended before the Mac was known to have locked again");
+        // High-performance ends: the Mac locked.
+        super::relocked_since("cycle-mac", hp.1);
+        assert_eq!(now(), 1, "the session kept before the high-performance one began should end, and only it");
         drop(hp);
+        assert!(super::keeps_unlocked("cycle-mac"));
         let until = std::time::Instant::now() + super::LOCKED_FALLBACK_LINGER * 20;
-        while now() != 111 && std::time::Instant::now() < until {
+        while now() != 11 && std::time::Instant::now() < until {
             std::thread::sleep(super::LOCKED_FALLBACK_LINGER / 10);
         }
-        assert_eq!(now(), 111);
+        assert_eq!(now(), 11);
     }
 
     #[test]
