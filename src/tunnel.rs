@@ -230,6 +230,26 @@ pub fn register_child(child: &Child) {
     #[cfg(not(windows))] let _ = child;
 }
 
+/// Kill a child and reap it, so it doesn't stay behind as a zombie (`<defunct>`) until Itda
+/// exits. After a kill the wait is normally immediate; if not, it finishes on its own thread
+/// rather than holding up the caller (a Drop, a timeout path).
+pub fn kill_and_reap(mut child: Child) {
+    let _ = child.kill();
+    if !matches!(child.try_wait(), Ok(Some(_))) {
+        reap_detached(child);
+    }
+}
+
+/// Wait for a child nobody else waits for (fire-and-forget helpers), on its own thread.
+pub fn reap_detached(mut child: Child) {
+    let spawned = std::thread::Builder::new().name("reap".into()).spawn(move || {
+        let _ = child.wait();
+    });
+    if let Err(e) = spawned {
+        crate::log!("child process not reaped: {e}");
+    }
+}
+
 impl Tunnel {
     pub fn open(cfg: SshCfg) -> io::Result<Arc<Tunnel>> {
         let t = Arc::new(Tunnel {
@@ -291,7 +311,7 @@ impl Tunnel {
                 return Err(e);
             }
             if Instant::now() > end {
-                let _ = child.kill();
+                kill_and_reap(child);
                 log_debug(&self.log.lock().unwrap());
                 crate::log!("ssh timed out");
                 return Err(err(io::ErrorKind::TimedOut, "SSH 연결 시간 초과"));
@@ -326,8 +346,8 @@ impl Tunnel {
 
 impl Drop for Tunnel {
     fn drop(&mut self) {
-        if let Some(mut c) = self.child.lock().unwrap().take() {
-            let _ = c.kill();
+        if let Some(c) = self.child.lock().unwrap().take() {
+            kill_and_reap(c);
         }
     }
 }
@@ -360,6 +380,40 @@ pub fn forget_host_key(host: &str, port: u16) {
 
 #[cfg(test)]
 mod tests {
+    /// A dropped tunnel kills its ssh and reaps it: nothing left behind as `<defunct>`.
+    #[cfg(unix)]
+    #[test]
+    fn dropped_tunnel_leaves_no_zombie() {
+        use super::*;
+        let gone = |pid: u32| {
+            // `ps` still lists a zombie (state Z); a reaped process isn't listed at all.
+            let out = Command::new("/bin/ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().is_empty()
+        };
+        let wait_gone = |pid: u32| {
+            let until = Instant::now() + Duration::from_secs(5);
+            while !gone(pid) {
+                assert!(Instant::now() < until, "child {pid} not reaped");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        let cfg = SshCfg { host: String::new(), port: 22, user: String::new(), pass: String::new(), vnc_port: 5900, key: String::new(), key_pass: String::new(), key_alias: String::new() };
+        let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        let t = Tunnel { cfg, child: Mutex::new(Some(child)), port: Mutex::new(0), log: Arc::new(Mutex::new(String::new())) };
+        drop(t);
+        wait_gone(pid);
+        // The startup-timeout path, and helpers nobody waits for, likewise.
+        let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        kill_and_reap(child);
+        wait_gone(pid);
+        let child = Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id();
+        reap_detached(child);
+        wait_gone(pid);
+    }
+
     #[test]
     fn ssh_debug_lines_wait_for_failure() {
         use super::log_now;

@@ -57,7 +57,21 @@ struct Fails {
     all: (u32, Option<Instant>),
 }
 /// Open browser sessions of the web viewer, closed when it stops.
-static LIVE: Mutex<Vec<TcpStream>> = Mutex::new(Vec::new());
+/// Each entry leaves with its connection (`LiveConn`), so remote viewers don't pile up sockets.
+static LIVE: Mutex<Vec<(u64, TcpStream)>> = Mutex::new(Vec::new());
+struct LiveConn(u64);
+impl LiveConn {
+    fn track(c: &TcpStream) -> io::Result<Self> {
+        let ticket = LOCAL_STREAM_ID.fetch_add(1, Relaxed);
+        LIVE.lock().unwrap().push((ticket, c.try_clone()?));
+        Ok(Self(ticket))
+    }
+}
+impl Drop for LiveConn {
+    fn drop(&mut self) {
+        LIVE.lock().unwrap().retain(|(ticket, _)| *ticket != self.0);
+    }
+}
 // Native monitor views share a relay; closing the final view must stop both sockets,
 // without waiting for WebKit to collect cross-window JavaScript references.
 static LOCAL_STREAMS: Mutex<Vec<(u64, String, TcpStream, TcpStream)>> = Mutex::new(Vec::new());
@@ -198,7 +212,7 @@ pub fn stop() {
             Err(e) => crate::log!("web viewer stop: accept not woken: {e}"),
         }
     }
-    for s in LIVE.lock().unwrap().drain(..) {
+    for (_, s) in LIVE.lock().unwrap().drain(..) {
         let _ = s.shutdown(Shutdown::Both);
     }
     TOKENS.lock().unwrap().retain(|t| t.2);
@@ -983,9 +997,8 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u3
     // (Holds a Screen Sharing session kept from unlocking this device until it's over.)
     let _conn = Conn::begin(id);
     let tx = ws::Sender::new(c.try_clone()?);
-    if !local {
-        LIVE.lock().unwrap().push(c.try_clone()?);
-    }
+    // (Removed from LIVE however this connection ends.)
+    let _live = if local { None } else { Some(LiveConn::track(&c)?) };
     let fail = |code: u16, why: String| {
         crate::log!("web viewer {id}: {why}");
         tx.close(code, &why);
@@ -1265,6 +1278,22 @@ fn kind_code(kind: &str) -> u16 {
 
 #[cfg(test)]
 mod tests {
+    /// A remote viewer's socket leaves LIVE when its connection ends; stop still closes the
+    /// ones open.
+    #[test]
+    fn live_entry_leaves_with_its_connection() {
+        use std::net::{TcpListener, TcpStream};
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let _a = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        let (c, _) = l.accept().unwrap();
+        let has = |t: u64| super::LIVE.lock().unwrap().iter().any(|(x, _)| *x == t);
+        let live = super::LiveConn::track(&c).unwrap();
+        let ticket = live.0;
+        assert!(has(ticket));
+        drop(live);
+        assert!(!has(ticket), "entry outlived its connection");
+    }
+
     #[test]
     fn a_device_ended_session_says_locked_only_when_the_mac_refuses_for_its_lock() {
         use super::{device_closed, LOCKED_CLOSE};

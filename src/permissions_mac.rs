@@ -218,7 +218,7 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
             "guide_reveal" | "guide_copy" => {
                 let app = app_path().ok_or("응용 프로그램 폴더의 Itda 앱을 실행해 주세요")?;
                 if v["cmd"] == "guide_reveal" {
-                    std::process::Command::new("/usr/bin/open").arg("-R").arg(&app).spawn().map_err(|e| e.to_string())?;
+                    std::process::Command::new("/usr/bin/open").arg("-R").arg(&app).spawn().map(crate::tunnel::reap_detached).map_err(|e| e.to_string())?;
                 } else {
                     let pb = NSPasteboard::generalPasteboard();
                     pb.clearContents();
@@ -275,6 +275,7 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
                     .arg("-R")
                     .arg(app)
                     .spawn()
+                    .map(crate::tunnel::reap_detached)
                     .map_err(|e| e.to_string())?;
             }
             "permission_copy" => {
@@ -352,6 +353,7 @@ fn request(permission: &str) -> Result<(), String> {
     std::process::Command::new("/usr/bin/open")
         .arg(url)
         .spawn()
+        .map(crate::tunnel::reap_detached)
         .map_err(|e| e.to_string())?;
     Ok(())
 }
