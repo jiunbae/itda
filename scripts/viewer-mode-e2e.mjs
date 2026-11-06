@@ -35,7 +35,7 @@ try{
  const p=await browser.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
  await p.addInitScript(()=>{
   window.ipcEvents=[];window.ipc={postMessage:m=>ipcEvents.push(JSON.parse(m))};
-  window.WebSocket=class extends EventTarget {constructor(url){super();this.url=url;}close(){}send(){}};
+  window.WebSocket=class extends EventTarget {constructor(url){super();this.url=url;window.fixtureWs=this;}close(){}send(){}};
  });
  await p.clock.install();
  await p.goto(`http://127.0.0.1:${server.address().port}/?open=studio`);
@@ -142,6 +142,34 @@ try{
  assert(readyRequests===asked,'kept asking after switching: '+(readyRequests-asked));
  await hp.click();
  assert(await p.evaluate(()=>ipcEvents.some(m=>m.ev==='hp-off')),'after the switch settled the button no longer turns high-performance off');
+ // The Mac locks during high-performance sharing: the gateway ends it with LOCKED_CLOSE. The
+ // viewer reconnects at once (no drop/retry countdown), lands on Screen Sharing with the locked
+ // message, and switches back once unlocked.
+ hpReady=false;mode={hp:true};
+ await p.goto(before);await quality.waitFor();
+ const lockDrop=()=>p.evaluate(()=>{fixtureWs.dispatchEvent(new CloseEvent('close',{code:4030,reason:'그 Mac의 화면이 잠겨 기본 화면 공유로 다시 연결합니다'}));fixtureRfb.dispatchEvent(new Event('disconnect'));});
+ {
+  const base=await app();
+  mode={hp:false,locked:true,reason:'화면이 잠겨 있어 고성능 모드로 보여 줄 수 없습니다'};readyRequests=0;
+  await lockDrop();
+  await p.clock.runFor(100);await p.waitForTimeout(50);
+  const now=await app();
+  assert(now.sessions===base.sessions+1&&now.reconnecting===base.reconnecting&&now.errors===base.errors&&!now.status,'a lock during high-performance did not reconnect at once: '+JSON.stringify(now));
+  assert(await p.evaluate(()=>[...document.querySelectorAll('.toast')].some(t=>t.textContent.includes('잠겨'))),'a lock during high-performance said nothing');
+  await p.waitForFunction(()=>document.querySelector('[data-t=hp]')?.title.includes('연결되지 않음'));
+  assert(await p.evaluate(()=>[...document.querySelectorAll('.toast')].some(t=>t.textContent.includes('잠금을 풀면'))),'the reconnect after a lock did not say it will switch back');
+  const locked=await p.evaluate(()=>fixtureSessions);
+  hpReady=true;mode={hp:true};
+  await p.clock.runFor(4100);await p.waitForTimeout(100);
+  assert(await p.evaluate(()=>fixtureSessions)===locked+1&&readyRequests>=1,'unlock after a lock during high-performance did not switch back');
+  // A second lock close soon after is handled as an ordinary drop (no reconnect loop).
+  const again=await app();
+  await lockDrop();
+  await p.clock.runFor(100);
+  const dropped=await app();
+  assert(dropped.reconnecting===again.reconnecting+1&&dropped.sessions===again.sessions,'a repeated lock close looped instead of the usual drop handling: '+JSON.stringify(dropped));
+  await p.clock.runFor(2100);
+ }
  assert(errors.length===0,errors.join('\n'));
- console.log('PASS: HTTP500 and null mode unknown/retry; locked fallback switches once unlocked; active capture and stale status guards; diagnostic retries preserve session, settings and per-attempt token');
+ console.log('PASS: HTTP500 and null mode unknown/retry; locked fallback switches once unlocked; a lock during high-performance reconnects through Screen Sharing and back; active capture and stale status guards; diagnostic retries preserve session, settings and per-attempt token');
 }finally{await browser.close();await new Promise(r=>server.close(r));}

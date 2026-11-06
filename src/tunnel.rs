@@ -305,12 +305,17 @@ impl Tunnel {
 
     /// Where to connect for RFB; restarts ssh if it died (network change, sleep).
     pub fn addr(&self) -> io::Result<String> {
-        let alive = self.child.lock().unwrap().as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None)));
-        if !alive {
+        if self.live_addr().is_none() {
             crate::log!("ssh tunnel down, restarting");
             self.start()?;
         }
         Ok(format!("127.0.0.1:{}", self.port.lock().unwrap()))
+    }
+
+    /// Where to connect for RFB while ssh is still up; nothing (no restart) once it's gone.
+    pub fn live_addr(&self) -> Option<String> {
+        let alive = self.child.lock().unwrap().as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None)));
+        alive.then(|| format!("127.0.0.1:{}", self.port.lock().unwrap()))
     }
 
     /// The Mac accepted SSH but refused the forwarded connection: Screen Sharing is off.
