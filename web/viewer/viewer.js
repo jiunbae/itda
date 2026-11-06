@@ -684,9 +684,9 @@ function open(h) {
     S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; S.hpModeContext = null; S.hpMode = null; S.hpCurtain = undefined; S.hpCurtainAsked = false; renderTools();
     // Only for the attempt still current: a replacement opened meanwhile (the HP toggle, a
     // quality change) owns the window now.
-    if (APP) return setTimeout(() => { if (S.gen === gen) appDropped(h, closeInfo, gen); }, 50);
+    if (APP) return setTimeout(() => { if (S.gen === gen && !lockedDrop(h, closeInfo)) appDropped(h, closeInfo, gen); }, 50);
     setTimeout(async () => {
-      if (S.gen !== gen) return;
+      if (S.gen !== gen || lockedDrop(h, closeInfo)) return;
       const code = closeInfo ? closeInfo.code : 0;
       const known = CLOSE_TEXT[code];
       const [t, d] = known ? known(h) : ['연결이 끊겼습니다', closeInfo && closeInfo.reason ? closeInfo.reason : '네트워크 상태를 확인하고 다시 연결하세요.'];
@@ -703,6 +703,20 @@ function open(h) {
     if (APP) { if (opt('clipboard', true)) post({ ev: 'clip', text: S.clip }); return; }
     toast(`${dev()} 클립보드를 받았습니다 — 📋에서 볼 수 있습니다`);
   });
+}
+
+// That Mac's screen locked during high-performance sharing, which then shows only the lock
+// screen's picture: the gateway says so (LOCKED_CLOSE). Reconnect at once; the Mac refuses
+// high-performance while locked, so this lands on Screen Sharing, where it can be unlocked
+// (and refreshHpMode/watchUnlock switch back once it is). Once per 15 s, so a Mac that keeps
+// ending sessions this way gets the usual drop handling instead of a loop.
+const LOCKED_CLOSE = 4030;
+function lockedDrop(h, info) {
+  if (info?.code !== LOCKED_CLOSE || !h?.hp?.on || (S.lockDropAt != null && Date.now() - S.lockDropAt < 15000)) return false;
+  S.lockDropAt = Date.now();
+  toast('그 Mac의 화면이 잠겨 기본 화면 공유로 다시 연결합니다');
+  open(h);
+  return true;
 }
 
 // App window: a first attempt that fails goes back to the home (which explains it); a drop

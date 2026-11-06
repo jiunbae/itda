@@ -581,6 +581,8 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
     let mut clip_seq = platform::clipboard_seq();
     let mut clip_check = Instant::now();
     let mut ext_clip = false;
+    #[cfg(target_os = "macos")]
+    let mut lock_watch = platform::LockWatch::new();
     loop {
         if stop.load(Relaxed) {
             return Ok(());
@@ -591,6 +593,10 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         // Terminal shared-capture failure must close even an idle/view-only viewer.
         #[cfg(target_os = "macos")]
         cap.lock().unwrap().check()?;
+        // A screen locked since the session began is only its picture here: end the session so
+        // the viewer's Itda reconnects through Screen Sharing (see `LockWatch`).
+        #[cfg(target_os = "macos")]
+        lock_watch.check(Instant::now())?;
         // Wake for the viewer's messages, the next capture when an update is due, or a
         // clipboard check. Captures stay FRAME apart also when the screen doesn't change.
         let gap = if video.is_some() { VIDEO_FRAME } else { FRAME };

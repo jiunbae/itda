@@ -696,6 +696,8 @@ thread_local! {
     /// The viewer couldn't show this device's high-performance video (?nohp=1): this attempt
     /// uses Screen Sharing whatever the saved choice.
     static NO_HP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// This connection is to the Mac's high-performance sharing (not Screen Sharing).
+    static HP_LIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 /// Why a connection used Screen Sharing after the viewer asked (?nohp=1).
 const HP_UNDECODABLE: &str = "이 기기에서 그 Mac의 고성능 영상을 표시하지 못했습니다";
@@ -920,7 +922,7 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
                         None => json!({"ready": false}),
                         Some(pass) => match open_hp(&host.reachable(), &login, &pass) {
                             Ok(_) => json!({"ready": true}),
-                            Err(e) => json!({"ready": false, "locked": e.to_string().contains(crate::hp_upgrade::SCREEN_LOCKED)}),
+                            Err(e) => json!({"ready": false, "locked": locked_refusal(&e)}),
                         },
                     }
                 }
@@ -963,6 +965,7 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             let attempt: String = req.query.split('&').find_map(|kv| kv.strip_prefix("attempt=")).unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(64).collect();
             ATTEMPT.with(|a| *a.borrow_mut() = attempt);
             LOCKED_FALLBACK.with(|l| l.set(false));
+            HP_LIVE.with(|l| l.set(false));
             NO_HP.with(|n| n.set(req.query.split('&').any(|kv| kv == "nohp=1")));
             proxy(c, &id, peer, local, size)
         }
@@ -1015,7 +1018,14 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u3
     if id != THIS_PC {
         mark_used(id, &raw);
     }
-    relay(c, raw, tx, id, tunnel, local)
+    // A high-performance session the Mac ends asks it why: one that ended because its screen
+    // locked (the capture there shows only the lock screen's picture) closes with LOCKED_CLOSE,
+    // and the viewer reconnects at once, getting Screen Sharing where it can be unlocked.
+    let probe = tunnel.clone().filter(|_| HP_LIVE.with(|l| l.get())).map(|t| {
+        let id = id.to_string();
+        Box::new(move || hp_locked(&t, &id)) as Box<dyn FnOnce() -> bool + Send>
+    });
+    relay(c, raw, tx, id, tunnel, local, probe)
 }
 
 fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mut Option<Arc<Tunnel>>, size: Option<(u32, u32)>) -> io::Result<rfb::Raw> {
@@ -1043,6 +1053,7 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
         match open_hp(host, login, &pass) {
             Ok((t, raw)) => {
                 *tunnel = Some(t);
+                HP_LIVE.with(|l| l.set(true));
                 record_mode(&host.id, json!({"hp": true}));
                 // (Screen Sharing kept from unlocking this Mac lasts as long as this connection.)
                 if keeps_unlocked(&host.id) {
@@ -1057,7 +1068,7 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
                 // Set up again (not retried) when it's high-performance sharing itself that is off
                 // or no longer matches; SSH problems keep their own message.
                 let setup = e.get_ref().is_some_and(|r| r.is::<HpSetup>());
-                let locked = e.to_string().contains(crate::hp_upgrade::SCREEN_LOCKED);
+                let locked = locked_refusal(&e);
                 LOCKED_FALLBACK.with(|l| l.set(locked));
                 record_mode(&host.id, json!({"hp": false, "setup": setup, "locked": locked, "reason": e.to_string()}));
             }
@@ -1125,7 +1136,31 @@ pub(crate) fn open_hp(host: &store::Host, login: &store::Login, ssh_pass: &str) 
     Ok((t, raw))
 }
 
-fn relay(c: TcpStream, raw: rfb::Raw, tx: ws::Sender, id: &str, tunnel: Option<Arc<Tunnel>>, local: bool) -> io::Result<()> {
+/// The Mac's high-performance sharing refused because its screen is locked.
+fn locked_refusal(e: &io::Error) -> bool {
+    e.to_string().contains(crate::hp_upgrade::SCREEN_LOCKED)
+}
+
+/// Close code for a high-performance session that ended because the Mac's screen locked (the
+/// viewer reconnects at once and gets Screen Sharing).
+const LOCKED_CLOSE: u16 = 4030;
+const LOCKED_CLOSE_TEXT: &str = "그 Mac의 화면이 잠겨 기본 화면 공유로 다시 연결합니다";
+
+/// Asks the Mac's high-performance sharing, through the session's own tunnel (no new SSH login,
+/// and none at all once that's gone), whether it refuses now because its screen is locked.
+fn hp_locked(t: &Tunnel, id: &str) -> bool {
+    let Some(addr) = t.live_addr() else { return false };
+    let Some(pass) = store::get_password(&crate::hp_upgrade::password_key(id)) else { return false };
+    rfb::open(&addr, &Creds { user: String::new(), pass }).is_err_and(|e| locked_refusal(&e))
+}
+
+/// How to close the viewer's side once the device ended the session: `probe` (high-performance
+/// only) says whether that Mac refuses now because its screen locked.
+fn device_closed(probe: Option<Box<dyn FnOnce() -> bool + Send>>) -> (u16, &'static str) {
+    if probe.is_some_and(|locked| locked()) { (LOCKED_CLOSE, LOCKED_CLOSE_TEXT) } else { (1000, "원격 기기와의 연결이 끊겼습니다") }
+}
+
+fn relay(c: TcpStream, raw: rfb::Raw, tx: ws::Sender, id: &str, tunnel: Option<Arc<Tunnel>>, local: bool, probe: Option<Box<dyn FnOnce() -> bool + Send>>) -> io::Result<()> {
     let rfb::Raw { reader, mut writer, server_init, .. } = raw;
     let _local_relay=if local {Some(LocalRelay::track(id,&c,&writer)?)} else {None};
     // The handshake timeout must not cut a quiet (unchanging) screen.
@@ -1148,33 +1183,45 @@ fn relay(c: TcpStream, raw: rfb::Raw, tx: ws::Sender, id: &str, tunnel: Option<A
     let down = tx.clone();
     let mac_sock = writer.try_clone()?;
     let mut reader = reader;
+    // The viewer left first (its side ended this relay): no reason to ask the device for.
+    let viewer_left = Arc::new(AtomicBool::new(false));
+    let (left, who) = (viewer_left.clone(), id.to_string());
     // Whatever the 1 MB read buffer holds goes out as one message: no copy into a smaller
     // buffer first, and fewer, larger messages for the browser to handle.
     let pump = std::thread::spawn(move || {
-        loop {
+        let device_ended = loop {
             let n = match reader.fill_buf() {
-                Ok([]) | Err(_) => break,
+                Ok([]) | Err(_) => break true,
                 Ok(b) => {
                     if down.binary(b).is_err() {
-                        break;
+                        break false;
                     }
                     b.len()
                 }
             };
             reader.consume(n);
+        };
+        let viewer_gone = !device_ended || left.load(std::sync::atomic::Ordering::Acquire);
+        // (Asked only when the device ended it: a viewer that left needs no reason.)
+        let (code, why) = device_closed(probe.filter(|_| !viewer_gone));
+        if code == LOCKED_CLOSE {
+            crate::log!("web viewer {who}: that Mac's screen locked during high-performance sharing; the viewer reconnects through Screen Sharing");
         }
-        down.close(1000, "원격 기기와의 연결이 끊겼습니다");
+        down.close(code, why);
     });
     let mut buf = vec![0u8; 1 << 16];
-    loop {
+    let viewer_ended = loop {
         match rx.read(&mut buf) {
-            Ok(0) | Err(_) => break,
+            Ok(0) | Err(_) => break true,
             Ok(n) => {
                 if writer.write_all(&buf[..n]).is_err() {
-                    break;
+                    break false;
                 }
             }
         }
+    };
+    if viewer_ended {
+        viewer_left.store(true, std::sync::atomic::Ordering::Release);
     }
     let end = move || {
         let _ = mac_sock.shutdown(Shutdown::Both);
@@ -1210,6 +1257,25 @@ fn kind_code(kind: &str) -> u16 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_device_ended_session_says_locked_only_when_the_mac_refuses_for_its_lock() {
+        use super::{device_closed, LOCKED_CLOSE};
+        assert_eq!(device_closed(None).0, 1000, "Screen Sharing (no probe) ended as before");
+        assert_eq!(device_closed(Some(Box::new(|| false))).0, 1000, "an unlocked Mac's end is an ordinary drop");
+        let (code, why) = device_closed(Some(Box::new(|| true)));
+        assert_eq!(code, LOCKED_CLOSE);
+        // A WebSocket close reason carries at most 123 bytes; ws::Sender::close cuts at 120.
+        assert!(why.len() <= 120, "close reason cut short: {} bytes", why.len());
+    }
+
+    /// The lock answer the gateway matches is the one the Mac's sharing gives.
+    #[test]
+    fn locked_refusals_are_recognised() {
+        let refused = std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("인증 실패: {}", crate::hp_upgrade::SCREEN_LOCKED));
+        assert!(super::locked_refusal(&refused));
+        assert!(!super::locked_refusal(&std::io::Error::other("원격 Mac의 Itda 고성능 공유에 연결하지 못했습니다")));
+    }
+
     /// A kept Screen Sharing session belongs to its device: it lasts while any connection to
     /// it does (a second viewer, a reconnect the other way, one still starting), ends a moment
     /// after the last one, and another device's is its own.

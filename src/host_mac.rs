@@ -1148,6 +1148,69 @@ pub(crate) fn screen_locked() -> bool {
     session_state().is_some_and(|(locked, _)| locked)
 }
 
+/// How often a running viewer's session asks whether the screen has locked since it began.
+const LOCK_POLL: Duration = Duration::from_secs(1);
+
+/// Ends a running session once this Mac's screen locks (⌃⌘Q through the viewer, or at the Mac):
+/// the capture then shows only the lock screen's picture, which can't be unlocked from here. The
+/// viewer's Itda reconnects, this server refuses with `SCREEN_LOCKED` as at the start, and it
+/// gets Screen Sharing, where the lock screen can be answered. Asked at most once a `LOCK_POLL`.
+pub(crate) struct LockWatch {
+    next: Instant,
+    locked: fn() -> bool,
+}
+
+impl LockWatch {
+    pub(crate) fn new() -> Self {
+        // (Tests drive the pump on whatever this Mac's screen shows; they never lock it.)
+        Self::with_source(if cfg!(test) { || false } else { screen_locked }, Instant::now())
+    }
+
+    fn with_source(locked: fn() -> bool, now: Instant) -> Self {
+        Self { next: now, locked }
+    }
+
+    pub(crate) fn check(&mut self, now: Instant) -> io::Result<()> {
+        if now < self.next { return Ok(()); }
+        self.next = now + LOCK_POLL;
+        if (self.locked)() { Err(io::Error::other(crate::hp_upgrade::SCREEN_LOCKED)) } else { Ok(()) }
+    }
+}
+
+#[cfg(test)]
+mod lock_watch_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    static ASKED: AtomicUsize = AtomicUsize::new(0);
+    static LOCKED: AtomicBool = AtomicBool::new(false);
+    fn source() -> bool {
+        ASKED.fetch_add(1, Ordering::SeqCst);
+        LOCKED.load(Ordering::SeqCst)
+    }
+
+    #[test]
+    fn a_session_ends_with_the_locked_reason_once_the_screen_locks_asking_at_most_once_a_second() {
+        let at = Instant::now();
+        let mut watch = LockWatch::with_source(source, at);
+        assert!(watch.check(at).is_ok());
+        assert_eq!(ASKED.load(Ordering::SeqCst), 1);
+        // Every pump turn checks; the session state is asked only once a second.
+        LOCKED.store(true, Ordering::SeqCst);
+        for ms in [1, 16, 500, 999] {
+            assert!(watch.check(at + Duration::from_millis(ms)).is_ok(), "asked again after {ms} ms");
+        }
+        assert_eq!(ASKED.load(Ordering::SeqCst), 1);
+        let error = watch.check(at + LOCK_POLL).unwrap_err();
+        assert_eq!(ASKED.load(Ordering::SeqCst), 2);
+        // The gateway and the viewer's reconnect match this reason, as for a refusal at the start.
+        assert!(error.to_string().contains(crate::hp_upgrade::SCREEN_LOCKED));
+        LOCKED.store(false, Ordering::SeqCst);
+        assert!(watch.check(at + LOCK_POLL * 2).is_ok());
+        assert_eq!(ASKED.load(Ordering::SeqCst), 3);
+    }
+}
+
 /// Poll intent as well as the bounded framework deadline; a user stop cancels pending startup.
 fn wait_capture<T>(rx: &std::sync::mpsc::Receiver<T>) -> Result<T, String> {
     let until = Instant::now() + START_WAIT;
