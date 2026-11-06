@@ -107,10 +107,19 @@ pub(crate) fn ready() -> Result<(), String> {
     if !CGPreflightScreenCaptureAccess() {
         return Err("이 Mac에서 화면 기록 권한이 아직 허용되지 않았습니다".into());
     }
+    match screen_unavailable() {
+        Some(why) => Err(why.into()),
+        None => Ok(()),
+    }
+}
+
+/// Why this Mac's screen can't be shown to a viewer now, if it can't: locked, or another user's
+/// session on the display (fast user switching).
+fn screen_unavailable() -> Option<&'static str> {
     match session_state() {
-        Some((true, _)) => Err(crate::hp_upgrade::SCREEN_LOCKED.into()),
-        Some((_, false)) => Err("다른 사용자가 이 Mac 화면을 쓰고 있어 고성능 모드로 보여 줄 수 없습니다".into()),
-        _ => Ok(()),
+        Some((true, _)) => Some(crate::hp_upgrade::SCREEN_LOCKED),
+        Some((_, false)) => Some("다른 사용자가 이 Mac 화면을 쓰고 있어 고성능 모드로 보여 줄 수 없습니다"),
+        _ => None,
     }
 }
 
@@ -1154,26 +1163,28 @@ const LOCK_POLL: Duration = Duration::from_secs(1);
 /// Ends a running session once this Mac's screen locks (⌃⌘Q through the viewer, or at the Mac):
 /// the capture then shows only the lock screen's picture, which can't be unlocked from here. The
 /// viewer's Itda reconnects, this server refuses with `SCREEN_LOCKED` as at the start, and it
-/// gets Screen Sharing, where the lock screen can be answered. Asked at most once a `LOCK_POLL`.
+/// gets Screen Sharing, where the lock screen can be answered. Likewise once another user's
+/// session takes the display (fast user switching), as `ready` refuses then. Asked at most once
+/// a `LOCK_POLL`.
 pub(crate) struct LockWatch {
     next: Instant,
-    locked: fn() -> bool,
+    unavailable: fn() -> Option<&'static str>,
 }
 
 impl LockWatch {
     pub(crate) fn new() -> Self {
         // (Tests drive the pump on whatever this Mac's screen shows; they never lock it.)
-        Self::with_source(if cfg!(test) { || false } else { screen_locked }, Instant::now())
+        Self::with_source(if cfg!(test) { || None } else { screen_unavailable }, Instant::now())
     }
 
-    fn with_source(locked: fn() -> bool, now: Instant) -> Self {
-        Self { next: now, locked }
+    fn with_source(unavailable: fn() -> Option<&'static str>, now: Instant) -> Self {
+        Self { next: now, unavailable }
     }
 
     pub(crate) fn check(&mut self, now: Instant) -> io::Result<()> {
         if now < self.next { return Ok(()); }
         self.next = now + LOCK_POLL;
-        if (self.locked)() { Err(io::Error::other(crate::hp_upgrade::SCREEN_LOCKED)) } else { Ok(()) }
+        match (self.unavailable)() { Some(why) => Err(io::Error::other(why)), None => Ok(()) }
     }
 }
 
@@ -1184,9 +1195,9 @@ mod lock_watch_tests {
 
     static ASKED: AtomicUsize = AtomicUsize::new(0);
     static LOCKED: AtomicBool = AtomicBool::new(false);
-    fn source() -> bool {
+    fn source() -> Option<&'static str> {
         ASKED.fetch_add(1, Ordering::SeqCst);
-        LOCKED.load(Ordering::SeqCst)
+        LOCKED.load(Ordering::SeqCst).then_some(crate::hp_upgrade::SCREEN_LOCKED)
     }
 
     #[test]
@@ -1208,6 +1219,14 @@ mod lock_watch_tests {
         LOCKED.store(false, Ordering::SeqCst);
         assert!(watch.check(at + LOCK_POLL * 2).is_ok());
         assert_eq!(ASKED.load(Ordering::SeqCst), 3);
+    }
+
+    /// Another user's session taking the display ends it too, with `ready`'s reason.
+    #[test]
+    fn a_session_ends_when_another_user_takes_the_display() {
+        let at = Instant::now();
+        let mut watch = LockWatch::with_source(|| Some("다른 사용자가 이 Mac 화면을 쓰고 있어 고성능 모드로 보여 줄 수 없습니다"), at);
+        assert!(watch.check(at).unwrap_err().to_string().contains("다른 사용자"));
     }
 }
 

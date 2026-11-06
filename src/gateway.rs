@@ -1151,8 +1151,16 @@ const LOCKED_CLOSE_TEXT: &str = "그 Mac의 화면이 잠겨 기본 화면 공�
 fn hp_locked(t: &Tunnel, id: &str) -> bool {
     let Some(addr) = t.live_addr() else { return false };
     let Some(pass) = store::get_password(&crate::hp_upgrade::password_key(id)) else { return false };
-    rfb::open(&addr, &Creds { user: String::new(), pass }).is_err_and(|e| locked_refusal(&e))
+    // Bounded: a stalled forward mustn't keep the viewer frozen or hold up cleanup. A late
+    // answer is dropped (the attempt ends with its own timeouts; it holds no tunnel).
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(rfb::open(&addr, &Creds { user: String::new(), pass }).is_err_and(|e| locked_refusal(&e)));
+    });
+    rx.recv_timeout(HP_LOCKED_PROBE).unwrap_or(false)
 }
+/// How long the gateway waits for that answer.
+const HP_LOCKED_PROBE: Duration = Duration::from_secs(3);
 
 /// How to close the viewer's side once the device ended the session: `probe` (high-performance
 /// only) says whether that Mac refuses now because its screen locked.
