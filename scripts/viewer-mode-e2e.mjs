@@ -170,6 +170,33 @@ try{
   assert(dropped.reconnecting===again.reconnecting+1&&dropped.sessions===again.sessions,'a repeated lock close looped instead of the usual drop handling: '+JSON.stringify(dropped));
   await p.clock.runFor(2100);
  }
+ // Another user takes the screen (fast user switching): the same at-once reconnect, saying so,
+ // and the watch for it to be back keeps going past 15 minutes (every 30 s after that).
+ hpReady=false;mode={hp:true};
+ await p.clock.runFor(16000);
+ await p.goto(before);await quality.waitFor();
+ {
+  const base=await app();
+  mode={hp:false,locked:true,other_user:true,reason:'다른 사용자가 이 Mac 화면을 쓰고 있어 고성능 모드로 보여 줄 수 없습니다'};readyRequests=0;
+  await p.evaluate(()=>{fixtureWs.dispatchEvent(new CloseEvent('close',{code:4030,reason:'다른 사용자가 그 Mac 화면을 쓰기 시작해 기본 화면 공유로 다시 연결합니다'}));fixtureRfb.dispatchEvent(new Event('disconnect'));});
+  await p.clock.runFor(100);await p.waitForTimeout(50);
+  const now=await app();
+  assert(now.sessions===base.sessions+1&&now.reconnecting===base.reconnecting&&!now.status,'another user taking the screen did not reconnect at once: '+JSON.stringify(now));
+  const toasts=()=>p.evaluate(()=>[...document.querySelectorAll('.toast')].map(t=>t.textContent).join('|'));
+  await p.waitForFunction(()=>document.querySelector('[data-t=hp]')?.title.includes('연결되지 않음'));
+  const said=await toasts();
+  assert(said.includes('다른 사용자가')&&said.includes('화면이 돌아오면')&&!said.includes('잠금을 풀면'),'another user taking the screen was explained as a lock: '+said);
+  const taken=await p.evaluate(()=>fixtureSessions);
+  for(let i=0;i<230;i++){await p.clock.runFor(4100);await p.waitForTimeout(2);}
+  const asked=readyRequests;
+  assert(asked>=200,'did not keep asking for the first 15 minutes: '+asked);
+  await p.clock.runFor(4100);await p.waitForTimeout(20);await p.clock.runFor(4100);await p.waitForTimeout(20);
+  assert(readyRequests<=asked+1,'kept asking every 4 s after 15 minutes: '+(readyRequests-asked));
+  hpReady=true;mode={hp:true};
+  for(let i=0;i<3;i++){await p.clock.runFor(15000);await p.waitForTimeout(20);}
+  assert(await p.evaluate(()=>fixtureSessions)===taken+1,'did not switch back once the screen came back after 15 minutes');
+  assert((await toasts()).includes('화면이 돌아와'),'the switch back did not say why');
+ }
  assert(errors.length===0,errors.join('\n'));
  console.log('PASS: HTTP500 and null mode unknown/retry; locked fallback switches once unlocked; a lock during high-performance reconnects through Screen Sharing and back; active capture and stale status guards; diagnostic retries preserve session, settings and per-attempt token');
 }finally{await browser.close();await new Promise(r=>server.close(r));}

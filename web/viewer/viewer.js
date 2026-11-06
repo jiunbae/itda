@@ -677,9 +677,9 @@ function open(h) {
       if (S.rfb !== rfb || typeof m?.hp !== 'boolean') return;
       S.hpMode = m.hp ? 'active' : 'fallback';
       if (!m.hp && m.locked) {
-        const context = { h, rfb, attempt };
+        const context = { h, rfb, attempt, otherUser: !!m.other_user };
         S.hpModeContext = context;
-        toast('그 Mac의 화면이 잠겨 있어 기본 화면 공유로 연결했습니다 — 잠금을 풀면 고성능 모드로 바꿉니다');
+        toast(unavailableText(context));
         watchUnlock(context);
       }
     }).catch(() => {});
@@ -725,7 +725,7 @@ const LOCKED_CLOSE = 4030;
 function lockedDrop(h, info) {
   if (info?.code !== LOCKED_CLOSE || !h?.hp?.on || (S.lockDropAt != null && Date.now() - S.lockDropAt < 15000)) return false;
   S.lockDropAt = Date.now();
-  toast('그 Mac의 화면이 잠겨 기본 화면 공유로 다시 연결합니다');
+  toast(info.reason || '그 Mac의 화면이 잠겨 기본 화면 공유로 다시 연결합니다');
   open(h);
   return true;
 }
@@ -861,7 +861,8 @@ function refreshHpMode(h, rfb, attempt) {
     if (m.hp) {
       requestHpQuality();
     } else if (m.locked) {
-      toast('그 Mac의 화면이 잠겨 있어 기본 화면 공유로 연결했습니다 — 잠금을 풀면 고성능 모드로 바꿉니다');
+      context.otherUser = !!m.other_user;
+      toast(unavailableText(context));
       watchUnlock(context);
     } else {
       toast(`고성능 모드로 연결하지 못해 기본 화면 공유로 연결했습니다 — ${S.hpFallback}`);
@@ -877,9 +878,11 @@ function refreshHpMode(h, rfb, attempt) {
 // Screen Sharing stood in because that Mac was locked: once it's unlocked there (often through
 // this very window), switch to high-performance. The app keeps this Screen Sharing session a
 // few seconds past the switch, so the Mac doesn't lock again before the new connection is in.
+// Asks every 4 s for the first 15 minutes, then every 30 s for as long as this window stays on it
+// (each ask is an SSH login there).
 function watchUnlock(context, tries = 0) {
   const live = () => S.hpModeContext === context && S.rfb === context.rfb && S.host?.id === context.h.id && S.host.hp?.on && S.hpMode === 'fallback';
-  if (!live() || tries >= 225) return; // (15 minutes)
+  if (!live()) return;
   setTimeout(() => {
     if (!live()) return;
     const controller = new AbortController();
@@ -888,11 +891,16 @@ function watchUnlock(context, tries = 0) {
       if (!live()) return;
       if (!m?.ready) return watchUnlock(context, tries + 1);
       S.hpFallback = null; S.hpFallbackSetup = false;
-      toast('잠금이 풀려 고성능 모드로 바꿉니다');
+      toast(context.otherUser ? '그 Mac 화면이 돌아와 고성능 모드로 바꿉니다' : '잠금이 풀려 고성능 모드로 바꿉니다');
       S.unlockSwitchAt = Date.now();
       open(S.host);
     }).catch(() => watchUnlock(context, tries + 1)).finally(() => clearTimeout(timeout));
-  }, 4000);
+  }, tries < 225 ? 4000 : 30000);
+}
+function unavailableText(context) {
+  return context.otherUser
+    ? '다른 사용자가 그 Mac 화면을 쓰고 있어 기본 화면 공유로 연결했습니다 — 화면이 돌아오면 고성능 모드로 바꿉니다'
+    : '그 Mac의 화면이 잠겨 있어 기본 화면 공유로 연결했습니다 — 잠금을 풀면 고성능 모드로 바꿉니다';
 }
 function requestHpQuality() {
   if (!S.rfb || !S.hpActual || !S.hpModeContext || (S.hpQualityPending && !S.hpQualityFailed)) return;
