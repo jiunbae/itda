@@ -696,75 +696,80 @@ thread_local! {
     /// The viewer couldn't show this device's high-performance video (?nohp=1): this attempt
     /// uses Screen Sharing whatever the saved choice.
     static NO_HP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// That Screen Sharing session, taken over by this high-performance connection.
-    static ADOPTED: std::cell::RefCell<Option<Box<dyn FnOnce() + Send>>> = const { std::cell::RefCell::new(None) };
 }
-/// How long Screen Sharing standing in for a locked Mac outlives its viewer: the viewer switches
-/// to high-performance once it's unlocked there.
 /// Why a connection used Screen Sharing after the viewer asked (?nohp=1).
 const HP_UNDECODABLE: &str = "이 기기에서 그 Mac의 고성능 영상을 표시하지 못했습니다";
+/// How long the Screen Sharing session that unlocked a Mac outlives the last connection to it:
+/// the viewer may be reconnecting (to high-performance once it's unlocked, back to Screen
+/// Sharing after video it couldn't decode, after a drop).
+#[cfg(not(test))]
 const LOCKED_FALLBACK_LINGER: Duration = Duration::from_secs(10);
-/// Screen Sharing sessions kept past their viewer, by device: how each one ends. macOS locks a
-/// screen again when the Screen Sharing session that unlocked it ends (seen on jiun-iMac: the
-/// high-performance capture lost its display seconds later), so a high-performance connection
-/// to that Mac takes it over and ends it only when it ends itself.
-static KEPT: Mutex<Vec<(String, u64, Box<dyn FnOnce() + Send>)>> = Mutex::new(Vec::new());
+#[cfg(test)]
+const LOCKED_FALLBACK_LINGER: Duration = Duration::from_millis(500);
+/// Per device: connections open to it now, and the Screen Sharing sessions kept from unlocking
+/// it (how each ends). macOS locks a screen again when the Screen Sharing session that unlocked
+/// it ends (seen on jiun-iMac: the high-performance capture lost its display seconds later), so
+/// such a session belongs to the device, not to one connection: it lasts while any connection
+/// to that device does (whichever way it went: high-performance, Screen Sharing, a second
+/// viewer), and ends `LOCKED_FALLBACK_LINGER` after the last one.
+#[derive(Default)]
+struct Device {
+    conns: usize,
+    kept: Vec<Box<dyn FnOnce() + Send>>,
+    /// New whenever a connection begins (unique across devices and their entries coming and
+    /// going): a pending end from before is called off.
+    epoch: u64,
+}
+static DEVICES: Mutex<std::collections::BTreeMap<String, Device>> = Mutex::new(std::collections::BTreeMap::new());
+/// A connection to device `id`, open from before it reaches the device (so a kept session is
+/// already held while high-performance sharing takes its time to start) until it's over.
+struct Conn(String);
+impl Conn {
+    fn begin(id: &str) -> Conn {
+        let mut d = DEVICES.lock().unwrap();
+        let dev = d.entry(id.to_string()).or_default();
+        static EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        dev.conns += 1;
+        dev.epoch = EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Conn(id.to_string())
+    }
+}
+impl Drop for Conn {
+    fn drop(&mut self) {
+        let mut d = DEVICES.lock().unwrap();
+        let Some(dev) = d.get_mut(&self.0) else { return };
+        dev.conns = dev.conns.saturating_sub(1);
+        if dev.conns > 0 {
+            return;
+        }
+        if dev.kept.is_empty() {
+            d.remove(&self.0);
+            return;
+        }
+        let (id, epoch) = (self.0.clone(), dev.epoch);
+        drop(d);
+        crate::log!("web viewer {id}: the Screen Sharing session that unlocked it ends in {}s unless a viewer comes back", LOCKED_FALLBACK_LINGER.as_secs());
+        std::thread::spawn(move || {
+            std::thread::sleep(LOCKED_FALLBACK_LINGER);
+            let mut d = DEVICES.lock().unwrap();
+            if !d.get(&id).is_some_and(|dev| dev.conns == 0 && dev.epoch == epoch) {
+                return; // someone connected again meanwhile
+            }
+            let ends = d.remove(&id).map(|dev| dev.kept).unwrap_or_default();
+            drop(d);
+            ends.into_iter().for_each(|end| end());
+            crate::log!("web viewer {id}: ended the Screen Sharing session that unlocked it");
+        });
+    }
+}
+/// This connection's Screen Sharing session unlocked device `id` (or may yet): keep it for the
+/// device. Called while the connection still counts.
 fn keep_unlocked(id: &str, end: Box<dyn FnOnce() + Send>) {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let token = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    KEPT.lock().unwrap().push((id.to_string(), token, end));
-    std::thread::spawn(move || {
-        std::thread::sleep(LOCKED_FALLBACK_LINGER);
-        let mut kept = KEPT.lock().unwrap();
-        let end = kept.iter().position(|k| k.1 == token).map(|i| kept.remove(i).2);
-        drop(kept);
-        if let Some(end) = end {
-            end();
-        }
-    });
+    DEVICES.lock().unwrap().entry(id.to_string()).or_default().kept.push(end);
 }
-/// Devices whose kept Screen Sharing session a live connection holds (one entry per connection).
-static HOLDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// This connection takes over the Screen Sharing session that unlocked device `id`.
-fn adopt(id: &str, end: Box<dyn FnOnce() + Send>) {
-    HOLDING.lock().unwrap().push(id.to_string());
-    ADOPTED.with(|a| *a.borrow_mut() = Some(end));
-}
-/// The connection is over: the session it took over is kept a few seconds more (the viewer may
-/// be reconnecting the other way, e.g. to Screen Sharing after high-performance video it
-/// couldn't decode, and takes it over), then ends.
-fn release_adopted(id: &str) {
-    if let Some(adopted) = ADOPTED.with(|a| a.borrow_mut().take()) {
-        crate::log!("web viewer {id}: the Screen Sharing session it kept ends in {}s", LOCKED_FALLBACK_LINGER.as_secs());
-        keep_unlocked(id, adopted);
-        let mut holding = HOLDING.lock().unwrap();
-        if let Some(i) = holding.iter().position(|h| h == id) {
-            holding.remove(i);
-        }
-    }
-}
-/// Like `take_kept`, but waits (up to `wait`) for a connection that still holds it to hand it
-/// back: the connection being replaced may not have finished yet.
-fn take_kept_handed_back(id: &str, wait: Duration) -> Option<Box<dyn FnOnce() + Send>> {
-    let until = Instant::now() + wait;
-    loop {
-        match take_kept(id) {
-            Some(end) => return Some(end),
-            None if Instant::now() < until && HOLDING.lock().unwrap().iter().any(|h| h == id) => std::thread::sleep(Duration::from_millis(50)),
-            // No holder now: one may have handed it back (it does so before it stops holding)
-            // since the first look.
-            None => return take_kept(id),
-        }
-    }
-}
-/// The Screen Sharing session(s) kept for device `id`, ending as one.
-fn take_kept(id: &str) -> Option<Box<dyn FnOnce() + Send>> {
-    let mut kept = KEPT.lock().unwrap();
-    let mut ends = Vec::new();
-    while let Some(i) = kept.iter().position(|k| k.0 == id) {
-        ends.push(kept.remove(i).2);
-    }
-    (!ends.is_empty()).then(|| Box::new(move || ends.into_iter().for_each(|end| end())) as Box<dyn FnOnce() + Send>)
+/// Whether a Screen Sharing session that unlocked device `id` is being kept.
+fn keeps_unlocked(id: &str) -> bool {
+    DEVICES.lock().unwrap().get(id).is_some_and(|d| !d.kept.is_empty())
 }
 fn record_mode(id: &str, v: serde_json::Value) {
     let attempt = ATTEMPT.with(|a| a.borrow().clone());
@@ -959,9 +964,6 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             ATTEMPT.with(|a| *a.borrow_mut() = attempt);
             LOCKED_FALLBACK.with(|l| l.set(false));
             NO_HP.with(|n| n.set(req.query.split('&').any(|kv| kv == "nohp=1")));
-            if let Some(left) = ADOPTED.with(|a| a.borrow_mut().take()) {
-                left();
-            }
             proxy(c, &id, peer, local, size)
         }
         (_, _) if p.starts_with("/api/") || p.starts_with("/thumb/") => {
@@ -975,6 +977,8 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
 
 /// Log in to the device, then act as a no-auth RFB server for the browser and pipe bytes.
 fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u32, u32)>) -> io::Result<()> {
+    // (Holds a Screen Sharing session kept from unlocking this device until it's over.)
+    let _conn = Conn::begin(id);
     let tx = ws::Sender::new(c.try_clone()?);
     if !local {
         LIVE.lock().unwrap().push(c.try_clone()?);
@@ -1006,19 +1010,12 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u3
     };
     let raw = match raw {
         Ok(r) => r,
-        Err(e) => {
-            release_adopted(id);
-            return fail(4000 + kind_code(rfb::classify(&e)), e.to_string());
-        }
+        Err(e) => return fail(4000 + kind_code(rfb::classify(&e)), e.to_string()),
     };
     if id != THIS_PC {
         mark_used(id, &raw);
     }
-    let result = relay(c, raw, tx, id, tunnel, local);
-    // However it ended, the Screen Sharing session this connection kept ends shortly after it
-    // (and that Mac locks again, as it was) unless the next connection takes it over.
-    release_adopted(id);
-    result
+    relay(c, raw, tx, id, tunnel, local)
 }
 
 fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mut Option<Arc<Tunnel>>, size: Option<(u32, u32)>) -> io::Result<rfb::Raw> {
@@ -1042,22 +1039,14 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
     if host.hp.on && NO_HP.with(|n| n.get()) {
         crate::log!("high-performance sharing on {}: the viewer couldn't decode its video, using Screen Sharing", host.host);
         record_mode(&host.id, json!({"hp": false, "setup": false, "locked": false, "reason": HP_UNDECODABLE}));
-        // A Screen Sharing session kept from unlocking this Mac stays with this connection, so
-        // the Mac doesn't lock again under it.
-        if let Some(end) = take_kept_handed_back(&host.id, Duration::from_secs(3)) {
-            adopt(&host.id, end);
-        }
     } else if host.hp.on {
         match open_hp(host, login, &pass) {
             Ok((t, raw)) => {
                 *tunnel = Some(t);
                 record_mode(&host.id, json!({"hp": true}));
-                // Screen Sharing kept from unlocking this Mac lasts as long as this connection.
-                // (The connection this replaces, e.g. Screen Sharing standing in after video this
-                // viewer couldn't decode, may still be handing it back.)
-                if let Some(end) = take_kept_handed_back(&host.id, Duration::from_secs(3)) {
+                // (Screen Sharing kept from unlocking this Mac lasts as long as this connection.)
+                if keeps_unlocked(&host.id) {
                     crate::log!("high-performance sharing on {}: keeping the Screen Sharing session that unlocked it", host.host);
-                    adopt(&host.id, end);
                 }
                 return Ok(raw);
             }
@@ -1194,7 +1183,7 @@ fn relay(c: TcpStream, raw: rfb::Raw, tx: ws::Sender, id: &str, tunnel: Option<A
     };
     if LOCKED_FALLBACK.with(|l| l.get()) {
         // (The viewer may be switching to high-performance now that it's unlocked.)
-        crate::log!("web viewer {id}: closed; Screen Sharing kept {}s for the switch", LOCKED_FALLBACK_LINGER.as_secs());
+        crate::log!("web viewer {id}: closed; its Screen Sharing session stays for the switch");
         keep_unlocked(id, Box::new(end));
         return Ok(());
     }
@@ -1221,51 +1210,57 @@ fn kind_code(kind: &str) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    /// A kept Screen Sharing session goes to the next high-performance connection to that Mac
-    /// (all of them, once), and ends only when that one says so; another Mac's stays kept.
+    /// A kept Screen Sharing session belongs to its device: it lasts while any connection to
+    /// it does (a second viewer, a reconnect the other way, one still starting), ends a moment
+    /// after the last one, and another device's is its own.
     #[test]
-    fn kept_screen_sharing_goes_to_the_next_connection() {
+    fn kept_screen_sharing_lasts_while_the_device_has_a_connection() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        let linger = super::LOCKED_FALLBACK_LINGER;
         let ended = Arc::new(AtomicUsize::new(0));
         let end = |n: usize| { let e = ended.clone(); Box::new(move || { e.fetch_add(n, Ordering::SeqCst); }) as Box<dyn FnOnce() + Send> };
-        super::keep_unlocked("kept-mac", end(1));
-        super::keep_unlocked("kept-mac", end(10));
+        let wait = || std::thread::sleep(linger * 2);
+        let now = || ended.load(Ordering::SeqCst);
+        // (Timer threads may run late on a busy machine: wait for an end, don't assume it.)
+        let ends_to = |n: usize| {
+            let until = std::time::Instant::now() + linger * 20;
+            while now() != n && std::time::Instant::now() < until {
+                std::thread::sleep(linger / 10);
+            }
+            assert_eq!(now(), n);
+        };
+        // Screen Sharing for the locked Mac; a second viewer (high-performance) joins.
+        let fallback = super::Conn::begin("dev-mac");
+        let second = super::Conn::begin("dev-mac");
+        super::keep_unlocked("dev-mac", end(1));
+        let other = super::Conn::begin("other-mac");
         super::keep_unlocked("other-mac", end(100));
-        let adopted = super::take_kept("kept-mac").expect("kept session not handed over");
-        assert!(super::take_kept("kept-mac").is_none(), "handed over twice");
-        assert_eq!(ended.load(Ordering::SeqCst), 0, "ended before the connection did");
-        adopted();
-        assert_eq!(ended.load(Ordering::SeqCst), 11);
-        super::take_kept("other-mac").expect("another Mac's session was taken")();
-        assert_eq!(ended.load(Ordering::SeqCst), 111);
-    }
-
-    /// A connection replacing one that still holds the kept session (it hasn't finished yet)
-    /// waits for it to be handed back instead of missing it; with no holder it doesn't wait.
-    #[test]
-    fn kept_screen_sharing_waits_for_the_connection_handing_it_back() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-        use std::time::{Duration, Instant};
-        let ended = Arc::new(AtomicBool::new(false));
-        let e = ended.clone();
-        let holder = std::thread::spawn(move || {
-            super::adopt("handoff-mac", Box::new(move || e.store(true, Ordering::SeqCst)));
-            std::thread::sleep(Duration::from_millis(300));
-            super::release_adopted("handoff-mac");
-        });
-        while !super::HOLDING.lock().unwrap().iter().any(|h| h == "handoff-mac") {
-            std::thread::yield_now();
-        }
-        let got = super::take_kept_handed_back("handoff-mac", Duration::from_secs(3)).expect("missed the session being handed back");
-        holder.join().unwrap();
-        assert!(!ended.load(Ordering::SeqCst), "ended during the handoff");
-        got();
-        assert!(ended.load(Ordering::SeqCst));
-        let t = Instant::now();
-        assert!(super::take_kept_handed_back("nobody-mac", Duration::from_secs(3)).is_none());
-        assert!(t.elapsed() < Duration::from_millis(500), "waited with nothing to hand back");
+        drop(fallback);
+        wait();
+        assert_eq!(now(), 0, "ended while another viewer of that Mac was still connected");
+        assert!(super::keeps_unlocked("dev-mac"));
+        // The last one goes, and a replacement comes back in time (e.g. still starting up).
+        drop(second);
+        let back = super::Conn::begin("dev-mac");
+        wait();
+        assert_eq!(now(), 0, "ended under a connection that came back in time");
+        // A reconnect that drops again soon gets the full time again, not what was left of the
+        // first wait.
+        drop(back);
+        std::thread::sleep(linger / 2);
+        let brief = super::Conn::begin("dev-mac");
+        drop(brief);
+        std::thread::sleep(linger * 7 / 10);
+        assert_eq!(now(), 0, "ended on the earlier connection's timer");
+        let back = super::Conn::begin("dev-mac");
+        // Gone for good: it ends a moment later, once; the other Mac's stays.
+        drop(back);
+        assert_eq!(now(), 0, "ended at once, with no time to come back");
+        ends_to(1);
+        assert!(!super::keeps_unlocked("dev-mac"));
+        drop(other);
+        ends_to(101);
     }
 
     #[test]
