@@ -4,6 +4,16 @@
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// How long one piece of a frame may wait for the browser to take it. A viewer that stopped
+/// reading would otherwise block the writer forever while it holds the sender (and with it
+/// Close and Pong from the reader, and the relay's cleanup).
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Frames go out in pieces this size so the timeout bounds a piece, not a whole (up to 1 MB)
+/// frame: on Windows a blocking send times out as a whole, so one piece only has to manage
+/// 64 KB in 30 s (~2 KB/s) and a slow but moving link isn't cut.
+const PIECE: usize = 64 << 10;
 
 const GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -100,6 +110,8 @@ pub struct Sender(Arc<Mutex<TcpStream>>);
 
 impl Sender {
     pub fn new(s: TcpStream) -> Sender {
+        // (Shared by every handle to this socket: the reader's clone included.)
+        let _ = s.set_write_timeout(Some(WRITE_TIMEOUT));
         Sender(Arc::new(Mutex::new(s)))
     }
 
@@ -119,7 +131,14 @@ impl Sender {
             }
         }
         hdr.extend_from_slice(data);
-        self.0.lock().unwrap().write_all(&hdr)
+        let mut s = self.0.lock().unwrap();
+        let r = hdr.chunks(PIECE).try_for_each(|piece| s.write_all(piece));
+        if r.is_err() {
+            // A frame cut short leaves the stream unusable, and a timed-out write must not be
+            // retried: end the connection, which also wakes the reader so the relay ends.
+            let _ = s.shutdown(std::net::Shutdown::Both);
+        }
+        r
     }
 
     pub fn binary(&self, data: &[u8]) -> io::Result<()> {
@@ -224,6 +243,29 @@ impl Read for Receiver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A viewer that stops reading fails the write (and ends the connection) instead of
+    /// blocking the sender forever.
+    #[test]
+    fn stuck_viewer_write_times_out() {
+        use std::net::TcpListener;
+        use std::time::Instant;
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let _peer = TcpStream::connect(l.local_addr().unwrap()).unwrap(); // never reads
+        let (s, _) = l.accept().unwrap();
+        let tx = Sender::new(s.try_clone().unwrap());
+        assert_eq!(s.write_timeout().unwrap(), Some(WRITE_TIMEOUT));
+        s.set_write_timeout(Some(Duration::from_millis(200))).unwrap(); // (same socket)
+        let big = vec![0u8; 1 << 20];
+        let until = Instant::now() + Duration::from_secs(20);
+        while tx.binary(&big).is_ok() {
+            assert!(Instant::now() < until, "write never timed out");
+        }
+        // Not retried: the connection is over.
+        let t = Instant::now();
+        assert!(tx.binary(b"x").is_err());
+        assert!(t.elapsed() < Duration::from_secs(1));
+    }
 
     #[test]
     fn rfc6455_example_key() {

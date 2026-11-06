@@ -197,7 +197,9 @@ pub fn apply_zoom(pct: u16) {
 
 /// Open a file, folder or link with its default app.
 pub fn open(target: &str) {
-    let _ = Command::new("/usr/bin/open").arg(target).spawn();
+    if let Ok(c) = Command::new("/usr/bin/open").arg(target).spawn() {
+        crate::tunnel::reap_detached(c); // (not left a zombie)
+    }
 }
 
 /// Build a password-free URL for Apple's separate Screen Sharing client.
@@ -266,7 +268,9 @@ fn as_str(s: &str) -> String {
 
 pub fn notify(title: &str, text: &str) {
     let script = format!("display notification {} with title {}", as_str(text), as_str(title));
-    let _ = Command::new("/usr/bin/osascript").args(["-e", &script]).spawn();
+    if let Ok(c) = Command::new("/usr/bin/osascript").args(["-e", &script]).spawn() {
+        crate::tunnel::reap_detached(c);
+    }
 }
 
 /// The system "choose file" dialog for an SSH private key, starting in ~/.ssh.
