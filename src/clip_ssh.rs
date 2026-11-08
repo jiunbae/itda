@@ -17,7 +17,7 @@ const MAX: usize = 256 << 10;
 /// The remote side: every second, if the clipboard changed, one line "C <base64 of the text>".
 /// The first line is the clipboard as found (not copied here: connecting mustn't overwrite
 /// what's on this Mac's clipboard).
-const WATCH: &str = r#"export LANG=en_US.UTF-8
+const WATCH: &str = r#"export LC_ALL=en_US.UTF-8
 last=""
 while :; do
   h=$(pbpaste 2>/dev/null | shasum | cut -c1-40)
@@ -167,7 +167,7 @@ fn watch(cfg: &SshCfg, stop: &AtomicBool, watcher: &Mutex<Option<Child>>, last: 
 
 /// The command on the Mac that puts the next `len` bytes of its input on the clipboard.
 fn paste_command(len: usize) -> String {
-    format!("head -c {len} | LANG=en_US.UTF-8 pbcopy")
+    format!("head -c {len} | LC_ALL=en_US.UTF-8 pbcopy")
 }
 
 /// Put `text` on that Mac's clipboard (pbcopy over SSH), stoppable through `sending`.
@@ -250,7 +250,7 @@ mod tests {
         assert_eq!(got, "원격 → 이 Mac ✅ 브리지");
         bridge.send("이 Mac → 원격 🌍 브리지");
         std::thread::sleep(std::time::Duration::from_secs(4));
-        let there = ssh("LANG=en_US.UTF-8 pbpaste", None);
+        let there = ssh("LC_ALL=en_US.UTF-8 pbpaste", None);
         // (No echo of our own text comes back.)
         assert!(rx.recv_timeout(std::time::Duration::from_secs(3)).is_err(), "own text echoed back");
         drop(bridge);
