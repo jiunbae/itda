@@ -540,7 +540,8 @@ pub(super) fn session_eval(id: &str, js: &str) {
 
 /// Text copied on this Mac goes to the connection when its window comes forward.
 fn offer_clipboard(id: &str) {
-    let text = output("/usr/bin/pbpaste", &[]);
+    // (Read natively: pbpaste decodes by the locale, and one opened from the Finder has none.)
+    let text = crate::host_mac::clipboard_get().unwrap_or_default();
     if text.is_empty() || text.len() > 256 << 10 || *LAST_CLIP.lock().unwrap() == text {
         return;
     }
