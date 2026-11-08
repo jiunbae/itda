@@ -489,11 +489,43 @@ fn close_monitor(owner: &str, screen: u32) {
 
 fn pbcopy(text: &str) {
     use std::io::Write;
-    if let Ok(mut c) = Command::new("/usr/bin/pbcopy").stdin(std::process::Stdio::piped()).spawn() {
+    // pbcopy reads its input in the locale's encoding, and an app opened from the Finder has
+    // no LANG: without UTF-8 here, Korean arrives as Mac Roman ("로그인" → "Î°úÍ∑∏Ïù∏").
+    if let Ok(mut c) = pbcopy_command().stdin(std::process::Stdio::piped()).spawn() {
         if let Some(mut i) = c.stdin.take() {
             let _ = i.write_all(text.as_bytes());
         }
         let _ = c.wait();
+    }
+}
+
+fn pbcopy_command() -> Command {
+    let mut c = Command::new("/usr/bin/pbcopy");
+    c.env("LC_ALL", "en_US.UTF-8");
+    c
+}
+
+#[cfg(test)]
+mod pbcopy_tests {
+    /// Text from the remote device keeps its Korean even when the app has no locale (opened
+    /// from the Finder). Uses the ruler pasteboard, not the one people copy with.
+    #[test]
+    fn copies_korean_without_a_locale() {
+        use std::io::Write;
+        let text = "로그인할 수 없음 — 다른 브라우저를 사용해 보세요";
+        // (As from the Finder: no locale of its own, only what pbcopy_command sets.)
+        let mut c = super::pbcopy_command();
+        for (k, _) in std::env::vars().filter(|(k, _)| k == "LANG" || k.starts_with("LC_")) {
+            if c.get_envs().all(|(set, _)| set != k.as_str()) {
+                c.env_remove(&k);
+            }
+        }
+        let mut child = c.args(["-pboard", "ruler"]).stdin(std::process::Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
+        assert!(child.wait().unwrap().success());
+        let out = std::process::Command::new("/usr/bin/pbpaste").args(["-pboard", "ruler"]).env("LC_ALL", "en_US.UTF-8").output().unwrap();
+        let _ = std::process::Command::new("/usr/bin/pbcopy").args(["-pboard", "ruler"]).stdin(std::process::Stdio::null()).status();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), text);
     }
 }
 
