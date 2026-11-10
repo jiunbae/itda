@@ -131,12 +131,13 @@ pub fn fill(t: &str, vars: &[(&str, &dyn std::fmt::Display)]) -> String {
     while let Some(i) = rest.find('{') {
         out.push_str(&rest[..i]);
         let after = &rest[i + 1..];
-        match after.find('}').map(|j| (&after[..j], j)) {
-            Some((name, j)) if let Some((_, v)) = vars.iter().find(|(n, _)| *n == name) => {
+        let hit = after.find('}').and_then(|j| vars.iter().find(|(n, _)| *n == &after[..j]).map(|(_, v)| (j, v)));
+        match hit {
+            Some((j, v)) => {
                 out.push_str(&v.to_string());
                 rest = &after[j + 1..];
             }
-            _ => {
+            None => {
                 out.push('{');
                 rest = after;
             }
