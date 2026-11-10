@@ -589,3 +589,26 @@ pub(crate) fn clipboard_set(text: &str) {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The system arrow and I-beam come out as shapes a viewer can draw: the arrow with
+    /// opaque pixels at its hotspot, the I-beam dark with a light outline.
+    #[test]
+    fn system_cursors_become_shapes() {
+        let arrow = cursor_shape(unsafe { LoadCursorW(null_mut(), IDC_ARROW) } as usize).expect("arrow");
+        assert!(arrow.w >= 16 && arrow.h >= 16, "{}x{}", arrow.w, arrow.h);
+        assert_eq!(arrow.px.len(), arrow.w as usize * arrow.h as usize);
+        let at = |c: &crate::enc::Cursor, x: u16, y: u16| c.px[y as usize * c.w as usize + x as usize];
+        assert!(at(&arrow, arrow.hx, arrow.hy) >> 24 >= 0x80, "arrow tip is opaque");
+        assert!(arrow.px.iter().any(|p| p >> 24 == 0), "arrow has a transparent background");
+        let beam = cursor_shape(unsafe { LoadCursorW(null_mut(), IDC_IBEAM) } as usize).expect("I-beam");
+        // (Inverting or not depends on the cursor scheme: either way it's dark, edged light.)
+        let lum = |p: u32| ((p >> 16 & 0xff) + (p >> 8 & 0xff) + (p & 0xff)) / 3;
+        assert!(beam.px.iter().any(|&p| p >> 24 >= 0x80 && lum(p) < 0x40), "I-beam has dark pixels");
+        assert!(beam.px.iter().any(|&p| p >> 24 >= 0x80 && lum(p) > 0xc0), "and a light edge");
+        assert_eq!(cursor_shape(0), Some(crate::enc::Cursor::hidden()));
+    }
+}
