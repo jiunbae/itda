@@ -15,7 +15,7 @@ use crate::rfb::{self, Raw, Rx, ENC_CURSOR, ENC_DESKTOP_SIZE, ENC_EXT_DESKTOP_SI
 use ironrdp_displaycontrol::client::DisplayControlClient;
 use ironrdp_dvc::DrdynvcClient;
 use crate::demand::{self, Demand};
-use crate::enc::{Damage, Encoder, PixelFormat, Update};
+use crate::enc::{Cursor, Damage, Encoder, PixelFormat, Update, ENC_VMWARE_CURSOR};
 use crate::outbox::Outbox;
 use ironrdp_blocking::Framed;
 use ironrdp_connector::sspi;
@@ -413,15 +413,6 @@ struct Bridge {
     pos: (u16, u16),
 }
 
-/// A pointer shape waiting to go out: (w, h, hotspot x, hotspot y, 0x00RRGGBB pixels, alpha).
-struct Cursor {
-    w: u16,
-    h: u16,
-    hx: u16,
-    hy: u16,
-    px: Vec<u32>,
-    opaque: Vec<bool>,
-}
 
 impl Bridge {
     fn new(framed: Framed<Tls>, r: ironrdp_connector::ConnectionResult, client: TcpStream) -> io::Result<Bridge> {
@@ -461,7 +452,7 @@ impl Bridge {
             pending_size: None,
             last_resize: Instant::now() - RESIZE_GAP,
             resize_reply: None,
-            cursor: Some(Cursor::arrow()),
+            cursor: Some(arrow()),
             last_sent: Instant::now() - FRAME,
             keys: Keys::default(),
             buttons: 0,
@@ -521,8 +512,8 @@ impl Bridge {
                     let (x, y) = ((r.left as usize).min(w), (r.top as usize).min(h));
                     self.damage.add(x, y, (r.right as usize + 1).min(w).saturating_sub(x), (r.bottom as usize + 1).min(h).saturating_sub(y));
                 }
-                ActiveStageOutput::PointerBitmap(p) => self.cursor = Some(Cursor::from_rdp(&p)),
-                ActiveStageOutput::PointerDefault => self.cursor = Some(Cursor::arrow()),
+                ActiveStageOutput::PointerBitmap(p) => self.cursor = Some(rdp_cursor(&p)),
+                ActiveStageOutput::PointerDefault => self.cursor = Some(arrow()),
                 ActiveStageOutput::PointerHidden => self.cursor = Some(Cursor::hidden()),
                 ActiveStageOutput::Terminate(reason) => {
                     crate::log!("rdp: host ended the session ({reason:?})");
@@ -700,7 +691,7 @@ impl Bridge {
         if !self.out.room() {
             return Ok(()); // the viewer is behind: changes keep piling up as damage
         }
-        let cursor_due = self.cursor.is_some() && self.encs.contains(&ENC_CURSOR);
+        let cursor_due = self.cursor.is_some() && (self.encs.contains(&ENC_CURSOR) || self.encs.contains(&ENC_VMWARE_CURSOR));
         let ext = self.encs.contains(&ENC_EXT_DESKTOP_SIZE);
         let ext_due = ext && (!self.ext_told || self.resize_reply.is_some());
         if (incremental && self.damage.is_empty() && !cursor_due && !self.resized && !ext_due) || self.last_sent.elapsed() < FRAME {
@@ -727,8 +718,9 @@ impl Bridge {
         self.resized = false;
         if cursor_due {
             if let Some(c) = self.cursor.take() {
-                c.encode(&mut u.buf, &self.pf);
-                u.rects += 1;
+                if c.encode(&mut u.buf, &self.pf, &self.encs) {
+                    u.rects += 1;
+                }
             }
         }
         let (demand, damage) = (&self.demand, &self.damage);
@@ -796,65 +788,39 @@ fn to_rgb(img: &[u8], w: usize, cur: &mut [u32], (x, y, rw, rh): (usize, usize, 
     }
 }
 
-impl Cursor {
-    fn from_rdp(p: &DecodedPointer) -> Cursor {
-        // RGBA, straight alpha.
-        let px = p.bitmap_data.chunks_exact(4).map(|c| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32).collect();
-        let opaque = p.bitmap_data.chunks_exact(4).map(|c| c[3] >= 0x80).collect();
-        Cursor { w: p.width, h: p.height, hx: p.hotspot_x, hy: p.hotspot_y, px, opaque }
-    }
+/// An RDP pointer (RGBA, straight alpha) as an RFB cursor.
+fn rdp_cursor(p: &DecodedPointer) -> Cursor {
+    let px = p.bitmap_data.chunks_exact(4).map(|c| u32::from_be_bytes([c[3], c[0], c[1], c[2]])).collect();
+    Cursor { w: p.width, h: p.height, hx: p.hotspot_x, hy: p.hotspot_y, px }
+}
 
-    fn hidden() -> Cursor {
-        Cursor { w: 0, h: 0, hx: 0, hy: 0, px: Vec::new(), opaque: Vec::new() }
-    }
-
-    /// Windows' default arrow, for "use the system pointer".
-    fn arrow() -> Cursor {
-        const ART: [&str; 17] = [
-            "X..........",
-            "XX.........",
-            "X#X........",
-            "X##X.......",
-            "X###X......",
-            "X####X.....",
-            "X#####X....",
-            "X######X...",
-            "X#######X..",
-            "X########X.",
-            "X#####XXXXX",
-            "X##X##X....",
-            "X#X.X##X...",
-            "XX..X##X...",
-            "X....X##X..",
-            ".....X##X..",
-            "......XX...",
-        ];
-        let px = ART.iter().flat_map(|r| r.bytes()).map(|b| if b == b'#' { 0xffffff } else { 0 }).collect();
-        let opaque = ART.iter().flat_map(|r| r.bytes()).map(|b| b != b'.').collect();
-        Cursor { w: 11, h: 17, hx: 0, hy: 0, px, opaque }
-    }
-
-    /// RFB Cursor pseudo-encoding rectangle.
-    fn encode(&self, out: &mut Vec<u8>, pf: &PixelFormat) {
-        for v in [self.hx, self.hy, self.w, self.h] {
-            out.extend_from_slice(&v.to_be_bytes());
-        }
-        out.extend_from_slice(&ENC_CURSOR.to_be_bytes());
-        let b = pf.bytes();
-        for &p in &self.px {
-            pf.put(p, out, b, 0);
-        }
-        let row = (self.w as usize).div_ceil(8);
-        for y in 0..self.h as usize {
-            let mut bits = vec![0u8; row];
-            for x in 0..self.w as usize {
-                if self.opaque[y * self.w as usize + x] {
-                    bits[x / 8] |= 0x80 >> (x % 8);
-                }
-            }
-            out.extend_from_slice(&bits);
-        }
-    }
+/// Windows' default arrow, for "use the system pointer".
+fn arrow() -> Cursor {
+    const ART: [&str; 17] = [
+        "X..........",
+        "XX.........",
+        "X#X........",
+        "X##X.......",
+        "X###X......",
+        "X####X.....",
+        "X#####X....",
+        "X######X...",
+        "X#######X..",
+        "X########X.",
+        "X#####XXXXX",
+        "X##X##X....",
+        "X#X.X##X...",
+        "XX..X##X...",
+        "X....X##X..",
+        ".....X##X..",
+        "......XX...",
+    ];
+    let px = ART.iter().flat_map(|r| r.bytes()).map(|b| match b {
+        b'#' => 0xffff_ffff,
+        b'X' => 0xff00_0000,
+        _ => 0,
+    }).collect();
+    Cursor { w: 11, h: 17, hx: 0, hy: 0, px }
 }
 
 // ---------------------------------------------------------------- keyboard

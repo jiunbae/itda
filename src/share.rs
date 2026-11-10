@@ -110,6 +110,73 @@ pub(crate) fn on_frame(_wake: Box<dyn Fn() + Send>) -> u64 {
 }
 pub(crate) fn off_frame(_id: u64) {}
 
+/// Viewers that can draw the pointer get its shape instead of it in the picture (server.rs).
+pub(crate) const LOCAL_CURSOR: bool = true;
+
+/// Where the pointer is (desktop coordinates) and which cursor it shows (0: hidden).
+pub(crate) fn pointer() -> Option<crate::server::Pointer> {
+    unsafe {
+        let mut ci: CURSORINFO = std::mem::zeroed();
+        ci.cbSize = size_of::<CURSORINFO>() as u32;
+        if GetCursorInfo(&mut ci) == 0 {
+            return None;
+        }
+        let shape = if ci.flags & CURSOR_SHOWING != 0 { ci.hCursor as usize } else { 0 };
+        Some(crate::server::Pointer { shape, x: ci.ptScreenPos.x, y: ci.ptScreenPos.y })
+    }
+}
+
+/// The pixels of cursor `shape` (from `pointer`), drawn once on black and once on white so
+/// alpha and monochrome cursors both come out right. None if it's gone meanwhile.
+pub(crate) fn cursor_shape(shape: usize) -> Option<crate::enc::Cursor> {
+    if shape == 0 {
+        return Some(crate::enc::Cursor::hidden());
+    }
+    unsafe {
+        let hc = shape as HCURSOR;
+        let mut ii: ICONINFO = std::mem::zeroed();
+        if GetIconInfo(hc, &mut ii) == 0 {
+            return None;
+        }
+        let mut bm: BITMAP = std::mem::zeroed();
+        let size = (GetObjectW(ii.hbmMask, size_of::<BITMAP>() as i32, &mut bm as *mut BITMAP as _) != 0)
+            .then(|| (bm.bmWidth, if ii.hbmColor.is_null() { bm.bmHeight / 2 } else { bm.bmHeight }));
+        let (hx, hy) = (ii.xHotspot, ii.yHotspot);
+        if !ii.hbmMask.is_null() {
+            DeleteObject(ii.hbmMask);
+        }
+        if !ii.hbmColor.is_null() {
+            DeleteObject(ii.hbmColor);
+        }
+        let (w, h) = size.filter(|&(w, h)| (1..=256).contains(&w) && (1..=256).contains(&h))?;
+        let screen = GetDC(null_mut());
+        let dc = CreateCompatibleDC(screen);
+        ReleaseDC(null_mut(), screen);
+        let on = |ground: u32| -> Option<Vec<u32>> {
+            let bi = crate::fb::dib_info(w, h);
+            let mut bits = null_mut();
+            let bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+            if bmp.is_null() || bits.is_null() {
+                return None;
+            }
+            let px = std::slice::from_raw_parts_mut(bits as *mut u32, (w * h) as usize);
+            px.fill(ground);
+            let old = SelectObject(dc, bmp);
+            let drawn = DrawIconEx(dc, 0, 0, hc, 0, 0, 0, null_mut(), DI_NORMAL) != 0;
+            GdiFlush();
+            let out = drawn.then(|| px.iter().map(|p| p & 0x00ff_ffff).collect());
+            SelectObject(dc, old);
+            DeleteObject(bmp);
+            out
+        };
+        let black = on(0);
+        let white = on(0x00ff_ffff);
+        DeleteDC(dc);
+        let (black, white) = (black?, white?);
+        Some(crate::enc::Cursor::from_black_white(w as u16, h as u16, hx as u16, hy as u16, &black, &white))
+    }
+}
+
 impl Capture {
     fn new() -> Capture {
         let mut c = Capture { x: 0, y: 0, w: 0, h: 0, mdc: null_mut(), bmp: null_mut(), bits: null_mut(), dup: None, dup_retry: Instant::now(), under: None, gdi_logged: false };
@@ -157,7 +224,9 @@ impl Capture {
         0
     }
 
-    pub(crate) fn grab(&mut self) -> (usize, usize, &[u32]) {
+    /// The current picture; `cursor`: with the pointer drawn in (for a viewer that doesn't
+    /// draw it itself, or when someone else is moving it, see server.rs).
+    pub(crate) fn grab(&mut self, cursor: bool) -> (usize, usize, &[u32]) {
         self.fit();
         unsafe {
             let (w, h) = (self.w, self.h);
@@ -209,7 +278,7 @@ impl Capture {
             // Neither capture includes the cursor: draw it in, keeping what it covers.
             let mut ci: CURSORINFO = std::mem::zeroed();
             ci.cbSize = size_of::<CURSORINFO>() as u32;
-            if GetCursorInfo(&mut ci) != 0 && ci.flags & CURSOR_SHOWING != 0 {
+            if cursor && GetCursorInfo(&mut ci) != 0 && ci.flags & CURSOR_SHOWING != 0 {
                 let mut ii: ICONINFO = std::mem::zeroed();
                 if GetIconInfo(ci.hCursor, &mut ii) != 0 {
                     let mut bm: BITMAP = std::mem::zeroed();
@@ -520,3 +589,26 @@ pub(crate) fn clipboard_set(text: &str) {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The system arrow and I-beam come out as shapes a viewer can draw: the arrow with
+    /// opaque pixels at its hotspot, the I-beam dark with a light outline.
+    #[test]
+    fn system_cursors_become_shapes() {
+        let arrow = cursor_shape(unsafe { LoadCursorW(null_mut(), IDC_ARROW) } as usize).expect("arrow");
+        assert!(arrow.w >= 16 && arrow.h >= 16, "{}x{}", arrow.w, arrow.h);
+        assert_eq!(arrow.px.len(), arrow.w as usize * arrow.h as usize);
+        let at = |c: &crate::enc::Cursor, x: u16, y: u16| c.px[y as usize * c.w as usize + x as usize];
+        assert!(at(&arrow, arrow.hx, arrow.hy) >> 24 >= 0x80, "arrow tip is opaque");
+        assert!(arrow.px.iter().any(|p| p >> 24 == 0), "arrow has a transparent background");
+        let beam = cursor_shape(unsafe { LoadCursorW(null_mut(), IDC_IBEAM) } as usize).expect("I-beam");
+        // (Inverting or not depends on the cursor scheme: either way it's dark, edged light.)
+        let lum = |p: u32| ((p >> 16 & 0xff) + (p >> 8 & 0xff) + (p & 0xff)) / 3;
+        assert!(beam.px.iter().any(|&p| p >> 24 >= 0x80 && lum(p) < 0x40), "I-beam has dark pixels");
+        assert!(beam.px.iter().any(|&p| p >> 24 >= 0x80 && lum(p) > 0xc0), "and a light edge");
+        assert_eq!(cursor_shape(0), Some(crate::enc::Cursor::hidden()));
+    }
+}

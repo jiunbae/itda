@@ -261,6 +261,108 @@ impl Update {
     }
 }
 
+/// RFB Cursor pseudo-encoding: the pointer's shape with a 1-bit mask; the viewer draws it
+/// where its own pointer is, so moving it costs neither a round trip nor a repaint.
+pub const ENC_CURSOR: i32 = -239;
+/// VMware's cursor pseudo-encoding ('WMVd'): the same, with real alpha (noVNC asks for it).
+pub const ENC_VMWARE_CURSOR: i32 = 0x574d_5664;
+
+/// A pointer shape, 0xAARRGGBB with straight alpha. 0×0 hides the viewer's pointer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cursor {
+    pub w: u16,
+    pub h: u16,
+    pub hx: u16,
+    pub hy: u16,
+    pub px: Vec<u32>,
+}
+
+impl Cursor {
+    pub fn hidden() -> Cursor {
+        Cursor { w: 0, h: 0, hx: 0, hy: 0, px: Vec::new() }
+    }
+
+    /// From the same cursor drawn on black and on white (0x00RRGGBB), which also covers
+    /// Windows' monochrome AND/XOR cursors: alpha is what the white background lets through,
+    /// colour is what's left on black. Inverting pixels (the text I-beam) have no colour of
+    /// their own; they become black with a white outline so they show on any background.
+    pub fn from_black_white(w: u16, h: u16, hx: u16, hy: u16, black: &[u32], white: &[u32]) -> Cursor {
+        let (wu, hu) = (w as usize, h as usize);
+        let ch = |p: u32, s: u32| ((p >> s) & 0xff) as i32;
+        let mut px = vec![0u32; wu * hu];
+        let mut inverted = vec![false; wu * hu];
+        for i in 0..wu * hu {
+            let (b, wh) = (black[i], white[i]);
+            if (0..3).any(|k| ch(wh, k * 8) < ch(b, k * 8)) {
+                inverted[i] = true;
+                px[i] = 0xff00_0000;
+                continue;
+            }
+            // Alpha from the channel that let the most white through (all equal when exact).
+            let through = (0..3).map(|k| ch(wh, k * 8) - ch(b, k * 8)).max().unwrap_or(255);
+            let a = (255 - through).clamp(0, 255) as u32;
+            if a == 0 {
+                continue;
+            }
+            // Un-premultiply: black shows colour × alpha.
+            let un = |s: u32| ((ch(b, s) as u32 * 255 + a / 2) / a).min(255);
+            px[i] = a << 24 | un(16) << 16 | un(8) << 8 | un(0);
+        }
+        for y in 0..hu {
+            for x in 0..wu {
+                let i = y * wu + x;
+                if px[i] >> 24 != 0 {
+                    continue;
+                }
+                let near = |dx: isize, dy: isize| {
+                    let (nx, ny) = (x as isize + dx, y as isize + dy);
+                    nx >= 0 && ny >= 0 && (nx as usize) < wu && (ny as usize) < hu && inverted[ny as usize * wu + nx as usize]
+                };
+                if near(-1, 0) || near(1, 0) || near(0, -1) || near(0, 1) {
+                    px[i] = 0xffff_ffff;
+                }
+            }
+        }
+        Cursor { w, h, hx: hx.min(w.saturating_sub(1)), hy: hy.min(h.saturating_sub(1)), px }
+    }
+
+    /// A cursor rectangle for a viewer that asked for `encs`: VMware's alpha cursor when it
+    /// can take it, else the classic one (pixels in its format plus a mask). None: neither.
+    pub fn encode(&self, out: &mut Vec<u8>, pf: &PixelFormat, encs: &[i32]) -> bool {
+        let vmware = encs.contains(&ENC_VMWARE_CURSOR) && self.w > 0 && self.h > 0;
+        if !vmware && !encs.contains(&ENC_CURSOR) {
+            return false;
+        }
+        for v in [self.hx, self.hy, self.w, self.h] {
+            out.extend_from_slice(&v.to_be_bytes());
+        }
+        if vmware {
+            out.extend_from_slice(&ENC_VMWARE_CURSOR.to_be_bytes());
+            out.extend_from_slice(&[1, 0]); // alpha cursor, padding
+            for &p in &self.px {
+                out.extend_from_slice(&(p << 8 | p >> 24).to_be_bytes()); // RGBA
+            }
+            return true;
+        }
+        out.extend_from_slice(&ENC_CURSOR.to_be_bytes());
+        let b = pf.bytes();
+        for &p in &self.px {
+            pf.put(p & 0x00ff_ffff, out, b, 0);
+        }
+        let row = (self.w as usize).div_ceil(8);
+        for y in 0..self.h as usize {
+            let at = out.len();
+            out.resize(at + row, 0);
+            for x in 0..self.w as usize {
+                if self.px[y * self.w as usize + x] >> 24 >= 0x80 {
+                    out[at + x / 8] |= 0x80 >> (x % 8);
+                }
+            }
+        }
+        true
+    }
+}
+
 pub fn ext_desktop_size(out: &mut Vec<u8>, reason: u16, status: u16, w: u16, h: u16, screens: &[Screen]) {
     out.extend_from_slice(&reason.to_be_bytes());
     out.extend_from_slice(&status.to_be_bytes());
@@ -387,6 +489,45 @@ fn solid<'a>(rows: impl Iterator<Item = &'a [u32]>, pal: &mut [u32; 16]) -> usiz
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn cursor_from_black_and_white() {
+        // opaque red, half-transparent white, transparent, inverting
+        let black = [0xff0000, 0x808080, 0x000000, 0xffffff];
+        let white = [0xff0000, 0xffffff, 0xffffff, 0x000000];
+        let c = Cursor::from_black_white(4, 1, 9, 0, &black, &white);
+        assert_eq!(c.px[0], 0xffff_0000);
+        assert_eq!(c.px[1] >> 24, 0x80);
+        assert_eq!(c.px[1] & 0xffffff, 0xffffff);
+        // transparent but next to the inverting pixel: its white outline
+        assert_eq!(c.px[2], 0xffff_ffff);
+        assert_eq!(c.px[3], 0xff00_0000);
+        assert_eq!((c.hx, c.hy), (3, 0), "hotspot kept inside the shape");
+    }
+
+    #[test]
+    fn cursor_rectangles() {
+        let pf = PixelFormat::parse(&crate::rfb::PIXEL_FORMAT);
+        let c = Cursor { w: 9, h: 1, hx: 1, hy: 0, px: (0..9).map(|i| if i % 2 == 0 { 0xff11_2233 } else { 0x4011_2233 }).collect() };
+        let mut out = Vec::new();
+        assert!(!c.encode(&mut out, &pf, &[ENC_ZRLE]));
+        assert!(out.is_empty());
+        assert!(c.encode(&mut out, &pf, &[ENC_CURSOR]));
+        assert_eq!(&out[8..12], &ENC_CURSOR.to_be_bytes());
+        assert_eq!(out.len(), 12 + 9 * 4 + 2);
+        assert_eq!(&out[out.len() - 2..], &[0b1010_1010, 0b1000_0000]);
+        out.clear();
+        assert!(c.encode(&mut out, &pf, &[ENC_CURSOR, ENC_VMWARE_CURSOR]));
+        assert_eq!(&out[8..12], &ENC_VMWARE_CURSOR.to_be_bytes());
+        assert_eq!(&out[12..18], &[1, 0, 0x11, 0x22, 0x33, 0xff]);
+        assert_eq!(out.len(), 14 + 9 * 4);
+        // Hiding: VMware can't say 0×0, the classic encoding can.
+        out.clear();
+        assert!(Cursor::hidden().encode(&mut out, &pf, &[ENC_CURSOR, ENC_VMWARE_CURSOR]));
+        assert_eq!(&out[4..12], &[0, 0, 0, 0, 0xff, 0xff, 0xff, 0x11]);
+        out.clear();
+        assert!(!Cursor::hidden().encode(&mut out, &pf, &[ENC_VMWARE_CURSOR]));
+    }
     #[test]
     fn viewer_pixel_formats_are_checked() {
         // bpp, depth, big endian, true colour, max r/g/b, shift r/g/b
