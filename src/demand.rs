@@ -77,6 +77,8 @@ pub struct Demand {
     seq: u32,
     /// Fenced updates not yet acknowledged: (sequence, bytes, sent at).
     inflight: VecDeque<(u32, usize, Instant)>,
+    /// How long acknowledged updates took, for the bitrate control (rate.rs).
+    acks: Vec<Duration>,
 }
 
 impl Demand {
@@ -116,8 +118,12 @@ impl Demand {
                 if let Ok(b) = <[u8; 4]>::try_from(&payload[..]) {
                     let seq = u32::from_be_bytes(b);
                     if let Some(i) = self.inflight.iter().position(|&(s, ..)| s == seq) {
+                        let delay = self.inflight[i].2.elapsed();
                         if crate::trace::on() {
-                            crate::trace::add("ack", self.inflight[i].2.elapsed().as_secs_f32() * 1000.0);
+                            crate::trace::add("ack", delay.as_secs_f32() * 1000.0);
+                        }
+                        if self.acks.len() < 256 {
+                            self.acks.push(delay);
                         }
                         // A fence answers everything sent before it too.
                         self.inflight.drain(..=i);
@@ -148,6 +154,11 @@ impl Demand {
             return room.then_some(true);
         }
         self.want
+    }
+
+    /// Ack delays since the last call.
+    pub fn take_acks(&mut self) -> Vec<Duration> {
+        std::mem::take(&mut self.acks)
     }
 
     /// Does the update cover the tile at (x, y, w, h)? Everything for a full request or
@@ -248,6 +259,17 @@ mod tests {
         ack(&mut d, 99); // unknown: ignored
         ack(&mut d, MAX_FRAMES as u32);
         assert!(d.inflight.is_empty());
+    }
+
+    #[test]
+    fn ack_delays_are_handed_over_once() {
+        let mut d = Demand::default();
+        on(&mut d);
+        d.sent(100, &mut Vec::new());
+        d.sent(100, &mut Vec::new());
+        ack(&mut d, 2);
+        assert_eq!(d.take_acks().len(), 1, "one fence answers both, one sample");
+        assert!(d.take_acks().is_empty());
     }
 
     #[test]

@@ -61,6 +61,8 @@ mod net;
 #[cfg(windows)]
 mod session;
 #[cfg(any(windows, target_os = "macos"))]
+mod rate;
+#[cfg(any(windows, target_os = "macos"))]
 mod server;
 #[cfg(windows)]
 mod share;

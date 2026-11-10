@@ -107,6 +107,11 @@ impl H264 {
         Ok(H264 { session, out, buffer: unsafe { CFRetained::from_raw(buffer) }, width, height, clock: FrameClock::default() })
     }
 
+    /// Aim for `bitrate` bits a second from the next frame on (a running session accepts it).
+    pub fn set_bitrate(&mut self, bitrate: i64) -> bool {
+        unsafe { set(&self.session, kVTCompressionPropertyKey_AverageBitRate, &CFNumber::new_i64(bitrate)) }
+    }
+
     /// Encode one frame (`px`: rows of `stride` pixels, at least width x height); `key` forces
     /// an IDR with parameter sets. Waits for the encoder, so the result is this frame's.
     pub fn encode(&mut self, px: &[u32], stride: usize, key: bool) -> Result<Unit, String> {
@@ -236,6 +241,25 @@ mod tests {
             }
         }
         t
+    }
+
+    /// A running session takes a new bitrate (the share server's rate control) and its
+    /// output shrinks accordingly.
+    #[test]
+    fn bitrate_changes_while_running() {
+        let (w, h) = (640, 360);
+        let mut e = H264::new(w, h, 8_000_000).expect("encoder");
+        let mut seed = 1u32;
+        let mut frames = |e: &mut H264, n: usize| -> usize {
+            (0..n).map(|i| {
+                let px: Vec<u32> = (0..w * h).map(|_| { seed = seed.wrapping_mul(1664525).wrapping_add(1013904223); seed >> 8 }).collect();
+                e.encode(&px, w, i == 0).map(|u| u.data.len()).unwrap_or(0)
+            }).sum()
+        };
+        let high = frames(&mut e, 30);
+        assert!(e.set_bitrate(500_000));
+        let low = frames(&mut e, 30);
+        assert!(low < high / 2, "{low} bytes at 0.5 Mbit/s vs {high} at 8");
     }
 
     #[test]

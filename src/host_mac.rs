@@ -180,11 +180,20 @@ pub(crate) fn clipboard_set(text: &str) {
 
 // ---------------------------------------------------------------- video
 
-struct Hw(H264);
+/// The encoder and the bitrate it was made with.
+struct Hw(H264, u32);
 
 impl VideoEncode for Hw {
     fn size(&self) -> (usize, usize) {
         (self.0.width, self.0.height)
+    }
+    fn bitrate(&self) -> u32 {
+        self.1
+    }
+    fn set_bitrate(&mut self, bps: u32) {
+        if !self.0.set_bitrate(bps as i64) {
+            crate::log!("hp: H.264 bitrate {bps} refused");
+        }
     }
     fn encode(&mut self, px: &[u32], stride: usize, key: bool) -> io::Result<Vec<u8>> {
         self.0.encode(px, stride, key).map(|u| u.data).map_err(io::Error::other)
@@ -198,7 +207,7 @@ pub(crate) fn video(w: usize, h: usize) -> Option<Video> {
     // ~0.1 bit per pixel at 60 fps, within 4–40 Mbit/s.
     let bitrate = ((w * h * 6) as i64).clamp(4_000_000, 40_000_000);
     match H264::new(w, h, bitrate) {
-        Ok(e) => Some(Box::new(Hw(e))),
+        Ok(e) => Some(Box::new(Hw(e, bitrate as u32))),
         Err(e) => {
             crate::log!("hp: no H.264 encoder: {e}");
             None
