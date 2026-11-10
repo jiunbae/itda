@@ -21,10 +21,11 @@ export function screenLayout(width, height, reported = [], layout = 0) {
 export class MonitorController {
     constructor(env) {
         this.e=env; this.screens=[]; this.children=new Map(); this.connection=null;
-        this.last=''; this.selected=null; this.openTimer=null; this.held=new Map(); this.pointers=new Map();
+        this.last=''; this.selected=null; this.openTimer=null; this.held=new Map(); this.pointers=new Map(); this.visible=new Set();
         window.ItdaMonitorOwner={
             state:()=>this.state(),
-            closed:id=>{this.release(id);this.children.delete(id);},
+            closed:id=>{this.release(id);this.children.delete(id);this.seen(id,false);},
+            seen:(id,on)=>this.seen(id,on),
             pointer:(x,y,mask,id)=>this.pointer(x,y,mask,id),
             key:(...args)=>this.key(...args),
             wheel:(x,y,held,clicks)=>this.e.S.rfb?.itdaWheel(x,y,held,clicks,true),
@@ -44,6 +45,10 @@ export class MonitorController {
         rfb.addEventListener('connect',()=>this.refresh());
     }
     get opts() { return this.e.S.host?.opts || {}; }
+    /// Monitor window `id` became visible or hidden (or closed): the owner decides whether
+    /// anyone is still looking (viewer.js syncBackground).
+    seen(id,on) { on?this.visible.add(id):this.visible.delete(id); this.e.visibility?.(); }
+    anyVisible() { return this.visible.size>0; }
     state() {
         const r=this.e.S.rfb;
         return {host:this.e.S.host,canvas:r?._display?._backbuffer,frame:r?._display?.itdaFrame || 0,
@@ -169,6 +174,8 @@ export function startMirror(env,id) {
     window.ItdaMirrorRelease=release;
     window.ItdaMirrorStop=()=>{stopped=true;release();keyboard.ungrab();canvas.width=canvas.height=1;env.S.rfb=null;};
     window.addEventListener('blur',release); window.addEventListener('beforeunload',release);
+    const seen=()=>{try{owner.seen(id,!document.hidden&&!stopped);}catch{}};
+    document.addEventListener('visibilitychange',seen); window.addEventListener('pagehide',()=>{stopped=true;seen();}); seen();
     env.S.rfb={sendKey:(k,c,d)=>owner.key(k,c,d,id),focus:()=>canvas.focus(),clipboardPasteFrom:()=>{},disconnect:release};
     tools.innerHTML='<button data-mirror="fit" title="맞춤 / 실제 크기">맞춤 / 1:1</button><button data-mirror="full">전체 화면</button><button data-mirror="single" title="한 창으로 돌아가기">한 창으로</button><button data-mirror="close" title="이 창 닫기">닫기</button>';
     if(macHost(env.S.host))tools.insertAdjacentHTML('afterbegin','<button data-mirror=mac-actions title="Mission Control · Exposé">Mac 화면 동작</button>');
