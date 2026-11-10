@@ -354,6 +354,7 @@ fn open_window(target: &EventLoopWindowTarget<Wake>, id: String, url: String, ti
     let popup_target = (*target).clone();
     let popup_origin = url.parse::<http::Uri>().ok().and_then(|u| u.authority().map(|a| a.to_string())).unwrap_or_default();
     let view = WebViewBuilder::new()
+        .with_initialization_script(&crate::i18n::init_script())
         .with_url(&url)
         .with_accept_first_mouse(true)
         .with_devtools(std::env::var_os("ITDA_DEVTOOLS").is_some())
@@ -723,7 +724,7 @@ fn home_view(window: &Window, dark: bool, file: Option<&str>, file_window: Optio
     let ipc_owner = protocol_owner.clone();
     let navigation_owner = protocol_owner.clone();
     let view = WebViewBuilder::new()
-        .with_initialization_script(&format!("window.itdaNativeFiles=true;window.ITDA_FILE_PATH={};", json!(file_path)))
+        .with_initialization_script(&format!("{}window.itdaNativeFiles=true;window.ITDA_FILE_PATH={};", crate::i18n::init_script(), json!(file_path)))
         .with_accept_first_mouse(file.is_some())
         .with_custom_protocol("itda".into(), move |_id, req| {
             if req.uri().path().starts_with("/preview/") { return crate::files::preview::response(&protocol_owner, &req); }

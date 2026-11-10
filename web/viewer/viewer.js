@@ -7,6 +7,13 @@ import { MonitorController, startMirror } from './monitors.js';
 import { WheelInput, macHost, hpKeys, macActions, macMenu, sendChord, sendMacAction } from './interaction.js';
 
 const $ = (s) => document.querySelector(s);
+// Language (web/i18n.js): the app's windows follow the app (window.ITDA_LANG); a browser follows
+// its own language unless the person picks one on the list or sign-in screen (kept here).
+const LANG_KEY = 'itda.lang';
+if (!window.ITDA_LANG) { let p = null; try { p = localStorage.getItem(LANG_KEY); } catch (_) {} I18N.setPref(p || 'auto'); }
+I18N.apply();
+// Text that follows a language change: `v` is a string, or a function giving it.
+const tx = (el, v) => { el.itdaText = typeof v === 'function' ? v : null; el.textContent = typeof v === 'function' ? v() : v; };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // Small stroke icons (no icon font on phones).
@@ -31,6 +38,7 @@ const P = {
   sound: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
   mute: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>',
   pc: '<rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M8 20h8M12 16.5V20M3 13h18"/>',
+  globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.4 3.5 5.2 3.5 8.5s-1.1 6.1-3.5 8.5c-2.4-2.4-3.5-5.2-3.5-8.5s1.1-6.1 3.5-8.5z"/>',
 };
 const icon = (n) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${P[n]}</svg>`;
 
@@ -158,8 +166,8 @@ const viewerTrace = (() => {
 })();
 const monitors = new MonitorController({S,app:APP,post,api,render:renderTools,toast,close:leave,visibility:()=>syncBackground()});
 const opt = (k, dflt) => (S.host && S.host.opts && k in S.host.opts ? S.host.opts[k] : dflt);
-// What to call the remote device in messages.
-const dev = () => (isWin(S.host) ? 'PC' : S.host && kindOf(S.host) === 'linux' ? '기기' : 'Mac');
+// What to call the remote device in messages: the key for a Mac, a PC or another device.
+const byDev = (mac, pc, device, vars) => T(isWin(S.host) ? pc : S.host && kindOf(S.host) === 'linux' ? device : mac, vars);
 
 function show(id) {
   for (const s of ['login', 'list', 'view']) $('#' + s).hidden = s !== id;
@@ -183,8 +191,9 @@ async function api(path, body) {
 
 // ---------------------------------------------------------------- sign in & list
 
-// Where passwords end up, for the editor's reassurance line.
-const vault = () => (S.local ? '이 Mac의 키체인' : 'Itda가 켜진 컴퓨터(Mac은 키체인, Windows는 자격 증명 관리자)');
+// Where passwords end up, for the editor's reassurance line: this Mac's Keychain, or the
+// computer running Itda (the Keychain on a Mac, Credential Manager on Windows).
+const vaultText = () => T(S.local ? 'viewer.vault.local' : 'viewer.vault.remote');
 
 async function boot() {
   if (MIRROR !== null) { document.body.classList.add('mirror', ...(APP ? ['app'] : [])); return startMirror({S,app:APP,post},Number(MIRROR)); }
@@ -198,6 +207,7 @@ async function boot() {
     $('#install').hidden = true;
     $('#hint').hidden = true;
   }
+  syncLangPick();
   if (APP && me.ok) return openFromApp();
   if (me.ok) return loadHosts();
   signIn();
@@ -209,15 +219,15 @@ function signIn(why = '') {
   close();
   closeEditor();
   status(null);
-  $('#loginError').textContent = '';
-  $('#loginNote').textContent = why;
+  tx($('#loginError'), '');
+  tx($('#loginNote'), why);
   $('#loginNote').hidden = !why;
   show('login');
   setTimeout(() => $('#pin').focus(), 50);
 }
 // The gateway forgets a session after 12 hours, when the PIN is renewed and when its Itda
 // stops or restarts (the web viewer turned off, the computer restarted).
-const expired = () => signIn('로그인이 끝나 다시 PIN을 넣어야 합니다. 12시간이 지났거나, 새 PIN이 만들어졌거나, 그 컴퓨터의 Itda가 다시 시작되었을 때 이렇게 됩니다.');
+const expired = () => signIn(() => T('viewer.login.expired'));
 
 // Wrong PINs: 5 from one device lock it out for 1 minute (src/gateway.rs MAX_FAILS, LOCKOUT).
 // The lock started at the latest with the first refusal seen here, so 60 s is an upper bound.
@@ -233,10 +243,10 @@ function lockedOut() {
     if (left <= 0) {
       clearInterval(lockTimer); lockTimer = null;
       btn.disabled = false;
-      $('#loginError').textContent = '이제 다시 입력할 수 있습니다. 공유 페이지의 PIN을 확인하고 넣으세요.';
+      tx($('#loginError'), () => T('viewer.login.unlocked'));
       return;
     }
-    $('#loginError').textContent = `PIN을 여러 번 틀려 잠시 막혔습니다. ${left}초 뒤에 다시 입력할 수 있습니다.`;
+    tx($('#loginError'), () => T('viewer.login.locked', { count: left }));
   };
   tick();
   lockTimer = setInterval(tick, 1000);
@@ -247,15 +257,13 @@ $('#loginForm').addEventListener('submit', async (e) => {
   if (lockTimer) return;
   const r = await api('/api/login', { pin: $('#pin').value });
   if (r.ok) {
-    $('#loginError').textContent = '';
+    tx($('#loginError'), '');
     $('#loginNote').hidden = true;
     $('#pin').value = '';
     return loadHosts();
   }
   if (r.status === 429) { $('#pin').value = ''; return lockedOut(); }
-  $('#loginError').textContent = r.status === 401
-    ? 'PIN이 맞지 않습니다. 공유 페이지에 지금 표시된 PIN인지 확인하세요 (새 PIN을 만들면 예전 PIN은 쓸 수 없습니다). 5번 틀리면 1분 동안 막힙니다.'
-    : r.data.error || '들어갈 수 없습니다';
+  tx($('#loginError'), r.status === 401 ? () => T('viewer.login.wrongPin') : r.data.error || (() => T('viewer.login.failed')));
   $('#pin').select();
 });
 
@@ -265,18 +273,33 @@ $('#logout').addEventListener('click', async () => {
   signIn();
 });
 $('#refresh').innerHTML = icon('refresh');
+// The language picker (list bar, sign-in card): not in the app's windows, which follow the app,
+// nor when the URL sets the language.
+const langPicks = [...document.querySelectorAll('.lang select')];
+document.querySelectorAll('.lang').forEach((l) => l.insertAdjacentHTML('afterbegin', icon('globe')));
+function syncLangPick() {
+  const off = !!window.ITDA_LANG || I18N.forced || APP || S.local;
+  for (const s of langPicks) { s.closest('.lang').hidden = off; s.value = I18N.pref; }
+}
+for (const s of langPicks) s.addEventListener('change', () => {
+  try { localStorage.setItem(LANG_KEY, s.value); } catch (_) {}
+  I18N.setPref(s.value);
+  syncLangPick();
+});
+syncLangPick();
 $('#refresh').addEventListener('click', loadHosts);
 
 const isWin = (h) => !!(h && (h.this || h.kind === 'rdp' || h.os === 'windows'));
 // Editor kinds (same as the PC's Itda): what to ask for per device.
-const KINDS = {
-  mac: { kind: 'vnc', os: 'mac', label: 'Mac', user: 'Mac 계정 이름', userHint: 'Mac 로그인에 쓰는 짧은 이름 (Apple ID 아님)', pass: 'Mac 로그인 암호', port: 5900, ssh: true },
-  windows: { kind: 'vnc', os: 'windows', label: 'Windows · Itda', user: null, pass: '공유 암호', passHint: '그 PC의 Itda → 공유 페이지에 표시된 8글자 암호 (Windows 로그인 암호나 이메일 아님)', port: 5900 },
-  rdp: { kind: 'rdp', os: 'windows', label: '원격 데스크톱', user: 'Windows 계정 (Microsoft 계정은 이메일)', userHint: 'Microsoft 계정은 이메일 주소(예: alex@outlook.com), 로컬 계정은 이름, 회사 계정은 회사\\이름', pass: 'Windows 암호 (PIN 아님)', passHint: 'Microsoft 계정이면 그 계정의 암호입니다. 로그인 화면의 숫자 PIN은 쓸 수 없습니다', port: 3389 },
-  linux: { kind: 'vnc', os: 'linux', label: 'Linux · VNC', user: '사용자 이름 (선택)', userHint: 'VNC 암호만 쓰는 서버는 비워 두세요', pass: 'VNC 암호', port: 5900, ssh: true },
-};
-const kindOf = (h) => (h.kind === 'rdp' ? 'rdp' : KINDS[h.os] ? h.os : 'mac');
-const KIND_TEXT = (h) => (h.this ? 'Windows · 이 PC 공유' : { mac: h.ssh ? 'Mac · SSH 암호화' : 'Mac · 화면 공유', windows: 'Windows · Itda 공유', rdp: 'Windows 원격 데스크톱', linux: h.ssh ? 'Linux · SSH 암호화' : 'Linux · VNC' }[kindOf(h)]);
+const KINDS = () => ({
+  mac: { kind: 'vnc', os: 'mac', label: 'Mac', user: T('viewer.kind.mac.user'), userHint: T('viewer.kind.mac.userHint'), pass: T('viewer.kind.mac.pass'), port: 5900, ssh: true },
+  windows: { kind: 'vnc', os: 'windows', label: 'Windows · Itda', user: null, pass: T('viewer.kind.windows.pass'), passHint: T('viewer.kind.windows.passHint'), port: 5900 },
+  rdp: { kind: 'rdp', os: 'windows', label: T('viewer.kind.rdp.label'), user: T('viewer.kind.rdp.user'), userHint: T('viewer.kind.rdp.userHint'), pass: T('viewer.kind.rdp.pass'), passHint: T('viewer.kind.rdp.passHint'), port: 3389 },
+  linux: { kind: 'vnc', os: 'linux', label: 'Linux · VNC', user: T('viewer.kind.linux.user'), userHint: T('viewer.kind.linux.userHint'), pass: T('viewer.kind.linux.pass'), port: 5900, ssh: true },
+});
+const KIND_IDS = ['mac', 'windows', 'rdp', 'linux'];
+const kindOf = (h) => (h.kind === 'rdp' ? 'rdp' : KIND_IDS.includes(h.os) ? h.os : 'mac');
+const KIND_TEXT = (h) => (h.this ? T('viewer.kindText.this') : kindOf(h) === 'linux' && !h.ssh ? 'Linux · VNC' : T({ mac: h.ssh ? 'viewer.kindText.macSsh' : 'viewer.kindText.mac', windows: 'viewer.kindText.windows', rdp: 'viewer.kindText.rdp', linux: 'viewer.kindText.linuxSsh' }[kindOf(h)]));
 
 async function loadHosts() {
   const [r, a] = await Promise.all([api('/api/hosts'), api('/api/accounts')]);
@@ -293,7 +316,7 @@ async function openFromApp() {
   document.body.classList.add('app');
   const r = await api('/api/hosts');
   const h = (r.data || []).find((x) => x.id === OPEN);
-  if (!h) return post({ ev: 'error', kind: 'other', msg: '연결을 찾을 수 없습니다' });
+  if (!h) return post({ ev: 'error', kind: 'other', msg: T('viewer.err.4004.title') });
   document.title = h.label;
   S.fit = !(h.opts && h.opts.actual);
   S.viewOnly = !!(h.opts && h.opts.view_only);
@@ -302,18 +325,18 @@ async function openFromApp() {
 
 function renderHosts() {
   const el = $('#hosts');
-  const add = `<button class="host add" data-new="host">${icon('plus')}<b>기기 추가</b><span>Mac 또는 Windows PC</span></button>`;
+  const add = `<button class="host add" data-new="host">${icon('plus')}<b>${T('viewer.hosts.add')}</b><span>${T('viewer.hosts.addSub')}</span></button>`;
   // Previews already shown stay as they are (a new <img> would be decoded again and flash).
   const shown = new Map([...el.querySelectorAll('img')].map((i) => [i.getAttribute('src'), i]));
   el.innerHTML = S.hosts.map((h) => `
       <div class="host${h.has_pw ? '' : ' nopw'}" data-id="${esc(h.id)}">
-        <button class="open" aria-label="${esc(h.label)} 열기">
+        <button class="open" aria-label="${T('viewer.hosts.open', { name: esc(h.label) })}">
           <div class="th ${esc(osName(h) || '')}">${osMark(h)}${h.thumb ? `<img alt="" src="thumb/${esc(h.id)}.png?v=${esc(String(h.thumb))}">` : ''}</div>
           <div class="meta"><b>${esc(h.label)}</b>
-            <span>${h.ssh ? icon('lock') : ''}${esc(h.this ? 'Itda가 실행 중인 PC' : h.user ? `${h.user}@${h.host}` : h.host)}</span>
-            ${h.has_pw ? `<span class="kind">${esc(KIND_TEXT(h))}</span>` : '<span class="warn">암호를 저장해야 열 수 있습니다 — 눌러서 입력</span>'}</div>
+            <span>${h.ssh ? icon('lock') : ''}${esc(h.this ? T('viewer.hosts.thisPc') : h.user ? `${h.user}@${h.host}` : h.host)}</span>
+            ${h.has_pw ? `<span class="kind">${esc(KIND_TEXT(h))}</span>` : `<span class="warn">${T('viewer.hosts.needPw')}</span>`}</div>
         </button>
-        ${h.this ? '' : `<button class="more" data-edit="${esc(h.id)}" title="편집" aria-label="${esc(h.label)} 편집">${icon('edit')}</button>`}
+        ${h.this ? '' : `<button class="more" data-edit="${esc(h.id)}" title="${T('viewer.hosts.edit')}" aria-label="${T('viewer.hosts.editName', { name: esc(h.label) })}">${icon('edit')}</button>`}
       </div>`).join('') + add;
   el.querySelectorAll('img').forEach((img) => {
     const old = shown.get(img.getAttribute('src'));
@@ -324,14 +347,14 @@ function renderHosts() {
 
 function renderAccounts() {
   const el = $('#accounts');
-  el.innerHTML = `<p class="lead">여러 기기에 같은 계정으로 로그인한다면 계정을 한 번만 저장하고 기기에서 골라 쓰세요.</p>` +
+  el.innerHTML = `<p class="lead">${T('viewer.acct.lead')}</p>` +
     S.accounts.map((a) => `
       <button class="acct" data-acct="${esc(a.id)}">
         <span class="av">${esc((a.name || a.user || '?').slice(0, 1).toUpperCase())}</span>
-        <span class="who"><b>${esc(a.name || a.user)}</b><small>${esc(a.user)} · 기기 ${a.uses}대${a.has_pw ? '' : ' · 암호 없음'}</small></span>
+        <span class="who"><b>${esc(a.name || a.user)}</b><small>${esc(a.user)} · ${T('viewer.acct.uses', { count: a.uses })}${a.has_pw ? '' : ` · ${T('viewer.acct.noPw')}`}</small></span>
         ${icon('edit')}
       </button>`).join('') +
-    `<button class="acct add" data-new="account">${icon('plus')}<b>계정 추가</b></button>`;
+    `<button class="acct add" data-new="account">${icon('plus')}<b>${T('viewer.acct.add')}</b></button>`;
 }
 
 document.querySelector('.tabs').addEventListener('click', (e) => {
@@ -349,7 +372,7 @@ $('#hosts').addEventListener('click', (e) => {
   const card = e.target.closest('.host');
   if (!card) return;
   const h = S.hosts.find((x) => x.id === card.dataset.id);
-  if (h && !h.has_pw) return editHost(h, '이 기기의 암호를 입력하면 바로 열 수 있습니다.');
+  if (h && !h.has_pw) return editHost(h, T('viewer.hosts.enterPw'));
   open(h);
 });
 
@@ -387,7 +410,7 @@ async function saveEdit(body, after) {
   const r = await api('/api/edit', body);
   if (btn) btn.disabled = false;
   if (r.status === 401) return expired();
-  if (!r.ok) { $('#edErr').textContent = r.data.error || '저장하지 못했습니다'; return false; }
+  if (!r.ok) { $('#edErr').textContent = r.data.error || T('viewer.ed.saveFailed'); return false; }
   S.hosts = r.data.hosts || S.hosts;
   S.accounts = r.data.accounts || S.accounts;
   renderHosts();
@@ -400,40 +423,41 @@ async function saveEdit(body, after) {
 function editHost(h, note = '', reopen = false) {
   const isNew = !h;
   h = h || { kind: 'vnc', os: 'mac', account: '', name: '', host: '', own_user: '', group: '', ssh: false };
-  const acctOpts = `<option value="">이 기기만의 계정</option>` + S.accounts.map((a) => `<option value="${esc(a.id)}" ${a.id === h.account ? 'selected' : ''}>${esc(a.name || a.user)} (${esc(a.user)})</option>`).join('');
+  const acctOpts = `<option value="">${T('viewer.ed.ownAccount')}</option>` + S.accounts.map((a) => `<option value="${esc(a.id)}" ${a.id === h.account ? 'selected' : ''}>${esc(a.name || a.user)} (${esc(a.user)})</option>`).join('');
+  const savedPw = !isNew && h.has_pw && !h.account;
   editor(`
-    <h2 id="edTitle">${isNew ? '기기 추가' : '기기 편집'}</h2>
+    <h2 id="edTitle">${T(isNew ? 'viewer.hosts.add' : 'viewer.ed.editHost')}</h2>
     ${note ? `<p class="note">${esc(note)}</p>` : ''}
-    ${isNew ? '<div id="nearby" class="nearby"><span class="muted">주변 기기를 찾는 중…</span></div>' : ''}
-    <div class="seg four" role="radiogroup" aria-label="종류">
-      ${Object.entries(KINDS).map(([k, d]) => `<label><input type="radio" name="kind" value="${k}" ${kindOf(h) === k ? 'checked' : ''}><span>${d.label}</span></label>`).join('')}
+    ${isNew ? `<div id="nearby" class="nearby"><span class="muted">${T('viewer.nearby.searching')}</span></div>` : ''}
+    <div class="seg four" role="radiogroup" aria-label="${T('viewer.ed.kind')}">
+      ${Object.entries(KINDS()).map(([k, d]) => `<label><input type="radio" name="kind" value="${k}" ${kindOf(h) === k ? 'checked' : ''}><span>${d.label}</span></label>`).join('')}
     </div>
-    ${field('주소', `<input name="host" required value="${esc(h.host)}" placeholder="예: my-mac.local, 192.168.0.10" autocapitalize="off" spellcheck="false">`, '<span id="portHint"></span>')}
-    ${field('이름 <i>(선택)</i>', `<input name="name" value="${esc(h.name)}" placeholder="예: 거실 iMac">`)}
-    ${field('로그인', `<select name="account">${acctOpts}</select>`)}
+    ${field(T('viewer.ed.address'), `<input name="host" required value="${esc(h.host)}" placeholder="${T('viewer.ed.addressPh')}" autocapitalize="off" spellcheck="false">`, '<span id="portHint"></span>')}
+    ${field(T('viewer.ed.name'), `<input name="name" value="${esc(h.name)}" placeholder="${T('viewer.ed.namePh')}">`)}
+    ${field(T('viewer.ed.login'), `<select name="account">${acctOpts}</select>`)}
     <div data-own>
       <div id="userBox">${field('<span id="userLabel"></span>', `<input name="user" value="${esc(h.own_user)}" autocapitalize="off" spellcheck="false">`, '<span id="userHint"></span>')}</div>
-      ${field('<span id="passLabel"></span>', `<input name="password" type="password" autocomplete="new-password" placeholder="${!isNew && h.has_pw && !h.account ? '저장됨 — 바꿀 때만 입력' : ''}">`, '<span id="passHint"></span>')}
+      ${field('<span id="passLabel"></span>', `<input name="password" type="password" autocomplete="new-password" placeholder="${savedPw ? T('viewer.ed.pwSaved') : ''}">`, '<span id="passHint"></span>')}
     </div>
-    <label class="check" id="sshBox"><input type="checkbox" name="ssh" ${h.ssh ? 'checked' : ''}><span>암호화 연결 (SSH 터널)<small>상대 기기에 SSH(Mac은 ‘원격 로그인’)가 켜져 있어야 합니다</small></span></label>
-    ${field('그룹 <i>(선택)</i>', `<input name="group" value="${esc(h.group)}" placeholder="예: 집, 회사">`)}
+    <label class="check" id="sshBox"><input type="checkbox" name="ssh" ${h.ssh ? 'checked' : ''}><span>${T('viewer.ed.ssh')}<small>${T('viewer.ed.sshHint')}</small></span></label>
+    ${field(T('viewer.ed.group'), `<input name="group" value="${esc(h.group)}" placeholder="${T('viewer.ed.groupPh')}">`)}
     <p id="edErr" class="error" role="alert"></p>
     <div class="ed-actions">
-      ${isNew ? '' : '<button type="button" class="danger" data-a="delete">삭제</button>'}
+      ${isNew ? '' : `<button type="button" class="danger" data-a="delete">${T('viewer.ed.delete')}</button>`}
       <span class="grow"></span>
-      <button type="button" data-a="cancel">취소</button>
-      <button type="submit" class="primary">${isNew ? '추가' : '저장'}</button>
+      <button type="button" data-a="cancel">${T('viewer.ed.cancel')}</button>
+      <button type="submit" class="primary">${T(isNew ? 'viewer.ed.add' : 'viewer.ed.save')}</button>
     </div>`);
   const f = $('#edForm');
   const sync = () => {
-    const d = KINDS[f.kind.value];
-    $('#portHint').textContent = `포트가 ${d.port}이 아니면 주소:포트`;
+    const d = KINDS()[f.kind.value];
+    $('#portHint').textContent = T('viewer.ed.portHint', { port: d.port });
     $('#userBox').hidden = !d.user;
     $('#userLabel').textContent = d.user || '';
     $('#userHint').textContent = d.userHint || '';
     $('#passLabel').textContent = d.pass;
-    $('#passHint').textContent = d.passHint || (S.local ? '암호는 이 Mac의 키체인에만 저장됩니다' : `암호는 ${vault()}에만 저장되고 이 브라우저에는 남지 않습니다`);
-    if (!f.password.placeholder.startsWith('저장됨')) f.password.placeholder = d.pass;
+    $('#passHint').textContent = d.passHint || T(S.local ? 'viewer.ed.pwStoredLocal' : 'viewer.ed.pwStoredRemote');
+    if (!savedPw) f.password.placeholder = d.pass;
     $('#sshBox').hidden = !d.ssh;
     f.querySelector('[data-own]').hidden = !!f.account.value;
   };
@@ -441,12 +465,12 @@ function editHost(h, note = '', reopen = false) {
   sync();
   if (isNew) showNearby(f, sync);
   f.querySelector('[data-a=delete]')?.addEventListener('click', async () => {
-    if (!confirm(`‘${h.label}’을(를) 지울까요? 저장된 암호도 함께 지워집니다.`)) return;
+    if (!confirm(T('viewer.ed.deleteHost', { name: h.label }))) return;
     await saveEdit({ cmd: 'delete_host', id: h.id });
   });
   f.onsubmit = async (e) => {
     e.preventDefault();
-    const d = KINDS[f.kind.value];
+    const d = KINDS()[f.kind.value];
     const body = {
       cmd: 'save_host', id: h.id || '', kind: d.kind, os: d.os, host: f.host.value, name: f.name.value, group: f.group.value,
       account: f.account.value, user: d.user ? f.user.value : '', password: f.account.value ? '' : f.password.value, ssh: !!d.ssh && f.ssh.checked,
@@ -455,7 +479,7 @@ function editHost(h, note = '', reopen = false) {
     await saveEdit(body, (id) => {
       const saved = S.hosts.find((x) => x.id === id);
       if (saved && wantOpen && saved.has_pw) open(saved);
-      else toast(isNew ? '추가했습니다' : '저장했습니다');
+      else toast(T(isNew ? 'viewer.toast.added' : 'viewer.toast.saved'));
     });
   };
 }
@@ -466,10 +490,10 @@ async function showNearby(f, sync) {
   const r = await api('/api/nearby');
   if (!box.isConnected) return;
   const list = r.ok ? r.data || [] : [];
-  if (!list.length) { box.innerHTML = '<span class="muted">주변에서 찾은 기기가 없습니다 — 아래에 주소를 직접 넣으세요.</span>'; return; }
+  if (!list.length) { box.innerHTML = `<span class="muted">${T('viewer.nearby.none')}</span>`; return; }
   const OS = { mac: 'Mac', windows: 'Windows', linux: 'Linux' };
-  box.innerHTML = `<b>주변에서 찾은 기기</b><div class="chips">${list.map((d, i) =>
-    `<button type="button" class="chip ${esc(osName(d) || '')}" data-i="${i}">${osMark(d)}<span>${esc(d.name)}<small>${OS[d.os] || ''}${d.kind === 'rdp' ? ' · 원격 데스크톱' : ''}${d.via === 'tailscale' ? ' · Tailscale' : ''}${d.off ? ' · 공유 꺼짐' : ''}</small></span></button>`).join('')}</div>`;
+  box.innerHTML = `<b>${T('viewer.nearby.title')}</b><div class="chips">${list.map((d, i) =>
+    `<button type="button" class="chip ${esc(osName(d) || '')}" data-i="${i}">${osMark(d)}<span>${esc(d.name)}<small>${OS[d.os] || ''}${d.kind === 'rdp' ? ` · ${T('viewer.kind.rdp.label')}` : ''}${d.via === 'tailscale' ? ' · Tailscale' : ''}${d.off ? ` · ${T('viewer.nearby.off')}` : ''}</small></span></button>`).join('')}</div>`;
   box.onclick = (e) => {
     const c = e.target.closest('[data-i]');
     if (!c) return;
@@ -489,27 +513,27 @@ function editAccount(a, after) {
   const isNew = !a;
   a = a || { name: '', user: '', ssh_key: '', uses: 0 };
   editor(`
-    <h2 id="edTitle">${isNew ? '계정 추가' : '계정 편집'}</h2>
-    ${field('사용자 이름', `<input name="user" required value="${esc(a.user)}" autocapitalize="off" spellcheck="false" placeholder="로그인 이름">`)}
-    ${field('표시 이름 <i>(선택)</i>', `<input name="name" value="${esc(a.name)}" placeholder="예: 내 Mac 계정">`)}
-    ${field('암호', `<input name="password" type="password" autocomplete="new-password" placeholder="${a.has_pw ? '저장됨 — 바꿀 때만 입력' : '암호'}">`, `암호는 ${vault()}에만 저장됩니다`)}
-    ${a.ssh_key ? `<p class="note">SSH 키: ${esc(a.ssh_key)}${S.local ? '' : ' (Itda가 켜진 컴퓨터의 Itda 앱에서 바꿀 수 있습니다)'}</p>` : ''}
-    ${isNew ? '' : `<p class="note">이 계정을 쓰는 기기: ${a.uses}대</p>`}
+    <h2 id="edTitle">${T(isNew ? 'viewer.acct.add' : 'viewer.acct.edit')}</h2>
+    ${field(T('viewer.acct.user'), `<input name="user" required value="${esc(a.user)}" autocapitalize="off" spellcheck="false" placeholder="${T('viewer.acct.userPh')}">`)}
+    ${field(T('viewer.acct.name'), `<input name="name" value="${esc(a.name)}" placeholder="${T('viewer.acct.namePh')}">`)}
+    ${field(T('viewer.acct.pw'), `<input name="password" type="password" autocomplete="new-password" placeholder="${a.has_pw ? T('viewer.ed.pwSaved') : T('viewer.acct.pw')}">`, T('viewer.acct.pwStored', { vault: vaultText() }))}
+    ${a.ssh_key ? `<p class="note">${T(S.local ? 'viewer.acct.sshKey' : 'viewer.acct.sshKeyRemote', { key: esc(a.ssh_key) })}</p>` : ''}
+    ${isNew ? '' : `<p class="note">${T('viewer.acct.usedBy', { count: a.uses })}</p>`}
     <p id="edErr" class="error" role="alert"></p>
     <div class="ed-actions">
-      ${isNew ? '' : '<button type="button" class="danger" data-a="delete">삭제</button>'}
+      ${isNew ? '' : `<button type="button" class="danger" data-a="delete">${T('viewer.ed.delete')}</button>`}
       <span class="grow"></span>
-      <button type="button" data-a="cancel">취소</button>
-      <button type="submit" class="primary">${isNew ? '추가' : '저장'}</button>
+      <button type="button" data-a="cancel">${T('viewer.ed.cancel')}</button>
+      <button type="submit" class="primary">${T(isNew ? 'viewer.ed.add' : 'viewer.ed.save')}</button>
     </div>`);
   const f = $('#edForm');
   f.querySelector('[data-a=delete]')?.addEventListener('click', async () => {
-    if (!confirm(`‘${a.name || a.user}’ 계정을 지울까요? 이 계정을 쓰던 기기는 다음에 암호를 다시 물어봅니다.`)) return;
+    if (!confirm(T('viewer.acct.deleteConfirm', { name: a.name || a.user }))) return;
     await saveEdit({ cmd: 'delete_account', id: a.id });
   });
   f.onsubmit = async (e) => {
     e.preventDefault();
-    await saveEdit({ cmd: 'save_account', id: a.id || '', user: f.user.value, name: f.name.value, password: f.password.value }, () => (after ? after() : toast(isNew ? '계정을 추가했습니다' : '저장했습니다')));
+    await saveEdit({ cmd: 'save_account', id: a.id || '', user: f.user.value, name: f.name.value, password: f.password.value }, () => (after ? after() : toast(T(isNew ? 'viewer.toast.accountAdded' : 'viewer.toast.saved'))));
   };
 }
 
@@ -528,7 +552,7 @@ window.addEventListener('beforeinstallprompt', (e) => {
   installEvt = e;
   $('#install').hidden = false;
 });
-window.addEventListener('appinstalled', () => { $('#install').hidden = true; toast('앱으로 설치했습니다'); });
+window.addEventListener('appinstalled', () => { $('#install').hidden = true; toast(T('viewer.toast.installed')); });
 $('#install').addEventListener('click', async () => {
   if (!installEvt) return;
   installEvt.prompt();
@@ -540,12 +564,12 @@ $('#install').addEventListener('click', async () => {
 function installHint() {
   if (STANDALONE || remembered('itda.hint')) return;
   const tip = IOS
-    ? '홈 화면에 추가하면 앱처럼 전체 화면으로 열립니다 — Safari의 공유 버튼 → ‘홈 화면에 추가’'
+    ? T('viewer.hint.ios')
     : !window.isSecureContext
-      ? '앱으로 설치하려면 Itda가 켜진 컴퓨터의 공유 페이지에서 Tailscale HTTPS 주소(https://…ts.net)를 만들고 그 주소로 여세요'
+      ? T('viewer.hint.https')
       : '';
   if (!tip) return;
-  $('#hint').innerHTML = `<span>${esc(tip)}</span><button class="ghost" aria-label="닫기">✕</button>`;
+  $('#hint').innerHTML = `<span>${esc(tip)}</span><button class="ghost" aria-label="${T('viewer.close')}">✕</button>`;
   $('#hint').hidden = false;
   $('#hint button').onclick = () => { $('#hint').hidden = true; remember('itda.hint'); };
 }
@@ -554,37 +578,39 @@ installHint();
 // ---------------------------------------------------------------- viewer
 
 // Close codes from the gateway → [title, advice]; functions see the host.
-const ga = () => ({ PC: 'PC가', 기기: '기기가' }[dev()] || 'Mac이');
-const MAC_LOGIN = 'Mac에 로그인할 때 쓰는 계정의 짧은 이름(Apple ID 아님)과 그 Mac의 로그인 암호를 넣으세요. 그 Mac의 시스템 설정 → 일반 → 공유 → 화면 공유 ⓘ → 접근 허용에 그 계정이 있어야 합니다.';
 const CLOSE_TEXT = {
-  4004: () => ['연결을 찾을 수 없습니다', '목록에서 지워졌을 수 있습니다.'],
-  4001: () => ['저장된 암호가 없습니다', '암호를 넣고 저장하면 바로 다시 연결합니다.'],
-  4010: (h) => [`${dev()} 로그인에 실패했습니다`, h.this || (h.os === 'windows' && h.kind !== 'rdp') ? '그 PC의 Itda → 공유 페이지에 표시된 8글자 공유 암호를 넣으세요. Windows 로그인 암호나 Microsoft 계정 암호가 아닙니다.' : h.kind === 'rdp' ? 'Microsoft 계정이면 사용자 이름에 이메일 주소, 암호에 Microsoft 계정 암호를 넣으세요. 숫자 PIN은 쓸 수 없습니다.' : kindOf(h) === 'linux' ? '그 기기의 VNC 암호(사용자 이름을 묻는 서버면 그 이름도)를 확인하세요.' : `${MAC_LOGIN} 여러 번 틀리면 Mac이 잠시 막으니, 고친 뒤에 다시 연결하세요.`],
-  4011: () => ['사용자 이름이 필요합니다', '기기를 편집해 사용자 이름을 넣으세요.'],
-  4012: (h) => [`${ga()} 연결을 거부했습니다`, h.kind === 'rdp' ? 'Windows 설정 → 시스템 → 원격 데스크톱이 켜져 있는지 확인하세요. (Home 에디션은 원격 데스크톱 서버가 없습니다 — 대신 그 PC에서 Itda의 ‘이 PC 공유’를 켜세요.)' : h.this ? 'PC의 Itda에서 ‘이 PC 공유’가 켜져 있는지 확인하세요.' : { windows: '그 PC의 Itda에서 ‘공유 → 이 PC 공유’가 켜져 있는지 확인하세요.', linux: 'VNC 서버가 실행 중인지, 포트(보통 5900·5901)가 맞는지 확인하세요.' }[kindOf(h)] || 'Mac에서 화면 공유가 켜져 있는지 확인하세요.'],
-  4013: () => [`${ga()} 응답하지 않습니다`, '기기가 켜져 있고 Itda가 켜진 컴퓨터와 같은 네트워크(또는 Tailscale)에 있는지 확인하세요.'],
-  4014: () => ['주소를 찾을 수 없습니다', '기기를 편집해 주소를 확인하세요.'],
-  4020: (h) => ['SSH 로그인에 실패했습니다', kindOf(h) === 'mac' ? `${MAC_LOGIN} 원격 로그인(SSH)도 같은 계정과 암호를 씁니다.` : '그 기기의 SSH 사용자 이름과 암호를 확인하세요.'],
-  4021: () => ['Mac의 보안 키가 바뀌었습니다', '그 Mac을 다시 설치했거나 다른 기기가 같은 주소를 쓰고 있을 수 있습니다. 웹 뷰어를 켠 컴퓨터의 Itda 앱에서 한 번 연결해 새 키를 확인하세요.'],
-  4022: () => ['원격 로그인(SSH)이 꺼져 있습니다', 'Mac의 공유 설정에서 원격 로그인을 켜세요.'],
+  4004: () => [T('viewer.err.4004.title'), T('viewer.err.4004.text')],
+  4001: () => [T('viewer.err.4001.title'), T('viewer.err.4001.text')],
+  4010: (h) => [byDev('viewer.err.4010.title.mac', 'viewer.err.4010.title.pc', 'viewer.err.4010.title.device'), T(h.this || (h.os === 'windows' && h.kind !== 'rdp') ? 'viewer.err.4010.itda' : h.kind === 'rdp' ? 'viewer.err.4010.rdp' : kindOf(h) === 'linux' ? 'viewer.err.4010.linux' : 'viewer.err.4010.mac')],
+  4011: () => [T('viewer.err.4011.title'), T('viewer.err.4011.text')],
+  4012: (h) => [byDev('viewer.err.4012.title.mac', 'viewer.err.4012.title.pc', 'viewer.err.4012.title.device'), T(h.kind === 'rdp' ? 'viewer.err.4012.rdp' : h.this ? 'viewer.err.4012.this' : { windows: 'viewer.err.4012.windows', linux: 'viewer.err.4012.linux' }[kindOf(h)] || 'viewer.err.4012.mac')],
+  4013: () => [byDev('viewer.err.4013.title.mac', 'viewer.err.4013.title.pc', 'viewer.err.4013.title.device'), T('viewer.err.4013.text')],
+  4014: () => [T('viewer.err.4014.title'), T('viewer.err.4014.text')],
+  4020: (h) => [T('viewer.err.4020.title'), T(kindOf(h) === 'mac' ? 'viewer.err.4020.mac' : 'viewer.err.4020.other')],
+  4021: () => [T('viewer.err.4021.title'), T('viewer.err.4021.text')],
+  4022: () => [T('viewer.err.4022.title'), T('viewer.err.4022.text')],
 };
 // Failures that the same saved login can't fix: offer to correct it instead of only retrying
 // (the editor never shows a saved password; it only replaces it).
 const FIX_LOGIN = new Set([4001, 4010, 4011, 4020]);
 
+// `title` and `text` may be functions (the card follows a language change).
 function status(kind, title, text, code = 0) {
   const st = $('#status');
+  S.status = kind ? [kind, title, text, code] : null;
   if (!kind) { st.hidden = true; return; }
   st.hidden = false;
+  if (typeof title === 'function') title = title();
+  if (typeof text === 'function') text = text();
   const fix = !APP && FIX_LOGIN.has(code) && S.host && !S.host.this;
   const acct = fix && S.host.account && S.accounts.find((a) => a.id === S.host.account);
   st.innerHTML = kind === 'busy'
     ? `<div class="card" role="status"><div class="spin"></div><h2>${esc(title)}</h2><p>${esc(text || '')}</p></div>`
     : `<div class="card" role="alert"><h2>${esc(title)}</h2><p>${esc(text || '')}</p>
-        ${fix && acct ? `<p class="small">이 기기는 저장된 계정 ‘${esc(acct.name || acct.user)}’으로 로그인합니다. 그 계정을 고치면 이 계정을 쓰는 기기 ${acct.uses}대에 모두 적용됩니다.</p>` : ''}
-        <div class="row">${fix ? `<button class="go" data-a="fix">${acct ? '계정 고치기' : code === 4011 ? '사용자 이름 넣기' : code === 4001 ? '암호 넣기' : '암호·계정 고치기'}</button>` : ''}
-          <button data-a="list">${APP ? '닫기' : '목록으로'}</button>
-          <button ${fix ? '' : 'class="go" '}data-a="retry">${fix && code !== 4001 ? '같은 정보로 다시' : '다시 연결'}</button></div></div>`;
+        ${fix && acct ? `<p class="small">${T('viewer.status.sharedAccount', { name: esc(acct.name || acct.user), count: acct.uses })}</p>` : ''}
+        <div class="row">${fix ? `<button class="go" data-a="fix">${T(acct ? 'viewer.status.fixAccount' : code === 4011 ? 'viewer.status.enterUser' : code === 4001 ? 'viewer.status.enterPw' : 'viewer.status.fixLogin')}</button>` : ''}
+          <button data-a="list">${T(APP ? 'viewer.close' : 'viewer.status.list')}</button>
+          <button ${fix ? '' : 'class="go" '}data-a="retry">${T(fix && code !== 4001 ? 'viewer.status.retrySame' : 'viewer.status.reconnect')}</button></div></div>`;
   st.querySelector('button.go')?.focus();
 }
 
@@ -596,7 +622,7 @@ $('#status').addEventListener('click', (e) => {
   else if (a.dataset.a === 'fix') {
     const acct = h.account && S.accounts.find((x) => x.id === h.account);
     if (acct) editAccount(acct, () => open(S.hosts.find((x) => x.id === h.id) || h));
-    else editHost(h, '저장된 암호는 보이지 않습니다. 새 암호를 넣고 저장하면 바로 다시 연결합니다.', true);
+    else editHost(h, T('viewer.status.pwHidden'), true);
   }
   else if (APP) post({ ev: 'close' });
   else leave();
@@ -626,7 +652,7 @@ function hpUndecodable(owner, e) {
   if (!S.rfb || owner !== S.rfb || !h?.hp?.on || S.hpMode === 'fallback' || S.hpNoDecode === h.id) return;
   console.warn('high-performance video could not be decoded:', e?.message || e);
   S.hpNoDecode = h.id;
-  toast('이 기기에서 고성능 영상을 표시하지 못해 기본 화면 공유로 다시 연결합니다');
+  toast(T('viewer.toast.hpUndecodable'));
   open(h);
 }
 
@@ -638,7 +664,8 @@ function open(h) {
   S.audio = !!opt('audio', false);
   show('view');
   renderTools();
-  status('busy', S.tries ? `${h.label}에 다시 연결하는 중 (${S.tries}/${RETRIES})` : `${h.label}에 연결하는 중`, h.ssh ? '암호화 연결(SSH)을 여는 중…' : h.kind === 'rdp' ? '원격 데스크톱에 로그인하는 중…' : '');
+  const tries = S.tries;
+  status('busy', () => (tries ? T('viewer.status.reconnecting', { name: h.label, n: tries, max: RETRIES }) : T('viewer.status.connecting', { name: h.label })), () => (h.ssh ? T('viewer.status.openingSsh') : h.kind === 'rdp' ? T('viewer.status.rdpLogin') : ''));
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   // Remote Desktop follows this window's size (not on phones: a desktop that small is no use).
   const follow = h.kind === 'rdp' && opt('resize', true) && !opt('monitor_layout', 0) && opt('monitor_mode',0)!==2 && (APP || matchMedia('(pointer: fine)').matches);
@@ -694,7 +721,7 @@ function open(h) {
         watchUnlock(context);
       }
     }).catch(() => {});
-    if (!APP) return toast(`${h.label}에 연결했습니다`);
+    if (!APP) return toast(T('viewer.toast.connected', { name: h.label }));
     post(S.tries ? { ev: 'reconnected' } : { ev: 'connected', name, w: rfb._fbWidth || 0, h: rfb._fbHeight || 0 });
     S.ever = true;
     S.tries = 0;
@@ -702,7 +729,7 @@ function open(h) {
   });
   rfb.addEventListener('pointermotion', (e) => {
     rel.hidden = e.detail.hidden;
-    if (rel.hidden && !rel.toasted && !relLocked() && !S.viewOnly && relAvailable()) { rel.toasted = true; toast('원격 화면이 마우스를 숨겼습니다 — 화면을 클릭하면 마우스를 잠급니다 (Esc로 풀기)'); }
+    if (rel.hidden && !rel.toasted && !relLocked() && !S.viewOnly && relAvailable()) { rel.toasted = true; toast(T('viewer.toast.pointerHidden')); }
     if (!rel.hidden && rel.auto && relLocked()) mouseLock(false);
     renderTools();
   });
@@ -718,8 +745,9 @@ function open(h) {
       if (S.gen !== gen || lockedDrop(h, closeInfo)) return;
       const code = closeInfo ? closeInfo.code : 0;
       const known = CLOSE_TEXT[code];
-      const [t, d] = known ? known(h) : ['연결이 끊겼습니다', closeInfo && closeInfo.reason ? closeInfo.reason : '네트워크 상태를 확인하고 다시 연결하세요.'];
-      status('error', t, d, code);
+      const reason = closeInfo && closeInfo.reason;
+      const say = () => (known ? known(h) : [T('viewer.err.lost.title'), reason || T('viewer.err.lost.text')]);
+      status('error', () => say()[0], () => say()[1], code);
       if (known) return;
       // The gateway refuses a WebSocket without a live session before it opens (no close code):
       // ask, but don't wait long on a network that is gone.
@@ -730,7 +758,7 @@ function open(h) {
   rfb.addEventListener('clipboard', (e) => {
     S.clip = e.detail.text || '';
     if (APP) { if (opt('clipboard', true)) post({ ev: 'clip', text: S.clip }); return; }
-    toast(`${dev()} 클립보드를 받았습니다 — 📋에서 볼 수 있습니다`);
+    toast(byDev('viewer.toast.clipReceived.mac', 'viewer.toast.clipReceived.pc', 'viewer.toast.clipReceived.device'));
   });
 }
 
@@ -743,7 +771,7 @@ const LOCKED_CLOSE = 4030;
 function lockedDrop(h, info) {
   if (info?.code !== LOCKED_CLOSE || !h?.hp?.on || (S.lockDropAt != null && Date.now() - S.lockDropAt < 15000)) return false;
   S.lockDropAt = Date.now();
-  toast(info.reason || '그 Mac의 화면이 잠겨 기본 화면 공유로 다시 연결합니다');
+  toast(info.reason || T('viewer.toast.lockedDrop'));
   open(h);
   return true;
 }
@@ -752,12 +780,13 @@ function lockedDrop(h, info) {
 // after that reconnects on its own, like the Windows viewer.
 function appDropped(h, info, gen) {
   const code = info ? info.code : 0;
-  const msg = (info && info.reason) || '원격 기기와의 연결이 끊겼습니다';
+  const msg = (info && info.reason) || T('viewer.app.lost');
   if (!S.ever) return post({ ev: 'error', kind: KIND_OF[code] || 'other', msg });
   if (opt('reconnect', true) && S.tries < RETRIES && !KIND_OF[code]?.includes('auth')) {
     S.tries += 1;
     post({ ev: 'reconnecting', n: S.tries });
-    status('busy', `${h.label} 연결이 끊겼습니다`, `${Math.min(S.tries * 2, 10)}초 뒤 다시 연결합니다… (${S.tries}/${RETRIES})`);
+    const tries = S.tries;
+    status('busy', () => T('viewer.status.dropped', { name: h.label }), () => T('viewer.status.retryIn', { count: Math.min(tries * 2, 10), n: tries, max: RETRIES }));
     return setTimeout(() => { if (S.gen === gen && !S.rfb) open(h); }, Math.min(S.tries * 2000, 10000));
   }
   post({ ev: 'error', kind: 'lost', msg });
@@ -872,7 +901,7 @@ function refreshHpMode(h, rfb, attempt) {
     if (typeof m?.hp !== 'boolean') throw Error('mode unknown');
     S.hpMode = m.hp ? 'active' : 'fallback';
     S.hpActual = m.hp;
-    S.hpFallback = m.hp ? null : m.reason || '연결하지 못했습니다';
+    S.hpFallback = m.hp ? null : m.reason || T('viewer.hp.connectFailed');
     S.hpFallbackSetup = !m.hp && !!m.setup;
     S.hpQuality = null;
     renderTools();
@@ -883,14 +912,14 @@ function refreshHpMode(h, rfb, attempt) {
       toast(unavailableText(context));
       watchUnlock(context);
     } else {
-      toast(`고성능 모드로 연결하지 못해 기본 화면 공유로 연결했습니다 — ${S.hpFallback}`);
+      toast(T('viewer.hp.fellBack', { reason: S.hpFallback }));
     }
   }).catch(() => {
     if (S.hpModeContext !== context || S.rfb !== rfb || S.host?.id !== h.id) return;
     S.hpMode = 'unknown';
     S.hpActual = false;
     renderTools();
-    toast('현재 연결 모드를 확인하지 못했습니다. 고성능 모드 버튼을 눌러 다시 확인하세요. 화면 연결은 유지됩니다.');
+    toast(T('viewer.hp.modeUnknown'));
   }).finally(() => clearTimeout(timeout));
 }
 // Screen Sharing stood in because that Mac was locked: once it's unlocked there (often through
@@ -909,16 +938,14 @@ function watchUnlock(context, tries = 0) {
       if (!live()) return;
       if (!m?.ready) return watchUnlock(context, tries + 1);
       S.hpFallback = null; S.hpFallbackSetup = false;
-      toast(context.otherUser ? '그 Mac 화면이 돌아와 고성능 모드로 바꿉니다' : '잠금이 풀려 고성능 모드로 바꿉니다');
+      toast(T(context.otherUser ? 'viewer.hp.screenBack' : 'viewer.hp.unlocked'));
       S.unlockSwitchAt = Date.now();
       open(S.host);
     }).catch(() => watchUnlock(context, tries + 1)).finally(() => clearTimeout(timeout));
   }, tries < 225 ? 4000 : 30000);
 }
 function unavailableText(context) {
-  return context.otherUser
-    ? '다른 사용자가 그 Mac 화면을 쓰고 있어 기본 화면 공유로 연결했습니다 — 화면이 돌아오면 고성능 모드로 바꿉니다'
-    : '그 Mac의 화면이 잠겨 있어 기본 화면 공유로 연결했습니다 — 잠금을 풀면 고성능 모드로 바꿉니다';
+  return T(context.otherUser ? 'viewer.hp.otherUser' : 'viewer.hp.locked');
 }
 function requestHpQuality() {
   if (!S.rfb || !S.hpActual || !S.hpModeContext || (S.hpQualityPending && !S.hpQualityFailed)) return;
@@ -935,18 +962,18 @@ function requestHpQuality() {
   renderTools();
 }
 function hpModeLabel() {
-  if (S.host.hp?.on && !S.hpModeContext) return '고성능 모드 사용 설정됨 — 누르면 끄고 기본 화면 공유로 다시 연결';
-  if (S.host.hp?.on && S.hpMode === 'checking') return '현재 연결 모드 확인 중…';
-  if (S.host.hp?.on && (!S.hpMode || S.hpMode === 'unknown')) return '현재 연결 모드를 확인하지 못함 — 눌러 다시 확인 (화면 연결 유지)';
-  if (S.host.hp?.on && S.hpFallback) return `고성능 모드로 연결되지 않음 (${S.hpFallback}) — ${S.hpFallbackSetup ? '누르면 그 Mac에 다시 켭니다' : '누르면 다시 시도합니다'}`;
-  if (S.host.hp?.on && S.hpActual) return '고성능 모드 켜짐 — 누르면 끕니다';
-  return S.hpBusy ? '고성능 모드 준비 중…' : '고성능 모드 — 이 Mac에 Itda 고성능 공유를 켜고 전환합니다 (SSH)';
+  if (S.host.hp?.on && !S.hpModeContext) return T('viewer.hp.label.enabled');
+  if (S.host.hp?.on && S.hpMode === 'checking') return T('viewer.hp.label.checking');
+  if (S.host.hp?.on && (!S.hpMode || S.hpMode === 'unknown')) return T('viewer.hp.label.unknown');
+  if (S.host.hp?.on && S.hpFallback) return T(S.hpFallbackSetup ? 'viewer.hp.label.fallbackSetup' : 'viewer.hp.label.fallbackRetry', { reason: S.hpFallback });
+  if (S.host.hp?.on && S.hpActual) return T('viewer.hp.label.on');
+  return T(S.hpBusy ? 'viewer.hp.label.preparing' : 'viewer.hp.label.off');
 }
 function hpDisable() {
   if (!hpCapable() || S.hpBusy || !S.host.hp?.on) return;
   S.host.hp = { ...S.host.hp, on: false };
   post({ ev: 'hp-off' });
-  toast('고성능 모드를 껐습니다 — 기본 화면 공유로 다시 연결합니다');
+  toast(T('viewer.hp.turnedOff'));
   return open(S.host);
 }
 function hpToggle() {
@@ -960,13 +987,13 @@ function hpToggle() {
   // or, when it isn't on there at all (e.g. Itda reinstalled), set it up again below.
   if (S.host.hp?.on && S.hpFallback && !S.hpFallbackSetup) {
     S.hpFallback = null; S.hpFallbackSetup = false; S.hpNoDecode = null;
-    toast('고성능 모드로 다시 연결합니다');
+    toast(T('viewer.hp.retrying'));
     return open(S.host);
   }
   // The switch after unlocking can land just as the person presses this button to try again:
   // that press must not turn high-performance off.
   if (S.host.hp?.on && !S.hpFallback && Date.now() - (S.unlockSwitchAt || 0) < 3000) {
-    toast('잠금이 풀려 고성능 모드로 바꾸는 중입니다');
+    toast(T('viewer.hp.switchingUnlocked'));
     return;
   }
   if (S.host.hp?.on && !S.hpFallback) {
@@ -975,7 +1002,7 @@ function hpToggle() {
   S.hpBusy = true; renderTools();
   const id=S.host.id;
   window.ItdaHpSetup.begin({id,name:S.host.label||S.host.name||S.host.remote_name||S.host.host,send:(op,extra={})=>post({ev:`hp-${op}`,...extra}),
-    done:()=>{if(S.host?.id!==id)return;S.hpBusy=false;S.hpNoDecode=null;S.host.hp={...(S.host.hp||{}),on:true};toast('고성능 모드로 전환합니다');open(S.host);},
+    done:()=>{if(S.host?.id!==id)return;S.hpBusy=false;S.hpNoDecode=null;S.host.hp={...(S.host.hp||{}),on:true};toast(T('viewer.hp.switching'));open(S.host);},
     cancel:()=>{S.hpBusy=false;renderTools();}
   });
   post({ ev: 'hp-upgrade' });
@@ -1013,10 +1040,10 @@ window.itdaHp = (m) => {
   }
   if (!m.status && typeof m.curtain === 'boolean') {
     S.hpCurtainBusy = false;
-    if (!m.ok) { renderTools(); return toast(`화면 가림을 바꾸지 못했습니다 — ${m.error || '원격 Mac에 연결할 수 없습니다'}`); }
+    if (!m.ok) { renderTools(); return toast(T('viewer.hp.curtainFailed', { reason: m.error || T('viewer.hp.noRemote') })); }
     S.host.hp = { ...(S.host.hp || {}), curtain: m.curtain };
     S.hpCurtainError = '';
-    toast(m.curtain ? '그 Mac의 화면을 가립니다 — 연결을 끝내면 그 Mac의 화면이 잠깁니다' : '화면 가림을 껐습니다 — 그 Mac의 화면이 다시 보입니다');
+    toast(T(m.curtain ? 'viewer.hp.curtainOn' : 'viewer.hp.curtainOff'));
     // What that Mac actually did (the request only reached it): checked until it settles.
     const req = S.hpStatusReq;
     S.hpCurtainSettling = m.curtain ? Date.now() + 12000 : 0;
@@ -1025,9 +1052,9 @@ window.itdaHp = (m) => {
   }
   if (typeof m.quality === 'boolean') {
     S.hpQualityBusy = false;
-    if (!m.ok) { renderTools(); return toast(`화질을 바꾸지 못했습니다 — ${m.error || '원격 Mac에 연결할 수 없습니다'}`); }
+    if (!m.ok) { renderTools(); return toast(T('viewer.hp.qualityFailed', { reason: m.error || T('viewer.hp.noRemote') })); }
     S.host.hp = { ...(S.host.hp || {}), native: !!m.quality };
-    toast(m.quality ? '선명하게(Retina)로 다시 연결합니다' : '빠르게로 다시 연결합니다');
+    toast(T(m.quality ? 'viewer.hp.toSharp' : 'viewer.hp.toFast'));
     return open(S.host);
   }
   window.ItdaHpSetup?.message(m);
@@ -1035,25 +1062,25 @@ window.itdaHp = (m) => {
 // The sharpness toggle: the saved choice for this Mac against what it actually serves now.
 function hpQualityShown() { return S.hpQuality?.quality === 'native'; }
 function hpQualityLabel() {
-  if (S.hpQualityBusy) return '화질 바꾸는 중…';
+  if (S.hpQualityBusy) return T('viewer.hp.quality.busy');
   const want = !!S.host.hp?.native, q = S.hpQuality?.quality;
-  if (q === undefined) return S.hpQualityFailed ? '현재 화질을 확인하지 못함 — 눌러 다시 확인 (화면 연결 유지)' : '현재 화질 확인 중…';
-  if (q === '') return '선명하게 (Retina) — 원격 Mac의 Itda를 업데이트하면 쓸 수 있습니다';
-  if (want && q === 'native') return `선명하게 (Retina) 켜짐 · ${S.hpQuality.w}×${S.hpQuality.h} — 누르면 빠르게로 바꿉니다`;
-  if (want) return '선명하게 (Retina) 적용 대기 — 이 Mac의 다른 고성능 연결이 모두 끝나면 적용됩니다';
-  if (q === 'native') return '지금은 선명하게로 보는 중 (이 Mac의 다른 연결이 켠 설정) — 누르면 이 Mac을 빠르게로 바꿉니다';
-  return '선명하게 (Retina) — 글자가 또렷해지고 프레임은 조금 줄어듭니다';
+  if (q === undefined) return T(S.hpQualityFailed ? 'viewer.hp.quality.unknown' : 'viewer.hp.quality.checking');
+  if (q === '') return T('viewer.hp.quality.update');
+  if (want && q === 'native') return T('viewer.hp.quality.on', { w: S.hpQuality.w, h: S.hpQuality.h });
+  if (want) return T('viewer.hp.quality.pending');
+  if (q === 'native') return T('viewer.hp.quality.other');
+  return T('viewer.hp.quality.off');
 }
 
 // Covering that Mac's own screens: the choice saved for this device.
 function hpCurtainLabel() {
-  if (S.hpCurtainBusy) return '화면 가림 바꾸는 중…';
-  if (S.hpCurtain === null) return '화면 가림 — 원격 Mac의 Itda를 업데이트하면 쓸 수 있습니다';
-  if (S.hpCurtain === true) return '화면 가림 켜짐 — 그 Mac의 화면은 가려지고 키보드·마우스는 막힙니다. 연결을 끝내면 화면이 잠깁니다. 누르면 끕니다';
-  if (S.host.hp?.curtain && S.hpCurtainError === 'local') return '그 Mac 앞에서 ⌃⌘Q로 화면 가림을 해제했습니다 (10분 동안 다시 가릴 수 없음)';
-  if (S.host.hp?.curtain && S.hpCurtainError) return `화면 가림을 켜지 못함 (${S.hpCurtainError === 'input' ? '그 Mac의 손쉬운 사용 권한 필요' : '화면 캡처에서 가림 창을 뺄 수 없음'}) — 누르면 다시 시도합니다`;
-  if (S.host.hp?.curtain && Date.now() < (S.hpCurtainSettling || 0)) return '화면 가림 켜는 중…';
-  return '화면 가림 — 그 Mac의 화면을 가리고 키보드·마우스를 막습니다. 연결을 끝내면 화면이 잠깁니다';
+  if (S.hpCurtainBusy) return T('viewer.hp.curtain.busy');
+  if (S.hpCurtain === null) return T('viewer.hp.curtain.update');
+  if (S.hpCurtain === true) return T('viewer.hp.curtain.on');
+  if (S.host.hp?.curtain && S.hpCurtainError === 'local') return T('viewer.hp.curtain.lifted');
+  if (S.host.hp?.curtain && S.hpCurtainError) return T('viewer.hp.curtain.failed', { why: T(S.hpCurtainError === 'input' ? 'viewer.hp.curtain.needsAccess' : 'viewer.hp.curtain.noExclude') });
+  if (S.host.hp?.curtain && Date.now() < (S.hpCurtainSettling || 0)) return T('viewer.hp.curtain.starting');
+  return T('viewer.hp.curtain.off');
 }
 // Pressed: what that Mac reports (the saved choice is asked again on each connection).
 const hpCurtainShown = () => S.hpCurtain === true;
@@ -1062,30 +1089,30 @@ const hpCurtainShown = () => S.hpCurtain === true;
 
 // Visible names under the toolbar icons (touch screens show no tooltips); the full
 // description stays the button's accessible name.
-const TOOL_NAME = { back: '목록', keyboard: '키보드', keys: '특수 키', 'mac-actions': '화면 동작', 'apple-screen-sharing': '화면 공유 앱',
-  'hp-quality': '화질', 'hp-curtain': '화면 가림', hp: '고성능', 'hp-disable': '고성능 끄기', clip: '클립보드', 'mouse-lock': '마우스 잠금', audio: '소리', monitors: '모니터', scale: () => (S.fit ? '실제 크기' : '맞춤'), viewonly: '보기 전용', full: '전체 화면' };
-const toolName = (t) => (typeof TOOL_NAME[t] === 'function' ? TOOL_NAME[t]() : TOOL_NAME[t] || '');
+const TOOL_NAME = { back: 'viewer.tool.back', keyboard: 'viewer.tool.keyboard', keys: 'viewer.tool.keys', 'mac-actions': 'viewer.tool.macActions', 'apple-screen-sharing': 'viewer.tool.appleScreenSharing',
+  'hp-quality': 'viewer.tool.hpQuality', 'hp-curtain': 'viewer.tool.hpCurtain', hp: 'viewer.tool.hp', 'hp-disable': 'viewer.tool.hpDisable', clip: 'viewer.tool.clip', 'mouse-lock': 'viewer.tool.mouseLock', audio: 'viewer.tool.audio', monitors: 'viewer.tool.monitors', scale: () => (S.fit ? 'viewer.tool.actual' : 'viewer.tool.fit'), viewonly: 'viewer.tool.viewonly', full: 'viewer.tool.full' };
+const toolName = (t) => (typeof TOOL_NAME[t] === 'function' ? T(TOOL_NAME[t]()) : TOOL_NAME[t] ? T(TOOL_NAME[t]) : '');
 
 function renderTools() {
   const t = $('#tools');
   const focused = t.contains(document.activeElement) ? document.activeElement.dataset.t : null;
   t.innerHTML = [
-    ...(APP ? [] : [['back', 'back', '목록으로'], 'sep', ['keyboard', 'keyboard', '키보드']]),
-    ['keys', 'command', `${isWin(S.host) ? 'Windows' : 'Mac'} 특수 키`],
-    ...(macHost(S.host) ? [['mac-actions', 'mission', 'Mac 화면 동작 — Mission Control · Exposé']] : []),
-    ...(APP && /Mac/.test(navigator.platform) && !IOS && ['mac', 'macos'].includes(S.host?.os) && S.host?.kind !== 'rdp' ? [['apple-screen-sharing', 'monitor', 'Apple 화면 공유 앱에서 열기 · 별도 앱으로 직접 연결']] : []),
+    ...(APP ? [] : [['back', 'back', T('viewer.status.list')], 'sep', ['keyboard', 'keyboard', T('viewer.tool.keyboard')]]),
+    ['keys', 'command', T(isWin(S.host) ? 'viewer.tip.keys.win' : 'viewer.tip.keys.mac')],
+    ...(macHost(S.host) ? [['mac-actions', 'mission', T('viewer.tip.macActions')]] : []),
+    ...(APP && /Mac/.test(navigator.platform) && !IOS && ['mac', 'macos'].includes(S.host?.os) && S.host?.kind !== 'rdp' ? [['apple-screen-sharing', 'monitor', T('viewer.tip.appleScreenSharing')]] : []),
     ...(hpCapable() && S.hpActual ? [['hp-quality', 'sparkle', hpQualityLabel(), hpQualityShown()]] : []),
     ...(hpCapable() && S.hpActual ? [['hp-curtain', 'lock', hpCurtainLabel(), hpCurtainShown()]] : []),
     ...(hpCapable() ? [['hp', 'bolt', hpModeLabel(), !!S.hpActual]] : []),
-    ...(hpCapable() && S.host.hp?.on && ['unknown', 'checking'].includes(S.hpMode) ? [['hp-disable', 'bolt', '고성능 모드 끄기 — 기본 화면 공유로 다시 연결']] : []),
-    ...(APP ? [] : [['clip', 'clip', '클립보드']]),
-    ['audio', S.audio ? 'sound' : 'mute', S.audio ? '소리 끄기' : '소리 켜기 — 원격 기기의 소리 듣기', S.audio],
+    ...(hpCapable() && S.host.hp?.on && ['unknown', 'checking'].includes(S.hpMode) ? [['hp-disable', 'bolt', T('viewer.tip.hpDisable')]] : []),
+    ...(APP ? [] : [['clip', 'clip', T('viewer.tool.clip')]]),
+    ['audio', S.audio ? 'sound' : 'mute', T(S.audio ? 'viewer.tip.soundOff' : 'viewer.tip.soundOn'), S.audio],
     'sep',
-    ...(relAvailable() ? [['mouse-lock', 'mouse', relLocked() ? '마우스 잠금 풀기 (Esc)' : '마우스 잠금 — 게임처럼 마우스를 숨기는 화면용 (Ctrl+Alt+Shift+M)', relLocked()]] : []),
-    ['monitors', 'monitor', '모니터 선택 및 창 배치'],
-    ['scale', S.fit ? 'fit' : 'actual', S.fit ? '실제 크기로' : '화면에 맞춤'],
-    ['viewonly', 'eye', '보기 전용', S.viewOnly],
-    ['full', 'full', '전체 화면'],
+    ...(relAvailable() ? [['mouse-lock', 'mouse', T(relLocked() ? 'viewer.tip.mouseUnlock' : 'viewer.tip.mouseLock'), relLocked()]] : []),
+    ['monitors', 'monitor', T('viewer.tip.monitors')],
+    ['scale', S.fit ? 'fit' : 'actual', T(S.fit ? 'viewer.tip.actual' : 'viewer.tip.fit')],
+    ['viewonly', 'eye', T('viewer.tool.viewonly'), S.viewOnly],
+    ['full', 'full', T('viewer.tool.full')],
   ].map((b) => (b === 'sep' ? '<span class="sep"></span>' : `<button data-t="${b[0]}" title="${esc(b[2])}" aria-label="${esc(b[2])}"${['viewonly', 'audio'].includes(b[0]) ? ` aria-pressed="${!!b[3]}"` : ''} class="${b[3] ? 'on' : ''}">${icon(b[1])}<span class="tl" aria-hidden="true">${toolName(b[0])}</span></button>`)).join('');
   if (focused) t.querySelector(`[data-t="${focused}"]`)?.focus();
 }
@@ -1113,7 +1140,7 @@ $('#tools').addEventListener('click', (e) => {
     case 'apple-screen-sharing':
       if (APP && /Mac/.test(navigator.platform) && !IOS && ['mac', 'macos'].includes(S.host?.os) && S.host?.kind !== 'rdp') {
         post({ev:'apple-screen-sharing'});
-        toast('Apple 화면 공유 앱에 연결을 요청했습니다. 이 세션은 유지됩니다.');
+        toast(T('viewer.toast.appleScreenSharing'));
       }
       return;
     case 'hp': return hpToggle();
@@ -1126,7 +1153,7 @@ $('#tools').addEventListener('click', (e) => {
       return post({ ev: 'hp-quality', native: !(S.hpQuality ? hpQualityShown() : !!S.host.hp?.native) });
     case 'hp-curtain':
       if (S.hpCurtainBusy) return;
-      if (S.hpCurtain === null) return toast('원격 Mac의 Itda를 업데이트하면 화면 가림을 쓸 수 있습니다');
+      if (S.hpCurtain === null) return toast(T('viewer.hp.curtain.updateToast'));
       S.hpCurtainBusy = true; renderTools();
       return post({ ev: 'hp-curtain', on: !hpCurtainShown() });
     case 'audio': return audioToggle();
@@ -1135,7 +1162,7 @@ $('#tools').addEventListener('click', (e) => {
     case 'scale':
       S.fit = !S.fit;
       if (r) { r.scaleViewport = S.fit; r.clipViewport = !S.fit; r.dragViewport = !S.fit && !monitors.selected; monitors.apply(); }
-      toast(S.fit ? '화면에 맞춤' : '실제 크기 — 끌어서 이동');
+      toast(T(S.fit ? 'viewer.tip.fit' : 'viewer.toast.actual'));
       return renderTools();
     case 'mouse-lock':
       rel.auto = false;
@@ -1143,14 +1170,14 @@ $('#tools').addEventListener('click', (e) => {
       return;
     case 'viewonly':
       monitors.option('view_only',!S.viewOnly);
-      toast(S.viewOnly ? '보기 전용 켜짐' : '보기 전용 꺼짐');
+      toast(T(S.viewOnly ? 'viewer.toast.viewOnlyOn' : 'viewer.toast.viewOnlyOff'));
       return renderTools();
     case 'full': {
       if (APP) return post({ ev: 'fullscreen' });
       const d = document.documentElement;
       if (document.fullscreenElement) document.exitFullscreen();
-      else if (d.requestFullscreen) d.requestFullscreen().catch(() => toast('이 브라우저는 전체 화면을 지원하지 않습니다. 홈 화면에 추가하면 전체 화면으로 열립니다.'));
-      else toast('홈 화면에 추가하면 전체 화면으로 열립니다');
+      else if (d.requestFullscreen) d.requestFullscreen().catch(() => toast(T('viewer.toast.noFullscreen')));
+      else toast(T('viewer.toast.fullscreenHome'));
     }
   }
 });
@@ -1164,45 +1191,46 @@ function audioToggle() {
   if (r && r.itdaAudio && !r.itdaAudio(S.audio)) {
     S.audio = false;
     renderTools();
-    return toast('이 브라우저에서는 소리를 재생할 수 없습니다');
+    return toast(T('viewer.toast.noSound'));
   }
   monitors.persist({ audio: S.audio });
-  toast(S.audio ? '소리 켜짐' : '소리 꺼짐');
+  toast(T(S.audio ? 'viewer.toast.soundOn' : 'viewer.toast.soundOff'));
   clearTimeout(S.audioCheck);
   // No confirmation from the server: it isn't Itda's sharing (Screen Sharing, Remote Desktop).
-  if (S.audio && r) S.audioCheck = setTimeout(() => { if (S.rfb === r && S.audio && !r._itdaAudioServer) toast(`이 연결에서는 ${dev()}의 소리를 받을 수 없습니다`); }, 4000);
+  if (S.audio && r) S.audioCheck = setTimeout(() => { if (S.rfb === r && S.audio && !r._itdaAudioServer) toast(byDev('viewer.toast.noRemoteSound.mac', 'viewer.toast.noRemoteSound.pc', 'viewer.toast.noRemoteSound.device')); }, 4000);
   renderTools();
 }
 for (const ev of ['pointerdown', 'keydown']) document.addEventListener(ev, () => { if (S.audio) S.rfb?.itdaAudioResume?.(); }, true);
 
+// [keys shown, the description's message ID, keysyms]
 const COMBOS = [
-  ['⌘ Space', 'Spotlight', [XK.cmd, XK.space]],
-  ['⌘ Tab', '앱 전환', [XK.cmd, XK.tab]],
-  ['⌘ C', '복사', [XK.cmd, 0x63]],
-  ['⌘ V', '붙여넣기', [XK.cmd, 0x76]],
-  ['⌘ Q', '앱 종료', [XK.cmd, 0x71]],
-  ['⌘ W', '창 닫기', [XK.cmd, 0x77]],
-  ['⌥⌘ Esc', '강제 종료', [XK.opt, XK.cmd, XK.esc]],
-  ['⌃⌘ Q', '화면 잠금', [XK.ctrl, XK.cmd, 0x71]],
+  ['⌘ Space', 'viewer.keys.spotlight', [XK.cmd, XK.space]],
+  ['⌘ Tab', 'viewer.keys.switchApps', [XK.cmd, XK.tab]],
+  ['⌘ C', 'viewer.keys.copy', [XK.cmd, 0x63]],
+  ['⌘ V', 'viewer.keys.paste', [XK.cmd, 0x76]],
+  ['⌘ Q', 'viewer.keys.quitApp', [XK.cmd, 0x71]],
+  ['⌘ W', 'viewer.keys.closeWindow', [XK.cmd, 0x77]],
+  ['⌥⌘ Esc', 'viewer.keys.forceQuit', [XK.opt, XK.cmd, XK.esc]],
+  ['⌃⌘ Q', 'viewer.keys.lockScreen', [XK.ctrl, XK.cmd, 0x71]],
   ...macActions.slice(0,5).map(([,label,key,keys])=>[key,label,keys]),
   ['Esc', '', [XK.esc]],
   ['Tab', '', [XK.tab]],
-  ['⌫', '지우기', [XK.back]],
+  ['⌫', 'viewer.keys.backspace', [XK.back]],
 ];
 
 const WIN_COMBOS = [
-  ['Ctrl Alt Del', '보안 화면', [XK.ctrl, XK.alt, XK.del]],
-  ['Alt Tab', '앱 전환', [XK.alt, XK.tab]],
-  ['Ctrl C', '복사', [XK.ctrl, 0x63]],
-  ['Ctrl V', '붙여넣기', [XK.ctrl, 0x76]],
-  ['Ctrl Z', '실행 취소', [XK.ctrl, 0x7a]],
-  ['Alt F4', '창 닫기', [XK.alt, XK.f4]],
-  ['⊞ Win', '시작 메뉴', [XK.win]],
-  ['⊞ D', '바탕 화면', [XK.win, 0x64]],
-  ['Ctrl Shift Esc', '작업 관리자', [XK.ctrl, XK.shift, XK.esc]],
+  ['Ctrl Alt Del', 'viewer.keys.securityScreen', [XK.ctrl, XK.alt, XK.del]],
+  ['Alt Tab', 'viewer.keys.switchApps', [XK.alt, XK.tab]],
+  ['Ctrl C', 'viewer.keys.copy', [XK.ctrl, 0x63]],
+  ['Ctrl V', 'viewer.keys.paste', [XK.ctrl, 0x76]],
+  ['Ctrl Z', 'viewer.keys.undo', [XK.ctrl, 0x7a]],
+  ['Alt F4', 'viewer.keys.closeWindow', [XK.alt, XK.f4]],
+  ['⊞ Win', 'viewer.keys.start', [XK.win]],
+  ['⊞ D', 'viewer.keys.desktop', [XK.win, 0x64]],
+  ['Ctrl Shift Esc', 'viewer.keys.taskManager', [XK.ctrl, XK.shift, XK.esc]],
   ['Esc', '', [XK.esc]],
   ['Tab', '', [XK.tab]],
-  ['⌫', '지우기', [XK.back]],
+  ['⌫', 'viewer.keys.backspace', [XK.back]],
 ];
 const combos = () => (isWin(S.host) ? WIN_COMBOS : COMBOS);
 
@@ -1221,13 +1249,13 @@ function toggleSheet(kind) {
     const mods = isWin(S.host)
       ? mod('ctrl', 'Ctrl') + mod('alt', 'Alt') + mod('shift', '⇧') + mod('win', '⊞')
       : mod('cmd', '⌘') + mod('opt', '⌥') + mod('ctrl', '⌃') + mod('shift', '⇧');
-    sh.innerHTML = `<h3>누른 채로 (다음 키와 함께)</h3><div class="mods">${mods}</div>
-      <h3>보내기</h3><div class="keys">${combos().map((c, i) => `<button data-combo="${i}">${esc(c[0])}${c[1] ? `<small>${esc(c[1])}</small>` : ''}</button>`).join('')}</div>`;
+    sh.innerHTML = `<h3>${T('viewer.keys.hold')}</h3><div class="mods">${mods}</div>
+      <h3>${T('viewer.keys.send')}</h3><div class="keys">${combos().map((c, i) => `<button data-combo="${i}">${esc(c[0])}${c[1] ? `<small>${esc(T(c[1]))}</small>` : ''}</button>`).join('')}</div>`;
   } else {
-    const d = dev();
-    sh.innerHTML = `<h3>${d}에서 받은 클립보드</h3><textarea id="clipIn" readonly placeholder="아직 받은 내용이 없습니다">${esc(S.clip)}</textarea>
-      <h3 style="margin-top:12px">${d}(으)로 보내기</h3><textarea id="clipOut" placeholder="여기에 붙여 넣고 보내기를 누르세요"></textarea>
-      <div class="row"><button data-a="copy">받은 내용 복사</button><button class="go" data-a="send">${d}(으)로 보내기</button></div>`;
+    const sendTo = byDev('viewer.clip.sendTo.mac', 'viewer.clip.sendTo.pc', 'viewer.clip.sendTo.device');
+    sh.innerHTML = `<h3>${byDev('viewer.clip.from.mac', 'viewer.clip.from.pc', 'viewer.clip.from.device')}</h3><textarea id="clipIn" readonly placeholder="${T('viewer.clip.empty')}">${esc(S.clip)}</textarea>
+      <h3 style="margin-top:12px">${sendTo}</h3><textarea id="clipOut" placeholder="${T('viewer.clip.outPh')}"></textarea>
+      <div class="row"><button data-a="copy">${T('viewer.clip.copy')}</button><button class="go" data-a="send">${sendTo}</button></div>`;
   }
   sh.hidden = false;
   dimToolsSoon();
@@ -1253,11 +1281,11 @@ $('#sheet').addEventListener('click', async (e) => {
   if (!a) return;
   if (a.dataset.a === 'send') {
     const t = $('#clipOut').value;
-    if (S.rfb && t) { S.rfb.clipboardPasteFrom(t); toast(isWin(S.host) ? 'PC 클립보드로 보냈습니다 — PC에서 Ctrl+V' : 'Mac 클립보드로 보냈습니다 — Mac에서 ⌘V'); }
+    if (S.rfb && t) { S.rfb.clipboardPasteFrom(t); toast(T(isWin(S.host) ? 'viewer.toast.clipSent.pc' : 'viewer.toast.clipSent.mac')); }
   } else if (a.dataset.a === 'copy') {
     const box = $('#clipIn');
-    try { await navigator.clipboard.writeText(box.value); toast('복사했습니다'); }
-    catch (_) { box.select(); toast('선택된 내용을 길게 눌러 복사하세요'); }
+    try { await navigator.clipboard.writeText(box.value); toast(T('viewer.toast.copied')); }
+    catch (_) { box.select(); toast(T('viewer.toast.copyByHand')); }
   }
 });
 
@@ -1351,7 +1379,7 @@ document.addEventListener('pointerlockchange', () => {
   if (!r._itdaLocked) {
     if (rel.mask) r.itdaRelative(0, 0, 0); // no button stays down on the other side
     rel.mask = rel.dx = rel.dy = 0;
-  } else toast('마우스 잠금 — Esc를 누르면 풀립니다');
+  } else toast(T('viewer.toast.mouseLocked'));
   renderTools();
 });
 document.addEventListener('mousemove', (e) => {
@@ -1385,6 +1413,25 @@ window.addEventListener('keydown', (e) => {
   rel.auto = false;
   mouseLock(!relLocked());
 }, true);
+
+// Another language (the picker, or the app): what is on screen again in it. The editor isn't
+// redrawn (it would lose what was typed; the picker is behind it).
+I18N.onChange(() => {
+  syncLangPick();
+  if (MIRROR !== null) return;
+  document.querySelectorAll('#loginError, #loginNote').forEach((el) => { if (el.itdaText) el.textContent = el.itdaText(); });
+  if (S.signedIn) { renderHosts(); renderAccounts(); }
+  if (!$('#hint').hidden) installHint();
+  if (S.status) status(...S.status);
+  if (!$('#view').hidden) renderTools();
+  const sh = $('#sheet');
+  if (!sh.hidden) {
+    const out = $('#clipOut')?.value;
+    sh.hidden = true;
+    toggleSheet(sh.dataset.kind);
+    if (out && $('#clipOut')) $('#clipOut').value = out;
+  }
+});
 
 window.addEventListener('beforeunload', () => { if (MIRROR === null) close(false); });
 boot();

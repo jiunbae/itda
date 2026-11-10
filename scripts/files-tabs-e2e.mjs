@@ -21,6 +21,8 @@ const assert=(value,msg)=>{if(!value)throw Error(msg);};
 try{
  for(const platform of ['mac','windows']){
   const c=await browser.newContext({viewport:{width:1200,height:800},reducedMotion:'reduce',userAgent:platform==='mac'?'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)':'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
+  // Korean UI as on a Korean system; the browser locale (sorting) stays the default.
+  await c.addInitScript(()=>{window.ITDA_LANG='ko';window.ITDA_OS_LANG='ko';});
   await c.addInitScript(()=>{
    const entry=(name,dir=false)=>({name,dir,size:100,modified:1780000000});
    // studio and build answer; slow never finishes connecting (used for cancel).

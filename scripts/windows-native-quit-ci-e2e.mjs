@@ -53,7 +53,7 @@ try{
  const candidate=path.join(root,'itda.exe');fs.copyFileSync(path.join(repo,'target/release/itda.exe'),candidate);assert(hash(candidate)===report.provenance.binary_sha256,'Copied executable bytes differ');
  originalStartup=control('startup');
  const listener=net.createServer();await new Promise((resolve,reject)=>{listener.once('error',reject);listener.listen(0,'127.0.0.1',resolve);});report.debug_port=listener.address().port;await new Promise(r=>listener.close(r));
- child=spawn(candidate,[],{env:{...process.env,ITDA_DATA_DIR:path.join(root,'data'),ITDA_DEBUG_PORT:String(report.debug_port)},stdio:['ignore','pipe','pipe']});child.stdout.on('data',()=>{});child.stderr.on('data',()=>{});
+ child=spawn(candidate,[],{env:{...process.env,ITDA_LANG:'ko',ITDA_DATA_DIR:path.join(root,'data'),ITDA_DEBUG_PORT:String(report.debug_port)},stdio:['ignore','pipe','pipe']});child.stdout.on('data',()=>{});child.stderr.on('data',()=>{});
  ended=new Promise(resolve=>{child.once('error',error=>resolve({error:error.message}));child.once('exit',(code,signal)=>{exited=true;resolve({code,signal});});});
  await wait(()=>{
   assert(child.pid&&child.exitCode===null&&child.signalCode===null,'Candidate exited before readiness');

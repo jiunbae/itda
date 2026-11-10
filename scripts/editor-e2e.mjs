@@ -21,7 +21,7 @@ const engine = process.env.ENGINE || "chromium";
 const exe = engine === "chromium" ? process.env.CHROMIUM : process.env.WEBKIT;
 const browser = await pw[engine].launch(exe ? { executablePath: exe } : {});
 try {
-  const page = await browser.newPage({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36" });
+  const page = await browser.newPage({locale:'ko-KR', userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36" });
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.addInitScript(() => (window.ipc = { postMessage: (s) => (window.sent ??= []).push(JSON.parse(s)) }));

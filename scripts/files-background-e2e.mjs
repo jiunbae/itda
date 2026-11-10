@@ -25,7 +25,7 @@ const request={id:'__network',from:'local',to:'local',source:'C:\\Users\\alex',d
 let seq=10;
 const app=(m)=>({type:'files_job',window:'app',orphan:true,request,seq:++seq,...m});
 try{
-  const c=await browser.newContext({viewport:{width:1200,height:800},reducedMotion:'reduce',userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
+  const c=await browser.newContext({locale:'ko-KR',viewport:{width:1200,height:800},reducedMotion:'reduce',userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
   await c.addInitScript(()=>{
     const entry=(name,dir=false)=>({name,dir,size:100,modified:1780000000});
     const tree={'C:\\Users\\alex':[entry('Photos',true),entry('report.txt')],'D:\\Backup':[],'':[entry('C:',true),entry('D:',true)]};

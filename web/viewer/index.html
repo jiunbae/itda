@@ -13,6 +13,9 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="stylesheet" href="viewer.css">
+<script src="i18n.js"></script>
+<script src="locales/ko.js"></script>
+<script src="locales/en.js"></script>
 </head>
 <body>
 <main id="login" class="screen center" hidden>
@@ -20,26 +23,28 @@
     <img src="icon.svg" alt="" class="login-logo">
     <h1>Itda</h1>
     <p id="loginNote" class="note" role="status" hidden></p>
-    <p class="muted">Itda가 켜진 컴퓨터(Mac 또는 Windows PC)에서 Itda 왼쪽의 <b>공유</b> 페이지를 열고, 거기 표시된 6자리 <b>접속 PIN</b>을 입력하세요.</p>
+    <p class="muted" data-i18n-html="viewer.login.intro"></p>
     <form id="loginForm" autocomplete="off">
-      <input id="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="PIN 6자리" aria-label="PIN" required>
-      <button class="primary" type="submit">들어가기</button>
+      <input id="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" data-i18n-attr="placeholder:viewer.login.pinPlaceholder" aria-label="PIN" required>
+      <button class="primary" type="submit" data-i18n="viewer.login.submit"></button>
     </form>
     <p id="loginError" class="error" role="alert"></p>
+    <label class="lang" hidden><select data-i18n-attr="aria-label:viewer.lang.label"><option value="auto" data-i18n="lang.auto"></option><option value="ko" data-i18n="lang.ko"></option><option value="en" data-i18n="lang.en"></option></select></label>
   </div>
 </main>
 
 <main id="list" class="screen" hidden>
   <header class="bar">
     <div class="brand"><img src="icon.svg" alt=""><b>Itda</b></div>
-    <button id="install" class="ghost text" hidden>앱으로 설치</button>
-    <button id="refresh" class="ghost" title="새로 고침" aria-label="새로 고침"></button>
-    <button id="logout" class="ghost text">로그아웃</button>
+    <button id="install" class="ghost text" hidden data-i18n="viewer.list.install"></button>
+    <button id="refresh" class="ghost" data-i18n-attr="title:viewer.list.refresh;aria-label:viewer.list.refresh"></button>
+    <label class="lang" hidden><select data-i18n-attr="aria-label:viewer.lang.label"><option value="auto" data-i18n="lang.auto"></option><option value="ko" data-i18n="lang.ko"></option><option value="en" data-i18n="lang.en"></option></select></label>
+    <button id="logout" class="ghost text" data-i18n="viewer.list.logout"></button>
   </header>
   <div id="hint" class="hint" hidden></div>
   <div class="tabs" role="tablist">
-    <button role="tab" data-tab="hosts" aria-selected="true">기기</button>
-    <button role="tab" data-tab="accounts" aria-selected="false">계정</button>
+    <button role="tab" data-tab="hosts" aria-selected="true" data-i18n="viewer.list.tabHosts"></button>
+    <button role="tab" data-tab="accounts" aria-selected="false" data-i18n="viewer.list.tabAccounts"></button>
   </div>
   <section id="hosts" class="hosts"></section>
   <section id="accounts" class="accounts" hidden></section>
@@ -51,10 +56,10 @@
 
 <main id="view" class="screen" hidden>
   <div id="screen"></div>
-  <nav id="tools" class="tools" aria-label="원격 화면 도구"></nav>
+  <nav id="tools" class="tools" data-i18n-attr="aria-label:viewer.tools"></nav>
   <div id="sheet" class="sheet" hidden></div>
   <div id="status" class="status" hidden></div>
-  <textarea id="kbd" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="키보드 입력"></textarea>
+  <textarea id="kbd" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" data-i18n-attr="aria-label:viewer.kbd"></textarea>
 </main>
 <div id="toast" class="toast" hidden></div>
 <script type="module" src="novnc.min.js"></script>

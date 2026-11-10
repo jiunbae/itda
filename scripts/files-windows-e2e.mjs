@@ -25,7 +25,7 @@ async function auditFiles(p){
 }
 try{
  for(const platform of ['windows','mac']){
-  const c=await browser.newContext({viewport:{width:1200,height:800},reducedMotion:'reduce',userAgent:platform==='mac'?'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)':'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
+  const c=await browser.newContext({locale:'ko-KR',viewport:{width:1200,height:800},reducedMotion:'reduce',userAgent:platform==='mac'?'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)':'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
   await c.addInitScript(()=>{
    const entry=(name,dir=false,size=100)=>({name,dir,size,modified:1780000000});
    const home='/Users/alex',tree={ [home]:[entry('Documents',true),entry('Downloads',true),entry('Notes.txt'),entry('Zebra.pdf',false,2000)], [home+'/Documents']:[entry('Alpha.txt'),entry('Beta.md')], [home+'/Downloads']:[entry('Download.txt')] };
@@ -143,7 +143,7 @@ try{
  // Windows file windows draw their own title bar: tabs, then minimize/maximize/close; the
  // empty tab row moves the window. Narrow windows keep every command reachable.
  {
-  const c=await browser.newContext({viewport:{width:1000,height:700},reducedMotion:'reduce',userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
+  const c=await browser.newContext({locale:'ko-KR',viewport:{width:1000,height:700},reducedMotion:'reduce',userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
   await c.addInitScript(()=>{window.ITDA_WINDOW_CHROME=true;window.ITDA_FILE_WINDOW='native-1';
    const entry=(name,dir=false)=>({name,dir,size:100,modified:1780000000});const home='/Users/alex',tree={[home]:[entry('Documents',true),entry('Notes.txt')]};
    window.testPackets=[];window.ipc={postMessage:raw=>{const m=JSON.parse(raw);testPackets.push(m);if(m.cmd!=='files')return;const result={...m,type:'files_result',ok:true};

@@ -299,6 +299,9 @@ fn asset(path: &str) -> Option<(Cow<'static, [u8]>, &'static str)> {
         "files.js" => FILES_JS,
         "files.css" => FILES_CSS,
         "icons.js" => ICONS_JS,
+        "i18n.js" => crate::i18n::WEB_I18N,
+        "locales/ko.js" => crate::i18n::WEB_KO,
+        "locales/en.js" => crate::i18n::WEB_EN,
         "icon.svg" => ICON_SVG,
         "help.js" => HELP_JS,
         "help.css" => HELP_CSS,
@@ -403,6 +406,7 @@ fn send_state() {
             "online": m.online,
             "found": m.found,
             "dark": plat::system_dark(),
+            "os_lang": crate::i18n::os_lang(),
             "ssh_ok": crate::tunnel::ssh_exe().is_some(),
             "tailnet": *TAILNET.lock().unwrap(),
             "quick": m.pending_quick.take(),
@@ -1039,6 +1043,7 @@ fn on_ipc(v: Value) {
                 }
                 let old = home(|m| std::mem::replace(&mut m.settings, st.clone()));
                 store::save_settings(&st);
+                crate::i18n::set_pref(&st.lang);
                 plat::apply_theme(is_dark(&st));
                 if old.zoom != st.zoom {
                     plat::apply_zoom(st.zoom);

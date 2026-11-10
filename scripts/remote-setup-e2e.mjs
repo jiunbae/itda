@@ -16,7 +16,7 @@ const browser=await pw.chromium.launch({headless:true,...(process.env.CHROMIUM?{
 const assert=(v,m)=>{if(!v)throw Error(m);};
 try {
  for(const platform of ['mac','windows']) {
-  const c=await browser.newContext({viewport:{width:1100,height:900},userAgent:platform==='mac'?'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)':'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
+  const c=await browser.newContext({locale:'ko-KR',viewport:{width:1100,height:900},userAgent:platform==='mac'?'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)':'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
   await c.addInitScript(()=>{window.packets=[];window.ipc={postMessage:raw=>packets.push(JSON.parse(raw))};});
   const p=await c.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
   await p.goto(`http://127.0.0.1:${server.address().port}/web/`);

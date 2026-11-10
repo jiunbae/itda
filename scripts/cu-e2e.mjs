@@ -16,7 +16,7 @@ for (let i = 0; ; i++) {
 }
 try {
   for (const mode of ['classic', 'cu', 'slow']) {
-    const page = await browser.newPage();
+    const page = await browser.newPage({locale:'ko-KR'});
     page.on('console', (m) => m.type() === 'error' && console.log(`[${mode}] ${m.text()}`));
     await page.goto(`http://127.0.0.1:18790/?mode=${mode}`);
     await page.waitForFunction(() => document.title === 'done', null, { timeout: 15000 });

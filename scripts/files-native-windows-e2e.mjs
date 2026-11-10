@@ -32,7 +32,7 @@ try {
  fs.writeFileSync(path.join(data,'settings.json'),JSON.stringify({onboarded:true,announce:false,auto_update:false,thumbnails:false,web:{on:false},share:{on:false},hp:{on:false}}));
  const server=net.createServer();await new Promise(r=>server.listen(0,'127.0.0.1',r));const port=server.address().port;await new Promise(r=>server.close(r));
  const runtime=path.join(root,'runtime');fs.mkdirSync(runtime);
- app=spawn(path.join(bundle,'Contents/MacOS/itda'),[],{env:{...process.env,TMPDIR:runtime,ITDA_DATA_DIR:path.join(root,'data'),ITDA_TEST_HTTP:String(port)},stdio:'ignore'});
+ app=spawn(path.join(bundle,'Contents/MacOS/itda'),[],{env:{...process.env,ITDA_LANG:'ko',TMPDIR:runtime,ITDA_DATA_DIR:path.join(root,'data'),ITDA_TEST_HTTP:String(port)},stdio:'ignore'});
  app.on('error',e=>{spawnError=e;});
  const base=`http://127.0.0.1:${port}`;let ready=false;for(let i=0;i<100;i++){if(spawnError)throw spawnError;if(app.exitCode!==null||app.signalCode!==null)throw Error('isolated native process exited before bridge ready');try{if((await fetch(base,{signal:AbortSignal.timeout(300)})).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,50));}assert(ready,'isolated native bridge did not start');
  const client='quality-'+uuid;

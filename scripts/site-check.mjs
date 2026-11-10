@@ -10,7 +10,7 @@ const browser=await pw.chromium.launch({headless:true,...(process.env.CHROMIUM?{
 const assert=(ok,msg)=>{if(!ok)throw Error(msg);};
 try{
   for(const width of [360,390,768,1024,1440]) for(const colorScheme of ['light','dark']) for(const lang of ['ko','en']){
-    const context=await browser.newContext({viewport:{width,height:1100},colorScheme,reducedMotion:'reduce'});
+    const context=await browser.newContext({locale:'ko-KR',viewport:{width,height:1100},colorScheme,reducedMotion:'reduce'});
     const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
     page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
     page.on('requestfailed',r=>errors.push(r.url()+': '+r.failure()?.errorText));

@@ -31,8 +31,8 @@ const server=http.createServer((req,res)=>{
  if(url.pathname==='/api/me')return json({local:true});
  if(url.pathname==='/api/hosts')return json([host]);
  const name=url.pathname==='/'?'index.html':url.pathname.slice(1);
- if(!['index.html','viewer.js','viewer.css','monitors.js','interaction.js','novnc.min.js','manifest.webmanifest'].includes(name)){res.writeHead(404);return res.end();}
- res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');res.end(fs.readFileSync(path.join(root,'web/viewer',name)));
+ if(!['index.html','viewer.js','viewer.css','monitors.js','interaction.js','novnc.min.js','manifest.webmanifest'].includes(name)&&!/^(i18n\.js|locales\/[\w.-]+\.js)$/.test(name)){res.writeHead(404);return res.end();}
+ res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');res.end(fs.readFileSync(path.join(root,/^(i18n\.js|locales\/[\w.-]+\.js)$/.test(name)?'web':'web/viewer',name)));
 });
 server.on('connection',s=>{sockets.add(s);s.on('close',()=>sockets.delete(s));});
 function frame(bytes){let h;if(bytes.length<126)h=Buffer.from([0x82,bytes.length]);else if(bytes.length<65536){h=Buffer.alloc(4);h[0]=0x82;h[1]=126;h.writeUInt16BE(bytes.length,2);}else{h=Buffer.alloc(10);h[0]=0x82;h[1]=127;h.writeBigUInt64BE(BigInt(bytes.length),2);}return Buffer.concat([h,bytes]);}
@@ -77,7 +77,7 @@ const FORMAT=[255,1,0,2,3,2,0,0,0xbb,0x80],ENABLE=[255,1,0,0],DISABLE=[255,1,0,1
 let browser;
 try{
  browser=await pw.chromium.launch({...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{}),headless:true});
- const context=await browser.newContext({viewport:{width:900,height:640}});
+ const context=await browser.newContext({locale:'ko-KR',viewport:{width:900,height:640}});
  // Speakers: what was scheduled, and when. Like a browser's, it resumes only in a click or key.
  await context.addInitScript(()=>{
   window.played=[];window.contexts=0;

@@ -32,7 +32,7 @@ const base=`http://127.0.0.1:${server.address().port}`;
 const browser=await pw.chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
 try{
   for(const localMac of [true,false]){
-    const context=await browser.newContext({userAgent:localMac?'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)':'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
+    const context=await browser.newContext({locale:'ko-KR',userAgent:localMac?'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)':'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
     await context.addInitScript(mac=>{Object.defineProperty(navigator,'platform',{value:mac?'MacIntel':'Win32'});window.messages=[];window.ipc={postMessage:m=>messages.push(JSON.parse(m))};},localMac);
     const home=await context.newPage();await home.goto(base);
     for(const kind of ['mac','macos','windows','linux','missing','rdp']){
@@ -53,7 +53,7 @@ try{
     }
     await context.close();
   }
-  const web=await browser.newPage();
+  const web=await browser.newPage({locale:'ko-KR'});
   await web.goto(`${base}/viewer/?target=mac`);
   await web.locator('.host[data-id="fixture"] .open').click();
   await web.locator('#tools [data-t="keys"]').waitFor();

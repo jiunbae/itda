@@ -194,7 +194,7 @@ try {
     "Macintosh; Intel Mac OS X 10_15_7",
     "Windows NT 10.0; Win64; x64",
   ]) {
-    const page = await browser.newPage({
+    const page = await browser.newPage({locale:'ko-KR',
       viewport: { width: 1440, height: 1000 },
       userAgent: `Mozilla/5.0 (${platform}) AppleWebKit/537.36 Chrome/145.0.0.0 Safari/537.36`,
     });
@@ -394,7 +394,7 @@ try {
       }
       // Two real pages of the same host: results and disconnect must stay isolated.
       const originalPath = await page.locator('[data-path="remote"]').first().inputValue();
-      const sibling = await browser.newPage({userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/145.0.0.0 Safari/537.36'});
+      const sibling = await browser.newPage({locale:'ko-KR',userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/145.0.0.0 Safari/537.36'});
       await sibling.goto(`http://127.0.0.1:${appPort}/?files=files-fixture`);
       await sibling.waitForFunction(() => document.querySelector('[data-pane="remote"] tr[data-index]') || document.querySelector('.files-dialog-error')?.textContent, {timeout:10000});
       await sibling.locator('[data-pane="remote"] tr[data-index]').filter({hasText:'Folder'}).dblclick();
@@ -423,7 +423,7 @@ try {
       const crossWindowDir=path.join(remote,'new-window-destination');fs.mkdirSync(crossWindowDir,{recursive:true});
       await page.evaluate(()=>send('files_release_page',{page:ItdaFiles.windowToken}));
       let crossWindowTransfer;
-      const late=await browser.newPage({viewport:{width:1200,height:800},userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/145.0.0.0 Safari/537.36'});
+      const late=await browser.newPage({locale:'ko-KR',viewport:{width:1200,height:800},userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/145.0.0.0 Safari/537.36'});
       await late.addInitScript(path=>{window.ITDA_FILE_PATH=path;window.itdaNativeFiles=true;},crossWindowDir);
       await late.route('**/ipc*',async route=>{const m=route.request().postDataJSON();if(m.cmd==='files'&&m.op==='transfer')crossWindowTransfer=m;await route.continue();});
       await late.goto(`http://127.0.0.1:${appPort}/?files=files-second`);

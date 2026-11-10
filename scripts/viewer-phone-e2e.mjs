@@ -41,7 +41,7 @@ const server = http.createServer(async (req, res) => {
     st.edits.push(b);
     return json(res, 200, { id: b.id, hosts: st.hosts, accounts: st.accounts });
   }
-  const file = p === "/" ? "web/viewer/index.html" : p === "/icon.svg" ? "assets/itda.svg" : p.startsWith("/hp-setup") ? `web${p}` : `web/viewer${p}`;
+  const file = p === "/" ? "web/viewer/index.html" : p === "/icon.svg" ? "assets/itda.svg" : p.startsWith("/hp-setup") || p === "/i18n.js" || p.startsWith("/locales/") ? `web${p}` : `web/viewer${p}`;
   try {
     const type = file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : file.endsWith(".svg") ? "image/svg+xml" : "text/html";
     const data = fs.readFileSync(path.join(repo, file));
@@ -54,7 +54,7 @@ const base = `http://127.0.0.1:${server.address().port}/`;
 
 const browser = await pw.chromium.launch(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {});
 try {
-  const ctx = await browser.newContext({
+  const ctx = await browser.newContext({locale:'ko-KR',
     viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
     userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
   });

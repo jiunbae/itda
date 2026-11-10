@@ -338,6 +338,8 @@ impl Host {
 pub struct Settings {
     /// "system" | "light" | "dark"
     pub theme: String,
+    /// Interface language: "auto" (the system's) | "ko" | "en". See i18n.rs.
+    pub lang: String,
     /// Closing the home window keeps Itda in the tray.
     pub tray: bool,
     pub thumbnails: bool,
@@ -411,6 +413,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             theme: "system".into(),
+            lang: "auto".into(),
             tray: true,
             thumbnails: true,
             notify: true,
