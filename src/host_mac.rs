@@ -1594,12 +1594,30 @@ impl Input {
     }
 
     pub(crate) fn pointer(&mut self, mask: u8, x: u16, y: u16) {
+        let b = CGDisplayBounds(CGMainDisplayID());
+        let (px, py) = point_from_frame(x, y, self.frame_size, (b.size.width, b.size.height));
+        self.mouse(mask, x, y, CGPoint { x: b.origin.x + px, y: b.origin.y + py }, (0, 0));
+    }
+
+    /// Move by (dx, dy) points with the buttons in `mask`, the deltas set on the events (what
+    /// games read), the pointer kept on the shared display.
+    pub(crate) fn pointer_relative(&mut self, mask: u8, dx: i16, dy: i16) {
+        let b = CGDisplayBounds(CGMainDisplayID());
+        let now = CGEvent::location(CGEvent::new(None).as_deref());
+        let at = CGPoint {
+            x: (now.x + dx as f64).clamp(b.origin.x, b.origin.x + b.size.width - 1.0),
+            y: (now.y + dy as f64).clamp(b.origin.y, b.origin.y + b.size.height - 1.0),
+        };
+        let frame = |v: f64, origin: f64, points: f64, pixels: usize| ((v - origin) * pixels as f64 / points.max(1.0)) as u16;
+        let (x, y) = (frame(at.x, b.origin.x, b.size.width, self.frame_size.0), frame(at.y, b.origin.y, b.size.height, self.frame_size.1));
+        self.mouse(mask, x, y, at, (dx as i64, dy as i64));
+    }
+
+    /// Pointer event at `at` (points), framebuffer (x, y), with `delta` set on moves.
+    fn mouse(&mut self, mask: u8, x: u16, y: u16, at: CGPoint, delta: (i64, i64)) {
         if self.view_only {
             return;
         }
-        let b = CGDisplayBounds(CGMainDisplayID());
-        let (px, py) = point_from_frame(x, y, self.frame_size, (b.size.width, b.size.height));
-        let at = CGPoint { x: b.origin.x + px, y: b.origin.y + py };
         self.at = (x, y);
         let changed = mask ^ self.buttons;
         let mouse = |kind: CGEventType, button: CGMouseButton, clicks: i64| {
@@ -1607,6 +1625,10 @@ impl Input {
             CGEvent::set_flags(e.as_deref(), self.flags);
             if clicks > 0 {
                 CGEvent::set_integer_value_field(e.as_deref(), CGEventField::MouseEventClickState, clicks);
+            }
+            if delta != (0, 0) {
+                CGEvent::set_integer_value_field(e.as_deref(), CGEventField::MouseEventDeltaX, delta.0);
+                CGEvent::set_integer_value_field(e.as_deref(), CGEventField::MouseEventDeltaY, delta.1);
             }
             post(e);
         };

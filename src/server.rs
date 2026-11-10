@@ -58,6 +58,26 @@ pub(crate) struct Pointer {
 /// Where this viewer last put the pointer (framebuffer coordinates) and when.
 type Steer = Arc<Mutex<Option<(u16, u16, Instant)>>>;
 
+/// QEMU's Pointer Motion Change pseudo-encoding. A viewer that asks for it is told, once, that
+/// this server takes relative movement (the rectangle's y is ITDA_MARK, which QEMU never
+/// sends), and then whether the pointer is hidden on this machine (x = 0: a game wants relative
+/// movement) or shown (x = 1).
+pub(crate) const ENC_POINTER_MOTION: i32 = -257;
+const ITDA_MARK: u16 = 0x4954;
+/// Itda's relative pointer message (viewer → server), sent only after that announcement:
+/// button mask, then dx and dy as big-endian i16.
+const MSG_RELATIVE_POINTER: u8 = 0xEA;
+/// How long the pointer must stay hidden before the viewer hears of it.
+const HIDDEN_FOR: Duration = Duration::from_millis(1500);
+
+/// The Pointer Motion Change rectangle saying whether the pointer is hidden here.
+fn pointer_motion(out: &mut Vec<u8>, hidden: bool) {
+    for v in [u16::from(!hidden), ITDA_MARK, 0, 0] {
+        out.extend_from_slice(&v.to_be_bytes());
+    }
+    out.extend_from_slice(&ENC_POINTER_MOTION.to_be_bytes());
+}
+
 /// How long after its own move the pointer counts as the viewer's even if it isn't there
 /// yet (input is applied asynchronously).
 const STEER_GRACE: Duration = Duration::from_millis(250);
@@ -493,6 +513,17 @@ fn read_client(mut r: BufReader<TcpStream>, tx: &Sender<Msg>, input: &mut platfo
                 r.read_exact(&mut d)?;
                 let _ = tx.send(Msg::Resize);
             }
+            MSG_RELATIVE_POINTER => {
+                // Itda's relative pointer: buttons, then how far it moved (signed).
+                let b: [u8; 5] = rd(&mut r)?;
+                if !view_only {
+                    // The viewer is moving it: keep it out of the picture (`steering`).
+                    let mut s = steer.lock().unwrap();
+                    let (x, y) = s.map_or((u16::MAX, u16::MAX), |(x, y, _)| (x, y));
+                    *s = Some((x, y, Instant::now()));
+                }
+                input.pointer_relative(b[0], i16::from_be_bytes([b[1], b[2]]), i16::from_be_bytes([b[3], b[4]]));
+            }
             t @ (demand::MSG_CONTINUOUS | demand::MSG_FENCE) => {
                 let _ = tx.send(Msg::Ext(demand::read(t, &mut r)?));
             }
@@ -623,6 +654,10 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
     let mut ext_clip = false;
     // The cursor shape this viewer was last sent (when it draws the pointer itself).
     let mut sent_shape: Option<usize> = None;
+    // Pointer Motion Change: what the viewer was last told (None: nothing yet), and since when
+    // the pointer has been hidden here.
+    let mut motion_told: Option<bool> = None;
+    let mut hidden_since: Option<Instant> = None;
     // The pointer's current shape (id and pixels), for sending and for drawing it in.
     let mut shape: Option<(usize, crate::enc::Cursor)> = None;
     // Where the pointer was drawn into the last grabbed picture (None: not drawn).
@@ -681,6 +716,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                     }
                     reset = true;
                     sent_shape = None;
+                    motion_told = None;
                     encs = e;
                     told = None; // (re)introduce the displays
                 }
@@ -749,10 +785,15 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                 shape = Some((p.shape, c));
             }
         }
+        // Hidden for a moment (Windows hides it while typing) isn't a game: only after HIDDEN_FOR.
+        let now = Instant::now();
+        hidden_since = if pointer.is_some_and(|p| p.shape == 0) { hidden_since.or(Some(now)) } else { None };
+        let hidden = hidden_since.is_some_and(|t| now.duration_since(t) >= HIDDEN_FOR);
+        let motion_due = !view_only && encs.contains(&ENC_POINTER_MOTION) && motion_told != Some(hidden);
         // With video and nothing new captured, there is nothing to encode until the still
         // repaint is due: skip the copy and compare of a whole frame.
         // (A viewer whose history was just reset, with `prev` cleared, always grabs.)
-        if video.is_some() && incremental && !prev.is_empty() && last_change.elapsed() < REFINE && !redo && drawn == last_drawn && !cap.lock().unwrap().fresh_since(seen) {
+        if video.is_some() && incremental && !prev.is_empty() && last_change.elapsed() < REFINE && !redo && drawn == last_drawn && !motion_due && !cap.lock().unwrap().fresh_since(seen) {
             // (A Frame can name a frame this pump already took: back to the fallback poll.)
             arrived = false;
             continue;
@@ -805,6 +846,10 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                 u.rects += 1;
             }
             new_shape = Some(*id);
+        }
+        if motion_due {
+            pointer_motion(&mut u.buf, hidden);
+            u.rects += 1;
         }
         let ext = encs.contains(&ENC_EXT_DESKTOP_SIZE);
         if ext && ((w, h) != (w0, h0) || screens_read.elapsed() >= Duration::from_secs(1)) {
@@ -913,6 +958,9 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         demand.sent(u.buf.len(), &mut u.buf);
         out.send(std::mem::replace(&mut u.buf, out.buffer()))?;
         sent_shape = new_shape.or(sent_shape);
+        if motion_due {
+            motion_told = Some(hidden);
+        }
         crate::trace::since("update", last_capture);
         prev.clear();
         prev.extend_from_slice(frame);
@@ -1100,6 +1148,14 @@ mod tests {
         assert!(steering(Some((10, 10, long_ago)), 11, 9, now), "still where the viewer put it");
         assert!(!steering(Some((10, 10, long_ago)), 40, 10, now), "moved by someone else");
         assert!(steering(Some((10, 10, now)), 40, 10, now), "the viewer's move not applied yet");
+    }
+
+    #[test]
+    fn pointer_motion_rectangle_carries_itdas_mark() {
+        let mut out = Vec::new();
+        super::pointer_motion(&mut out, true);
+        super::pointer_motion(&mut out, false);
+        assert_eq!(out, [0, 0, 0x49, 0x54, 0, 0, 0, 0, 0xff, 0xff, 0xfe, 0xff, 0, 1, 0x49, 0x54, 0, 0, 0, 0, 0xff, 0xff, 0xfe, 0xff]);
     }
 
     #[test]

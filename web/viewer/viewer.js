@@ -25,6 +25,7 @@ const P = {
   bolt: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>',
   sparkle: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>',
   lock: '<rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
+  mouse: '<rect x="6.5" y="3" width="11" height="18" rx="5.5"/><path d="M12 3v6.5M6.5 9.5h11"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
   pc: '<rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M8 20h8M12 16.5V20M3 13h18"/>',
@@ -52,6 +53,10 @@ const S = { hosts: [], accounts: [], rfb: null, ws: null, host: null, fit: true,
 // to the app's home instead of offering the list.
 const OPEN = new URLSearchParams(location.search).get('open');
 const MIRROR = new URLSearchParams(location.search).get('mirror');
+// Relative pointer state (see mouseLock below).
+const rel = { dx: 0, dy: 0, mask: 0, raf: 0, hidden: false, auto: false, toasted: false };
+const relAvailable = () => !!S.rfb?.itdaRelativeOk && !S.viewOnly && MIRROR === null && matchMedia('(pointer: fine)').matches;
+const relLocked = () => !!S.rfb?._canvas && document.pointerLockElement === S.rfb._canvas;
 // ITDA_HP_TRACE (the app adds trace=1): time this viewer's part of each H.264 frame.
 const TRACE = new URLSearchParams(location.search).get('trace') === '1';
 const APP = !!(OPEN && window.ipc);
@@ -690,7 +695,14 @@ function open(h) {
     S.tries = 0;
     thumbSoon(2500);
   });
+  rfb.addEventListener('pointermotion', (e) => {
+    rel.hidden = e.detail.hidden;
+    if (rel.hidden && !rel.toasted && !relLocked() && !S.viewOnly && relAvailable()) { rel.toasted = true; toast('원격 화면이 마우스를 숨겼습니다 — 화면을 클릭하면 마우스를 잠급니다 (Esc로 풀기)'); }
+    if (!rel.hidden && rel.auto && relLocked()) mouseLock(false);
+    renderTools();
+  });
   rfb.addEventListener('disconnect', () => {
+    rel.hidden = rel.toasted = false;
     if (S.rfb !== rfb) return;
     S.rfb = null;
     S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; S.hpModeContext = null; S.hpMode = null; S.hpCurtain = undefined; S.hpCurtainAsked = false; renderTools();
@@ -788,7 +800,7 @@ const wheel = new WheelInput();
 const BTN = (b) => (b & 1) | ((b & 4) >> 1) | ((b & 2) << 1); // DOM buttons → RFB mask
 function onWheel(e) {
   const rfb = S.rfb;
-  if (!rfb || !rfb._canvas || !rfb._canvas.contains(e.target)) return;
+  if (!rfb || !rfb._canvas || !rfb._canvas.contains(e.target) || relLocked()) return;
   e.preventDefault();
   e.stopPropagation(); // noVNC's own handler sits on the canvas
   if (S.viewOnly || e.ctrlKey) return; // Ctrl + wheel is a pinch: kept here
@@ -1046,7 +1058,7 @@ const hpCurtainShown = () => S.hpCurtain === true;
 // Visible names under the toolbar icons (touch screens show no tooltips); the full
 // description stays the button's accessible name.
 const TOOL_NAME = { back: '목록', keyboard: '키보드', keys: '특수 키', 'mac-actions': '화면 동작', 'apple-screen-sharing': '화면 공유 앱',
-  'hp-quality': '화질', 'hp-curtain': '화면 가림', hp: '고성능', 'hp-disable': '고성능 끄기', clip: '클립보드', monitors: '모니터', scale: () => (S.fit ? '실제 크기' : '맞춤'), viewonly: '보기 전용', full: '전체 화면' };
+  'hp-quality': '화질', 'hp-curtain': '화면 가림', hp: '고성능', 'hp-disable': '고성능 끄기', clip: '클립보드', 'mouse-lock': '마우스 잠금', monitors: '모니터', scale: () => (S.fit ? '실제 크기' : '맞춤'), viewonly: '보기 전용', full: '전체 화면' };
 const toolName = (t) => (typeof TOOL_NAME[t] === 'function' ? TOOL_NAME[t]() : TOOL_NAME[t] || '');
 
 function renderTools() {
@@ -1063,6 +1075,7 @@ function renderTools() {
     ...(hpCapable() && S.host.hp?.on && ['unknown', 'checking'].includes(S.hpMode) ? [['hp-disable', 'bolt', '고성능 모드 끄기 — 기본 화면 공유로 다시 연결']] : []),
     ...(APP ? [] : [['clip', 'clip', '클립보드']]),
     'sep',
+    ...(relAvailable() ? [['mouse-lock', 'mouse', relLocked() ? '마우스 잠금 풀기 (Esc)' : '마우스 잠금 — 게임처럼 마우스를 숨기는 화면용 (Ctrl+Alt+Shift+M)', relLocked()]] : []),
     ['monitors', 'monitor', '모니터 선택 및 창 배치'],
     ['scale', S.fit ? 'fit' : 'actual', S.fit ? '실제 크기로' : '화면에 맞춤'],
     ['viewonly', 'eye', '보기 전용', S.viewOnly],
@@ -1117,6 +1130,10 @@ $('#tools').addEventListener('click', (e) => {
       if (r) { r.scaleViewport = S.fit; r.clipViewport = !S.fit; r.dragViewport = !S.fit && !monitors.selected; monitors.apply(); }
       toast(S.fit ? '화면에 맞춤' : '실제 크기 — 끌어서 이동');
       return renderTools();
+    case 'mouse-lock':
+      rel.auto = false;
+      mouseLock(!relLocked());
+      return;
     case 'viewonly':
       monitors.option('view_only',!S.viewOnly);
       toast(S.viewOnly ? '보기 전용 켜짐' : '보기 전용 꺼짐');
@@ -1278,6 +1295,65 @@ function syncBackground() {
   S.rfb.itdaBackground = document.hidden && !monitors.anyVisible();
 }
 document.addEventListener('visibilitychange', syncBackground);
+
+// Relative pointer (Itda's own servers, which announce it): a game on the other side hides the
+// pointer and reads only how far the mouse moves, pulling it back to the middle, so absolute
+// positions fight it. With the pointer locked here, movement goes as deltas (novnc-src/itda.js).
+// Locks by itself on a click while the remote pointer is hidden; the toolbar or Ctrl+Alt+Shift+M
+// lock it by hand; Esc releases it.
+function mouseLock(on) {
+  const c = S.rfb?._canvas;
+  if (!on) { if (document.pointerLockElement) document.exitPointerLock(); return; }
+  if (!c || !relAvailable() || !c.requestPointerLock) return;
+  // Raw movement where the browser offers it (no pointer acceleration applied twice).
+  try { const p = c.requestPointerLock({ unadjustedMovement: true }); p?.catch?.(() => c.requestPointerLock()); } catch { c.requestPointerLock(); }
+}
+function relSend() {
+  rel.raf = 0;
+  if (!relLocked()) return;
+  S.rfb.itdaRelative(rel.dx, rel.dy, rel.mask);
+  rel.dx = rel.dy = 0;
+}
+document.addEventListener('pointerlockchange', () => {
+  const r = S.rfb;
+  if (!r) return;
+  r._itdaLocked = relLocked();
+  if (!r._itdaLocked) {
+    if (rel.mask) r.itdaRelative(0, 0, 0); // no button stays down on the other side
+    rel.mask = rel.dx = rel.dy = 0;
+  } else toast('마우스 잠금 — Esc를 누르면 풀립니다');
+  renderTools();
+});
+document.addEventListener('mousemove', (e) => {
+  if (!relLocked()) return;
+  rel.dx += e.movementX; rel.dy += e.movementY;
+  rel.raf ||= requestAnimationFrame(relSend); // one message a frame
+});
+for (const type of ['mousedown', 'mouseup']) document.addEventListener(type, (e) => {
+  if (!relLocked()) {
+    // A click while the remote pointer is hidden locks it (a user gesture, as browsers require).
+    if (type === 'mousedown' && rel.hidden && e.target === S.rfb?._canvas && relAvailable()) { rel.auto = true; mouseLock(true); }
+    return;
+  }
+  e.preventDefault();
+  const bit = [1, 2, 4][e.button] || 0;
+  rel.mask = type === 'mousedown' ? rel.mask | bit : rel.mask & ~bit;
+  relSend();
+}, true);
+document.addEventListener('wheel', (e) => {
+  if (!relLocked()) return;
+  e.preventDefault();
+  const bit = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? (e.deltaX > 0 ? 64 : 32) : (e.deltaY > 0 ? 16 : 8);
+  relSend();
+  S.rfb.itdaRelative(0, 0, rel.mask | bit);
+  S.rfb.itdaRelative(0, 0, rel.mask);
+}, { passive: false, capture: true });
+window.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey && e.altKey && e.shiftKey && e.code === 'KeyM') || !relAvailable()) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  rel.auto = false;
+  mouseLock(!relLocked());
+}, true);
 
 window.addEventListener('beforeunload', () => { if (MIRROR === null) close(false); });
 boot();

@@ -59,6 +59,37 @@ RFB.prototype.itdaWheel = function(x,y,held,clicks,absolute=false) {
     this._sock.flush();
 };
 
+// Relative pointer (Itda's own servers only): the server announces it with QEMU's Pointer
+// Motion Change (-257) carrying Itda's mark in y, and says with x whether its pointer is hidden
+// (x = 0: a game wants relative movement). While the page holds a pointer lock, noVNC's own
+// absolute mouse handling stands aside and the page sends movement through itdaRelative.
+const POINTER_MOTION=-257, ITDA_MARK=0x4954, sendEncodings=RFB.prototype._sendEncodings;
+RFB.prototype._sendEncodings=function(){
+    const enc=RFB.messages.clientEncodings;
+    RFB.messages.clientEncodings=(sock,encs)=>enc(sock,[...encs,POINTER_MOTION]);
+    try{return sendEncodings.call(this);}finally{RFB.messages.clientEncodings=enc;}
+};
+const handleRect=RFB.prototype._handleRect, handleMouse=RFB.prototype._handleMouse;
+RFB.prototype._handleRect=function(){
+    if(this._FBU.encoding!==POINTER_MOTION)return handleRect.call(this);
+    if(this._FBU.y===ITDA_MARK){
+        this.itdaRelativeOk=true;
+        this.dispatchEvent(new CustomEvent('pointermotion',{detail:{hidden:this._FBU.x===0}}));
+    }
+    return true;
+};
+RFB.prototype._handleMouse=function(ev){
+    if(this._itdaLocked&&ev.type!=='click')return;
+    return handleMouse.call(this,ev);
+};
+RFB.prototype.itdaRelative=function(dx,dy,mask){
+    if(!this.itdaRelativeOk||this._rfbConnectionState!=='connected'||this._viewOnly)return;
+    const c=v=>Math.max(-32768,Math.min(32767,Math.round(v)))&0xffff;
+    this._sock.sQpush8(0xea);this._sock.sQpush8(mask&127);
+    this._sock.sQpush16(c(dx));this._sock.sQpush16(c(dy));
+    this._sock.flush();
+};
+
 // A relay may deliver several completed updates in a single WebSocket message.
 // Yield between protocol messages so decoding that burst cannot monopolize the
 // UI thread. Never discard/reorder a rectangle, CopyRect, fence or clipboard event.
