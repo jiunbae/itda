@@ -16,7 +16,19 @@ node scripts/site-capture.mjs --help-images
 
 `PLAYWRIGHT` can point to an existing Playwright `index.mjs`, `CHROMIUM` to a browser executable, and `CAPTURE_DIR` to an alternative output directory. The script checks that nearby devices are present, columns retain ancestors, gallery preview loads and the Windows toolbar icon is sized correctly. It generates light/dark images, whole-window overviews at 2× density, readable file details, mobile variants and the social preview. Keep overview images uncropped; use the existing responsive detail crops where the landing page needs readable controls on a small screen.
 
-The current capture set was refreshed on 2026-10-24 from the product frontend at `03d832b7` on `main`, including the accessibility contrast and file-navigation updates. The seven help-center images use the same capture set. This records source provenance, not an installed or released build. Screenshots omit the app version so a docs-only or release version bump does not make otherwise current UI images obsolete. Recreate them after changes to tabs, commands, navigation, device cards, account editing or sharing. Do not label fictional data as a live connection or use captures as proof of native transfer/permission behavior.
+The current capture set was refreshed on 2026-10-24 from the product frontend at `03d832b7` on `main`, including the accessibility contrast and file-navigation updates. Re-running the capture on 2026-11-10 at v1.0.22 produced identical images. The seven help-center images use the same capture set. This records source provenance, not an installed or released build. Screenshots omit the app version so a docs-only or release version bump does not make otherwise current UI images obsolete. Recreate them after changes to tabs, commands, navigation, device cards, account editing or sharing. Do not label fictional data as a live connection or use captures as proof of native transfer/permission behavior.
+
+## Recreate the film
+
+The landing film (`docs/media/itda-film.mp4`, `.webm`, `itda-film-poster.jpg`; README poster) is rendered, not recorded. `scripts/film/plates.mjs` captures the real frontend with the same fictional devices, a made-up remote desktop (`scripts/film/desktop.html`) streamed by a synthetic RFB server, and records where controls are; `scripts/film/stage.html` lays the plates out on a timeline (camera, sticker captions, transitions) where every frame is a function of its time; ffmpeg encodes. It touches no device, account or user data. Render on macOS (the captions use the system font) with ffmpeg installed:
+
+```sh
+node scripts/film/render-film.mjs                    # plates + film → docs/media/ (about 3 minutes)
+node scripts/film/render-film.mjs --preview 4,9.5    # stills + contact sheet in $TMPDIR/itda-film
+node scripts/film/render-film.mjs --reuse-plates     # re-cut without recapturing
+```
+
+Re-render after UI changes to the home, nearby devices, viewer toolbar, files window or phone viewer, then check the contact sheet and a 1-second grid of the encoded MP4 before committing. Captions are English. Targets: 34 s, 1920×1080, 30 fps, MP4 under 6 MB.
 
 ## Check the result
 

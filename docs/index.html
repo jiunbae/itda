@@ -32,6 +32,8 @@
     <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></symbol>
     <symbol id="i-github" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.46-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.58 9.58 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-sound" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"/></symbol>
+    <symbol id="i-mouse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="6.5" y="3" width="11" height="18" rx="5.5"/><path d="M12 7v3.5"/></symbol>
     <symbol id="i-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2.5L4.5 13.5H11l-1 8 8.5-11H12l1-8z"/></symbol>
     <symbol id="i-mac" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12.5" rx="2"/><path d="M8.5 20.5h7M12 16.5v4"/></symbol>
     <symbol id="i-windows" viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.4l7.4-1v7.1H3zM11.4 4.2L21 3v8.5h-9.6zM3 12.5h7.4v7.1L3 18.6zM11.4 12.5H21V21l-9.6-1.3z"/></symbol>
@@ -59,6 +61,7 @@
   <div class="wrap">
     <a class="brand" href="./" aria-label="Itda"><img src="favicon.svg" alt="" width="32" height="32">Itda<small>잇다</small></a>
     <nav class="nav-links" aria-label="Main">
+      <a href="#film"><span lang="ko">영상</span><span lang="en">Film</span></a>
       <a href="#features"><span lang="ko">기능</span><span lang="en">Features</span></a>
       <a href="#how"><span lang="ko">작동 방식</span><span lang="en">How it works</span></a>
       <a href="#security"><span lang="ko">보안</span><span lang="en">Security</span></a>
@@ -129,6 +132,24 @@
     </div>
   </section>
 
+  <!-- film -->
+  <section class="section film-section" id="film">
+    <div class="wrap">
+      <div class="section-head center reveal">
+        <span class="kicker"><span lang="ko">영상</span><span lang="en">Film</span></span>
+        <h2><span lang="ko">34초로 보는 Itda</span><span lang="en">Itda in 34 seconds</span></h2>
+        <p><span lang="ko">기기를 찾고, 화면을 열고, 파일과 휴대폰까지. 화면 속은 모두 실제 Itda 화면이고, 기기와 내용은 예시입니다.</span><span lang="en">Find a device, open its screen, then files and your phone. Every screen is the real Itda interface with example devices.</span></p>
+      </div>
+      <figure class="film reveal">
+        <video id="film-video" muted playsinline loop preload="none" poster="media/itda-film-poster.jpg" width="1920" height="1080" aria-label="Itda film">
+          <source data-src="media/itda-film.webm" type="video/webm">
+          <source data-src="media/itda-film.mp4" type="video/mp4">
+        </video>
+        <figcaption><span lang="ko">영상의 자막은 영어입니다.</span><span lang="en">Captions in English.</span></figcaption>
+      </figure>
+    </div>
+  </section>
+
   <!-- features -->
   <section class="section" id="features">
     <div class="wrap">
@@ -177,6 +198,26 @@
           <div class="ic"><svg><use href="#i-displays"/></svg></div>
           <h3><span lang="ko">여러 모니터, 여러 창</span><span lang="en">More displays, more windows</span></h3>
           <p><span lang="ko">원격 기기가 보고하는 모니터를 선택하거나 각각의 창으로 분리하세요. 모니터 정보를 제공하지 않는 연결은 수동 분할로 배치합니다.</span><span lang="en">Choose a reported remote display or open displays in separate windows. Use manual splits when the server does not report its monitors.</span></p>
+        </article>
+        <article class="feature reveal" style="--ic:var(--coral);--c:var(--glow-2)">
+          <div class="ic"><svg><use href="#i-sound"/></svg></div>
+          <h3><span lang="ko">원격 기기의 소리</span><span lang="en">Hear the remote device</span></h3>
+          <p><span lang="ko">도구 막대의 소리 버튼으로 공유한 PC나 Mac의 소리를 듣습니다. Itda 공유(Windows)와 Mac 고성능 모드에서 쓰고, 마이크는 전달하지 않습니다.</span><span lang="en">Turn on Sound in the toolbar to hear a shared PC or Mac. Works with Itda sharing on Windows and Mac high-performance mode; the microphone is never sent.</span></p>
+        </article>
+        <article class="feature reveal" style="--ic:var(--teal);--c:var(--glow-3)">
+          <div class="ic"><svg><use href="#i-mouse"/></svg></div>
+          <h3><span lang="ko">게임용 마우스 잠금</span><span lang="en">Mouse lock for games</span></h3>
+          <p><span lang="ko">원격 화면이 포인터를 숨기면 클릭 한 번으로 마우스를 잠가 움직인 만큼 그대로 보냅니다. Ctrl+Alt+Shift+M으로 직접 잠그고 Esc로 풉니다.</span><span lang="en">When the remote screen hides its pointer, one click locks the mouse and sends exactly how far it moves. Lock it yourself with Ctrl+Alt+Shift+M; Esc releases it.</span></p>
+        </article>
+        <article class="feature reveal" style="--ic:var(--violet)">
+          <div class="ic"><svg><use href="#i-radar"/></svg></div>
+          <h3><span lang="ko">연결에 맞춘 화질</span><span lang="en">Quality that follows the connection</span></h3>
+          <p><span lang="ko">연결이 느려지면 영상 화질을 낮춰 움직임을 지키고, 좋아지면 다시 올립니다. 화면이 멈추면 글자는 원래대로 선명해집니다.</span><span lang="en">On a slow link the video quality steps down to keep motion smooth, then back up. When the screen stands still, text turns sharp again.</span></p>
+        </article>
+        <article class="feature reveal" style="--ic:#5ea8ff">
+          <div class="ic"><svg><use href="#i-bolt"/></svg></div>
+          <h3><span lang="ko">Mac 고성능 모드</span><span lang="en">High-performance Mac mode</span></h3>
+          <p><span lang="ko">상대 Mac에도 Itda를 설치하면 하드웨어 H.264로 최대 60fps 화면을 SSH 터널로 받습니다. 잠금 화면이나 권한 문제는 기본 화면 공유로 안내합니다.</span><span lang="en">Install Itda on the remote Mac too for hardware H.264 at up to 60 fps over an SSH tunnel. Lock screens and permission issues fall back to built-in Screen Sharing.</span></p>
         </article>
       </div>
     </div>

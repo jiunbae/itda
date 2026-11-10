@@ -1,0 +1,268 @@
+<!doctype html>
+<!-- The film's cut: plates (plates.mjs) placed on a timeline with camera moves, sticker captions
+     and punch-in transitions. render(t) draws time t and depends on nothing else, so any frame
+     can be rendered alone. Tone B "Snap": light, fast, stickers in the logo's three colours. -->
+<meta charset="utf-8">
+<style>
+*{box-sizing:border-box;margin:0}
+html,body{width:1920px;height:1080px;overflow:hidden}
+body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",system-ui,sans-serif;color:#15133a;
+  background:#f4f3fb;-webkit-font-smoothing:antialiased}
+#bg{position:absolute;inset:0;overflow:hidden}
+#bg i{position:absolute;border-radius:50%;filter:blur(90px);opacity:.55}
+.layer{position:absolute;inset:0;transform-origin:50% 50%;will-change:transform,opacity}
+.cam{position:absolute;inset:0;perspective:2200px}
+.rig{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0}
+.win{position:absolute;border-radius:14px;overflow:hidden;background:#fff;
+  box-shadow:0 40px 90px rgba(21,19,58,.22),0 10px 28px rgba(21,19,58,.14),0 0 0 1px rgba(21,19,58,.08)}
+.win .bar{height:34px;background:#ecebf5;border-bottom:1px solid #dddbea;display:flex;align-items:center;gap:8px;padding:0 13px;font:600 13px/1 -apple-system,system-ui,sans-serif;color:#5d5a80}
+.win .bar i{width:12px;height:12px;border-radius:50%;background:#d1cfe2;display:block}
+.win .bar i:first-child{background:#ff6a43}.win .bar i:nth-child(2){background:#f3c56b}.win .bar i:nth-child(3){background:#33d1c2}
+.win .bar span{margin-left:10px}
+.win img{display:block;width:100%}
+.win.dark{background:#000}.win.dark .bar{background:#22213a;border-color:#2f2e4c;color:#b9b6dd}
+.sticker{position:absolute;left:104px;top:86px;font-weight:900;font-size:74px;letter-spacing:-.035em;line-height:1;
+  padding:20px 30px 24px;border-radius:22px;transform-origin:0 50%;white-space:nowrap;box-shadow:0 18px 40px rgba(21,19,58,.18)}
+.sticker.o{background:#ff6a43;color:#fff}
+.sticker.i{background:#fff;color:#15133a;box-shadow:0 0 0 4px #15133a,0 18px 40px rgba(21,19,58,.18)}
+.sticker.s{background:#33d1c2;color:#0d2b33}
+.sticker.n{background:#4744b0;color:#fff}
+.cursor{position:absolute;width:30px;height:44px;left:0;top:0;pointer-events:none;filter:drop-shadow(0 3px 5px rgba(0,0,0,.35))}
+.ripple{position:absolute;width:80px;height:80px;margin:-40px 0 0 -40px;border-radius:50%;border:5px solid #ff6a43;opacity:0}
+.card3{position:absolute;width:540px;padding:38px 40px;border-radius:22px;background:#fff;box-shadow:0 30px 70px rgba(21,19,58,.16),0 0 0 1px rgba(21,19,58,.06);display:grid;gap:12px}
+.card3 svg{width:66px;height:66px}
+.card3 b{font-size:40px;letter-spacing:-.02em;line-height:1.15}
+.card3 span{font-size:26px;color:#5d5a80;line-height:1.35}
+.phone{position:absolute;border-radius:58px;background:#15133a;padding:16px;box-shadow:0 40px 90px rgba(21,19,58,.28)}
+.phone .scr{border-radius:44px;overflow:hidden;background:#000;width:100%;height:100%;position:relative}
+.phone .scr img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.word{font-weight:900;letter-spacing:-.04em}
+.btn{display:inline-flex;align-items:center;gap:14px;font-weight:700;font-size:28px;padding:20px 30px;border-radius:999px}
+</style>
+<div id="bg"><i style="width:900px;height:900px;left:-260px;top:-300px;background:#a4a1ff"></i><i style="width:760px;height:760px;right:-200px;bottom:-280px;background:#7fe6dc"></i><i style="width:620px;height:620px;right:220px;top:-320px;background:#ffb39d"></i></div>
+<div id="stage"></div>
+<script>
+const P=new URLSearchParams(location.search).get('plates')||'plates';
+const W=1920,H=1080;
+window.DURATION=34;window.POSTER=9.6;
+const clamp=(v,a=0,b=1)=>Math.min(b,Math.max(a,v));
+const lerp=(a,b,u)=>a+(b-a)*u;
+const ease=u=>u<.5?4*u*u*u:1-Math.pow(-2*u+2,3)/2;          // in-out cubic
+const out=u=>1-Math.pow(1-u,3);
+const back=u=>{const c=1.7;return 1+(c+1)*Math.pow(u-1,3)+c*Math.pow(u-1,2);}; // overshoot
+const span=(t,a,b)=>clamp((t-a)/(b-a));
+/** Keyframes [[t,{...}]...] eased between neighbours. */
+function kf(keys,t){
+  if(t<=keys[0][0])return keys[0][1];
+  for(let i=1;i<keys.length;i++){const [t1,v1]=keys[i],[t0,v0]=keys[i-1];if(t<=t1){const u=ease((t-t0)/(t1-t0));const o={};for(const k in v1)o[k]=lerp(v0[k]??v1[k],v1[k],u);return o;}}
+  return keys.at(-1)[1];
+}
+const el=(tag,cls,html)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(html!=null)e.innerHTML=html;return e;};
+const stage=document.getElementById('stage');
+const CURSOR='<svg class="cursor" viewBox="0 0 30 44"><path d="M3 2v34l9-8 6 14 6-3-6-13h12z" fill="#15133a" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"/></svg>';
+let logos=0;
+// Each logo has its own gradient id: a hidden shot's gradient can't paint another shot's logo.
+const LOGO=(d,id='lg'+(++logos))=>`<svg viewBox="0 0 256 256" width="${d}" height="${d}"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4E4BBA"/><stop offset="1" stop-color="#26255F"/></linearGradient></defs><rect class="tile" width="256" height="256" rx="56" fill="url(#${id})"/><g fill="none" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"><circle class="so" cx="98" cy="96" r="36" stroke="#FF6A43" stroke-dasharray="227" transform="rotate(-90 98 96)"/><line class="si" x1="174" y1="58" x2="174" y2="134" stroke="#fff" stroke-dasharray="76"/><polyline class="ss" points="74,204 128,164 182,204" stroke="#33D1C2" stroke-dasharray="136"/></g></svg>`;
+let L={};
+
+/** A window holding a plate, sized to `w` stage px wide; plate coords → stage coords. */
+function win(plate,{x,y,w,title='Itda',dark=false}){
+  const size=(L[plate]||L[plate.replace(/-\d$/,'')]||L[plate.split('-')[0]]).size; // files-list → files
+  const e=el('div','win'+(dark?' dark':''),`<div class="bar"><i></i><i></i><i></i><span>${title}</span></div><img src="${P}/${plate}.png">`);
+  e.style.cssText=`left:${x}px;top:${y}px;width:${w}px`;
+  const k=w/size[0];
+  e.at=(px,py)=>[x+px*k,y+34+py*k];
+  e.rectOf=r=>[x+r[0]*k,y+34+r[1]*k,r[2]*k,r[3]*k];
+  e.k=k;return e;
+}
+function addImg(e,plate){const i=el('img');i.src=`${P}/${plate}.png`;i.style.cssText='position:absolute;left:0;top:34px;width:100%;opacity:0';e.append(i);return i;}
+
+/** One shot: a layer from a to b with a camera rig; build() fills it, tick(t) animates it. */
+const shots=[];
+function shot(a,b,build){
+  const layer=el('div','layer'),cam=el('div','cam'),rig=el('div','rig');cam.append(rig);layer.append(cam);stage.append(layer);
+  const s={a,b,layer,rig,...build(rig)};shots.push(s);return s;
+}
+/** Sticker caption: pops in at a, leaves at b. */
+const stickers=[];
+function sticker(text,cls,a,b,top=86){const e=el('div','sticker '+cls,text);e.style.top=top+'px';stage.append(e);stickers.push({e,a,b});}
+function cursorIn(rig){rig.insertAdjacentHTML('beforeend',CURSOR);const c=rig.lastElementChild;const r=el('div','ripple');rig.append(r);return {c,r,
+  at(x,y){c.style.transform=`translate(${x-3}px,${y-2}px)`;},click(u){r.style.opacity=u>0&&u<1?String(1-u):'0';r.style.transform=`scale(${.4+u*1.1})`;}};}
+function camera(rig,{s=1,x=0,y=0,rx=0,ry=0}){ // zoom s about stage point (x,y) offset; tilt in degrees
+  rig.style.transform=`translate(${W/2}px,${H/2}px) rotateX(${rx}deg) rotateY(${ry}deg) scale(${s}) translate(${-W/2-x}px,${-H/2-y}px)`;
+}
+
+function build(){
+  // 1 · Title: three device marks gather and become 잇.
+  shot(0,2.62,rig=>{
+    const marks=['<svg viewBox="0 0 64 44" width="150"><rect x="8" y="2" width="48" height="31" rx="4" fill="none" stroke="#4744b0" stroke-width="4"/><path d="M2 40h60" stroke="#4744b0" stroke-width="4" stroke-linecap="round"/></svg>',
+      '<svg viewBox="0 0 64 54" width="140"><rect x="3" y="3" width="58" height="36" rx="4" fill="none" stroke="#ff6a43" stroke-width="4"/><path d="M22 51h20M32 39v12" stroke="#ff6a43" stroke-width="4" stroke-linecap="round"/></svg>',
+      '<svg viewBox="0 0 34 60" width="78"><rect x="3" y="3" width="28" height="54" rx="7" fill="none" stroke="#1aa99b" stroke-width="4"/><path d="M13 50h8" stroke="#1aa99b" stroke-width="4" stroke-linecap="round"/></svg>'];
+    const from=[[380,330],[1500,300],[1340,800]];
+    const els=marks.map(m=>{const d=el('div','',m);d.style.cssText='position:absolute;left:0;top:0';rig.append(d);return d;});
+    const logo=el('div','',LOGO(300));logo.style.cssText='position:absolute;left:810px;top:300px';rig.append(logo);
+    const word=el('div','word','itda <span style="color:#7d7a9e;font-weight:700">잇다</span>');word.style.cssText='position:absolute;left:0;width:1920px;text-align:center;top:650px;font-size:64px';rig.append(word);
+    return {tick(t){
+      els.forEach((d,i)=>{const u=ease(span(t,.15,1.05));const [fx,fy]=from[i];d.style.transform=`translate(${lerp(fx,960-70,u)}px,${lerp(fy,450,u)}px) scale(${lerp(1,.4,u)})`;d.style.opacity=String(1-span(t,.8,1.05));});
+      const q=logo.querySelector('svg');
+      q.querySelector('.tile').style.opacity=String(out(span(t,.75,1.1)));
+      q.querySelector('.so').style.strokeDashoffset=227*(1-out(span(t,.9,1.35)));
+      q.querySelector('.si').style.strokeDashoffset=76*(1-out(span(t,1.25,1.5)));
+      q.querySelector('.ss').style.strokeDashoffset=136*(1-out(span(t,1.42,1.8)));
+      logo.style.transform=`scale(${lerp(.86,1,back(span(t,.75,1.2)))})`;logo.style.opacity=String(span(t,.75,.9));
+      word.style.opacity=String(span(t,1.6,1.95));word.style.transform=`translateY(${lerp(18,0,out(span(t,1.6,2)))}px)`;
+    }};
+  });
+  sticker('Devices everywhere.','n',.2,2.4);
+
+  // 2 · Nearby devices turn up; add one.
+  shot(2.5,6.22,rig=>{
+    const w=win('nearby-0',{x:300,y:170,w:1320,title:'Itda — Nearby'});rig.append(w);
+    const imgs=[1,2,3].map(n=>addImg(w,'nearby-'+n));
+    const cur=cursorIn(rig);const add=w.rectOf(L.nearby.add);const target=[add[0]+add[2]/2,add[1]+add[3]/2];
+    return {tick(t){
+      imgs.forEach((im,i)=>im.style.opacity=t>=2.95+i*.45?'1':'0');
+      camera(rig,kf([[2.5,{s:1,x:0,y:0}],[4.6,{s:1.22,x:180,y:-60}],[6.2,{s:1.3,x:260,y:-80}]],t));
+      const p=kf([[2.5,{x:1500,y:930}],[4.1,{x:1500,y:930}],[5.1,{x:target[0],y:target[1]}]],t);cur.at(p.x,p.y);cur.click(span(t,5.2,5.7));
+    }};
+  });
+  sticker('Find.','o',2.7,6.0);
+
+  // 3 · A card opens the remote screen; the pointer moves smoothly over it.
+  shot(6.0,11.42,rig=>{
+    const home=win('home',{x:300,y:150,w:1320,title:'Itda'});rig.append(home);
+    const view=win('viewer',{x:240,y:120,w:1440,title:'Studio Mac',dark:true});rig.append(view);
+    const card=home.rectOf(L.home.studio);
+    const cur=cursorIn(rig);
+    return {tick(t){
+      const u=ease(span(t,7.55,8.3));
+      // The viewer grows out of the card's preview.
+      const vx=lerp(card[0],240,u),vy=lerp(card[1]-34*(card[2]/1440),120,u),vw=lerp(card[2],1440,u);
+      view.style.left=vx+'px';view.style.top=vy+'px';view.style.width=vw+'px';view.style.opacity=String(span(t,7.5,7.62));
+      home.style.opacity=String(1-span(t,7.9,8.3));
+      camera(rig,kf([[6,{s:1.15,x:220,y:-120}],[7.4,{s:1.32,x:300,y:-160}],[8.3,{s:1,x:0,y:0}],[11.4,{s:1.06,x:20,y:10}]],t));
+      // Pointer: onto the card, click; then drawn locally over the remote desktop.
+      const k=1440/2560,ox=240,oy=154;
+      const p=t<8.3?kf([[6,{x:900,y:820}],[7.3,{x:card[0]+card[2]*.5,y:card[1]+card[3]*.55}]],t)
+        :kf([[8.3,{x:ox+1300*k,y:oy+900*k}],[9.3,{x:ox+520*k,y:oy+290*k}],[10.3,{x:ox+1880*k,y:oy+1180*k}],[11.4,{x:ox+1700*k,y:oy+560*k}]],t);
+      cur.at(p.x,p.y);cur.click(span(t,7.4,7.9));
+    }};
+  });
+  sticker('Open.','i',6.2,11.2);
+
+  // 4 · Two remote displays, a window each.
+  shot(11.2,15.22,rig=>{
+    const a=win('monitor-1',{x:510,y:250,w:900,title:'Studio Mac — Display 1',dark:true}),b=win('monitor-2',{x:510,y:250,w:900,title:'Studio Mac — Display 2',dark:true});
+    rig.append(b,a);
+    return {tick(t){
+      const u=ease(span(t,11.6,12.8));
+      a.style.transform=`translateX(${lerp(0,-430,u)}px) rotateY(${lerp(0,10,u)}deg)`;b.style.transform=`translateX(${lerp(0,430,u)}px) rotateY(${lerp(0,-10,u)}deg)`;
+      a.style.transformOrigin='100% 50%';b.style.transformOrigin='0 50%';
+      camera(rig,kf([[11.2,{s:1.18,rx:8}],[12.8,{s:.98,rx:0}],[15.2,{s:1.02,rx:0}]],t));
+    }};
+  });
+  sticker('Every display. Its own window.','o',11.4,15.0);
+
+  // 5 · Files in their own window: list, then columns into Film.
+  shot(15.0,19.22,rig=>{
+    const w=win('files-list',{x:280,y:170,w:1360,title:'Studio Mac — Files'});rig.append(w);
+    const cols=addImg(w,'files-columns');
+    const cur=cursorIn(rig);const cb=w.rectOf(L.files.columns),fb=w.rectOf(L.files.film),pb=w.rectOf(L.files.plates);
+    return {tick(t){
+      cols.style.opacity=t>=16.75?'1':'0';
+      camera(rig,kf([[15,{s:1.12,x:-120,y:-40}],[16.7,{s:1.2,x:120,y:-60}],[19.2,{s:1.26,x:-40,y:-30}]],t));
+      const p=kf([[15,{x:1250,y:700}],[16.2,{x:cb[0]+cb[2]/2,y:cb[1]+cb[3]/2}],[17.4,{x:fb[0]+120,y:fb[1]+fb[3]/2}],[18.5,{x:pb[0]+pb[2]*.4,y:pb[1]+pb[3]/2}]],t);
+      cur.at(p.x,p.y);cur.click(Math.max(span(t,16.3,16.8),span(t,18.6,19.1)));
+    }};
+  });
+  sticker('Files. No screen needed.','i',15.2,19.0);
+
+  // 6 · A phone: scan the QR, open the same Mac in the browser.
+  shot(19.0,23.62,rig=>{
+    const qr=el('div','win',`<img src="${P}/share-qr.png">`);qr.style.cssText='left:170px;top:420px;width:820px';rig.append(qr);
+    const ph=el('div','phone','<div class="scr"><img src="'+P+'/phone-list.png"><img src="'+P+'/phone-view.png" style="opacity:0"></div>');
+    ph.style.cssText='left:1180px;top:140px;width:420px;height:880px';rig.append(ph);
+    const [list,view]=ph.querySelectorAll('img');
+    // Landscape picture inside the portrait screen, turned so it is upright once the phone turns.
+    view.style.cssText+=';width:848px;height:388px;left:-230px;top:230px;transform:rotate(90deg)';
+    return {tick(t){
+      const up=out(span(t,19.1,19.9));ph.style.transform=`translateY(${lerp(500,0,up)}px)`;
+      // Turn sideways at 21.2 to watch the screen.
+      const r=ease(span(t,21,21.8));
+      ph.style.transform+=` rotate(${-90*r}deg)`;ph.style.transformOrigin='50% 50%';
+      list.style.opacity=String(1-span(t,21.3,21.5));view.style.opacity=String(span(t,21.3,21.5));
+      qr.style.opacity=String(1-span(t,21,21.6));qr.style.transform=`translateX(${lerp(0,-120,span(t,21,21.6))}px)`;
+      camera(rig,kf([[19,{s:1.02,x:0,y:40}],[21,{s:1.06,x:120,y:0}],[23.6,{s:1.22,x:440,y:40}]],t));
+    }};
+  });
+  sticker('Phone? Just a browser.','s',19.2,23.4);
+
+  // 7 · New in 1.0.22: sound, and a mouse lock for games.
+  shot(23.4,27.02,rig=>{
+    const a=win('viewer-sound',{x:240,y:120,w:1440,title:'Studio Mac',dark:true});rig.append(a);
+    const b=addImg(a,'viewer-lock');
+    const au=a.rectOf(L['viewer-sound'].audio),to=a.rectOf(L['viewer-lock'].toast);
+    return {tick(t){
+      b.style.opacity=t>=25.2?'1':'0';
+      const c1={s:2.1,x:au[0]+au[2]/2-960,y:au[1]+au[3]/2-540+120};
+      const c2={s:1.5,x:to[0]+to[2]/2-960,y:to[1]-540+20};
+      camera(rig,kf([[23.4,{s:1.6,x:c1.x*.8,y:c1.y*.8}],[24.3,c1],[25.1,c1],[25.6,c2],[27,{...c2,s:1.56}]],t));
+    }};
+  });
+  sticker('Hear it.','o',23.6,25.15);
+  sticker('Lock the mouse for games.','s',25.3,26.9);
+
+  // 8 · Trust.
+  shot(26.8,29.62,rig=>{
+    const items=[['<svg viewBox="0 0 54 54"><rect x="9" y="24" width="36" height="24" rx="5" fill="#4744b0"/><path d="M16 24v-6a11 11 0 0 1 22 0v6" fill="none" stroke="#4744b0" stroke-width="5"/></svg>','Passwords stay put','In Keychain or Credential Manager. Never sent to the browser.'],
+      ['<svg viewBox="0 0 54 54"><rect x="6" y="14" width="42" height="26" rx="6" fill="none" stroke="#ff6a43" stroke-width="5"/><g fill="#ff6a43"><circle cx="17" cy="27" r="3.5"/><circle cx="27" cy="27" r="3.5"/><circle cx="37" cy="27" r="3.5"/></g></svg>','PIN with lockout','Phones sign in with a 6-digit PIN that locks after five misses.'],
+      ['<svg viewBox="0 0 54 54"><g fill="#1aa99b"><circle cx="13" cy="13" r="5"/><circle cx="27" cy="13" r="5"/><circle cx="41" cy="13" r="5"/><circle cx="27" cy="27" r="5"/><circle cx="13" cy="41" r="5" opacity=".35"/><circle cx="27" cy="41" r="5"/><circle cx="41" cy="41" r="5" opacity=".35"/></g></svg>','Away with Tailscale','No port forwarding. An HTTPS address when you need one.']];
+    const cards=items.map(([ic,b,s],i)=>{const c=el('div','card3',`${ic}<b>${b}</b><span>${s}</span>`);c.style.left=(105+i*585)+'px';c.style.top='440px';rig.append(c);return c;});
+    return {tick(t){cards.forEach((c,i)=>{const u=back(span(t,26.95+i*.22,27.4+i*.22));c.style.opacity=String(span(t,26.95+i*.22,27.15+i*.22));c.style.transform=`translateY(${lerp(80,0,clamp(u,0,1.2))}px) rotate(${(i-1)*1.2}deg)`;});
+      camera(rig,kf([[26.8,{s:1.04}],[29.6,{s:1}]],t));}};
+  });
+  sticker('Passwords stay home.','s',27.0,29.4);
+
+  // 9 · End card.
+  shot(29.4,34.2,rig=>{
+    const logo=el('div','',LOGO(170));logo.style.cssText='position:absolute;left:875px;top:150px';rig.append(logo);
+    const t1=el('div','word','All your devices, connected.');t1.style.cssText='position:absolute;left:0;width:1920px;text-align:center;top:372px;font-size:96px';rig.append(t1);
+    const btns=el('div','',`<span class="btn" style="background:#4744b0;color:#fff"><svg width="30" height="30" viewBox="0 0 24 24"><path fill="#fff" d="M3 5.5 10 4.5v7H3zM11 4.4 21 3v8.5H11zM3 12.5h7v7l-7-1zM11 12.5h10V21l-10-1.4z"/></svg>Download for Windows</span><span class="btn" style="background:#15133a;color:#fff"><svg width="30" height="30" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2" fill="none" stroke="#fff" stroke-width="2"/><path d="M1.5 19.5h21" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>Download for Mac</span>`);
+    btns.style.cssText='position:absolute;left:0;width:1920px;top:560px;display:flex;justify-content:center;gap:24px';rig.append(btns);
+    const url=el('div','',`<span style="font-weight:800;font-size:44px;letter-spacing:-.01em">jiun.dev/itda</span><br><span style="font-size:27px;color:#5d5a80;font-weight:600">Free · Open source · No sign-up</span>`);
+    url.style.cssText='position:absolute;left:0;width:1920px;text-align:center;top:720px;line-height:1.5';rig.append(url);
+    return {tick(t){
+      const q=logo.querySelector('svg');
+      q.querySelector('.so').style.strokeDashoffset=227*(1-out(span(t,29.6,30)));
+      q.querySelector('.si').style.strokeDashoffset=76*(1-out(span(t,29.9,30.15)));
+      q.querySelector('.ss').style.strokeDashoffset=136*(1-out(span(t,30.05,30.4)));
+      [t1,btns,url].forEach((e,i)=>{e.style.opacity=String(span(t,29.8+i*.25,30.1+i*.25));e.style.transform=`translateY(${lerp(30,0,out(span(t,29.8+i*.25,30.3+i*.25)))}px)`;});
+    }};
+  });
+}
+
+/** Draw time t. */
+window.render=function(t){
+  for(const s of shots){
+    const on=t>=s.a&&t<s.b;s.layer.style.display=on?'':'none';if(!on)continue;
+    // Punch in (0.28 s), and push out over the last 0.22 s.
+    const i=span(t,s.a,s.a+.28),o=span(t,s.b-.22,s.b);
+    s.layer.style.opacity=String(Math.min(i===1?1:out(i)*1,1-o));
+    s.layer.style.transform=`scale(${lerp(1.08,1,out(i))*lerp(1,.94,o)})`;
+    s.tick(t);
+  }
+  for(const s of stickers){
+    const on=t>=s.a&&t<s.b;s.e.style.display=on?'':'none';if(!on)continue;
+    const u=span(t,s.a,s.a+.36),o=span(t,s.b-.18,s.b);
+    s.e.style.transform=`rotate(${lerp(-6,-2.5,out(u))}deg) scale(${(u<1?back(u):1)*lerp(1,.6,o)})`;s.e.style.opacity=String((u>0?1:0)*(1-o));
+  }
+  // The background drifts slowly.
+  document.querySelectorAll('#bg i').forEach((b,i)=>b.style.transform=`translate(${Math.sin(t*.25+i*2)*60}px,${Math.cos(t*.2+i)*40}px)`);
+};
+
+(async()=>{
+  L=window.LAYOUT;build();
+  await Promise.all([...document.images].map(i=>i.decode().catch(()=>{})));
+  await document.fonts.ready;render(0);window.stageReady=true;
+})();
+</script>

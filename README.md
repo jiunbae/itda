@@ -12,6 +12,10 @@ Connect to your devices’ **screens and files** from **Windows and Mac**. Brows
 
 [**Download**](https://github.com/jiunbae/itda/releases/latest) · [Website](https://jiun.dev/itda/) · [Getting started](https://jiun.dev/itda/start.html) · [Security](SECURITY.md) · [한국어](README.ko.md)
 
+<a href="https://jiun.dev/itda/#film"><img src="docs/media/itda-film-poster.jpg" width="960" alt="Itda film poster: a remote Mac opened from a device card"></a>
+
+▶ <a href="https://jiun.dev/itda/#film">Watch the 34-second film</a>
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/home-window-dark.png?v=7">
   <img src="docs/img/home-window-light.png?v=7" width="960" alt="Itda address book with saved devices, groups and file browser">

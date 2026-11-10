@@ -12,6 +12,10 @@
 
 [**다운로드**](https://github.com/jiunbae/itda/releases/latest) · [웹사이트](https://jiun.dev/itda/) · [시작하기](https://jiun.dev/itda/start.html) · [보안](SECURITY.md) · [English](README.md)
 
+<a href="https://jiun.dev/itda/#film"><img src="docs/media/itda-film-poster.jpg" width="960" alt="Itda 소개 영상 포스터: 기기 카드에서 연 원격 Mac 화면"></a>
+
+▶ <a href="https://jiun.dev/itda/#film">34초 소개 영상 보기</a>
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/home-window-dark.png?v=7">
   <img src="docs/img/home-window-light.png?v=7" width="960" alt="저장한 기기, 그룹과 파일 브라우저가 있는 Itda 주소록">

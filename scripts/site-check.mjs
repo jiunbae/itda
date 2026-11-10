@@ -13,7 +13,8 @@ try{
     const context=await browser.newContext({locale:'ko-KR',viewport:{width,height:1100},colorScheme,reducedMotion:'reduce'});
     const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
     page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
-    page.on('requestfailed',r=>errors.push(r.url()+': '+r.failure()?.errorText));
+    // A browser aborts in-flight film range requests when the page moves on: not a failure.
+    page.on('requestfailed',r=>{if(/\/media\/itda-film\.(webm|mp4)$/.test(r.url())&&r.failure()?.errorText==='net::ERR_ABORTED')return;errors.push(r.url()+': '+r.failure()?.errorText);});
     for(const name of ['', 'start.html']){
       await page.goto(base+name+'?lang='+lang,{waitUntil:'networkidle'});
       await page.evaluate(async()=>{await document.fonts.ready;for(const image of document.images){image.loading='eager';await image.decode().catch(()=>{});}});
