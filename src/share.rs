@@ -500,15 +500,25 @@ impl Input {
     }
 
     pub(crate) fn pointer(&mut self, mask: u8, x: u16, y: u16) {
-        if self.view_only {
-            return;
-        }
         let (vw, vh) = unsafe { (GetSystemMetrics(SM_CXVIRTUALSCREEN).max(2) as i64, GetSystemMetrics(SM_CYVIRTUALSCREEN).max(2) as i64) };
         // Windows maps back with (n * size) >> 16; rounding up lands on exactly this pixel.
         let norm = |v: u16, size: i64| ((v as i64 * 65536 + size - 1) / size).min(65535) as i32;
+        self.mouse(mask, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, norm(x, vw), norm(y, vh));
+    }
+
+    /// Move by (dx, dy) like a real mouse (a game that hides the pointer reads only how far it
+    /// moved, and keeps pulling it back to the middle), with the buttons in `mask`.
+    pub(crate) fn pointer_relative(&mut self, mask: u8, dx: i16, dy: i16) {
+        let flags = if dx != 0 || dy != 0 { MOUSEEVENTF_MOVE } else { 0 };
+        self.mouse(mask, flags, dx as i32, dy as i32);
+    }
+
+    fn mouse(&mut self, mask: u8, mut flags: MOUSE_EVENT_FLAGS, dx: i32, dy: i32) {
+        if self.view_only {
+            return;
+        }
         let mut i: INPUT = unsafe { std::mem::zeroed() };
         i.r#type = INPUT_MOUSE;
-        let mut flags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
         let mut data: i32 = 0;
         let changed = mask ^ self.buttons;
         let press = |bit: u8| changed & bit != 0 && mask & bit != 0;
@@ -524,9 +534,12 @@ impl Input {
         if press(32) { flags |= MOUSEEVENTF_HWHEEL; data = -120; }
         if press(64) { flags |= MOUSEEVENTF_HWHEEL; data = 120; }
         self.buttons = mask;
+        if flags == 0 {
+            return;
+        }
         i.Anonymous.mi = MOUSEINPUT {
-            dx: norm(x, vw),
-            dy: norm(y, vh),
+            dx,
+            dy,
             mouseData: data as u32,
             dwFlags: flags,
             time: 0,
