@@ -323,6 +323,34 @@ fn asset(path: &str) -> Option<(Cow<'static, [u8]>, &'static str)> {
 pub(crate) fn binary_previews() -> bool { !test_bridge::active() }
 
 /// Send a message to the page.
+/// The menu bar's / tray's Language items: the same as Settings → Language.
+fn set_language(pref: &str) {
+    if !matches!(pref, "auto" | "ko" | "en") {
+        return;
+    }
+    let st = home(|m| {
+        m.settings.lang = pref.to_string();
+        m.settings.clone()
+    });
+    store::save_settings(&st);
+    crate::i18n::set_pref(&st.lang);
+    plat::language_changed();
+    send(json!({"type": "settings", "settings": st}));
+}
+
+/// The Language menu's items: (Settings → Language value, label, checked). "Automatic" names
+/// the language it picks now (the system's).
+fn language_items() -> [(&'static str, String, bool); 3] {
+    let pref = home(|m| m.settings.lang.clone());
+    let pref = if matches!(pref.as_str(), "ko" | "en") { pref } else { "auto".to_string() };
+    let name = |l: &str| crate::i18n::text(if l == "ko" { "lang.ko" } else { "lang.en" });
+    [
+        ("auto", tr!("app.menu.langAuto", lang = name(crate::i18n::resolve("auto"))), pref == "auto"),
+        ("ko", name("ko").to_string(), pref == "ko"),
+        ("en", name("en").to_string(), pref == "en"),
+    ]
+}
+
 fn send(v: Value) {
     if !home(|m| m.ready) {
         return;
@@ -2369,5 +2397,24 @@ mod quit_tests {
         assert_eq!(*QUIT_PENDING.lock().unwrap(), Some((other_stop, QuitPending::Stopping(QuitReason::User))));
         assert!(!crate::files::accepting() && checked.get()==3);
         clear();
+    }
+}
+
+#[cfg(test)]
+mod language_menu_tests {
+    #[test]
+    fn the_language_menu_checks_the_saved_choice() {
+        let items = |lang: &str| {
+            super::home(|m| m.settings.lang = lang.into());
+            super::language_items()
+        };
+        // Tests run in Korean (i18n::forced): "Automatic" names what it picks.
+        let auto = items("auto");
+        assert_eq!(auto.clone().map(|i| i.0), ["auto", "ko", "en"]);
+        assert_eq!(auto.clone().map(|i| i.1), ["자동 (한국어)".to_string(), "한국어".into(), "English".into()]);
+        assert_eq!(auto.map(|i| i.2), [true, false, false]);
+        assert_eq!(items("").map(|i| i.2), [true, false, false], "unset is automatic");
+        assert_eq!(items("en").map(|i| i.2), [false, false, true]);
+        assert_eq!(items("ko").map(|i| i.2), [false, true, false]);
     }
 }

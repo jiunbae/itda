@@ -1,6 +1,7 @@
 //! English messages: the same IDs and {placeholders} as ko.rs.
 pub(super) const MESSAGES: &[(&str, &str)] = &[
     ("lang.en", "English"),
+    ("lang.ko", "한국어"),
 
     // Connections, SSH, remote setup, high-performance setup, updates, system.
     ("conn.hostNotFound", "Can’t find the host"),
@@ -498,6 +499,8 @@ pub(super) const MESSAGES: &[(&str, &str)] = &[
     ("app.menu.home", "Itda Home"),
     ("app.menu.help", "Help"),
     ("app.menu.helpItem", "Itda Help"),
+    ("app.menu.language", "Language"),
+    ("app.menu.langAuto", "Automatic ({lang})"),
     ("app.webview2Missing", "Can’t start a required component (Microsoft Edge WebView2).\n\n{error}\n\nYou can install it from https://go.microsoft.com/fwlink/p/?LinkId=2124703."),
     ("app.drag.checkWindow", "Check the file window to drop onto"),
     ("app.tray.watching", "{app} — {count} watching this PC"),

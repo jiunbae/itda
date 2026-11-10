@@ -179,7 +179,8 @@ mod tests {
             assert!(seen_en.insert(*k), "{k}: defined twice in English");
             let ko = find(KO_ALL, k).unwrap_or_else(|| panic!("{k}: in English but not Korean"));
             assert_eq!(holes(ko), holes(v), "{k}: placeholders differ");
-            assert!(!v.chars().any(|c| ('가'..='힣').contains(&c)), "{k}: English text has Hangul");
+            // Language names are written in their own language (lang.ko is 한국어 in both).
+            assert!(k.starts_with("lang.") || !v.chars().any(|c| ('가'..='힣').contains(&c)), "{k}: English text has Hangul");
         }
         for (k, _) in KO_ALL.iter() {
             assert!(find(EN_ALL, k).is_some(), "{k}: in Korean but not English");
