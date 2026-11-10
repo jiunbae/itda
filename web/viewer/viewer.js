@@ -1262,5 +1262,13 @@ kbd.addEventListener('keydown', (e) => {
   }
 });
 
+// Full screen in a browser that has the Keyboard Lock API (Chrome, Edge): ⌘/Ctrl+W, Alt+Tab,
+// Esc and the like go to the remote device instead of the browser (hold Esc to leave).
+document.addEventListener('fullscreenchange', () => {
+  const k = navigator.keyboard;
+  if (!k || !k.lock) return;
+  if (document.fullscreenElement) k.lock().catch(() => {});
+  else k.unlock();
+});
 window.addEventListener('beforeunload', () => { if (MIRROR === null) close(false); });
 boot();
