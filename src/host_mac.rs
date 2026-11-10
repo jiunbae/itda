@@ -19,12 +19,12 @@ use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass, Message};
-use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+use objc2_app_kit::{NSBitmapImageRep, NSCompositingOperation, NSCursor, NSDeviceRGBColorSpace, NSGraphicsContext, NSImage, NSPasteboard, NSPasteboardTypeString};
 use objc2_core_foundation::{CFRetained, CGPoint};
 use objc2_core_graphics::{CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGEvent, CGEventField, CGEventFlags, CGEventTapLocation, CGEventType, CGMainDisplayID, CGMouseButton, CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, CGScrollEventUnit};
 use objc2_core_media::CMSampleBuffer;
 use objc2_core_video::{CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight, CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress};
-use objc2_foundation::{NSArray, NSError, NSProcessInfo, NSString};
+use objc2_foundation::{NSArray, NSError, NSPoint, NSProcessInfo, NSRect, NSSize, NSString};
 use objc2_screen_capture_kit::{SCContentFilter, SCDisplay, SCShareableContent, SCWindow, SCStream, SCStreamConfiguration, SCStreamDelegate, SCStreamErrorCode, SCStreamErrorDomain, SCStreamOutput, SCStreamOutputType};
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -34,15 +34,59 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-/// ScreenCaptureKit draws the pointer into the picture; viewers don't get its shape.
-pub(crate) const LOCAL_CURSOR: bool = false;
+/// The system cursor `Capture::pointer` saw last, for `cursor_shape`: its image, hotspot (points,
+/// from the top left) and the capture's pixels per point.
+struct SeenCursor {
+    id: usize,
+    image: Retained<NSImage>,
+    hot: NSPoint,
+    scale: f64,
+}
+// Only read and replaced under the mutex; NSImage drawing is thread-safe for distinct contexts.
+unsafe impl Send for SeenCursor {}
+static SEEN_CURSOR: Mutex<Option<SeenCursor>> = Mutex::new(None);
 
-pub(crate) fn pointer() -> Option<crate::server::Pointer> {
-    None
+/// The pixels of cursor `shape` (an id from `Capture::pointer`). None: it changed meanwhile.
+pub(crate) fn cursor_shape(shape: usize) -> Option<crate::enc::Cursor> {
+    if shape == 0 {
+        return Some(crate::enc::Cursor::hidden());
+    }
+    let seen = SEEN_CURSOR.lock().unwrap();
+    let s = seen.as_ref().filter(|s| s.id == shape)?;
+    render_cursor(&s.image, s.hot, s.scale)
 }
 
-pub(crate) fn cursor_shape(_shape: usize) -> Option<crate::enc::Cursor> {
-    None
+/// Draw a cursor image at `scale` pixels per point into straight-alpha pixels.
+fn render_cursor(image: &NSImage, hot: NSPoint, scale: f64) -> Option<crate::enc::Cursor> {
+    let size = image.size();
+    let (w, h) = ((size.width * scale).round() as isize, (size.height * scale).round() as isize);
+    if !(1..=256).contains(&w) || !(1..=256).contains(&h) {
+        return None;
+    }
+    let rep = unsafe {
+        NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+            NSBitmapImageRep::alloc(), std::ptr::null_mut(), w, h, 8, 4, true, false, NSDeviceRGBColorSpace, w * 4, 32)
+    }?;
+    let ctx = NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep)?;
+    NSGraphicsContext::saveGraphicsState_class();
+    NSGraphicsContext::setCurrentContext(Some(&ctx));
+    let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w as f64, h as f64));
+    image.drawInRect_fromRect_operation_fraction(rect, NSRect::ZERO, NSCompositingOperation::Copy, 1.0);
+    ctx.flushGraphics();
+    NSGraphicsContext::restoreGraphicsState_class();
+    let data = rep.bitmapData();
+    if data.is_null() {
+        return None;
+    }
+    // Premultiplied RGBA rows, top row first.
+    let bytes = unsafe { std::slice::from_raw_parts(data, (w * h * 4) as usize) };
+    let px = bytes.chunks_exact(4).map(|p| {
+        let a = p[3] as u32;
+        let un = |c: u8| if a == 0 { 0 } else { (c as u32 * 255 + a / 2) / a }.min(255);
+        a << 24 | un(p[0]) << 16 | un(p[1]) << 8 | un(p[2])
+    }).collect();
+    let (hx, hy) = ((hot.x * scale) as u16, (hot.y * scale) as u16);
+    Some(crate::enc::Cursor { w: w as u16, h: h as u16, hx: hx.min(w as u16 - 1), hy: hy.min(h as u16 - 1), px })
 }
 
 pub(crate) const KIND: &str = "Mac";
@@ -568,6 +612,35 @@ impl Capture {
     /// The capture's size and quality are fixed for its life (one display).
     pub(crate) fn fit(&mut self) {}
 
+    /// The pointer in framebuffer coordinates and an id of the cursor it shows (server.rs:
+    /// ScreenCaptureKit leaves it out of the picture). None for a fixed test capture.
+    pub(crate) fn pointer(&self) -> Option<crate::server::Pointer> {
+        self.stream.as_ref()?;
+        let b = CGDisplayBounds(CGMainDisplayID());
+        if b.size.width <= 0.0 || b.size.height <= 0.0 {
+            return None;
+        }
+        let at = CGEvent::location(CGEvent::new(None).as_deref());
+        let (sx, sy) = (self.w as f64 / b.size.width, self.h as f64 / b.size.height);
+        let (x, y) = (((at.x - b.origin.x) * sx).floor() as i32, ((at.y - b.origin.y) * sy).floor() as i32);
+        // Deprecated in favour of ScreenCaptureKit's showsCursor, which can't give the shape alone.
+        #[allow(deprecated)]
+        let cursor = NSCursor::currentSystemCursor()?;
+        let (image, hot) = (cursor.image(), cursor.hotSpot());
+        // The same cursor hands out the same image (the cursor object is new each time).
+        let id = {
+            use std::hash::{Hash, Hasher};
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            (Retained::as_ptr(&image) as usize, hot.x.to_bits(), hot.y.to_bits(), sx.to_bits()).hash(&mut hash);
+            hash.finish() as usize | 1
+        };
+        let mut seen = SEEN_CURSOR.lock().unwrap();
+        if seen.as_ref().is_none_or(|s| s.id != id) {
+            *seen = Some(SeenCursor { id, image, hot, scale: sx });
+        }
+        Some(crate::server::Pointer { shape: id, x, y })
+    }
+
     pub(crate) fn check(&self) -> io::Result<()> {
         check_intent(&USER_STOPPED).map_err(io::Error::other)?;
         match &self.failed { Some(error) => Err(io::Error::other(error.clone())), None => Ok(()) }
@@ -719,7 +792,8 @@ fn stream_configuration(w: usize, h: usize) -> Retained<SCStreamConfiguration> {
         config.setHeight(h);
         config.setPixelFormat(u32::from_be_bytes(*b"BGRA"));
         config.setMinimumFrameInterval(objc2_core_media::CMTime::new(1, 60));
-        config.setShowsCursor(true);
+        // The pointer goes to viewers as a shape (server.rs), drawn in only where needed.
+        config.setShowsCursor(false);
         config.setQueueDepth(3);
     }
     config
@@ -1707,5 +1781,30 @@ mod action_tests {
         assert_eq!((code(0xffeb), code(0xffec)), (Some(55), Some(54)));
         assert_eq!((code(0xffe9), code(0xffea)), (Some(58), Some(61)));
         assert_eq!((code(0xff7e), code(0xfe03)), (Some(58), Some(61)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The system cursor (what `Capture::pointer` reads, off the main thread) comes out
+    /// upright at the capture's scale: opaque at its hotspot, transparent in the far corner,
+    /// twice the size at two pixels per point. Assumes the usual arrow (pointing up-left).
+    #[test]
+    fn cursor_images_become_shapes() {
+        #[allow(deprecated)]
+        let Some(arrow) = NSCursor::currentSystemCursor() else { return eprintln!("skipped: no window server") };
+        let (image, hot) = (arrow.image(), arrow.hotSpot());
+        let one = render_cursor(&image, hot, 1.0).expect("arrow at 1x");
+        let two = render_cursor(&image, hot, 2.0).expect("arrow at 2x");
+        assert_eq!((two.w, two.h), (one.w * 2, one.h * 2));
+        for c in [&one, &two] {
+            let at = |x: u16, y: u16| c.px[y as usize * c.w as usize + x as usize];
+            // The tip: the hotspot or a pixel just inside it (antialiasing).
+            let tip = (0..3).flat_map(|d| [(c.hx + d, c.hy + d), (c.hx + d, c.hy)]).any(|(x, y)| at(x, y) >> 24 >= 0x80);
+            assert!(tip, "opaque at the hotspot ({}, {})", c.hx, c.hy);
+            assert_eq!(at(c.w - 1, 0) >> 24, 0, "top right is clear (upright, not flipped)");
+        }
     }
 }
