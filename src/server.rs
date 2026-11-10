@@ -521,6 +521,10 @@ pub(crate) trait VideoEncode: Send {
     fn size(&self) -> (usize, usize);
     /// Encode a frame (rows of `stride` pixels); `key` asks for an IDR with parameter sets.
     fn encode(&mut self, px: &[u32], stride: usize, key: bool) -> io::Result<Vec<u8>>;
+    /// The bitrate it was made with: the most the rate control (rate.rs) asks for.
+    fn bitrate(&self) -> u32;
+    /// Aim for `bps` from the next frame on.
+    fn set_bitrate(&mut self, bps: u32);
     /// macOS can encode the immutable SCK buffer itself, avoiding an encoder staging copy.
     /// Other implementations can keep using the CPU-pixel path.
     #[cfg(target_os = "macos")]
@@ -605,6 +609,8 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
     // painted losslessly, and when the screen last changed.
     let mut video: Option<Video> = None;
     let mut video_ok = true;
+    // Its bitrate, adapted to what the link carries (rate.rs).
+    let mut rate: Option<crate::rate::Rate> = None;
     let mut reset = true;
     let mut exact: Vec<u32> = Vec::new();
     let mut last_change = Instant::now();
@@ -657,6 +663,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                 Msg::Encodings(e) => {
                     demand.encodings(&e, &mut reply);
                     if !e.contains(&ENC_H264) && video.take().is_some() {
+                        rate = None;
                         // Back to ZRLE while the viewer shows a lossy picture: repaint it all.
                         prev.clear();
                         exact.clear();
@@ -688,6 +695,18 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
             next = rx.try_recv().ok();
         }
         out.send(reply)?;
+        // Bitrate: learn from the acks, back off while the send queue is full, decide.
+        let acks = demand.take_acks();
+        if let (Some(r), Some(v)) = (rate.as_mut(), video.as_mut()) {
+            acks.into_iter().for_each(|d| r.ack(d));
+            if !out.room() && last_change.elapsed() < REFINE {
+                r.held();
+            }
+            if let Some(bps) = r.tick(Instant::now()) {
+                v.set_bitrate(bps);
+                crate::trace::add("kbps", bps as f32 / 1000.0);
+            }
+        }
         // Local clipboard changed → offer it to the viewer (not one that may only watch).
         if !view_only && clip_check.elapsed() > Duration::from_millis(500) {
             clip_check = Instant::now();
@@ -794,6 +813,14 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         if want_video && video.as_ref().map(|v| v.size()) != Some((w & !1, h & !1)) {
             video = platform::video(w, h);
             video_ok = video.is_some();
+            if let Some(v) = video.as_mut() {
+                // A new size: keep what the link has shown it can carry.
+                let r = rate.get_or_insert_with(|| crate::rate::Rate::new(v.bitrate(), Instant::now()));
+                r.rebase(v.bitrate());
+                if r.bitrate() < v.bitrate() {
+                    v.set_bitrate(r.bitrate());
+                }
+            }
             reset = true;
         }
         let mut lossless = true;

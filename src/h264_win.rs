@@ -22,6 +22,10 @@ pub struct H264 {
     w: usize,
     h: usize,
     bitrate: u32,
+    /// The bitrate it was made with (the rate control's ceiling).
+    start_bitrate: u32,
+    /// ICodecAPI refused a bitrate change once (logged once).
+    dynamic_failed: bool,
     frame: i64,
     /// This encoder has given output: a forced key must start a fresh one (until then, its
     /// first output is an IDR anyway).
@@ -48,6 +52,19 @@ impl Drop for Com {
     }
 }
 thread_local!(static COM: Com = Com(unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok()));
+
+/// Set the running encoder's mean bitrate (CODECAPI_AVEncCommonMeanBitRate).
+fn mean_bitrate(t: &IMFTransform, bps: u32) -> bool {
+    use windows::core::Interface;
+    use windows::Win32::System::Variant::{VARIANT, VT_UI4};
+    let Ok(api) = t.cast::<ICodecAPI>() else { return false };
+    unsafe {
+        let mut v: VARIANT = std::mem::zeroed();
+        (*v.Anonymous.Anonymous).vt = VT_UI4;
+        (*v.Anonymous.Anonymous).Anonymous.ulVal = bps;
+        api.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &v).is_ok()
+    }
+}
 
 fn open(w: usize, h: usize, bitrate: u32) -> windows::core::Result<Mft> {
     COM.with(|_| {});
@@ -92,7 +109,7 @@ impl H264 {
             return Err("Media Foundation unavailable".into());
         }
         let mft = open(w, h, bitrate).map_err(|e| format!("H.264 encoder: {e}"))?;
-        Ok(H264 { mft, w, h, bitrate, frame: 0, produced: false, nv12: vec![0; w * h * 3 / 2] })
+        Ok(H264 { mft, w, h, bitrate, start_bitrate: bitrate, dynamic_failed: false, frame: 0, produced: false, nv12: vec![0; w * h * 3 / 2] })
     }
 
     /// BGRA (0x00RRGGBB) to NV12, BT.601 limited range.
@@ -192,6 +209,18 @@ impl VideoEncode for H264 {
     fn size(&self) -> (usize, usize) {
         (self.w, self.h)
     }
+    fn bitrate(&self) -> u32 {
+        self.start_bitrate
+    }
+    /// Through ICodecAPI on the running encoder when it allows that; else the next encoder
+    /// (made at the next forced key frame) starts at it.
+    fn set_bitrate(&mut self, bps: u32) {
+        self.bitrate = bps;
+        if !mean_bitrate(&self.mft.t, bps) && !self.dynamic_failed {
+            self.dynamic_failed = true;
+            crate::log!("share: H.264 encoder can't change bitrate while running");
+        }
+    }
     fn encode(&mut self, px: &[u32], stride: usize, key: bool) -> io::Result<Vec<u8>> {
         self.encode_frame(px, stride, key).map_err(io::Error::other)
     }
@@ -228,5 +257,10 @@ mod tests {
         px[1000] ^= 0xffffff;
         let next = e.encode(&px, 640, false).unwrap();
         assert!(next.len() < first.len(), "{} vs {}", next.len(), first.len());
+        // The rate control's bitrate changes reach the running encoder.
+        e.set_bitrate(1_000_000);
+        assert!(!e.dynamic_failed, "CODECAPI_AVEncCommonMeanBitRate refused");
+        px[2000] ^= 0xffffff;
+        e.encode(&px, 640, false).unwrap();
     }
 }
