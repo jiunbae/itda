@@ -516,3 +516,9 @@ h1, h2, h3 { text-wrap: balance; }
   .flow svg.diagram { min-width: 640px; }
 }
 .text-link { display:inline-block; margin-top:20px; color:var(--accent); font-size:14px; font-weight:650; text-decoration:underline; text-underline-offset:4px; }
+
+/* Film: one wide player under the hero strip. Loads when it scrolls into view; Reduce Motion keeps the poster with controls. */
+.film-section { padding-top: 64px; }
+.film { margin: 0; display: grid; gap: 12px; justify-items: center; }
+.film video { display: block; width: 100%; max-width: 1080px; height: auto; aspect-ratio: 16 / 9; border-radius: 18px; border: 1px solid var(--line-2); box-shadow: var(--shadow); background: #f4f3fb; }
+.film figcaption { color: var(--text-3); font-size: 13px; }

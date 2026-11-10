@@ -1,0 +1,76 @@
+<!doctype html>
+<!-- The fictional remote desktop shown inside Itda's viewer in the film (rendered to a PNG, then
+     sent by a synthetic RFB server). Made-up apps and content; no real system UI or brands.
+     ?screen=2 draws the second display for the multi-monitor shot. -->
+<meta charset="utf-8">
+<style>
+*{box-sizing:border-box;margin:0}
+html,body{width:1600px;height:1000px;overflow:hidden}
+body{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:#1d1b33;
+  background:radial-gradient(70% 90% at 12% 18%,#8f8bf3 0,transparent 60%),radial-gradient(60% 80% at 88% 85%,#3fd3c4 0,transparent 62%),radial-gradient(60% 70% at 70% 10%,#ff9a7a 0,transparent 55%),linear-gradient(135deg,#5552c4,#2b2970)}
+.bar{position:absolute;inset:0 0 auto;height:30px;background:rgba(250,250,255,.62);backdrop-filter:blur(18px);display:flex;align-items:center;gap:22px;padding:0 16px;font-size:13.5px;font-weight:500}
+.bar b{font-weight:700}.bar .r{margin-left:auto;display:flex;gap:16px;font-variant-numeric:tabular-nums}
+.win{position:absolute;background:#fbfbfe;border-radius:12px;box-shadow:0 24px 60px rgba(14,12,48,.35),0 0 0 1px rgba(20,18,60,.08);overflow:hidden}
+.tb{height:38px;display:flex;align-items:center;gap:8px;padding:0 14px;background:#f1f0f8;border-bottom:1px solid #e3e1ef;font-size:13px;font-weight:600;color:#55527a}
+.dots{display:flex;gap:7px;margin-right:8px}.dots i{width:12px;height:12px;border-radius:50%;background:#d6d4e6}
+.doc{left:120px;top:96px;width:760px;height:640px}
+.doc .page{padding:34px 48px;display:grid;gap:14px}
+.doc h1{font-size:30px;letter-spacing:-.02em}
+.doc .meta{color:#7a7799;font-size:13px}
+.doc p{color:#38355c;max-width:60ch}
+.doc ul{padding-left:20px;display:grid;gap:6px;color:#38355c}
+.doc .tag{display:inline-block;background:#ecebff;color:#4744b0;font-weight:700;font-size:12px;padding:3px 8px;border-radius:6px;margin-right:6px}
+.board{left:930px;top:150px;width:560px;height:430px}
+.board .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:16px}
+.board .tile{aspect-ratio:4/3;border-radius:8px}
+.chart{left:980px;top:620px;width:470px;height:250px}
+.chart .bars{display:flex;align-items:flex-end;gap:14px;height:150px;padding:18px 22px 0}
+.chart .bars i{flex:1;border-radius:6px 6px 0 0;background:#4744b0}
+.chart .bars i:nth-child(3n){background:#33d1c2}.chart .bars i:nth-child(4){background:#ff6a43}
+.chart .lbl{display:flex;justify-content:space-between;padding:6px 22px;color:#8a87a8;font-size:12px}
+.dock{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);display:flex;gap:12px;padding:10px 14px;background:rgba(250,250,255,.45);backdrop-filter:blur(18px);border-radius:20px;box-shadow:0 10px 30px rgba(14,12,48,.25)}
+.dock i{width:50px;height:50px;border-radius:13px;display:block}
+/* Second display: a video call and a terminal-ish log */
+.call{left:110px;top:110px;width:900px;height:600px;background:#14132a}
+.call .tb{background:#1d1c38;border-color:#2a2950;color:#b9b6dd}
+.people{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px;height:calc(100% - 38px)}
+.person{border-radius:10px;display:grid;place-items:center;font-weight:700;font-size:44px;color:#fff}
+.log{left:1060px;top:200px;width:440px;height:520px;background:#101022}
+.log .tb{background:#1a1a33;border-color:#26264a;color:#a9a7d1}
+.log pre{padding:16px;color:#bdf5ee;font:13px/1.7 ui-monospace,Menlo,monospace;white-space:pre-wrap}
+</style>
+<div class="bar"><b>Canvas</b><span>File</span><span>Edit</span><span>View</span><span>Window</span><span class="r"><span>Wed 10:24</span></span></div>
+<div id="one">
+  <div class="win doc"><div class="tb"><span class="dots"><i></i><i></i><i></i></span>Launch plan — Canvas</div>
+    <div class="page">
+      <div><span class="tag">Launch</span><span class="tag" style="background:#e3fbf8;color:#178a80">On track</span></div>
+      <h1>Spring launch plan</h1>
+      <div class="meta">Edited by Alex · 2 min ago</div>
+      <p>Ship the new studio site with the product film, refreshed screenshots and a one-page quick start.</p>
+      <ul><li>Film: 34 seconds, real product UI</li><li>Landing: film section and new feature cards</li><li>Screenshots: light and dark, phone and desktop</li><li>Review with the team on Thursday at 10:00</li></ul>
+      <p style="color:#7a7799;font-size:13.5px">Next: record voiceover drafts and pick the poster frame.</p>
+    </div></div>
+  <div class="win board"><div class="tb"><span class="dots"><i></i><i></i><i></i></span>Moodboard</div>
+    <div class="grid">
+      <div class="tile" style="background:linear-gradient(135deg,#ffb199,#ff6a43)"></div><div class="tile" style="background:linear-gradient(135deg,#9d9af7,#4744b0)"></div><div class="tile" style="background:linear-gradient(135deg,#a6f0e8,#33d1c2)"></div>
+      <div class="tile" style="background:linear-gradient(135deg,#f6f5fd,#d9d6f2)"></div><div class="tile" style="background:linear-gradient(135deg,#2b2970,#5552c4)"></div><div class="tile" style="background:linear-gradient(135deg,#ffd9a8,#ff9a7a)"></div>
+    </div></div>
+  <div class="win chart"><div class="tb"><span class="dots"><i></i><i></i><i></i></span>Weekly visits</div>
+    <div class="bars"><i style="height:40%"></i><i style="height:55%"></i><i style="height:48%"></i><i style="height:72%"></i><i style="height:66%"></i><i style="height:88%"></i><i style="height:80%"></i></div>
+    <div class="lbl"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div></div>
+</div>
+<div id="two" hidden>
+  <div class="win call"><div class="tb"><span class="dots"><i></i><i></i><i></i></span>Team call · 4 people</div>
+    <div class="people"><div class="person" style="background:linear-gradient(135deg,#5552c4,#2b2970)">A</div><div class="person" style="background:linear-gradient(135deg,#ff9a7a,#e2553a)">J</div><div class="person" style="background:linear-gradient(135deg,#3fd3c4,#178a80)">M</div><div class="person" style="background:linear-gradient(135deg,#8f8bf3,#5552c4)">S</div></div></div>
+  <div class="win log"><div class="tb"><span class="dots"><i></i><i></i><i></i></span>build.log</div>
+<pre>$ build site --release
+  pages      12   ok
+  images     48   ok
+  film       1080p ok
+  size       5.6 MB
+done in 18.4s</pre></div>
+</div>
+<div class="dock"><i style="background:linear-gradient(135deg,#9d9af7,#4744b0)"></i><i style="background:linear-gradient(135deg,#ffb199,#ff6a43)"></i><i style="background:linear-gradient(135deg,#a6f0e8,#33d1c2)"></i><i style="background:linear-gradient(135deg,#fff,#dcdaf0)"></i><i style="background:linear-gradient(135deg,#ffd9a8,#ff9a7a)"></i><i style="background:linear-gradient(135deg,#5552c4,#14132a)"></i></div>
+<script>
+if(new URLSearchParams(location.search).get('screen')==='2'){document.getElementById('one').hidden=true;document.getElementById('two').hidden=false;}
+</script>

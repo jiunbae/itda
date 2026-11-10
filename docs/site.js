@@ -111,6 +111,28 @@
     items.forEach(function (el) { el.classList.add('in'); });
   }
 
+  // ---- film: load when visible, play muted; Reduce Motion shows the poster with controls
+  var film = document.getElementById('film-video');
+  if (film) {
+    var still = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var load = function () {
+      if (film.dataset.loaded) return;
+      film.dataset.loaded = '1';
+      film.querySelectorAll('source[data-src]').forEach(function (s) { s.src = s.dataset.src; });
+      film.load();
+    };
+    // Reduce Motion: poster and controls; the film downloads only once someone presses play.
+    if (still) { film.controls = true; film.loop = false; film.addEventListener('play', function () { if (!film.dataset.loaded) { load(); film.play().catch(function () {}); } }); }
+    else if ('IntersectionObserver' in window) {
+      new IntersectionObserver(function (es) {
+        es.forEach(function (en) {
+          if (en.isIntersecting) { load(); film.play().catch(function () { film.controls = true; }); }
+          else if (film.dataset.loaded) film.pause();
+        });
+      }, { threshold: 0.35 }).observe(film);
+    } else { film.controls = true; load(); }
+  }
+
   // ---- guide: highlight the step in view
   var links = document.querySelectorAll('.toc a[href^="#"]');
   if (links.length && 'IntersectionObserver' in window) {
