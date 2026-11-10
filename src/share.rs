@@ -110,11 +110,8 @@ pub(crate) fn on_frame(_wake: Box<dyn Fn() + Send>) -> u64 {
 }
 pub(crate) fn off_frame(_id: u64) {}
 
-/// Viewers that can draw the pointer get its shape instead of it in the picture (server.rs).
-pub(crate) const LOCAL_CURSOR: bool = true;
-
 /// Where the pointer is (desktop coordinates) and which cursor it shows (0: hidden).
-pub(crate) fn pointer() -> Option<crate::server::Pointer> {
+fn pointer() -> Option<crate::server::Pointer> {
     unsafe {
         let mut ci: CURSORINFO = std::mem::zeroed();
         ci.cbSize = size_of::<CURSORINFO>() as u32;
@@ -213,6 +210,11 @@ impl Capture {
         self.dup = None;
         self.dup_retry = Instant::now();
         self.under = None;
+    }
+
+    /// The pointer in framebuffer coordinates (server.rs: viewers that draw it get its shape).
+    pub(crate) fn pointer(&self) -> Option<crate::server::Pointer> {
+        pointer().map(|p| crate::server::Pointer { x: p.x - self.x, y: p.y - self.y, ..p })
     }
 
     /// Whether a frame may have changed since a grab: Windows can only tell by grabbing.

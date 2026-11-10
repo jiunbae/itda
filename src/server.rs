@@ -10,9 +10,10 @@
 //! still (4:2:0 video blurs text and colour edges).
 //!
 //! Viewers that ask for a cursor pseudo-encoding (VMware's alpha cursor, or RFB Cursor) draw
-//! the pointer themselves where the platform can say what it looks like (Windows): they get
-//! its shape when it changes, and the picture without it while the pointer is where they put
-//! it, so moving it sends no pixels. When someone else moves it, it's drawn in again.
+//! the pointer themselves: they get its shape when it changes, and the picture without it
+//! while the pointer is where they put it, so moving it sends no pixels. When someone else
+//! moves it, or for view-only viewers and those that can't draw it, it's drawn in (Windows
+//! with GDI; macOS captures without it and draws it into a copy of the picture).
 
 use crate::demand::{self, Demand};
 use crate::enc::{ext_desktop_size, screens_in, Encoder, PixelFormat, Screen, Update, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, ENC_H264, ENC_VMWARE_CURSOR, ENC_ZRLE};
@@ -616,8 +617,13 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
     let mut ext_clip = false;
     // The cursor shape this viewer was last sent (when it draws the pointer itself).
     let mut sent_shape: Option<usize> = None;
+    // The pointer's current shape (id and pixels), for sending and for drawing it in.
+    let mut shape: Option<(usize, crate::enc::Cursor)> = None;
+    // Where the pointer was drawn into the last grabbed picture (None: not drawn).
+    let mut last_drawn: Option<(i32, i32, usize)> = None;
+    // A picture with the pointer drawn in (macOS: the shared snapshot stays untouched).
     #[cfg(target_os = "macos")]
-    let _ = steer; // (ScreenCaptureKit draws the pointer in)
+    let mut with_cursor: Vec<u32> = Vec::new();
     #[cfg(target_os = "macos")]
     let mut lock_watch = platform::LockWatch::new();
     loop {
@@ -712,10 +718,22 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         if last_capture.elapsed() < gap || !out.room() {
             continue; // (a viewer that's behind gets the changes together later)
         }
+        // A viewer that draws the pointer itself gets its shape, and the picture without it
+        // while the pointer is where the viewer put it; anyone else (a view-only viewer, one
+        // that can't draw it, or when someone else moves it) gets it drawn in.
+        let can_draw = !view_only && (encs.contains(&ENC_CURSOR) || encs.contains(&ENC_VMWARE_CURSOR));
+        let pointer = cap.lock().unwrap().pointer();
+        let draw_cursor = !can_draw || pointer.is_none_or(|p| !steering(*steer.lock().unwrap(), p.x, p.y, Instant::now()));
+        let drawn = pointer.filter(|_| draw_cursor).map(|p| (p.x, p.y, p.shape));
+        if let Some(p) = pointer.filter(|p| shape.as_ref().is_none_or(|s| s.0 != p.shape)) {
+            if let Some(c) = platform::cursor_shape(p.shape) {
+                shape = Some((p.shape, c));
+            }
+        }
         // With video and nothing new captured, there is nothing to encode until the still
         // repaint is due: skip the copy and compare of a whole frame.
         // (A viewer whose history was just reset, with `prev` cleared, always grabs.)
-        if video.is_some() && incremental && !prev.is_empty() && last_change.elapsed() < REFINE && !redo && !cap.lock().unwrap().fresh_since(seen) {
+        if video.is_some() && incremental && !prev.is_empty() && last_change.elapsed() < REFINE && !redo && drawn == last_drawn && !cap.lock().unwrap().fresh_since(seen) {
             // (A Frame can name a frame this pump already took: back to the fallback poll.)
             arrived = false;
             continue;
@@ -728,9 +746,21 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         #[cfg(target_os = "macos")]
         let snapshot = cap.lock().unwrap().snapshot();
         #[cfg(target_os = "macos")]
-        let (ox, oy, w, h, frame) = (snapshot.x, snapshot.y, snapshot.w, snapshot.h, snapshot.pixels.as_slice());
+        let (ox, oy, w, h) = (snapshot.x, snapshot.y, snapshot.w, snapshot.h);
         #[cfg(target_os = "macos")]
         { seen = snapshot.generation; }
+        // ScreenCaptureKit leaves the pointer out: draw it into a copy where needed, which is
+        // then encoded from memory rather than from the capture's own buffer.
+        #[cfg(target_os = "macos")]
+        let (frame, native) = match (drawn, shape.as_ref().filter(|s| Some(s.0) == drawn.map(|d| d.2))) {
+            (Some((x, y, _)), Some((_, c))) => {
+                with_cursor.clear();
+                with_cursor.extend_from_slice(&snapshot.pixels);
+                c.draw(&mut with_cursor, w, h, x - c.hx as i32, y - c.hy as i32);
+                (with_cursor.as_slice(), None)
+            }
+            _ => (snapshot.pixels.as_slice(), snapshot.native.clone()),
+        };
         // Windows keeps its Desktop Duplication frame borrowed until this update is done.
         // On macOS the capture lock is already released: slow encoders and lossless
         // repaints cannot stop another viewer from taking its own immutable snapshot.
@@ -745,24 +775,17 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         let g = cap.generation();
         #[cfg(not(target_os = "macos"))]
         { seen = g.wrapping_add(u64::from(cap.fresh_since(g))); }
-        // A viewer that draws the pointer itself gets its shape, and the picture without it
-        // while the pointer is where the viewer put it (a view-only viewer never moves it).
-        let local_cursor = platform::LOCAL_CURSOR && !view_only && (encs.contains(&ENC_CURSOR) || encs.contains(&ENC_VMWARE_CURSOR));
-        let pointer = if local_cursor { platform::pointer() } else { None };
-        #[cfg(not(target_os = "macos"))]
-        let draw_cursor = pointer.is_none_or(|p| !steering(*steer.lock().unwrap(), p.x - ox, p.y - oy, Instant::now()));
         #[cfg(not(target_os = "macos"))]
         let (w, h, frame) = cap.grab(draw_cursor);
+        last_drawn = drawn;
         size = (w, h);
         u.start();
         let mut new_shape = None;
-        if let Some(p) = pointer.filter(|p| sent_shape != Some(p.shape)) {
-            if let Some(c) = platform::cursor_shape(p.shape) {
-                if c.encode(&mut u.buf, &pf, &encs) {
-                    u.rects += 1;
-                }
-                new_shape = Some(p.shape);
+        if let Some((id, c)) = shape.as_ref().filter(|s| can_draw && sent_shape != Some(s.0)) {
+            if c.encode(&mut u.buf, &pf, &encs) {
+                u.rects += 1;
             }
+            new_shape = Some(*id);
         }
         let ext = encs.contains(&ENC_EXT_DESKTOP_SIZE);
         if ext && ((w, h) != (w0, h0) || screens_read.elapsed() >= Duration::from_secs(1)) {
@@ -803,7 +826,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                 let key = reset || !incremental;
                 let encode = Instant::now();
                 #[cfg(target_os = "macos")]
-                let encoded = snapshot.native.as_deref().and_then(|buffer| v.encode_buffer(buffer, key))
+                let encoded = native.as_deref().and_then(|buffer| v.encode_buffer(buffer, key))
                     .unwrap_or_else(|| v.encode(frame, w, key));
                 #[cfg(not(target_os = "macos"))]
                 let encoded = v.encode(frame, w, key);

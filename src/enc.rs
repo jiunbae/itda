@@ -326,6 +326,25 @@ impl Cursor {
         Cursor { w, h, hx: hx.min(w.saturating_sub(1)), hy: hy.min(h.saturating_sub(1)), px }
     }
 
+    /// Draw it over `px` (w×h, 0x00RRGGBB) with its top-left corner at (x, y), for a viewer
+    /// whose picture must show the pointer.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // (Windows draws with GDI)
+    pub fn draw(&self, px: &mut [u32], w: usize, h: usize, x: i32, y: i32) {
+        let (cw, ch) = (self.w as i32, self.h as i32);
+        for cy in 0.max(-y)..ch.min(h as i32 - y) {
+            for cx in 0.max(-x)..cw.min(w as i32 - x) {
+                let s = self.px[(cy * cw + cx) as usize];
+                let a = s >> 24;
+                if a == 0 {
+                    continue;
+                }
+                let d = &mut px[(y + cy) as usize * w + (x + cx) as usize];
+                let mix = |sh: u32| (((s >> sh) & 0xff) * a + ((*d >> sh) & 0xff) * (255 - a) + 127) / 255;
+                *d = mix(16) << 16 | mix(8) << 8 | mix(0);
+            }
+        }
+    }
+
     /// A cursor rectangle for a viewer that asked for `encs`: VMware's alpha cursor when it
     /// can take it, else the classic one (pixels in its format plus a mask). None: neither.
     pub fn encode(&self, out: &mut Vec<u8>, pf: &PixelFormat, encs: &[i32]) -> bool {
@@ -503,6 +522,16 @@ mod tests {
         assert_eq!(c.px[2], 0xffff_ffff);
         assert_eq!(c.px[3], 0xff00_0000);
         assert_eq!((c.hx, c.hy), (3, 0), "hotspot kept inside the shape");
+    }
+
+    #[test]
+    fn cursor_drawn_over_a_picture_is_clipped_and_blended() {
+        let c = Cursor { w: 2, h: 2, hx: 0, hy: 0, px: vec![0xff00_00ff, 0x80ff_ffff, 0, 0xffff_0000] };
+        let mut px = vec![0u32; 3 * 2];
+        c.draw(&mut px, 3, 2, 2, -1);
+        assert_eq!(px, [0, 0, 0, 0, 0, 0], "only the bottom-right pixel lands, at (3, 0): outside");
+        c.draw(&mut px, 3, 2, 1, 0);
+        assert_eq!(px, [0, 0x0000ff, 0x808080, 0, 0, 0xff0000]);
     }
 
     #[test]
