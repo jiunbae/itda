@@ -13,4 +13,5 @@ cp web/viewer/novnc-src/zrle.js "$work/package/core/decoders/zrle.js"
 cp web/viewer/novnc-src/raw.js "$work/package/core/decoders/raw.js"
 python3 scripts/patch-novnc.py "$work"
 cp web/viewer/novnc-src/itda.js "$work/entry.js"
+cp web/viewer/novnc-src/audio.js "$work/audio.js"
 npx --yes "esbuild@$ESBUILD" "$work/entry.js" --bundle --format=esm --minify --target=es2022 --outfile=web/viewer/novnc.min.js

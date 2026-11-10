@@ -2,7 +2,7 @@
 
 `novnc.min.js` is [noVNC](https://github.com/novnc/noVNC) 1.7.0 (MPL-2.0), bundled with
 esbuild by `scripts/build-novnc.sh`, with `core/decoders/zrle.js` and `core/decoders/raw.js` replaced by
-the versions in `novnc-src/`. The checked `scripts/patch-novnc.py` transformation preserves all ExtendedDesktopSize screen records and emits geometry events. `novnc-src/itda.js` exposes the pinned viewport/absolute-pointer adapter, a frame version and Keyboard for sibling views; the viewer imports the bundle explicitly before it boots.
+the versions in `novnc-src/`. The checked `scripts/patch-novnc.py` transformation preserves all ExtendedDesktopSize screen records and emits geometry events. `novnc-src/itda.js` exposes the pinned viewport/absolute-pointer adapter, a frame version and Keyboard for sibling views; the viewer imports the bundle explicitly before it boots. It also adds the QEMU Audio extension (pseudo-encoding -259, listed only while the viewer turns sound on) and plays the PCM with `novnc-src/audio.js` (Web Audio buffers on a short jitter lead; no AudioWorklet, which plain HTTP doesn't allow); `scripts/audio-e2e.mjs` checks it.
 
 ## Why
 

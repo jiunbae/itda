@@ -90,6 +90,8 @@ pub struct HostOpts {
     pub monitor_id: Option<u32>,
     /// Per-display windows (mode 2) open full screen, each on its monitor.
     pub monitor_fullscreen: bool,
+    /// Play the remote machine's sound (web viewer; Itda's own servers).
+    pub audio: bool,
 }
 
 impl Default for HostOpts {
@@ -108,6 +110,7 @@ impl Default for HostOpts {
             monitor_mode: 0,
             monitor_id: None,
             monitor_fullscreen: false,
+            audio: false,
         }
     }
 }

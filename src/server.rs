@@ -14,6 +14,9 @@
 //! while the pointer is where they put it, so moving it sends no pixels. When someone else
 //! moves it, or for view-only viewers and those that can't draw it, it's drawn in (Windows
 //! with GDI; macOS captures without it and draws it into a copy of the picture).
+//!
+//! Viewers that ask for QEMU Audio (pseudo-encoding -259) and enable it hear this machine's
+//! sound output (audio.rs): raw PCM between updates, never waiting for them or holding them up.
 
 use crate::demand::{self, Demand};
 use crate::enc::{ext_desktop_size, screens_in, Encoder, PixelFormat, Screen, Update, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, ENC_H264, ENC_ITDA_BACKGROUND, ENC_VMWARE_CURSOR, ENC_ZRLE, BACKGROUND_FRAME};
@@ -27,9 +30,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
-use crate::share as platform;
+pub(crate) use crate::share as platform;
 #[cfg(target_os = "macos")]
-use crate::host_mac as platform;
+pub(crate) use crate::host_mac as platform;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -217,6 +220,10 @@ enum Msg {
     Gone,
     /// A reply from the reader (extended clipboard), sent as is.
     Send(Vec<u8>),
+    /// The viewer's QEMU Audio request.
+    Audio(crate::audio::Op),
+    /// Captured sound is waiting for this viewer (at most one waits in the channel).
+    Sound,
 }
 
 // ---------------------------------------------------------------- extended clipboard
@@ -398,7 +405,7 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
     let (tx, rx) = channel();
     // At most one Frame waits in the channel: the pump takes the newest frame anyway.
     let woken = Arc::new(AtomicBool::new(false));
-    let (wake, woken2) = (tx.clone(), woken.clone());
+    let (wake, woken2, sound_tx) = (tx.clone(), woken.clone(), tx.clone());
     let waker = FrameWaker(platform::on_frame(Box::new(move || {
         if !woken2.swap(true, Relaxed) {
             let _ = wake.send(Msg::Frame);
@@ -415,7 +422,8 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
         let _ = read_client(BufReader::new(reader), &gone.0, &mut input, cfg2.view_only, &steer2);
         input.release_all();
     });
-    let r = Outbox::new(c.try_clone()?).and_then(|out| pump(&out, &rx, &woken, &cap, size, stop, cfg.view_only, &steer));
+    let sound = sound_waker(sound_tx);
+    let r = Outbox::new(c.try_clone()?).and_then(|out| pump(&out, &rx, &woken, &cap, size, stop, cfg.view_only, &steer, sound));
     drop(waker);
     let _ = c.shutdown(Shutdown::Both);
     VIEWERS.lock().unwrap().retain(|(i, _, _)| *i != id);
@@ -524,6 +532,11 @@ fn read_client(mut r: BufReader<TcpStream>, tx: &Sender<Msg>, input: &mut platfo
                 }
                 input.pointer_relative(b[0], i16::from_be_bytes([b[1], b[2]]), i16::from_be_bytes([b[3], b[4]]));
             }
+            crate::audio::MSG_QEMU => {
+                if let Some(op) = crate::audio::read(&mut r)? {
+                    let _ = tx.send(Msg::Audio(op));
+                }
+            }
             t @ (demand::MSG_CONTINUOUS | demand::MSG_FENCE) => {
                 let _ = tx.send(Msg::Ext(demand::read(t, &mut r)?));
             }
@@ -617,7 +630,27 @@ impl Drop for Gone {
     }
 }
 
-fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platform::Capture>, mut size: (usize, usize), stop: &AtomicBool, view_only: bool, steer: &Steer) -> io::Result<()> {
+/// Wakes a pump for captured sound; one Msg::Sound at a time waits in the channel (the pump
+/// takes all waiting audio at once).
+struct SoundWaker {
+    flag: Arc<AtomicBool>,
+    wake: Arc<dyn Fn() + Send + Sync>,
+}
+
+fn sound_waker(tx: Sender<Msg>) -> SoundWaker {
+    let flag = Arc::new(AtomicBool::new(false));
+    let f = flag.clone();
+    SoundWaker {
+        flag,
+        wake: Arc::new(move || {
+            if !f.swap(true, Relaxed) {
+                let _ = tx.send(Msg::Sound);
+            }
+        }),
+    }
+}
+
+fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platform::Capture>, mut size: (usize, usize), stop: &AtomicBool, view_only: bool, steer: &Steer, sound: SoundWaker) -> io::Result<()> {
     let mut pf = PixelFormat::parse(&PIXEL_FORMAT);
     let mut encs: Vec<i32> = Vec::new();
     let mut demand = Demand::default();
@@ -658,6 +691,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
     // the pointer has been hidden here.
     let mut motion_told: Option<bool> = None;
     let mut hidden_since: Option<Instant> = None;
+    let mut audio = crate::audio::Stream::new(&crate::audio::HUB, platform::audio_supported(), sound.wake.clone());
     // The pointer's current shape (id and pixels), for sending and for drawing it in.
     let mut shape: Option<(usize, crate::enc::Cursor)> = None;
     // Where the pointer was drawn into the last grabbed picture (None: not drawn).
@@ -709,6 +743,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                         prev.clear();
                         exact.clear();
                     }
+                    audio.encodings(&e);
                     if e.contains(&ENC_EXT_CLIPBOARD) && !ext_clip {
                         // Our capabilities: text, and the actions noVNC needs to send UTF-8.
                         ext_clip = true;
@@ -727,6 +762,8 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                 }
                 Msg::Gone => return Ok(()),
                 Msg::Send(m) => reply.extend(m),
+                Msg::Audio(op) => audio.op(op, &mut reply),
+                Msg::Sound => sound.flag.store(false, Relaxed),
                 Msg::Request { incremental } => demand.request(incremental),
                 Msg::Ext(m) => {
                     if demand.ext(m, size.0, size.1, &mut reply) {
@@ -736,6 +773,8 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
             }
             next = rx.try_recv().ok();
         }
+        // Sound first, and only while the viewer keeps up (else it waits, its oldest dropped).
+        audio.pump(out.room(), Instant::now(), &mut reply);
         out.send(reply)?;
         // Bitrate: learn from the acks, back off while the send queue is full, decide.
         let acks = demand.take_acks();
@@ -840,6 +879,9 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         last_drawn = drawn;
         size = (w, h);
         u.start();
+        if audio.confirm(&mut u.buf) {
+            u.rects += 1;
+        }
         let mut new_shape = None;
         if let Some((id, c)) = shape.as_ref().filter(|s| can_draw && sent_shape != Some(s.0)) {
             if c.encode(&mut u.buf, &pf, &encs) {
@@ -1054,7 +1096,7 @@ mod tests {
         let (tx, rx) = channel();
         let worker = std::thread::spawn(move || {
             let out = Outbox::new(socket).unwrap();
-            pump(&out, &rx, &AtomicBool::new(false), &cap, (w, h), &AtomicBool::new(false), true, &Default::default()).unwrap();
+            pump(&out, &rx, &AtomicBool::new(false), &cap, (w, h), &AtomicBool::new(false), true, &Default::default(), sound_waker(channel().0)).unwrap();
         });
         tx.send(Msg::Encodings(vec![ENC_H264, ENC_ZRLE])).unwrap();
         tx.send(Msg::Request { incremental: false }).unwrap();
@@ -1101,6 +1143,78 @@ mod tests {
         assert!(delay >= REFINE.saturating_sub(Duration::from_millis(20)) && delay < REFINE+Duration::from_secs(2), "{delay:?}");
         tx.send(Msg::Gone).unwrap(); worker.join().unwrap();
         println!("refine {w}x{h}: received after {:.2} ms; {bytes} compressed bytes; {area} exact pixels", delay.as_secs_f64()*1000.);
+    }
+
+    /// The Mac's real sound through the production pump: confirmation in an update, then
+    /// begin and S16 data once the viewer enables it. Opt-in (plays a quiet system sound;
+    /// skipped unless Screen Recording is already allowed).
+    /// cargo test --release pump_sends_mac_sound -- --ignored --nocapture
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn pump_sends_mac_sound() {
+        use super::*;
+        if !platform::audio_supported() {
+            return println!("skipped: needs macOS 13+ and Screen Recording already allowed");
+        }
+        let cap = Mutex::new(platform::fixed_capture(64, 64, vec![0x404040; 64 * 64]));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut c = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let (socket, _) = listener.accept().unwrap();
+        let (tx, rx) = channel();
+        let sound = sound_waker(tx.clone());
+        let worker = std::thread::spawn(move || {
+            let out = Outbox::new(socket).unwrap();
+            pump(&out, &rx, &AtomicBool::new(false), &cap, (64, 64), &AtomicBool::new(false), true, &Default::default(), sound).unwrap();
+        });
+        tx.send(Msg::Encodings(vec![ENC_ZRLE, crate::audio::ENC_QEMU_AUDIO])).unwrap();
+        tx.send(Msg::Request { incremental: false }).unwrap();
+        let u32_of = |c: &mut TcpStream| u32::from_be_bytes(rd::<4>(c).unwrap());
+        // (type, op, bytes): the server messages that arrive.
+        let next = |c: &mut TcpStream| -> (u8, u16, usize) {
+            match rd::<1>(c).unwrap()[0] {
+                0 => {
+                    let n = u16::from_be_bytes(rd::<3>(c).unwrap()[1..].try_into().unwrap());
+                    let mut audio = 0;
+                    for _ in 0..n {
+                        let r = rd::<12>(c).unwrap();
+                        match i32::from_be_bytes(r[8..].try_into().unwrap()) {
+                            crate::audio::ENC_QEMU_AUDIO => audio += 1,
+                            ENC_ZRLE => {
+                                let n = u32_of(c) as usize;
+                                crate::rfb::rd_vec(c, n).unwrap();
+                            }
+                            e => panic!("encoding {e}"),
+                        }
+                    }
+                    (0, audio, 0)
+                }
+                255 => {
+                    let h = rd::<3>(c).unwrap();
+                    let op = u16::from_be_bytes([h[1], h[2]]);
+                    let len = if op == 2 { u32_of(c) as usize } else { 0 };
+                    crate::rfb::rd_vec(c, len).unwrap();
+                    (255, op, len)
+                }
+                t => panic!("message {t}"),
+            }
+        };
+        assert_eq!(next(&mut c), (0, 1, 0), "the first update confirms audio");
+        tx.send(Msg::Audio(crate::audio::Op::Format(crate::audio::Format::DEFAULT))).unwrap();
+        tx.send(Msg::Audio(crate::audio::Op::Enable)).unwrap();
+        std::thread::sleep(Duration::from_secs(2)); // (the capture starting)
+        let _ = std::process::Command::new("/usr/bin/afplay").args(["-v", "0.15", "/System/Library/Sounds/Tink.aiff"]).status();
+        let mut got = Vec::new();
+        while got.last() != Some(&(255, 0, 0)) {
+            got.push(next(&mut c));
+        }
+        let bytes: usize = got.iter().filter(|m| m.1 == 2).map(|m| m.2).sum();
+        println!("{} messages, {bytes} bytes of S16 stereo ({} ms)", got.len(), bytes / 4 / 48);
+        assert_eq!(got[0], (255, 1, 0), "begin first");
+        assert!(bytes > 4000 && got.iter().all(|m| m.0 == 255 && (m.1 != 2 || m.2 % 4 == 0)));
+        tx.send(Msg::Gone).unwrap();
+        worker.join().unwrap();
     }
 
     #[test]

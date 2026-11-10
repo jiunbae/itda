@@ -28,6 +28,8 @@ const P = {
   mouse: '<rect x="6.5" y="3" width="11" height="18" rx="5.5"/><path d="M12 3v6.5M6.5 9.5h11"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+  sound: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
+  mute: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>',
   pc: '<rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M8 20h8M12 16.5V20M3 13h18"/>',
 };
 const icon = (n) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${P[n]}</svg>`;
@@ -633,6 +635,7 @@ function open(h) {
   close();
   const gen = ++S.gen;
   S.host = h;
+  S.audio = !!opt('audio', false);
   show('view');
   renderTools();
   status('busy', S.tries ? `${h.label}에 다시 연결하는 중 (${S.tries}/${RETRIES})` : `${h.label}에 연결하는 중`, h.ssh ? '암호화 연결(SSH)을 여는 중…' : h.kind === 'rdp' ? '원격 데스크톱에 로그인하는 중…' : '');
@@ -661,6 +664,8 @@ function open(h) {
   rfb.focusOnClick = true;
   rfb.showDotCursor = true;
   rfb.qualityLevel = 7;
+  // Sound remembered on: asked for from the start (the browser may hold it until a click).
+  if (S.audio) rfb.itdaAudio?.(true);
   // Every key (this window's, a monitor window's) leaves through sendKey: the Mac modifiers go
   // as Itda's server reads them, unless this connection is known to have fallen back to Screen
   // Sharing (before the mode is known too: the first ⌘C mustn't go as ⌥C).
@@ -1058,7 +1063,7 @@ const hpCurtainShown = () => S.hpCurtain === true;
 // Visible names under the toolbar icons (touch screens show no tooltips); the full
 // description stays the button's accessible name.
 const TOOL_NAME = { back: '목록', keyboard: '키보드', keys: '특수 키', 'mac-actions': '화면 동작', 'apple-screen-sharing': '화면 공유 앱',
-  'hp-quality': '화질', 'hp-curtain': '화면 가림', hp: '고성능', 'hp-disable': '고성능 끄기', clip: '클립보드', 'mouse-lock': '마우스 잠금', monitors: '모니터', scale: () => (S.fit ? '실제 크기' : '맞춤'), viewonly: '보기 전용', full: '전체 화면' };
+  'hp-quality': '화질', 'hp-curtain': '화면 가림', hp: '고성능', 'hp-disable': '고성능 끄기', clip: '클립보드', 'mouse-lock': '마우스 잠금', audio: '소리', monitors: '모니터', scale: () => (S.fit ? '실제 크기' : '맞춤'), viewonly: '보기 전용', full: '전체 화면' };
 const toolName = (t) => (typeof TOOL_NAME[t] === 'function' ? TOOL_NAME[t]() : TOOL_NAME[t] || '');
 
 function renderTools() {
@@ -1074,13 +1079,14 @@ function renderTools() {
     ...(hpCapable() ? [['hp', 'bolt', hpModeLabel(), !!S.hpActual]] : []),
     ...(hpCapable() && S.host.hp?.on && ['unknown', 'checking'].includes(S.hpMode) ? [['hp-disable', 'bolt', '고성능 모드 끄기 — 기본 화면 공유로 다시 연결']] : []),
     ...(APP ? [] : [['clip', 'clip', '클립보드']]),
+    ['audio', S.audio ? 'sound' : 'mute', S.audio ? '소리 끄기' : '소리 켜기 — 원격 기기의 소리 듣기', S.audio],
     'sep',
     ...(relAvailable() ? [['mouse-lock', 'mouse', relLocked() ? '마우스 잠금 풀기 (Esc)' : '마우스 잠금 — 게임처럼 마우스를 숨기는 화면용 (Ctrl+Alt+Shift+M)', relLocked()]] : []),
     ['monitors', 'monitor', '모니터 선택 및 창 배치'],
     ['scale', S.fit ? 'fit' : 'actual', S.fit ? '실제 크기로' : '화면에 맞춤'],
     ['viewonly', 'eye', '보기 전용', S.viewOnly],
     ['full', 'full', '전체 화면'],
-  ].map((b) => (b === 'sep' ? '<span class="sep"></span>' : `<button data-t="${b[0]}" title="${esc(b[2])}" aria-label="${esc(b[2])}"${b[0] === 'viewonly' ? ` aria-pressed="${!!b[3]}"` : ''} class="${b[3] ? 'on' : ''}">${icon(b[1])}<span class="tl" aria-hidden="true">${toolName(b[0])}</span></button>`)).join('');
+  ].map((b) => (b === 'sep' ? '<span class="sep"></span>' : `<button data-t="${b[0]}" title="${esc(b[2])}" aria-label="${esc(b[2])}"${['viewonly', 'audio'].includes(b[0]) ? ` aria-pressed="${!!b[3]}"` : ''} class="${b[3] ? 'on' : ''}">${icon(b[1])}<span class="tl" aria-hidden="true">${toolName(b[0])}</span></button>`)).join('');
   if (focused) t.querySelector(`[data-t="${focused}"]`)?.focus();
 }
 
@@ -1123,6 +1129,7 @@ $('#tools').addEventListener('click', (e) => {
       if (S.hpCurtain === null) return toast('원격 Mac의 Itda를 업데이트하면 화면 가림을 쓸 수 있습니다');
       S.hpCurtainBusy = true; renderTools();
       return post({ ev: 'hp-curtain', on: !hpCurtainShown() });
+    case 'audio': return audioToggle();
     case 'monitors': return toggleSheet('monitors');
     case 'clip': return toggleSheet('clip');
     case 'scale':
@@ -1147,6 +1154,26 @@ $('#tools').addEventListener('click', (e) => {
     }
   }
 });
+
+// The remote machine's sound (Itda's own sharing sends it), remembered per connection. Off by
+// default; browsers play sound only after a click or key, so a remembered choice starts with
+// the first one in this page.
+function audioToggle() {
+  const r = S.rfb;
+  S.audio = !S.audio;
+  if (r && r.itdaAudio && !r.itdaAudio(S.audio)) {
+    S.audio = false;
+    renderTools();
+    return toast('이 브라우저에서는 소리를 재생할 수 없습니다');
+  }
+  monitors.persist({ audio: S.audio });
+  toast(S.audio ? '소리 켜짐' : '소리 꺼짐');
+  clearTimeout(S.audioCheck);
+  // No confirmation from the server: it isn't Itda's sharing (Screen Sharing, Remote Desktop).
+  if (S.audio && r) S.audioCheck = setTimeout(() => { if (S.rfb === r && S.audio && !r._itdaAudioServer) toast(`이 연결에서는 ${dev()}의 소리를 받을 수 없습니다`); }, 4000);
+  renderTools();
+}
+for (const ev of ['pointerdown', 'keydown']) document.addEventListener(ev, () => { if (S.audio) S.rfb?.itdaAudioResume?.(); }, true);
 
 const COMBOS = [
   ['⌘ Space', 'Spotlight', [XK.cmd, XK.space]],
