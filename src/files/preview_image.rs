@@ -33,7 +33,7 @@ pub fn work(ticket: Option<&super::preview::Ticket>) -> io::Result<Work> {
         if ticket.is_some_and(|t| !super::preview::current(t)) {
             return Err(io::Error::new(
                 io::ErrorKind::Interrupted,
-                "이전 미리보기입니다",
+                tr!("fx.preview.stale"),
             ));
         }
         if *n < 4 {
@@ -43,7 +43,7 @@ pub fn work(ticket: Option<&super::preview::Ticket>) -> io::Result<Work> {
         if Instant::now() >= by {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                "다른 미리보기를 처리 중입니다. 다시 선택해 주세요",
+                tr!("fx.preview.busy"),
             ));
         }
         n = FETCH_READY
@@ -156,7 +156,7 @@ fn mime(code: u8) -> io::Result<&'static str> {
         2 => Ok("image/jpeg"),
         3 => Ok("image/bmp"),
         4 => Ok("image/webp"),
-        _ => Err(io::Error::other("잘못된 이미지 미리보기 응답입니다")),
+        _ => Err(io::Error::other(tr!("fx.preview.badReply"))),
     }
 }
 fn preserved(bytes: &[u8], mime: &str) -> bool {
@@ -172,12 +172,12 @@ fn canceled(ticket: Option<&super::preview::Ticket>) -> bool {
     ticket.is_some_and(|t| !super::preview::current(t))
 }
 fn interrupted() -> io::Error {
-    io::Error::new(io::ErrorKind::Interrupted, "이전 미리보기입니다")
+    io::Error::new(io::ErrorKind::Interrupted, tr!("fx.preview.stale"))
 }
 fn timeout() -> io::Error {
     io::Error::new(
         io::ErrorKind::TimedOut,
-        "이미지 미리보기 시간이 초과되었습니다",
+        tr!("fx.preview.timeout"),
     )
 }
 
@@ -190,7 +190,7 @@ pub fn prepare(
         return Err(interrupted());
     }
     if bytes.len() > PAYLOAD {
-        return Err(io::Error::other("이미지 미리보기 크기 제한을 넘었습니다"));
+        return Err(io::Error::other(tr!("fx.preview.imageTooLarge")));
     }
     // Header-only inspection uses no image decoder inside the application process.
     if preserved(&bytes, mime)
@@ -217,20 +217,20 @@ pub fn prepare(
     let mut input = Vec::with_capacity(bytes.len() + 1);
     input.push(
         format(mime)
-            .ok_or_else(|| io::Error::other("지원하지 않는 이미지입니다"))?
+            .ok_or_else(|| io::Error::other(tr!("fx.preview.unsupportedImage")))?
             .0,
     );
     input.extend_from_slice(&bytes);
     let output = run_worker(command, input, || canceled(ticket), TIMEOUT)?;
     if !output.starts_with(MAGIC) {
-        return Err(io::Error::other("잘못된 이미지 미리보기 응답입니다"));
+        return Err(io::Error::other(tr!("fx.preview.badReply")));
     }
     let output_mime = mime_from_response(&output)?;
     Ok(unchanged(output[MAGIC.len() + 1..].to_vec(), output_mime))
 }
 fn mime_from_response(output: &[u8]) -> io::Result<&'static str> {
     if output.len() <= MAGIC.len() + 1 {
-        return Err(io::Error::other("빈 이미지 미리보기 응답입니다"));
+        return Err(io::Error::other(tr!("fx.preview.emptyReply")));
     }
     mime(output[MAGIC.len()])
 }
@@ -268,12 +268,12 @@ fn run_worker(
         .0
         .stdin
         .take()
-        .ok_or_else(|| io::Error::other("미리보기 입력 파이프 오류"))?;
+        .ok_or_else(|| io::Error::other(tr!("fx.preview.inPipe")))?;
     let stdout = worker
         .0
         .stdout
         .take()
-        .ok_or_else(|| io::Error::other("미리보기 출력 파이프 오류"))?;
+        .ok_or_else(|| io::Error::other(tr!("fx.preview.outPipe")))?;
     let (tx, rx) = mpsc::channel();
     let writer = std::thread::Builder::new()
         .name("preview-input".into())
@@ -287,7 +287,7 @@ fn run_worker(
                 .read_to_end(&mut output)
                 .and_then(|_| {
                     if output.len() > PAYLOAD + MAGIC.len() + 1 {
-                        Err(io::Error::other("이미지 미리보기 응답이 너무 큽니다"))
+                        Err(io::Error::other(tr!("fx.preview.replyTooLarge")))
                     } else {
                         Ok(output)
                     }
@@ -327,7 +327,7 @@ fn run_worker(
                                 Ok(output)
                             } else {
                                 Err(io::Error::other(
-                                    "이미지 미리보기 프로세스가 종료되었습니다",
+                                    tr!("fx.preview.exited"),
                                 ))
                             };
                         }
@@ -335,14 +335,14 @@ fn run_worker(
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => (),
-                Err(_) => return Err(io::Error::other("이미지 미리보기 응답을 받지 못했습니다")),
+                Err(_) => return Err(io::Error::other(tr!("fx.preview.noReply"))),
             }
         }
     })();
     drop(worker); // Close the process before joining potentially blocked pipe IO.
     let written = writer
         .join()
-        .map_err(|_| io::Error::other("미리보기 입력 오류"));
+        .map_err(|_| io::Error::other(tr!("fx.preview.input")));
     let _ = reader.join();
     let output = result?;
     written??;
@@ -385,7 +385,7 @@ fn decode(bytes: Vec<u8>, mime: &str) -> io::Result<Prepared> {
         .ok_or_else(|| io::Error::other("unsupported image"))?
         .1;
     let unchanged = |bytes| unchanged(bytes, mime);
-    let failed = |e| io::Error::other(format!("이미지 미리보기를 만들지 못했습니다: {e}"));
+    let failed = |e| io::Error::other(tr!("fx.preview.failed", error = e));
     let mut reader = ImageReader::with_format(Cursor::new(&bytes), format);
     let mut limits = image::Limits::default();
     limits.max_alloc = Some(DECODED);
@@ -396,7 +396,7 @@ fn decode(bytes: Vec<u8>, mime: &str) -> io::Result<Prepared> {
     let (w, h) = decoder.dimensions();
     if decoder.total_bytes() > DECODED || w == 0 || h == 0 {
         return Err(io::Error::other(
-            "이미지 해상도가 미리보기 제한을 넘었습니다",
+            tr!("fx.preview.resolution"),
         ));
     }
     if w <= EDGE && h <= EDGE {
@@ -451,7 +451,7 @@ fn decode(bytes: Vec<u8>, mime: &str) -> io::Result<Prepared> {
         "image/png"
     };
     if out.get_ref().len() > 16 * 1024 * 1024 {
-        return Err(io::Error::other("이미지 미리보기 크기 제한을 넘었습니다"));
+        return Err(io::Error::other(tr!("fx.preview.imageTooLarge")));
     }
     Ok(Prepared {
         bytes: Arc::new(out.into_inner()),

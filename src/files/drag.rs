@@ -34,7 +34,7 @@ pub fn begin(v: &Value, files: &[export::File]) -> io::Result<String> {
     prune(&mut table);
     if table.len() >= LIMIT {
         return Err(io::Error::other(
-            "전송 확인 창을 닫은 뒤 다시 끌어 놓아 주세요",
+            tr!("fx.drag.confirmOpen"),
         ));
     }
     table.insert(

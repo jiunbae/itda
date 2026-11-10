@@ -21,7 +21,7 @@ The executable is `target/release/itda.exe` on Windows or `target/release/itda` 
 
 The interface is embedded from `web/`. Set `ITDA_WEB_DIR` to an absolute `web/` directory for local iteration without embedding each edit. Restart when changing native Rust code. Static public documentation is in `docs/`, published by GitHub Pages.
 
-Interface text is translated (Korean and English). Web UI strings live in `web/locales/ko.js` and `en.js`, keyed by stable message IDs and read with `T('area.thing', { name })` (see `web/i18n.js`); Korean is the source language. Add every new string to both catalogs with the same `{placeholders}`; `node scripts/i18n-check.mjs` fails on a missing key, a placeholder mismatch or Korean left in UI code. To see the UI in one language, add `?lang=en` (or `ko`) to the page URL, give Playwright `locale: 'en-US'`, or run the app with `ITDA_LANG=en`.
+Interface text is translated (Korean and English). Web UI strings live in `web/locales/ko.js` and `en.js`, keyed by stable message IDs and read with `T('area.thing', { name })` (see `web/i18n.js`); Korean is the source language. Text Rust shows itself (menus, dialogs, the Windows viewer, errors) uses `tr!("area.thing", name = value)` with `src/locales/ko.rs` and `en.rs`; `cargo test` checks those catalogs and runs in Korean. Add every new string to both catalogs with the same `{placeholders}`; `node scripts/i18n-check.mjs` fails on a missing key, a placeholder mismatch or Korean left in UI code (web or Rust). To see the UI in one language, add `?lang=en` (or `ko`) to the page URL, give Playwright `locale: 'en-US'`, or run the app with `ITDA_LANG=en`.
 
 ## Check a change
 

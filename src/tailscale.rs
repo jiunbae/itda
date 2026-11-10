@@ -143,15 +143,15 @@ pub fn serve(port: u16, on: bool) -> Result<(), String> {
     let target = format!("http://127.0.0.1:{port}");
     let args: Vec<&str> = if on { vec!["serve", "--bg", "--yes", &target] } else { vec!["serve", "--https=443", "off"] };
     match run(&args) {
-        None => Err("Tailscale이 설치되어 있지 않습니다".into()),
+        None => Err(tr!("net.tailscaleMissing").into()),
         Some((true, _)) => Ok(()),
         Some((false, out)) => {
             crate::log!("tailscale serve: {out}");
             let line = out.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
             Err(if out.contains("Access denied") || out.contains("operator") {
-                "권한이 없습니다 — 관리자 PowerShell에서 'tailscale set --operator=%USERNAME%'을 한 번 실행하세요".into()
+                tr!("net.tailscaleOperator").into()
             } else if out.contains("HTTPS") || out.contains("cert") {
-                "Tailscale 관리 콘솔(DNS)에서 HTTPS 인증서를 먼저 켜세요".into()
+                tr!("net.tailscaleHttps").into()
             } else {
                 line.to_string()
             })

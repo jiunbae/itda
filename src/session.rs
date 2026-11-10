@@ -98,7 +98,7 @@ pub fn run(l: Launch) {
         tunnel_ref = Some(t.clone());
         let sess = rfb::connect(&t.addr()?, &creds).map_err(|e| {
             if t.vnc_refused() {
-                io::Error::new(io::ErrorKind::ConnectionRefused, "SSH는 연결됐지만 화면 공유가 꺼져 있습니다")
+                rfb::kinded(io::ErrorKind::ConnectionRefused, "refused", tr!("conn.sshNoScreenSharing"))
             } else {
                 e
             }
@@ -114,7 +114,7 @@ pub fn run(l: Launch) {
             if managed() {
                 emit(json!({"ev": "error", "kind": kind, "msg": e.to_string()}));
             } else {
-                crate::ui::message(&format!("연결할 수 없습니다: {e}\n\n로그: {}", crate::log::path().display()), true);
+                crate::ui::message(&tr!("conn.failedLog", error = e, log = crate::log::path().display()), true);
             }
         }
     }

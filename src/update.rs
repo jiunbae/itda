@@ -55,7 +55,7 @@ pub fn check() -> io::Result<Option<Release>> {
         .arg(format!("https://api.github.com/repos/{REPO}/releases/latest"))
         .output()?;
     if !out.status.success() {
-        return Err(io::Error::other("업데이트 정보를 가져오지 못했습니다. 인터넷 연결을 확인해 주세요"));
+        return Err(io::Error::other(tr!("update.checkFailed")));
     }
     release(&serde_json::from_slice(&out.stdout)?)
 }
@@ -74,7 +74,7 @@ fn release(v: &Value) -> io::Result<Option<Release>> {
     let (Some(asset), Some(sums)) = (url(ASSET), url("SHA256SUMS.txt")) else { return Ok(None) };
     let ours = format!("https://github.com/{REPO}/releases/download/");
     if !asset.starts_with(&ours) || !sums.starts_with(&ours) {
-        return Err(io::Error::other("업데이트 주소가 올바르지 않습니다"));
+        return Err(io::Error::other(tr!("update.badUrl")));
     }
     let page = v["html_url"].as_str().filter(|u| u.starts_with(&format!("https://github.com/{REPO}/"))).unwrap_or("").to_string();
     Ok(Some(Release { version, page, asset, sums }))
@@ -82,7 +82,7 @@ fn release(v: &Value) -> io::Result<Option<Release>> {
 
 fn download(url: &str, to: &Path) -> io::Result<()> {
     let ok = curl().args(["--max-time", "900", "-o"]).arg(to).arg(url).stdout(Stdio::null()).stderr(Stdio::null()).status()?.success();
-    if ok { Ok(()) } else { Err(io::Error::other("업데이트를 내려받지 못했습니다")) }
+    if ok { Ok(()) } else { Err(io::Error::other(tr!("update.downloadFailed"))) }
 }
 
 fn expected(sums: &str, name: &str) -> Option<String> {
@@ -105,18 +105,18 @@ pub fn install(r: &Release, progress: &dyn Fn(&str)) -> io::Result<()> {
     let dir = std::env::temp_dir().join(format!("itda-update-{}", r.version));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
-    progress("내려받는 중…");
+    progress(tr!("update.downloading"));
     let sums = dir.join("SHA256SUMS.txt");
     let file = dir.join(ASSET);
     download(&r.sums, &sums)?;
     download(&r.asset, &file)?;
-    progress("확인하는 중…");
-    let want = expected(&std::fs::read_to_string(&sums)?, ASSET).ok_or_else(|| io::Error::other("업데이트 체크섬을 찾지 못했습니다"))?;
+    progress(tr!("update.verifying"));
+    let want = expected(&std::fs::read_to_string(&sums)?, ASSET).ok_or_else(|| io::Error::other(tr!("update.noChecksum")))?;
     if sha256(&file)? != want {
         let _ = std::fs::remove_dir_all(&dir);
-        return Err(io::Error::other("내려받은 파일이 릴리스와 다릅니다. 다시 시도해 주세요"));
+        return Err(io::Error::other(tr!("update.checksumMismatch")));
     }
-    progress("설치하는 중…");
+    progress(tr!("update.installing"));
     swap(&dir, &file)
 }
 
@@ -127,7 +127,7 @@ fn current_app() -> io::Result<PathBuf> {
         .nth(3)
         .filter(|a| a.extension().is_some_and(|e| e == "app"))
         .map(Path::to_path_buf)
-        .ok_or_else(|| io::Error::other("응용 프로그램 폴더의 Itda 앱에서 업데이트해 주세요"))
+        .ok_or_else(|| io::Error::other(tr!("update.notInApplications")))
 }
 
 /// TeamIdentifier of a signed bundle; None for ad-hoc.
@@ -161,38 +161,39 @@ fn swap(dir: &Path, zip: &Path) -> io::Result<()> {
 /// Unpack and check the new bundle beside the download; the running app is untouched.
 #[cfg(target_os = "macos")]
 fn stage(app: &Path, dir: &Path, zip: &Path) -> io::Result<PathBuf> {
-    let parent = app.parent().ok_or_else(|| io::Error::other("앱 위치를 확인하지 못했습니다"))?;
+    let parent = app.parent().ok_or_else(|| io::Error::other(tr!("update.noAppPath")))?;
     let probe = parent.join(".itda-update-probe");
-    std::fs::write(&probe, b"").map_err(|_| io::Error::other(format!("{}에 쓸 수 없습니다. 관리자 계정으로 업데이트해 주세요", parent.display())))?;
+    std::fs::write(&probe, b"").map_err(|_| io::Error::other(tr!("update.notWritableAdmin", path = parent.display())))?;
     let _ = std::fs::remove_file(&probe);
     let x = dir.join("x");
     if !Command::new("/usr/bin/ditto").arg("-x").arg("-k").arg(zip).arg(&x).status()?.success() {
-        return Err(io::Error::other("업데이트 파일을 풀지 못했습니다"));
+        return Err(io::Error::other(tr!("update.unzipFailed")));
     }
     let new = x.join("Itda.app");
     if !Command::new("/usr/bin/codesign").args(["--verify", "--deep", "--strict"]).arg(&new).stderr(Stdio::null()).status()?.success() {
-        return Err(io::Error::other("업데이트의 서명을 확인하지 못했습니다"));
+        return Err(io::Error::other(tr!("update.signatureFailed")));
     }
     if !trusted(team(app).as_deref(), team(&new).as_deref()) {
-        return Err(io::Error::other("업데이트의 서명이 Itda와 다릅니다. 설치하지 않았습니다"));
+        return Err(io::Error::other(tr!("update.signatureMismatch")));
     }
     Ok(new)
 }
 
-/// $1 pid to wait for, $2 app, $3 new bundle, $4 download dir, $5 launch (1/0), $6 failure note.
+/// $1 pid to wait for, $2 app, $3 new bundle, $4 download dir, $5 launch (1/0), $6 failure note,
+/// $7-$10 the notes for: a stuck backup, a stuck app, an unrestorable app, a failed copy.
 /// The current app is only removed after it was moved aside; any failure leaves (or puts back)
 /// the current app, keeps the download for inspection, writes the note and still relaunches.
 #[cfg(target_os = "macos")]
 const HELPER: &str = r#"pid=$1 app=$2 new=$3 dl=$4 launch=$5 note=$6
 while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
 fail() { printf '%s\n' "$1" > "$note"; [ "$launch" = 1 ] && /usr/bin/open "$app"; exit 1; }
-if [ -e "$app.old" ]; then rm -rf "$app.old" || fail "이전 백업($app.old)을 지우지 못해 업데이트하지 않았습니다"; fi
-[ -e "$app.old" ] && fail "이전 백업($app.old)을 지우지 못해 업데이트하지 않았습니다"
-mv "$app" "$app.old" || fail "$app 을(를) 옮기지 못해 업데이트하지 않았습니다"
+if [ -e "$app.old" ]; then rm -rf "$app.old" || fail "$7"; fi
+[ -e "$app.old" ] && fail "$7"
+mv "$app" "$app.old" || fail "$8"
 if ! /usr/bin/ditto "$new" "$app"; then
   rm -rf "$app"
-  mv "$app.old" "$app" || { printf '%s\n' "업데이트에 실패했고 이전 앱을 되돌리지 못했습니다. $app.old 를 $app 으로 옮겨 주세요" > "$note"; exit 1; }
-  fail "새 버전을 복사하지 못해 이전 버전을 유지했습니다"
+  mv "$app.old" "$app" || { printf '%s\n' "$9" > "$note"; exit 1; }
+  fail "${10}"
 fi
 rm -rf "$app.old" "$dl"
 [ "$launch" = 1 ] && /usr/bin/open "$app"
@@ -212,6 +213,10 @@ fn replace_after(pid: u32, app: &Path, new: &Path, dir: &Path, launch: bool) -> 
         .arg(dir)
         .arg(if launch { "1" } else { "0" })
         .arg(&note)
+        .arg(tr!("update.backupStuck", backup = format!("{}.old", app.display())))
+        .arg(tr!("update.moveFailed", app = app.display()))
+        .arg(tr!("update.restoreFailed", backup = format!("{}.old", app.display()), app = app.display()))
+        .arg(tr!("update.copyFailed"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -226,7 +231,7 @@ fn swap(dir: &Path, new: &Path) -> io::Result<()> {
     let exe = std::env::current_exe()?;
     let old = exe.with_extension("exe.old");
     let _ = std::fs::remove_file(&old);
-    std::fs::rename(&exe, &old).map_err(|_| io::Error::other(format!("{}에 쓸 수 없습니다", exe.display())))?;
+    std::fs::rename(&exe, &old).map_err(|_| io::Error::other(tr!("update.notWritable", path = exe.display())))?;
     if let Err(e) = std::fs::copy(new, &exe) {
         let _ = std::fs::rename(&old, &exe);
         return Err(e);

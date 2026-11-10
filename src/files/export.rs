@@ -13,13 +13,13 @@ pub struct File {
 pub fn selection(v: &Value) -> io::Result<Vec<File>> {
     let side = get(v, "side");
     if side != "local" && side != "remote" {
-        return Err(error("파일 위치를 확인하세요"));
+        return Err(error(tr!("fx.export.place")));
     }
     let items = v["items"]
         .as_array()
-        .ok_or_else(|| error("파일을 선택하세요"))?;
+        .ok_or_else(|| error(tr!("fx.chooseFile")))?;
     if items.is_empty() || items.len() > 10_000 {
-        return Err(error("복사할 파일 수를 확인하세요"));
+        return Err(error(tr!("fx.export.count")));
     }
     let mut seen = std::collections::HashSet::new();
     items
@@ -28,7 +28,7 @@ pub fn selection(v: &Value) -> io::Result<Vec<File>> {
             let n = get(item, "name");
             name(&n)?;
             if !seen.insert(n.clone()) {
-                return Err(error("중복된 파일 이름입니다"));
+                return Err(error(tr!("fx.export.duplicate")));
             }
             Ok(File {
                 id: super::scoped_id(&get(v, "id"), &v["window"]),

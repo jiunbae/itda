@@ -120,7 +120,7 @@ pub fn finish_copy(v: &mut Value) {
     let pb = clipboard_board();
     if !CLIP.with(|c| c.get() == (v["serial"].as_u64().unwrap_or(0), pb.changeCount())) {
         v["ok"] = json!(false);
-        v["error"] = json!("다른 내용을 복사해 Finder용 파일 준비를 취소했습니다");
+        v["error"] = json!(tr!("fx.mac.superseded"));
         return;
     }
     let urls: Vec<_> = v["data"]["paths"]
@@ -136,7 +136,7 @@ pub fn finish_copy(v: &mut Value) {
         .collect();
     if urls.is_empty() || !pb.writeObjects(&NSArray::from_retained_slice(&urls)) {
         v["ok"] = json!(false);
-        v["error"] = json!("Finder 파일 클립보드를 만들지 못했습니다");
+        v["error"] = json!(tr!("fx.mac.clipboard"));
     } else {
         v["data"]["stamp"] = json!(pb.changeCount());
     }
@@ -203,7 +203,7 @@ define_class!(
             let _keep_alive = self.retain();
             files::PROMISE_WRITE.with(|p| p.set(true));
             let result = if url.isFileURL() { url.path() } else { None }
-                .ok_or_else(|| std::io::Error::other("Finder 복사 위치를 확인할 수 없습니다"))
+                .ok_or_else(|| std::io::Error::other(tr!("fx.mac.copyPlace")))
                 .and_then(|path| {
                     files::export::write(
                         &self.ivars().file,
@@ -404,18 +404,18 @@ define_class!(
 /// Finder accepts the drop, on an NSOperationQueue, directly into its chosen URL.
 pub fn drag(nsview: &NSView, v: Value) -> Result<(), String> {
     let selection = files::export::selection(&v).map_err(|e| e.to_string())?;
-    let mtm = MainThreadMarker::new().ok_or("파일 드래그는 UI 스레드에서 시작해야 합니다")?;
+    let mtm = MainThreadMarker::new().ok_or(tr!("fx.mac.uiThread"))?;
     if NSEvent::pressedMouseButtons() & 1 == 0 {
-        return Err("파일을 누른 채 Finder로 끌어 주세요".into());
+        return Err(tr!("fx.mac.hold").into());
     }
-    let window = nsview.window().ok_or("파일 창을 찾을 수 없습니다")?;
-    let content = window.contentView().ok_or("파일 창을 찾을 수 없습니다")?;
+    let window = nsview.window().ok_or(tr!("fx.windowNotFound"))?;
+    let content = window.contentView().ok_or(tr!("fx.windowNotFound"))?;
     let position = window.mouseLocationOutsideOfEventStream();
     let image = NSImage::initWithData(
         NSImage::alloc(),
         &NSData::with_bytes(include_bytes!("../assets/itda-192.png")),
     )
-    .ok_or("드래그 이미지를 만들지 못했습니다")?;
+    .ok_or(tr!("fx.mac.dragImage"))?;
     image.setSize(NSSize::new(40., 40.));
     let frame = NSRect::new(
         NSPoint::new(position.x - 20., position.y - 20.),
@@ -423,7 +423,7 @@ pub fn drag(nsview: &NSView, v: Value) -> Result<(), String> {
     );
     if selection.len() > 256 {
         return Err(
-            "한 번에 256개까지 Finder로 끌어 놓을 수 있습니다. 폴더로 묶어 다시 시도하세요".into(),
+            tr!("fx.mac.tooMany").into(),
         );
     }
     let mut pending = PendingDrag {token:files::drag::begin(&v,&selection).map_err(|e|e.to_string())?,promises:Vec::new(),started:false};
@@ -454,7 +454,7 @@ pub fn drag(nsview: &NSView, v: Value) -> Result<(), String> {
     });
     let source: Retained<Source> = unsafe { msg_send![super(state), init] };
     let timestamp = NSApp(mtm).currentEvent().map_or(0., |e| e.timestamp());
-    let event=NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(NSEventType::LeftMouseDragged,position,NSEventModifierFlags::empty(),timestamp,window.windowNumber(),None,0,1,1.).ok_or("드래그 이벤트를 만들지 못했습니다")?;
+    let event=NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(NSEventType::LeftMouseDragged,position,NSEventModifierFlags::empty(),timestamp,window.windowNumber(),None,0,1,1.).ok_or(tr!("fx.mac.dragEvent"))?;
     // NSDraggingSource is usually a view; our standalone source needs an explicit
     // owner until the asynchronous end callback has returned.
     DRAGS.with(|d| {

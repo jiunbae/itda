@@ -52,16 +52,16 @@ impl SourceFocus {
     fn take(source: isize, gesture: Arc<gesture::Gesture>, fallback: fn(isize,&Arc<gesture::Gesture>)) -> Result<Self, String> {
         use windows_sys::Win32::{System::Threading::*, UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*}};
         unsafe {
-            if !gesture::registry().lock().unwrap().owns(source,&gesture) {return Err("파일 창이 바뀌었습니다".into());}
+            if !gesture::registry().lock().unwrap().owns(source,&gesture) {return Err(tr!("fx.win.windowChanged").into());}
             let h=source as windows_sys::Win32::Foundation::HWND;
             let mut pid=0;
             if IsWindow(h)==0 || GetWindowThreadProcessId(h,&mut pid)!=GetCurrentThreadId() || pid!=GetCurrentProcessId() || GetAncestor(GetForegroundWindow(),GA_ROOT)!=h {
-                return Err("파일 창의 입력 위치가 바뀌었습니다. 다시 끌어 놓아 주세요".into());
+                return Err(tr!("fx.win.inputMoved").into());
             }
             let saved=GetFocus();
             let guard=Self {source,saved:saved as isize,gesture,fallback};
             SetFocus(h);
-            if GetFocus()!=h || GetAncestor(GetForegroundWindow(),GA_ROOT)!=h { return Err("파일 창으로 입력을 전달할 수 없습니다".into()); }
+            if GetFocus()!=h || GetAncestor(GetForegroundWindow(),GA_ROOT)!=h { return Err(tr!("fx.win.noInput").into()); }
             Ok(guard)
         }
     }
@@ -117,7 +117,7 @@ pub fn drag(v: &Value, post: fn(Value), gesture: Arc<gesture::Gesture>, source_h
     if !focus.verified() {
         gesture.cancel();
         if let Some(source)=&remote_source { source.stop(); source.end_batch(); }
-        return Err("파일 창의 입력 위치가 바뀌었습니다. 다시 끌어 놓아 주세요".into());
+        return Err(tr!("fx.win.inputMoved").into());
     }
     let mut effect = DROPEFFECT_NONE;
     gesture.entered_ole.store(true,std::sync::atomic::Ordering::SeqCst);
@@ -133,7 +133,7 @@ pub fn drag(v: &Value, post: fn(Value), gesture: Arc<gesture::Gesture>, source_h
     // an early data-object error must not re-enable the renderer during OLE.
     if let Some(error)=remote_failure.and_then(|e| {let error=e.lock().unwrap().clone();error}) { return Err(error); }
     if hr.is_err() {
-        return Err(format!("끌어 놓기를 시작할 수 없습니다 ({})", windows::core::Error::from(hr)));
+        return Err(tr!("fx.win.dragFailed", error = windows::core::Error::from(hr)));
     }
     post(json!({"type":"files_native_drag_end","id":id,"gesture":gesture.nonce,"dropped":accepted,"trace":drag_trace(&gesture,"ole_returned")}));
     Ok(())
@@ -143,7 +143,7 @@ pub fn drag(v: &Value, post: fn(Value), gesture: Arc<gesture::Gesture>, source_h
 /// life (S_FALSE: it already was, which also counts once).
 fn ole() -> Result<(), String> {
     thread_local!(static OLE: std::cell::OnceCell<Result<(), String>> = const { std::cell::OnceCell::new() });
-    OLE.with(|o| o.get_or_init(|| unsafe { OleInitialize(None) }.map_err(|e| format!("OLE을 시작할 수 없습니다 ({e})"))).clone())
+    OLE.with(|o| o.get_or_init(|| unsafe { OleInitialize(None) }.map_err(|e| tr!("fx.win.ole", error = e))).clone())
 }
 
 // ---------------------------------------------------------------- this PC's files
@@ -1139,7 +1139,7 @@ pub fn install_drop(root: isize, window: Option<String>, post: fn(Value)) -> Res
         );
     }
     if receivers.targets.is_empty() {
-        return Err("파일을 받을 창을 등록하지 못했습니다".into());
+        return Err(tr!("fx.win.receivers").into());
     }
     RECEIVERS.with(|r| r.borrow_mut().insert(root, receivers));
     Ok(())

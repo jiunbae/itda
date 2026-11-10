@@ -576,12 +576,12 @@ fn cred_read_checked(target: &str) -> std::io::Result<Option<String>> {
         if CredReadW(w(target).as_ptr(), CRED_TYPE_GENERIC, 0, &mut p) == 0 {
             let code=windows_sys::Win32::Foundation::GetLastError();
             if code==windows_sys::Win32::Foundation::ERROR_NOT_FOUND {return Ok(None);}
-            return Err(std::io::Error::other("Windows 자격 증명 관리자에서 기존 로그인 정보를 읽지 못했습니다"));
+            return Err(std::io::Error::other(tr!("store.winReadFailed")));
         }
         let c = &*p;
         let result=if c.CredentialBlobSize==0 {Ok(String::new())} else {
             let blob=std::slice::from_raw_parts(c.CredentialBlob as *const u16,c.CredentialBlobSize as usize/2);
-            String::from_utf16(blob).map_err(|_|std::io::Error::other("저장된 로그인 정보의 문자를 읽지 못했습니다"))
+            String::from_utf16(blob).map_err(|_|std::io::Error::other(tr!("store.badText")))
         };
         CredFree(p as _);
         result.map(Some)
@@ -622,26 +622,26 @@ fn security(args: &[&str]) -> Option<std::process::Output> {
 
 #[cfg(not(windows))]
 fn security_password(printed:&str)->std::io::Result<String> {
-    let value=printed.lines().find_map(|line|line.strip_prefix("password: ")).ok_or_else(||std::io::Error::other("키체인의 응답을 읽지 못했습니다"))?;
+    let value=printed.lines().find_map(|line|line.strip_prefix("password: ")).ok_or_else(||std::io::Error::other(tr!("store.keychainReply")))?;
     if let Some(hex)=value.strip_prefix("0x") {
         let hex=hex.split_whitespace().next().unwrap_or("");
-        if hex.len()%2!=0 || !hex.is_ascii(){return Err(std::io::Error::other("키체인의 비밀번호 형식이 올바르지 않습니다"));}
-        let bytes=zeroize::Zeroizing::new((0..hex.len()).step_by(2).map(|i|u8::from_str_radix(&hex[i..i+2],16)).collect::<Result<Vec<_>,_>>().map_err(|_|std::io::Error::other("키체인의 비밀번호 형식이 올바르지 않습니다"))?);
-        return std::str::from_utf8(&bytes).map(str::to_owned).map_err(|_|std::io::Error::other("저장된 로그인 정보의 문자를 읽지 못했습니다"));
+        if hex.len()%2!=0 || !hex.is_ascii(){return Err(std::io::Error::other(tr!("store.keychainFormat")));}
+        let bytes=zeroize::Zeroizing::new((0..hex.len()).step_by(2).map(|i|u8::from_str_radix(&hex[i..i+2],16)).collect::<Result<Vec<_>,_>>().map_err(|_|std::io::Error::other(tr!("store.keychainFormat")))?);
+        return std::str::from_utf8(&bytes).map(str::to_owned).map_err(|_|std::io::Error::other(tr!("store.badText")));
     }
     if value.is_empty(){return Ok(String::new());}
-    value.strip_prefix('"').and_then(|v|v.strip_suffix('"')).map(str::to_owned).ok_or_else(||std::io::Error::other("키체인의 비밀번호 형식이 올바르지 않습니다"))
+    value.strip_prefix('"').and_then(|v|v.strip_suffix('"')).map(str::to_owned).ok_or_else(||std::io::Error::other(tr!("store.keychainFormat")))
 }
 
 #[cfg(not(windows))]
 fn cred_read_checked(target: &str)->std::io::Result<Option<String>> {
     // -w prints non-ASCII/control bytes as unmarked hex. -g has an explicit
     // 0x prefix, so Korean passwords and literal hex strings remain distinct.
-    let mut o=security(&["find-generic-password","-s",KEYCHAIN_SERVICE,"-a",target,"-g"]).ok_or_else(||std::io::Error::other("Mac 키체인을 열지 못했습니다"))?;
+    let mut o=security(&["find-generic-password","-s",KEYCHAIN_SERVICE,"-a",target,"-g"]).ok_or_else(||std::io::Error::other(tr!("store.keychainOpen")))?;
     let result=if o.status.success(){security_password(&String::from_utf8_lossy(&o.stderr)).map(Some)}
         // errSecItemNotFound (-25300), returned as an eight-bit process status.
         else if o.status.code()==Some(44){Ok(None)}
-        else {Err(std::io::Error::other("Mac 키체인의 기존 로그인 정보를 읽지 못했습니다. 키체인을 잠금 해제한 뒤 다시 시도하세요"))};
+        else {Err(std::io::Error::other(tr!("store.keychainRead")))};
     use zeroize::Zeroize;o.stdout.zeroize();o.stderr.zeroize();result
 }
 
@@ -770,10 +770,10 @@ pub fn get_password_checked(id:&str)->std::io::Result<Option<String>> {
 
 /// Configuration provisioning must not report success when the OS vault rejected a write.
 pub fn set_password_checked(id: &str, pass: Option<&str>) -> std::io::Result<()> {
-    if id.chars().any(char::is_control) {return Err(std::io::Error::other("로그인 식별자에 제어 문자가 있습니다"));}
+    if id.chars().any(char::is_control) {return Err(std::io::Error::other(tr!("store.controlChar")));}
     #[cfg(not(windows))]
     if pass.is_some_and(|p|p.len().saturating_mul(2)+format!("add-generic-password -U -s {KEYCHAIN_SERVICE} -a {} -l {} -X \"\"\n",security_arg(&target(id)),security_arg(&format!("Itda ({})",target(id)))).len()>=4096) {
-        return Err(std::io::Error::other("비밀번호가 이 Mac의 보안 저장소 입력 한도를 초과했습니다. 해당 항목을 제외하고 다시 시도하세요"));
+        return Err(std::io::Error::other(tr!("store.tooLong")));
     }
     set_password(id,pass);
     let mut got=cred_read_checked(&target(id))?;
@@ -783,9 +783,9 @@ pub fn set_password_checked(id: &str, pass: Option<&str>) -> std::io::Result<()>
         Ok(())
     } else {
         #[cfg(not(windows))]
-        let message="Mac 키체인에 로그인 정보를 저장하지 못했습니다. 로그인 키체인을 잠금 해제한 후 다시 시도하세요";
+        let message=tr!("store.keychainSave");
         #[cfg(windows)]
-        let message="Windows 자격 증명 관리자에 로그인 정보를 저장하지 못했습니다. 비밀번호 공유를 해제하면 프로필만 가져올 수 있습니다";
+        let message=tr!("store.winSave");
         Err(std::io::Error::other(message))
     }
 }

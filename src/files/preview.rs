@@ -65,7 +65,7 @@ impl Registry {
         let p = self
             .pages
             .get_mut(page)
-            .ok_or_else(|| io::Error::other("파일 창이 닫혔습니다"))?;
+            .ok_or_else(|| io::Error::other(tr!("fx.preview.windowClosed")))?;
         p.nonce = random()?;
         p.connection = connection.into();
         p.asset = None;
@@ -82,9 +82,9 @@ impl Registry {
     ) -> io::Result<String> {
         let bytes = bytes.into();
         let mime = media_mime(mime)
-            .ok_or_else(|| io::Error::other("지원하지 않는 미리보기 형식입니다"))?;
+            .ok_or_else(|| io::Error::other(tr!("fx.preview.unsupported")))?;
         if bytes.len() > MAX_ITEM {
-            return Err(io::Error::other("미리보기 크기 제한을 넘었습니다"));
+            return Err(io::Error::other(tr!("fx.preview.tooLarge")));
         }
         if !self
             .pages
@@ -93,7 +93,7 @@ impl Registry {
         {
             return Err(io::Error::new(
                 io::ErrorKind::Interrupted,
-                "이전 미리보기입니다",
+                tr!("fx.preview.stale"),
             ));
         }
         // A currently displayed audio/video may request a later range after a long pause.
@@ -109,7 +109,7 @@ impl Registry {
             > MAX_BYTES
         {
             return Err(io::Error::other(
-                "다른 파일 창의 미리보기를 닫은 뒤 다시 선택해 주세요",
+                tr!("fx.preview.otherWindow"),
             ));
         }
         let token = random()?;

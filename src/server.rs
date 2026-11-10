@@ -132,7 +132,7 @@ pub fn kick_all() {
 
 pub fn start(cfg: Config) -> io::Result<()> {
     stop();
-    let l = TcpListener::bind((if cfg.local_only { "127.0.0.1" } else { "0.0.0.0" }, cfg.port)).map_err(|e| io::Error::new(e.kind(), format!("포트 {}을(를) 열 수 없습니다: {e}", cfg.port)))?;
+    let l = TcpListener::bind((if cfg.local_only { "127.0.0.1" } else { "0.0.0.0" }, cfg.port)).map_err(|e| io::Error::new(e.kind(), tr!("pcshare.portBusy", port = cfg.port, error = e)))?;
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
     let cfg = Arc::new(cfg);
@@ -170,7 +170,7 @@ pub fn start(cfg: Config) -> io::Result<()> {
 pub fn open_local(peer: SocketAddr) -> io::Result<crate::rfb::Raw> {
     let (cfg, stop) = {
         let r = RUNNING.lock().unwrap();
-        let r = r.as_ref().ok_or_else(|| io::Error::new(io::ErrorKind::ConnectionRefused, "이 PC 공유가 꺼져 있습니다"))?;
+        let r = r.as_ref().ok_or_else(|| io::Error::new(io::ErrorKind::ConnectionRefused, tr!("pcshare.off")))?;
         (Config { ask: false, ..(*r.cfg).clone() }, r.stop.clone())
     };
     let l = TcpListener::bind(("127.0.0.1", 0))?;

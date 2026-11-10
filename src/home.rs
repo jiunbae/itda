@@ -249,7 +249,7 @@ fn start_update_install(r: crate::update::Release) {
         match crate::update::install(&r, &stage) {
             Ok(()) => {
                 crate::log!("update: installing {}, quitting", r.version);
-                stage("다시 시작하는 중…");
+                stage(tr!("app.update.restarting"));
                 let ids: Vec<String> = home(|m| m.sessions.keys().cloned().collect());
                 for id in ids { stop_session(&id); }
                 std::thread::sleep(std::time::Duration::from_millis(400));
@@ -475,7 +475,7 @@ fn update_install_failed() {
     resume_admissions_locked(&pending);
 }
 fn update_busy() {
-    post(Event::Page(json!({"type":"toast","text":"업데이트를 적용하고 있어 Itda를 종료하거나 다시 열 수 없습니다. 완료될 때까지 기다려 주세요.","err":true})));
+    post(Event::Page(json!({"type":"toast","text":tr!("app.update.busy"),"err":true})));
 }
 static QUIT_TICKETS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 fn pend(p: QuitPending) -> u64 {
@@ -597,14 +597,14 @@ pub(crate) fn permission_restart_closing() -> bool {
 fn permission_restart_with(launch: impl FnOnce() -> Result<(), String>, quit: impl FnOnce()) -> Result<(), String> {
     let mut pending = QUIT_PENDING.lock().unwrap();
     if pending.is_some() || QUITTING.load(std::sync::atomic::Ordering::SeqCst) || UPDATING.load(std::sync::atomic::Ordering::SeqCst) || !crate::files::accepting() {
-        return Err("Itda의 종료 또는 업데이트가 진행 중입니다. 끝난 뒤 권한 적용을 다시 시도해 주세요.".into());
+        return Err(tr!("app.perm.closing").into());
     }
     // Job admission and this close+recount share the registry lock. A transfer
     // accepted after an earlier UI count is included; later attempts are refused.
     let count = crate::files::close_admissions();
     if count > 0 {
         resume_admissions_locked(&pending);
-        return Err(format!("파일 전송 {count}개가 진행 중이라 Itda를 다시 열지 않았습니다. 전송이 끝난 뒤 다시 시도해 주세요."));
+        return Err(tr!("app.perm.transfers", count = count));
     }
     if let Err(error) = launch() {
         // Only this guard's open→closed reservation is rolled back. A prior
@@ -706,7 +706,7 @@ fn quit_drained(reason: QuitReason, _reported: usize, ticket: u64) {
     send(json!({"type": "quit_pending", "count": 0}));
     crate::log!("quit: {left} transfer(s) did not end in time; Itda stays open");
     if reason == QuitReason::Configuration {
-        notify("원격 설치를 위해 Itda를 닫지 못했습니다", &format!("전송 {left}개가 아직 정리 중입니다. 끝난 뒤 원격 설치를 다시 시도하세요."));
+        notify(tr!("app.remoteSetup.notClosed"), &tr!("app.remoteSetup.notClosedText", count = left));
     } else {
         ask_quit(reason, left, true);
     }
@@ -820,7 +820,7 @@ fn on_ipc(v: Value) {
             if v["op"] == "connect" {
                 let options = match serde_json::from_value::<crate::files::Options>(v["options"].clone()) {
                     Ok(o) if ["auto", "sftp", "smb"].contains(&o.method.as_str()) => o,
-                    _ => { send(json!({"type":"files_result","id":id,"window":v["window"],"op":"connect","ok":false,"error":"파일 연결 설정을 확인하세요"})); return; }
+                    _ => { send(json!({"type":"files_result","id":id,"window":v["window"],"op":"connect","ok":false,"error":tr!("app.files.checkConnection")})); return; }
                 };
                 {
                     host.files = options;
@@ -847,7 +847,7 @@ fn on_ipc(v: Value) {
                     Some(store::resolve(&selected, &m.accounts))
                 } else { None }
             });
-            let Some(login) = login else { send(json!({"type":"files_result","id":id,"window":v["window"],"op":"connect","ok":false,"error":"저장 계정이 삭제되었습니다. 사용할 계정을 다시 선택하세요"})); return; };
+            let Some(login) = login else { send(json!({"type":"files_result","id":id,"window":v["window"],"op":"connect","ok":false,"error":tr!("app.files.accountDeleted")})); return; };
             crate::files::dispatch(v, host, login, std::sync::Arc::new(|v| post(Event::Page(v))));
         }
         "cancel" | "disconnect" => stop_session(&id),
@@ -907,7 +907,7 @@ fn on_ipc(v: Value) {
             let copy = home(|m| m.hosts.iter().find(|x| x.id == id).cloned());
             if let Some(mut c) = copy {
                 c.id = store::new_id();
-                c.name = format!("{} (복사본)", c.label());
+                c.name = tr!("app.host.copyName", name = c.label());
                 c.last_used = 0;
                 c.favorite = false;
                 home(|m| m.hosts.push(c));
@@ -1017,7 +1017,7 @@ fn on_ipc(v: Value) {
                 None => std::fs::remove_file(store::custom_thumb_path(&id)).is_ok(),
             };
             if !ok {
-                send(json!({"type": "toast", "text": "미리보기 이미지를 저장하지 못했습니다", "err": true}));
+                send(json!({"type": "toast", "text": tr!("app.thumb.saveFailed"), "err": true}));
             }
             send_thumb(&id);
         }
@@ -1030,20 +1030,24 @@ fn on_ipc(v: Value) {
                 // The system holds this one: keep what it actually did.
                 if st.login_start != home(|m| m.settings.login_start) && store::isolated() {
                     st.login_start = home(|m| m.settings.login_start);
-                    send(json!({"type":"toast","text":"별도 설정으로 실행한 앱에서는 로그인 시 실행을 변경할 수 없습니다","err":true}));
+                    send(json!({"type":"toast","text":tr!("app.login.isolated"),"err":true}));
                     send(json!({"type": "login_item", "state": if st.login_start { "on" } else { "off" }}));
                 } else if st.login_start != home(|m| m.settings.login_start) {
                     let (login, err) = crate::autostart::apply(st.login_start, crate::autostart::set, crate::autostart::state);
                     st.login_start = login.on();
                     if let Some(e) = err {
                         crate::log!("login start: {e}");
-                        send(json!({"type": "toast", "text": format!("로그인 시 실행을 바꾸지 못했습니다: {e}"), "err": true}));
+                        send(json!({"type": "toast", "text": tr!("app.login.failed", error = e), "err": true}));
                     }
                     send(json!({"type": "login_item", "state": login.name()}));
                 }
                 let old = home(|m| std::mem::replace(&mut m.settings, st.clone()));
                 store::save_settings(&st);
                 crate::i18n::set_pref(&st.lang);
+                // Native menus, the tray and window titles built in the old language.
+                if old.lang != st.lang {
+                    plat::language_changed();
+                }
                 plat::apply_theme(is_dark(&st));
                 if old.zoom != st.zoom {
                     plat::apply_zoom(st.zoom);
@@ -1085,7 +1089,7 @@ fn on_ipc(v: Value) {
         "forget_rdp_key" => {
             store::forget_rdp_key(&id);
             send_hosts();
-            send(json!({"type": "toast", "text": "원격 데스크톱 서버 키를 지웠습니다. 다음 연결에서 새로 받습니다"}));
+            send(json!({"type": "toast", "text": tr!("app.rdp.keyForgotten")}));
         }
         // Settings opened: the login item may have been changed in the system's settings.
         "login_item" => {
@@ -1275,9 +1279,9 @@ fn connect(id: &str, typed: Option<String>, save: bool) {
                 home(|m| m.hosts.iter_mut().filter(|h| h.id == id).for_each(|h| h.last_used = store::now()));
                 save_hosts();
                 send_hosts();
-                send(json!({"type": "toast", "text": format!("{} — 원격 데스크톱을 열었습니다", host.label())}));
+                send(json!({"type": "toast", "text": tr!("app.rdp.opened", name = host.label())}));
             }
-            Err(e) => send(json!({"type": "error", "id": id, "kind": "other", "msg": format!("원격 데스크톱(mstsc)을 열 수 없습니다: {e}")})),
+            Err(e) => send(json!({"type": "error", "id": id, "kind": "other", "msg": tr!("app.rdp.openFailed", error = e)})),
         };
     }
     let pass = match typed.clone().or_else(|| login.pass.clone()) {
@@ -1291,7 +1295,7 @@ fn connect(id: &str, typed: Option<String>, save: bool) {
     let proc = match plat::spawn_session(&host, &login, pass, &settings) {
         Ok(p) => p,
         Err(e) => {
-            send(json!({"type": "error", "id": id, "kind": "other", "msg": format!("세션을 시작할 수 없습니다: {e}")}));
+            send(json!({"type": "error", "id": id, "kind": "other", "msg": tr!("app.session.startFailed", error = e)}));
             return;
         }
     };
@@ -1368,15 +1372,15 @@ fn remote_setup_probe(v:Value) {
         let account=s(&v,"login_account");
         let login=if account=="-" {store::Login::default()}
         else if !account.is_empty() {
-            let a=accounts.iter().find(|a|a.id==account).ok_or_else(||std::io::Error::other("SSH에 사용할 계정을 다시 선택하세요"))?;
+            let a=accounts.iter().find(|a|a.id==account).ok_or_else(||std::io::Error::other(tr!("app.remoteSetup.chooseAccount")))?;
             store::Login{user:a.user.clone(),pass:store::get_password(&store::acct_key(&a.id)),ssh_key:a.ssh_key.clone(),key_pass:store::get_password(&store::acct_keypass(&a.id))}
         } else {h.map(|h|store::resolve(h,&accounts)).unwrap_or_default()};
         let host=s(&v,"address");
-        let port=v["port"].as_u64().filter(|p|*p>0&&*p<=65535).ok_or_else(||std::io::Error::other("SSH 포트는 1부터 65535 사이여야 합니다"))? as u16;
+        let port=v["port"].as_u64().filter(|p|*p>0&&*p<=65535).ok_or_else(||std::io::Error::other(tr!("app.remoteSetup.badPort")))? as u16;
         let pass=match v["password"].as_str().filter(|p|!p.is_empty()){Some(p)=>p.into(),None=>if account.is_empty(){h.and_then(|h|crate::gateway::typed(&h.id)).or(login.pass).unwrap_or_default()}else{login.pass.unwrap_or_default()}};
         let cfg=crate::tunnel::SshCfg{host,port,user:s(&v,"user"),pass,vnc_port:0,key:login.ssh_key,key_pass:login.key_pass.unwrap_or_default(),key_alias:String::new()};
         crate::tunnel::ssh_target(&cfg)?;
-        if cfg.host.trim().is_empty(){return Err(std::io::Error::other("설치할 기기의 SSH 주소를 입력하세요"));}
+        if cfg.host.trim().is_empty(){return Err(std::io::Error::other(tr!("app.remoteSetup.needAddress")));}
         let busy=crate::remote_setup::begin()?;
         Ok::<_,std::io::Error>((cfg,choice,hosts,accounts,settings,busy))
     })();
@@ -1480,7 +1484,7 @@ fn on_session(id: &str, v: Value) {
             send_session(id);
             let kind = s(&v, "kind");
             if kind == "lost" || kind == "auth" {
-                notify(&format!("{} 연결 종료", host_label(id)), &s(&v, "msg"));
+                notify(&tr!("app.notify.ended", name = host_label(id)), &s(&v, "msg"));
             }
             plat::show_home();
             send(json!({"type": "error", "id": id, "kind": kind, "msg": s(&v, "msg")}));
@@ -1492,7 +1496,7 @@ fn on_session(id: &str, v: Value) {
                 }
             });
             if v["n"].as_u64() == Some(1) {
-                notify(&format!("{} 연결이 끊겼습니다", host_label(id)), "자동으로 다시 연결하는 중입니다.");
+                notify(&tr!("app.notify.dropped", name = host_label(id)), tr!("app.notify.reconnecting"));
             }
             send_session(id);
         }
@@ -1537,7 +1541,7 @@ fn on_exit(id: &str) {
         let early = s.state == "connecting";
         if plat::reap(s.proc) && early {
             // Died before reporting anything useful.
-            send(json!({"type": "error", "id": id, "kind": "other", "msg": "연결 프로세스가 예기치 않게 종료되었습니다"}));
+            send(json!({"type": "error", "id": id, "kind": "other", "msg": tr!("app.session.exited")}));
         }
     }
     send_session(id);
@@ -1590,7 +1594,7 @@ fn drain() {
                 let fresh: Vec<String> = now.iter().map(|v| v.peer.clone()).filter(|p| !SHARE_SEEN.lock().unwrap().contains(p)).collect();
                 *SHARE_SEEN.lock().unwrap() = now.iter().map(|v| v.peer.clone()).collect();
                 for p in fresh {
-                    notify("누군가 이 PC를 보고 있습니다", &format!("{p}에서 연결했습니다. 알림 영역의 Itda에서 끊을 수 있습니다."));
+                    notify(tr!("app.notify.watching"), &tr!("app.notify.watchingText", peer = p));
                 }
                 plat::tray_tip(now.len());
                 send(share_info());
@@ -1645,14 +1649,25 @@ fn drain() {
                 // (the main window says it itself when it is in front).
                 if v["type"] == "files_job" && v["window"] == "app" && v["dismissed"] != true && !plat::home_focused()
                     && ["completed", "failed", "cancelled"].contains(&v["state"].as_str().unwrap_or("")) {
-                    let what = if v["moving"] == true || v["request"]["move"] == true { "파일 이동" } else { "파일 복사" };
-                    let device = Some(host_label(v["id"].as_str().unwrap_or(""))).filter(|d| !d.is_empty()).unwrap_or_else(|| "이 컴퓨터".into());
+                    let moving = v["moving"] == true || v["request"]["move"] == true;
+                    let device = Some(host_label(v["id"].as_str().unwrap_or(""))).filter(|d| !d.is_empty()).unwrap_or_else(|| tr!("app.files.thisComputer").into());
                     let text = match v["state"].as_str() {
-                        Some("completed") => format!("{device}: 끝났습니다"),
-                        Some("cancelled") => format!("{device}: 취소했습니다"),
-                        _ => format!("{device}: {}{}", v["error"].as_str().unwrap_or("실패했습니다"), if v["request"]["names"].is_array() { " — 그 기기의 파일 창에서 남은 항목을 다시 보낼 수 있습니다" } else { "" }),
+                        Some("completed") => tr!("app.files.done", device = device),
+                        Some("cancelled") => tr!("app.files.cancelled", device = device),
+                        _ => {
+                            let error = v["error"].as_str().unwrap_or(tr!("app.files.failed"));
+                            if v["request"]["names"].is_array() { tr!("app.files.failedRetry", device = device, error = error) } else { format!("{device}: {error}") }
+                        }
                     };
-                    notify(&format!("{what} {}", match v["state"].as_str() { Some("completed") => "완료", Some("cancelled") => "취소됨", _ => "실패" }), &text);
+                    let title = match (moving, v["state"].as_str()) {
+                        (false, Some("completed")) => tr!("app.files.copyCompleted"),
+                        (false, Some("cancelled")) => tr!("app.files.copyCancelled"),
+                        (false, _) => tr!("app.files.copyFailed"),
+                        (true, Some("completed")) => tr!("app.files.moveCompleted"),
+                        (true, Some("cancelled")) => tr!("app.files.moveCancelled"),
+                        (true, _) => tr!("app.files.moveFailed"),
+                    };
+                    notify(title, &text);
                 }
                 #[cfg(target_os = "macos")]
                 let mut v=v;

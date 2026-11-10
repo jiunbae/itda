@@ -277,7 +277,7 @@ fn show_windows() -> Vec<u32> {
             w.setCollectionBehavior(NSWindowCollectionBehavior::CanJoinAllSpaces | NSWindowCollectionBehavior::Stationary | NSWindowCollectionBehavior::FullScreenAuxiliary | NSWindowCollectionBehavior::IgnoresCycle);
             w.setAlphaValue(0.0);
             if let Some(view) = w.contentView() {
-                for (text, size, white, y) in [("원격으로 사용 중", 28.0, 0.6, 10.0), ("이 Mac에서 ⌃⌘Q를 누르면 가림을 끝내고 화면을 잠급니다", 13.0, 0.4, -30.0)] {
+                for (text, size, white, y) in [(tr!("sys.curtainTitle"), 28.0, 0.6, 10.0), (tr!("sys.curtainHint"), 13.0, 0.4, -30.0)] {
                     let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
                     label.setFont(Some(&NSFont::systemFontOfSize(size)));
                     label.setTextColor(Some(&NSColor::colorWithWhite_alpha(white, 1.0)));

@@ -77,21 +77,22 @@ const OPT: u32 = 0xffe9;
 const SHIFT: u32 = 0xffe1;
 
 /// Mac shortcuts that Windows would otherwise swallow or that are awkward to type.
-const SPECIAL_KEYS: &[(&str, &[u32])] = &[
-    ("⌘ Space — Spotlight", &[CMD, 0x20]),
-    ("⌘ Tab — 앱 전환", &[CMD, 0xff09]),
-    ("⌘ Q — 앱 종료", &[CMD, 0x71]),
-    ("⌘ W — 창 닫기", &[CMD, 0x77]),
-    ("⌘ H — 앱 가리기", &[CMD, 0x68]),
-    ("⌥⌘ Esc — 강제 종료", &[OPT, CMD, 0xff1b]),
-    ("⌃⌘ Q — 화면 잠금", &[CTRL, CMD, 0x71]),
-    ("⇧⌘ 3 — Mac 전체 화면 캡처", &[SHIFT, CMD, 0x33]),
-    ("⇧⌘ 4 — Mac 영역 캡처", &[SHIFT, CMD, 0x34]),
-    ("⌃ ↑ — Mission Control", &[CTRL, 0xff52]),
-    ("⌃ ↓ — 앱 Exposé", &[CTRL, 0xff54]),
-    ("F11 — 데스크탑 보기", &[0xffc8]),
-    ("⌃ ← — 왼쪽 데스크탑", &[CTRL, 0xff51]),
-    ("⌃ → — 오른쪽 데스크탑", &[CTRL, 0xff53]),
+/// Labels are looked up when shown, in the app's language.
+const SPECIAL_KEYS: &[(fn() -> &'static str, &[u32])] = &[
+    (|| "⌘ Space — Spotlight", &[CMD, 0x20]),
+    (|| tr!("ui.key.switchApps"), &[CMD, 0xff09]),
+    (|| tr!("ui.key.quitApp"), &[CMD, 0x71]),
+    (|| tr!("ui.key.closeWindow"), &[CMD, 0x77]),
+    (|| tr!("ui.key.hideApp"), &[CMD, 0x68]),
+    (|| tr!("ui.key.forceQuit"), &[OPT, CMD, 0xff1b]),
+    (|| tr!("ui.key.lockScreen"), &[CTRL, CMD, 0x71]),
+    (|| tr!("ui.key.shotFull"), &[SHIFT, CMD, 0x33]),
+    (|| tr!("ui.key.shotArea"), &[SHIFT, CMD, 0x34]),
+    (|| "⌃ ↑ — Mission Control", &[CTRL, 0xff52]),
+    (|| tr!("ui.key.expose"), &[CTRL, 0xff54]),
+    (|| tr!("ui.key.desktop"), &[0xffc8]),
+    (|| tr!("ui.key.spaceLeft"), &[CTRL, 0xff51]),
+    (|| tr!("ui.key.spaceRight"), &[CTRL, 0xff53]),
 ];
 
 struct Fonts {
@@ -130,7 +131,7 @@ struct Ui {
     started: Option<Instant>,
     first_frame: Option<Instant>,
     thumb_done: bool,
-    /// "닫기" button on the reconnect card, in client coordinates.
+    /// "Close" button on the reconnect card, in client coordinates.
     close_btn: [i32; 4],
 }
 
@@ -313,7 +314,7 @@ pub fn run(c: Conn, l: Launch) {
 
         let h = CreateWindowExW(0, cls.as_ptr(), wide(crate::APP).as_ptr(), style, wx, wy, ww, wh, null_mut(), null_mut(), hinst, null());
         if h.is_null() {
-            return message("창을 만들 수 없습니다", true);
+            return message(tr!("ui.cantCreateWindow"), true);
         }
         let dark: BOOL = 1;
         DwmSetWindowAttribute(h, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark as *const BOOL as _, 4);
@@ -365,20 +366,20 @@ fn toolbar_items() -> Vec<Item> {
     // Tooltip strings live for the whole session.
     let t = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
     vec![
-        Item::Button(M_FULL, t(format!("전체 화면 ({p}+Enter)"))),
-        Item::Button(M_SCALE, t(format!("창에 맞춤 ↔ 실제 크기 ({p}+0 / {p}+1)"))),
-        Item::Button(TB_SCREENS, "모니터 선택"),
+        Item::Button(M_FULL, t(tr!("ui.tb.full", hk = p))),
+        Item::Button(M_SCALE, t(tr!("ui.tb.scale", hk = p))),
+        Item::Button(TB_SCREENS, tr!("ui.tb.screens")),
         Item::Sep,
-        Item::Button(TB_KEYS, "Mac 특수 키 보내기"),
-        Item::Button(M_CLIP, "클립보드 공유"),
-        Item::Button(M_VIEWONLY, t(format!("보기 전용 ({p}+V)"))),
+        Item::Button(TB_KEYS, tr!("ui.macKeys")),
+        Item::Button(M_CLIP, tr!("ui.clipboard")),
+        Item::Button(M_VIEWONLY, t(tr!("ui.tb.viewOnly", hk = p))),
         Item::Sep,
-        Item::Button(M_SHOT, t(format!("스크린샷 저장 ({p}+P)"))),
-        Item::Button(M_STATS, t(format!("통계 표시 ({p}+S)"))),
-        Item::Button(TB_MORE, t(format!("더보기 ({p}+M)"))),
-        Item::Button(M_PIN, t(format!("툴바 고정 ({p}+T)"))),
+        Item::Button(M_SHOT, t(tr!("ui.tb.shot", hk = p))),
+        Item::Button(M_STATS, t(tr!("ui.tb.stats", hk = p))),
+        Item::Button(TB_MORE, t(tr!("ui.tb.more", hk = p))),
+        Item::Button(M_PIN, t(tr!("ui.tb.pin", hk = p))),
         Item::Sep,
-        Item::Button(M_DISCONNECT, "연결 끊기"),
+        Item::Button(M_DISCONNECT, tr!("ui.disconnect")),
     ]
 }
 
@@ -600,10 +601,10 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
         WM_NETERR => {
             let e = sh().error.lock().unwrap().clone().unwrap_or_default();
             if session::managed() {
-                let kind = if e.contains("인증") { "auth" } else { "lost" };
+                let kind = if sh().error_auth.load(Relaxed) { "auth" } else { "lost" };
                 session::emit(json!({"ev": "error", "kind": kind, "msg": e}));
             } else {
-                let t = wide(&format!("{e}\n\n로그: {}", crate::log::path().display()));
+                let t = wide(&tr!("ui.errLog", error = e, log = crate::log::path().display()));
                 MessageBoxW(h, t.as_ptr(), wide(crate::APP).as_ptr(), MB_ICONERROR);
             }
             end_session(h);
@@ -710,7 +711,7 @@ unsafe fn close(h: HWND) {
     }
 }
 
-/// Leave the session from any window ("연결 끊기", lost link): every window closes.
+/// Leave the session from any window (Disconnect, lost link): every window closes.
 unsafe fn end_session(h: HWND) {
     let _ = h;
     if ENDING.with(|e| e.replace(true)) {
@@ -747,22 +748,22 @@ unsafe fn screens_menu() -> HMENU {
     let rs = regions();
     let crop = view().crop;
     let layout = ui(|u| u.l.opts.monitor_layout);
-    add(m, M_SCREEN_ALL, "전체 화면 영역", crop.is_none(), true);
+    add(m, M_SCREEN_ALL, tr!("ui.mon.all"), crop.is_none(), true);
     if rs.is_empty() {
-        let note = if sh().screens.lock().unwrap().is_empty() { "모니터 정보 없음 — 아래 ‘화면 나누기’로 나눌 수 있습니다" } else { "모니터 1개" };
+        let note = if sh().screens.lock().unwrap().is_empty() { tr!("ui.mon.none") } else { tr!("ui.mon.one") };
         add(m, 0, note, false, false);
     }
     for (i, r) in rs.iter().take(MAX_SCREENS).enumerate() {
         add(m, M_SCREEN0 + i * 0x10, &region_name(r, i), crop == Some(r.rect), true);
     }
     sep(m);
-    add(m, M_WINDOWS, "각 화면을 창으로 열기", false, rs.len() >= 2);
-    add(m, M_GATHER, "한 창으로 모으기", false, !child_hwnds().is_empty());
+    add(m, M_WINDOWS, tr!("ui.mon.windows"), false, rs.len() >= 2);
+    add(m, M_GATHER, tr!("ui.mon.gather"), false, !child_hwnds().is_empty());
     let split = CreatePopupMenu();
     for (i, label) in LAYOUTS.iter().enumerate() {
-        add(split, M_LAYOUT0 + i * 0x10, label, layout as usize == i, true);
+        add(split, M_LAYOUT0 + i * 0x10, label(), layout as usize == i, true);
     }
-    sub(m, split, "화면 나누기");
+    sub(m, split, tr!("ui.mon.split"));
     m
 }
 
@@ -770,12 +771,12 @@ unsafe fn keys_menu() -> HMENU {
     let m = CreatePopupMenu();
     let ro = VIEW_ONLY.load(Relaxed);
     for (i, (label, _)) in SPECIAL_KEYS.iter().enumerate() {
-        add(m, M_KEY0 + i * 0x10, label, false, !ro);
+        add(m, M_KEY0 + i * 0x10, label(), false, !ro);
     }
     m
 }
 
-/// Everything, for the "더보기" button, Ctrl+Alt+M and the window's system menu.
+/// Everything, for the "More" button, Ctrl+Alt+M and the window's system menu.
 unsafe fn fill_menu(h: HWND, m: HMENU) {
     let p = hk();
     let (opts, full) = ui(|u| (u.l.opts, u.saved.is_some()));
@@ -783,25 +784,25 @@ unsafe fn fill_menu(h: HWND, m: HMENU) {
     let has_screens = !sh().screens.lock().unwrap().is_empty();
     let pinned = toolbar::mode() == "pinned";
     let _ = h;
-    add(m, M_FIT, &format!("창에 맞춤\t{p}+0"), !v.actual, true);
-    add(m, M_ACTUAL, &format!("실제 크기 (1:1)\t{p}+1"), v.actual, true);
-    add(m, M_FULL, &format!("전체 화면\t{p}+Enter"), full, true);
-    sub(m, screens_menu(), "모니터");
-    add(m, M_REMOTE_RES, "Mac 해상도를 창 크기로 변경", false, has_screens);
+    add(m, M_FIT, &tr!("ui.menu.fit", hk = p), !v.actual, true);
+    add(m, M_ACTUAL, &tr!("ui.menu.actual", hk = p), v.actual, true);
+    add(m, M_FULL, &tr!("ui.menu.full", hk = p), full, true);
+    sub(m, screens_menu(), tr!("ui.menu.monitors"));
+    add(m, M_REMOTE_RES, tr!("ui.menu.remoteRes"), false, has_screens);
     sep(m);
-    add(m, M_VIEWONLY, &format!("보기 전용\t{p}+V"), VIEW_ONLY.load(Relaxed), true);
-    add(m, M_SWAP, "Ctrl ↔ ⌘ Cmd 바꾸기", SWAP.load(Relaxed), true);
-    add(m, M_HANGUL, "한/영 키 → Caps Lock (해제 시 Ctrl+Space)", opts.hangul_caps, true);
-    sub(m, keys_menu(), "Mac 특수 키 보내기");
+    add(m, M_VIEWONLY, &tr!("ui.menu.viewOnly", hk = p), VIEW_ONLY.load(Relaxed), true);
+    add(m, M_SWAP, tr!("ui.menu.swap"), SWAP.load(Relaxed), true);
+    add(m, M_HANGUL, tr!("ui.menu.hangul"), opts.hangul_caps, true);
+    sub(m, keys_menu(), tr!("ui.macKeys"));
     sep(m);
-    add(m, M_CLIP, "클립보드 공유", opts.clipboard, true);
-    add(m, M_STATS, &format!("통계 표시\t{p}+S"), opts.stats, true);
-    add(m, M_PIN, &format!("툴바 고정\t{p}+T"), pinned, true);
+    add(m, M_CLIP, tr!("ui.clipboard"), opts.clipboard, true);
+    add(m, M_STATS, &tr!("ui.menu.stats", hk = p), opts.stats, true);
+    add(m, M_PIN, &tr!("ui.menu.pin", hk = p), pinned, true);
     sep(m);
-    add(m, M_SHOT, &format!("스크린샷 저장\t{p}+P"), false, true);
-    add(m, M_INFO, &format!("연결 정보\t{p}+I"), false, true);
-    add(m, M_RECONNECT, &format!("다시 연결\t{p}+R"), false, true);
-    add(m, M_DISCONNECT, "연결 끊기", false, true);
+    add(m, M_SHOT, &tr!("ui.menu.shot", hk = p), false, true);
+    add(m, M_INFO, &tr!("ui.menu.info", hk = p), false, true);
+    add(m, M_RECONNECT, &tr!("ui.menu.reconnect", hk = p), false, true);
+    add(m, M_DISCONNECT, tr!("ui.disconnect"), false, true);
 }
 
 unsafe fn full_menu(h: HWND) -> HMENU {
@@ -839,7 +840,6 @@ fn emit_opts() {
 
 /// Handle a viewer command; false if `id` isn't ours.
 unsafe fn command(h: HWND, id: usize) -> bool {
-    let on_off = |b: bool| if b { "켜짐" } else { "꺼짐" };
     match id {
         M_FIT | M_ACTUAL | M_SCALE => {
             let actual = if id == M_SCALE { !view().actual } else { id == M_ACTUAL };
@@ -848,7 +848,7 @@ unsafe fn command(h: HWND, id: usize) -> bool {
             update_scroll(h);
             rebuild_cursor(h);
             emit_opts();
-            toast(h, if actual { "실제 크기 (1:1)" } else { "창에 맞춤" });
+            toast(h, if actual { tr!("ui.toast.actual") } else { tr!("ui.toast.fit") });
         }
         M_FULL => toggle_fullscreen(h),
         M_STATS => {
@@ -867,7 +867,7 @@ unsafe fn command(h: HWND, id: usize) -> bool {
             ui(|u| u.l.opts.view_only = v);
             update_title(h);
             emit_opts();
-            toast(h, &format!("보기 전용 {}", on_off(v)));
+            toast(h, if v { tr!("ui.toast.viewOnlyOn") } else { tr!("ui.toast.viewOnlyOff") });
         }
         M_HANGUL => {
             let v = ui(|u| {
@@ -875,7 +875,7 @@ unsafe fn command(h: HWND, id: usize) -> bool {
                 u.l.opts.hangul_caps
             });
             emit_opts();
-            toast(h, if v { "한/영 키 → Caps Lock" } else { "한/영 키 → Ctrl+Space" });
+            toast(h, if v { tr!("ui.toast.hangulCaps") } else { tr!("ui.toast.hangulSpace") });
         }
         M_SWAP => {
             release_all();
@@ -883,7 +883,7 @@ unsafe fn command(h: HWND, id: usize) -> bool {
             SWAP.store(v, Relaxed);
             ui(|u| u.l.opts.swap = v);
             emit_opts();
-            toast(h, &format!("Ctrl ↔ ⌘ 바꾸기 {}", on_off(v)));
+            toast(h, if v { tr!("ui.toast.swapOn") } else { tr!("ui.toast.swapOff") });
         }
         M_RECONNECT => sh().reconnect(),
         M_CLIP => {
@@ -892,7 +892,7 @@ unsafe fn command(h: HWND, id: usize) -> bool {
                 u.l.opts.clipboard
             });
             emit_opts();
-            toast(h, &format!("클립보드 공유 {}", on_off(v)));
+            toast(h, if v { tr!("ui.toast.clipOn") } else { tr!("ui.toast.clipOff") });
         }
         M_REMOTE_RES => {
             let (cw, ch) = client(h);
@@ -920,7 +920,7 @@ unsafe fn command(h: HWND, id: usize) -> bool {
             emit_opts();
             APPLIED.with(|a| a.set(false));
             apply_monitor_mode();
-            toast(h, LAYOUTS[layout as usize]);
+            toast(h, LAYOUTS[layout as usize]());
         }
         _ if (M_SCREEN0..M_SCREEN0 + 0x10 * MAX_SCREENS).contains(&id) => select_screen(h, Some((id - M_SCREEN0) / 0x10)),
         _ if (M_KEY0..M_KEY0 + 0x10 * SPECIAL_KEYS.len()).contains(&id) => {
@@ -928,7 +928,7 @@ unsafe fn command(h: HWND, id: usize) -> bool {
                 let (label, combo) = SPECIAL_KEYS[(id - M_KEY0) / 0x10];
                 combo.iter().for_each(|&k| sh().key(true, k));
                 combo.iter().rev().for_each(|&k| sh().key(false, k));
-                toast(h, &format!("보냄: {label}"));
+                toast(h, &tr!("ui.toast.sent", key = label()));
             }
         }
         _ => return false,
@@ -943,7 +943,7 @@ unsafe fn update_title(h: HWND) {
     let (w, hh) = sh().size();
     let mut t = if st.is_empty() { format!("{title} — {w}×{hh}") } else { format!("{title} — {st}") };
     if VIEW_ONLY.load(Relaxed) {
-        t.push_str(" [보기 전용]");
+        t.push_str(tr!("ui.titleViewOnly"));
     }
     if h as isize != sh().hwnd.load(Relaxed) {
         let region = CHILDREN.with(|c| c.borrow().iter().find(|w| w.hwnd == h).map(|w| w.region));
@@ -1053,8 +1053,8 @@ unsafe fn fit_shape(h: HWND, fw: i32, fh: i32) {
 
 const CHILD_CLASS: &str = "itda_display";
 
-/// "화면 나누기" choices, by HostOpts::monitor_layout.
-const LAYOUTS: [&str; 5] = ["서버가 알려 준 모니터", "가로로 2개", "세로로 2개", "가로로 3개", "2×2"];
+/// "Split screen" choices, by HostOpts::monitor_layout (looked up when shown).
+const LAYOUTS: [fn() -> &'static str; 5] = [|| tr!("ui.layout.reported"), || tr!("ui.layout.cols2"), || tr!("ui.layout.rows2"), || tr!("ui.layout.cols3"), || "2×2"];
 
 /// A part of the framebuffer a view can show: a display the server reported, or a screen
 /// region from a manual split (named as such: it isn't a detected monitor).
@@ -1103,9 +1103,9 @@ fn split(layout: u8, w: i32, h: i32) -> Option<Vec<[i32; 4]>> {
 
 fn region_name(r: &Region, i: usize) -> String {
     if r.manual {
-        format!("화면 영역 {} — {}×{}", i + 1, r.rect[2], r.rect[3])
+        tr!("ui.region.area", n = i + 1, w = r.rect[2], h = r.rect[3])
     } else {
-        format!("모니터 {} — {}×{}", i + 1, r.rect[2], r.rect[3])
+        tr!("ui.region.monitor", n = i + 1, w = r.rect[2], h = r.rect[3])
     }
 }
 
@@ -1137,7 +1137,7 @@ unsafe fn open_windows() {
     let main = sh().hwnd.load(Relaxed) as HWND;
     let rs = regions();
     if rs.len() < 2 {
-        return toast(main, "나눌 화면이 없습니다 — ‘화면 나누기’에서 고를 수 있습니다");
+        return toast(main, tr!("ui.toast.nothingToSplit"));
     }
     APPLIED.with(|a| a.set(true));
     gather();
@@ -1184,7 +1184,7 @@ unsafe fn open_windows() {
             toggle_child_fullscreen(h);
         }
     }
-    toast(main, "화면마다 창을 열었습니다 — 닫으면 그 창만 닫힙니다");
+    toast(main, tr!("ui.toast.windowsOpened"));
 }
 
 /// Close the display windows; the session window shows everything again.
@@ -1372,9 +1372,9 @@ unsafe fn screenshot(h: HWND) {
     match std::fs::write(&path, img.png(1)) {
         Ok(()) => {
             crate::log!("screenshot {}", path.display());
-            toast(h, &format!("스크린샷 저장됨 — 사진\\Itda\\{}", path.file_name().unwrap_or_default().to_string_lossy()));
+            toast(h, &tr!("ui.toast.shotSaved", file = path.file_name().unwrap_or_default().to_string_lossy()));
         }
-        Err(e) => toast(h, &format!("스크린샷 저장 실패: {e}")),
+        Err(e) => toast(h, &tr!("ui.toast.shotFailed", error = e)),
     }
 }
 
@@ -1384,19 +1384,23 @@ unsafe fn info(h: HWND) {
     let screens = sh().screens.lock().unwrap().len();
     let secs = started.map_or(0, |t| t.elapsed().as_secs());
     let rtt = sh().rtt_ms().map_or("-".into(), |r| format!("{r:.1} ms"));
-    let text = format!(
-        "{title}\n\nMac 이름\t{name}\n주소\t{addr}\n보안\t{}\n사용자\t{}\n해상도\t{w} × {hh}\n모니터\t{}\n클립보드\t{}\n응답 시간\t{rtt}\n받은 데이터\t{:.1} MB\n연결 시간\t{:02}:{:02}:{:02}\n\n로그: {}",
-        if secure { "SSH 터널 (암호화)" } else { "암호화 안 됨 — 같은 네트워크에서만 쓰세요" },
-        if user.is_empty() { "(VNC 암호)" } else { &user },
-        if screens == 0 { "정보 없음".to_string() } else { format!("{screens}개") },
-        if sh().ext_clip.load(Relaxed) { "확장 (UTF-8, 한글 지원)" } else { "기본" },
-        RX_BYTES.load(Relaxed) as f64 / 1e6,
-        secs / 3600,
-        secs / 60 % 60,
-        secs % 60,
-        crate::log::path().display(),
+    let text = tr!(
+        "ui.info.text",
+        title = title,
+        name = name,
+        addr = addr,
+        w = w,
+        h = hh,
+        rtt = rtt,
+        security = if secure { tr!("ui.info.ssh") } else { tr!("ui.info.plain") },
+        user = if user.is_empty() { tr!("ui.info.vncPassword") } else { &user },
+        monitors = if screens == 0 { tr!("ui.info.noMonitors").to_string() } else { tr!("ui.info.monitors", n = screens) },
+        clipboard = if sh().ext_clip.load(Relaxed) { tr!("ui.info.clipExt") } else { tr!("ui.info.clipBasic") },
+        mb = format!("{:.1}", RX_BYTES.load(Relaxed) as f64 / 1e6),
+        time = format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60),
+        log = crate::log::path().display(),
     );
-    MessageBoxW(h, wide(&text).as_ptr(), wide("연결 정보 — Itda").as_ptr(), MB_ICONINFORMATION);
+    MessageBoxW(h, wide(&text).as_ptr(), wide(tr!("ui.info.title")).as_ptr(), MB_ICONINFORMATION);
 }
 
 // ---------------------------------------------------------------- clipboard
@@ -1695,15 +1699,15 @@ unsafe fn draw_card(h: HWND, hdc: HDC) {
     text_at(hdc, icon, 0x0000_b9fc, "\u{E7BA}", &ir, DT_LEFT | DT_TOP | DT_SINGLELINE);
     let tx = ir.right + sc(h, 12);
     let tr = RECT { left: tx, top: card.top + pad, right: card.right - pad, bottom: card.top + pad + sc(h, 26) };
-    text_at(hdc, title, 0x00ff_ffff, "Mac과의 연결이 끊겼습니다", &tr, DT_LEFT | DT_TOP | DT_SINGLELINE);
+    text_at(hdc, title, 0x00ff_ffff, tr!("ui.lost.title"), &tr, DT_LEFT | DT_TOP | DT_SINGLELINE);
     let st = sh().status.lock().unwrap().clone();
     let sr = RECT { left: tx, top: tr.bottom + sc(h, 6), right: card.right - pad, bottom: tr.bottom + sc(h, 50) };
-    let msg = format!("{st}\n네트워크가 돌아오면 자동으로 이어집니다.");
+    let msg = tr!("ui.lost.auto", status = st);
     text_at(hdc, text, 0x00c8_c8c8, &msg, &sr, DT_LEFT | DT_TOP | DT_WORDBREAK);
     let (bw, bh) = (sc(h, 96), sc(h, 32));
     let btn = RECT { left: card.right - pad - bw, top: card.bottom - pad - bh, right: card.right - pad, bottom: card.bottom - pad };
     round_rect(hdc, &btn, 0x003d_3d3d, 0x0055_5555, sc(h, 8));
-    text_at(hdc, bold, 0x00ff_ffff, "연결 닫기", &btn, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    text_at(hdc, bold, 0x00ff_ffff, tr!("ui.lost.close"), &btn, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     ui(|u| u.close_btn = [btn.left, btn.top, btn.right, btn.bottom]);
 }
 

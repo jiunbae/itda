@@ -174,8 +174,24 @@ pub fn home_focused() -> bool {
     HOME_PANE.with(|h| h.borrow().as_ref().is_some_and(|p| p.window.is_visible() && p.window.is_focused()))
 }
 
+/// A file window's title: its device, or the network page.
+fn files_title(id: &str) -> String {
+    home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| tr!("app.files.windowTitle", name = h.label())).unwrap_or_else(|| tr!("app.files.networkTitle").into()))
+}
+
+/// Settings → Language changed: the menu bar and the file windows' titles follow (a connection
+/// window's title is the device's own name; a monitor window keeps the title it opened with).
+pub fn language_changed() {
+    // (No menu bar without the window loop: the test bridge.)
+    if PROXY.get().is_some() { set_menu(); }
+    FILE_PANES.with(|p| for (window, pane) in p.borrow().iter() {
+        let host = FILE_HOSTS.with(|h| h.borrow().get(window).cloned()).unwrap_or_default();
+        pane.window.set_title(&files_title(&host));
+    });
+}
+
 pub fn files_window_context(window: &str, id: &str, page: &str) {
-    let title = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| format!("{} — 파일", h.label())).unwrap_or_else(|| "네트워크 — Itda".into()));
+    let title = files_title(id);
     let exists = FILE_PANES.with(|p| { if let Some(p) = p.borrow().get(window) { p.window.set_title(&title); true } else { false } });
     // A reloaded page has a new token: the old page is gone, so its transfers become the app's.
     if exists { if let Some(old) = FILE_PAGES.with(|p| p.borrow_mut().insert(window.into(), page.into())).filter(|old| old != page) { crate::files::release_page(&old); } FILE_HOSTS.with(|p| {p.borrow_mut().insert(window.into(), id.into());}); super::send_hosts(); }
@@ -206,24 +222,24 @@ pub fn open(target: &str) {
 fn apple_screen_sharing_url(address: &str, user: &str) -> Result<String, String> {
     let address = address.trim();
     let explicit_port = if let Some(rest) = address.strip_prefix('[') {
-        let (_, suffix) = rest.split_once(']').ok_or_else(|| "화면 공유 주소를 확인하세요".to_string())?;
-        if suffix.is_empty() { None } else { Some(suffix.strip_prefix(':').ok_or_else(|| "화면 공유 포트를 확인하세요".to_string())?) }
+        let (_, suffix) = rest.split_once(']').ok_or_else(|| tr!("app.screenSharing.checkAddress").to_string())?;
+        if suffix.is_empty() { None } else { Some(suffix.strip_prefix(':').ok_or_else(|| tr!("app.screenSharing.checkPort").to_string())?) }
     } else if address.matches(':').count() == 1 { address.rsplit_once(':').map(|(_, port)| port) } else { None };
     if explicit_port.is_some_and(|port| port.is_empty() || port.parse::<u16>().map_or(true, |p| p == 0)) {
-        return Err("화면 공유 포트를 확인하세요".into());
+        return Err(tr!("app.screenSharing.checkPort").into());
     }
     let (host, port) = crate::tunnel::split_host(address, 5900);
     if host.is_empty() || port == 0 || !host.bytes().all(|c| c.is_ascii_alphanumeric() || b".-_:%".contains(&c)) {
-        return Err("화면 공유 주소를 확인하세요".into());
+        return Err(tr!("app.screenSharing.checkAddress").into());
     }
     let host = if host.contains(':') {
         let (ip, zone) = host.split_once('%').map_or((host.as_str(), None), |(ip, zone)| (ip, Some(zone)));
         if ip.parse::<std::net::Ipv6Addr>().is_err() || zone.is_some_and(|z| z.is_empty() || !z.bytes().all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))) {
-            return Err("화면 공유 IPv6 주소를 확인하세요".into());
+            return Err(tr!("app.screenSharing.checkIpv6").into());
         }
         format!("[{}]", host.replace('%', "%25"))
     } else {
-        if host.contains('%') { return Err("화면 공유 주소를 확인하세요".into()); }
+        if host.contains('%') { return Err(tr!("app.screenSharing.checkAddress").into()); }
         host
     };
     let user: String = user.bytes().map(|c| if c.is_ascii_alphanumeric() || b"-._~".contains(&c) { (c as char).to_string() } else { format!("%{c:02X}") }).collect();
@@ -232,15 +248,15 @@ fn apple_screen_sharing_url(address: &str, user: &str) -> Result<String, String>
 fn apple_screen_sharing(id: &str) {
     let target = home(|m| {
         let h = m.hosts.iter().find(|h| h.id == id && matches!(h.os.as_str(), "mac" | "macos") && !h.is_rdp())
-            .ok_or_else(|| "Mac 연결을 선택하세요".to_string())?;
+            .ok_or_else(|| tr!("app.screenSharing.chooseMac").to_string())?;
         let user = m.accounts.iter().find(|a| !h.account.is_empty() && a.id == h.account).map_or(h.user.as_str(), |a| a.user.as_str());
         apple_screen_sharing_url(&h.host, user)
     });
     let id = id.to_string();
     std::thread::spawn(move || {
         let result = target.and_then(|url| Command::new("/usr/bin/open").args(["-b", "com.apple.ScreenSharing", &url]).status()
-            .map_err(|e| format!("Apple 화면 공유 앱을 열 수 없습니다: {e}"))
-            .and_then(|status| if status.success() { Ok(()) } else { Err("Apple 화면 공유 앱을 열 수 없습니다".into()) }));
+            .map_err(|e| tr!("app.screenSharing.openFailedError", error = e))
+            .and_then(|status| if status.success() { Ok(()) } else { Err(tr!("app.screenSharing.openFailed").into()) }));
         super::post(Event::Page(json!({"type":"apple_screen_sharing_result","id":id,"ok":result.is_ok(),"error":result.err()})));
     });
 }
@@ -278,7 +294,7 @@ pub fn pick_file(field: String) {
     std::thread::spawn(move || {
         let ssh = std::env::var("HOME").map(|h| format!("{h}/.ssh")).unwrap_or_default();
         let at = if std::path::Path::new(&ssh).is_dir() { format!(" default location (POSIX file {})", as_str(&ssh)) } else { String::new() };
-        let script = format!("POSIX path of (choose file with prompt {}{at} with invisibles)", as_str("SSH 키 파일 선택"));
+        let script = format!("POSIX path of (choose file with prompt {}{at} with invisibles)", as_str(tr!("app.pickKey.title")));
         let path = output("/usr/bin/osascript", &["-e", &script]);
         if !path.is_empty() {
             super::post(Event::Page(json!({"type": "picked", "field": field, "path": path})));
@@ -347,7 +363,7 @@ fn open_window(target: &EventLoopWindowTarget<Wake>, id: String, url: String, ti
         .build(target)
     {
         Ok(w) => w,
-        Err(e) => return super::post(Event::Session(id, json!({"ev": "error", "kind": "other", "msg": format!("창을 열 수 없습니다: {e}")}))),
+        Err(e) => return super::post(Event::Session(id, json!({"ev": "error", "kind": "other", "msg": tr!("app.window.openFailed", error = e)}))),
     };
     let sid = id.clone();
     let popup_id = id.clone();
@@ -437,7 +453,7 @@ fn open_window(target: &EventLoopWindowTarget<Wake>, id: String, url: String, ti
                 CLIP_BRIDGES.with(|b| b.borrow_mut().insert(id, bridge));
             }
         }),
-        Err(e) => super::post(Event::Session(id, json!({"ev": "error", "kind": "other", "msg": format!("화면을 만들 수 없습니다: {e}")}))),
+        Err(e) => super::post(Event::Session(id, json!({"ev": "error", "kind": "other", "msg": tr!("app.window.viewFailed", error = e)}))),
     }
 }
 
@@ -454,7 +470,7 @@ fn open_monitor_window(target: &EventLoopWindowTarget<Wake>, owner: &str, screen
     let Some((other, current)) = local else { return wry::NewWindowResponse::Deny };
     let monitor = other.clone().or(current);
     let label = home(|m| m.hosts.iter().find(|h| h.id == owner).map(|h| h.label().to_string()).unwrap_or_else(|| crate::APP.into()));
-    let mut builder = WindowBuilder::new().with_title(format!("{label} — 모니터 {}", index+1))
+    let mut builder = WindowBuilder::new().with_title(tr!("app.monitor.title", name = label, n = index+1))
         .with_inner_size(LogicalSize::new(1100.0,740.0)).with_min_inner_size(LogicalSize::new(480.0,320.0));
     if let Some(mon) = monitor.clone() {
         let size = mon.size(); let pos = mon.position(); let scale = mon.scale_factor();
@@ -570,7 +586,7 @@ fn flush(target: &EventLoopWindowTarget<Wake>) {
         });
         if exists { continue; }
         let window_id = crate::store::new_id();
-        let title = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| format!("{} — 파일", h.label())).unwrap_or_else(|| "네트워크 — Itda".into()));
+        let title = files_title(&id);
         match WindowBuilder::new().with_title(title).with_titlebar_transparent(true).with_title_hidden(true).with_fullsize_content_view(true).with_inner_size(LogicalSize::new(1000.0, 700.0)).with_min_inner_size(LogicalSize::new(720.0, 480.0)).build(target) {
             Ok(window) => match home_view(&window, home(|m| is_dark(&m.settings)), Some(&id), Some(&window_id), path.as_deref()) {
                 Ok(view) => { crate::log!("file window up: {id}"); FILE_HOSTS.with(|p| {p.borrow_mut().insert(window_id.clone(), id);}); FILE_PANES.with(|p| { p.borrow_mut().insert(window_id, Pane { window, view }); }); }
@@ -629,19 +645,29 @@ const MENU_FILE_NEW: &str = "file-window-new";
 const MENU_HELP: &str = "help";
 const MENU_HOME: &str = "home";
 
+thread_local! {
+    /// The menu bar in use (kept alive here; replaced when the language changes).
+    static MENU: RefCell<Option<Menu>> = const { RefCell::new(None) };
+}
+fn set_menu() {
+    let m = menu();
+    m.init_for_nsapp();
+    MENU.with(|old| *old.borrow_mut() = Some(m));
+}
+
 /// The menu bar. Without Edit items, ⌘C/⌘V/⌘A don't work in WKWebView text fields.
 fn menu() -> Menu {
     let about = AboutMetadata {
         name: Some(crate::APP.into()),
         version: Some(env!("CARGO_PKG_VERSION").into()),
-        comments: Some("내 기기를 잇다".into()),
+        comments: Some(tr!("app.about.comments").into()),
         website: Some("https://jiun.dev/itda/".into()),
         ..Default::default()
     };
     let item = |id: &str, text: &str, key: Option<(Modifiers, Code)>| MenuItem::with_id(id, text, true, key.map(|(m, c)| Accelerator::new(Some(m), c)));
-    let settings = item(MENU_SETTINGS, "설정…", Some((Modifiers::SUPER, Code::Comma)));
+    let settings = item(MENU_SETTINGS, tr!("app.menu.settings"), Some((Modifiers::SUPER, Code::Comma)));
     // Not the predefined Quit: it would end the app at once, mid-transfer.
-    let quit = item(MENU_QUIT, &format!("{} 종료", crate::APP), Some((Modifiers::SUPER, Code::KeyQ)));
+    let quit = item(MENU_QUIT, &tr!("app.menu.quit", app = crate::APP), Some((Modifiers::SUPER, Code::KeyQ)));
     let app = Submenu::with_items(
         crate::APP,
         true,
@@ -659,31 +685,31 @@ fn menu() -> Menu {
             &quit,
         ],
     );
-    let new = item(MENU_NEW, "새 연결", Some((Modifiers::SUPER, Code::KeyN)));
-    let new_file = item(MENU_FILE_NEW, "새 파일 창", None);
-    let file = Submenu::with_items("파일", true, &[&new_file, &new, &PredefinedMenuItem::separator(), &PredefinedMenuItem::close_window(None)]);
+    let new = item(MENU_NEW, tr!("app.menu.newConnection"), Some((Modifiers::SUPER, Code::KeyN)));
+    let new_file = item(MENU_FILE_NEW, tr!("app.menu.newFileWindow"), None);
+    let file = Submenu::with_items(tr!("app.menu.file"), true, &[&new_file, &new, &PredefinedMenuItem::separator(), &PredefinedMenuItem::close_window(None)]);
     let edit = Submenu::with_items(
-        "편집",
+        tr!("app.menu.edit"),
         true,
         &[
             &PredefinedMenuItem::undo(None),
             &PredefinedMenuItem::redo(None),
             &PredefinedMenuItem::separator(),
-            &item("file-cut", "잘라내기", Some((Modifiers::SUPER, Code::KeyX))),
-            &item("file-copy", "복사", Some((Modifiers::SUPER, Code::KeyC))),
-            &item("file-paste", "붙여넣기", Some((Modifiers::SUPER, Code::KeyV))),
+            &item("file-cut", tr!("app.menu.cut"), Some((Modifiers::SUPER, Code::KeyX))),
+            &item("file-copy", tr!("app.menu.copy"), Some((Modifiers::SUPER, Code::KeyC))),
+            &item("file-paste", tr!("app.menu.paste"), Some((Modifiers::SUPER, Code::KeyV))),
             &PredefinedMenuItem::select_all(None),
         ],
     );
-    let view = Submenu::with_items("보기", true, &[&PredefinedMenuItem::fullscreen(None)]);
-    let home_item = item(MENU_HOME, "Itda 홈", Some((Modifiers::SUPER, Code::Digit1)));
+    let view = Submenu::with_items(tr!("app.menu.view"), true, &[&PredefinedMenuItem::fullscreen(None)]);
+    let home_item = item(MENU_HOME, tr!("app.menu.home"), Some((Modifiers::SUPER, Code::Digit1)));
     let window = Submenu::with_items(
-        "윈도우",
+        tr!("app.menu.window"),
         true,
         &[&PredefinedMenuItem::minimize(None), &PredefinedMenuItem::maximize(None), &PredefinedMenuItem::separator(), &home_item],
     );
-    let help_item = item(MENU_HELP, "Itda 도움말", None);
-    let help = Submenu::with_items("도움말", true, &[&help_item]);
+    let help_item = item(MENU_HELP, tr!("app.menu.helpItem"), None);
+    let help = Submenu::with_items(tr!("app.menu.help"), true, &[&help_item]);
     let m = Menu::new();
     for s in [app, file, edit, view, window, help].iter().flatten() {
         let _ = m.append(s);
@@ -756,7 +782,7 @@ fn home_view(window: &Window, dark: bool, file: Option<&str>, file_window: Optio
                         let view=if let Some(window_id)=&drag_id {
                             FILE_PANES.with(|panes|panes.borrow().get(window_id).map(|p|p.view.webview()))
                         } else { HOME_PANE.with(|pane|pane.borrow().as_ref().map(|p|p.view.webview())) };
-                        let result=view.ok_or_else(||"파일 창을 찾을 수 없습니다".to_string()).and_then(|view|native_files::drag(&view,v));
+                        let result=view.ok_or_else(||tr!("fx.windowNotFound").to_string()).and_then(|view|native_files::drag(&view,v));
                         if let Err(error)=result { super::post(Event::Page(json!({"type":"files_native_drag_end","id":id,"error":error}))); }
                         return;
                     }
@@ -843,8 +869,7 @@ pub fn run(quick: Option<String>) {
             let _ = p.lock().unwrap().send_event(Wake::Menu(e.id));
         }
     }));
-    let menu = menu();
-    menu.init_for_nsapp();
+    set_menu();
     let dark = home(|m| is_dark(&m.settings));
     // Started in the background (another Itda turning on high-performance sharing here over
     // SSH): no home window, only the permission helper; the Dock icon brings the home back.
@@ -881,7 +906,6 @@ pub fn run(quick: Option<String>) {
 
     event_loop.run(move |event, target, flow| {
         *flow = ControlFlow::Wait;
-        let _ = &menu;
         match event {
             // Launched: AppKit has installed its own quit handler by now; ours replaces it.
             TaoEvent::NewEvents(tao::event::StartCause::Init) => {

@@ -70,13 +70,13 @@ pub fn open(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>, expect
 fn connect(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>, expect: Option<&str>) -> io::Result<(Raw, String)> {
     let (name, port) = split(host);
     if user.trim().is_empty() {
-        return Err(rfb::denied("사용자 이름을 입력하세요 (Windows 계정 이름)"));
+        return Err(rfb::kinded(io::ErrorKind::PermissionDenied, "need_user", tr!("rdp.needUser")));
     }
     let addrs: Vec<SocketAddr> = (name.as_str(), port).to_socket_addrs()?.collect();
     if addrs.is_empty() {
-        return rfb::err("호스트를 찾을 수 없습니다");
+        return Err(rfb::kinded(io::ErrorKind::Other, "dns", tr!("conn.hostNotFound")));
     }
-    let mut last = io::Error::other("연결할 수 없습니다");
+    let mut last = io::Error::other(tr!("conn.cantConnect"));
     let mut tcp = None;
     for a in &addrs {
         match TcpStream::connect_timeout(a, Duration::from_secs(10)) {
@@ -147,9 +147,7 @@ fn connect(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>, expect:
     let (tls, server_key) = tls_upgrade(framed.into_inner_no_leftover(), &name)?;
     let key_id = key_id(&server_key);
     if expect.is_some_and(|e| e != key_id) {
-        return Err(rfb::denied(
-            "원격 데스크톱 서버 키가 지난번과 다릅니다. 다른 기기가 응답했을 수 있어 암호를 보내지 않았습니다. 그 PC를 다시 설치했거나 인증서가 바뀐 것이 확실하면 연결의 ⋯ 메뉴에서 ‘원격 데스크톱 서버 키 다시 받기’를 누르세요",
-        ));
+        return Err(rfb::denied(tr!("rdp.keyChanged")));
     }
     let upgraded = ironrdp_blocking::mark_as_upgraded(upgrade, &mut connector);
     let mut framed = Framed::new(tls);
@@ -226,25 +224,21 @@ fn split(host: &str) -> (String, u16) {
 fn conn_err(e: ironrdp_connector::ConnectorError) -> io::Error {
     crate::log!("rdp connector: {e:?}");
     match e.kind() {
-        ConnectorErrorKind::AccessDenied => rfb::denied("이 계정은 원격 데스크톱으로 로그인할 수 없습니다 (원격 데스크톱 사용자 권한 확인)"),
-        ConnectorErrorKind::Credssp(_) => rfb::denied("RDP 로그인 실패: 사용자 이름 또는 암호가 맞지 않습니다"),
-        ConnectorErrorKind::Negotiation(f) => io::Error::other(format!(
-            "원격 데스크톱 보안 협상 실패: {f}. Itda는 암호를 보호하는 네트워크 수준 인증(NLA)으로만 연결합니다. 상대 PC의 원격 데스크톱 설정에서 NLA를 허용하세요"
-        )),
+        ConnectorErrorKind::AccessDenied => rfb::denied(tr!("rdp.accessDenied")),
+        ConnectorErrorKind::Credssp(_) => rfb::denied(tr!("rdp.authFailed")),
+        ConnectorErrorKind::Negotiation(f) => io::Error::other(tr!("rdp.negotiation", error = f)),
         // The server chose a protocol without NLA, which wasn't offered.
-        _ if e.to_string().contains("but server selected") => rfb::denied(
-            "이 원격 데스크톱이 네트워크 수준 인증(NLA) 없이 연결하려고 해서 연결하지 않았습니다 (암호 보호). 상대 PC의 원격 데스크톱 설정에서 NLA를 허용하세요",
-        ),
+        _ if e.to_string().contains("but server selected") => rfb::denied(tr!("rdp.noNla")),
         _ => {
             // Keep the socket error's kind (reset, timeout…) when there is one underneath.
             let mut src: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(&e);
             while let Some(s) = src {
                 if let Some(io) = s.downcast_ref::<io::Error>() {
-                    return io::Error::new(io.kind(), format!("RDP 연결 오류: {io}"));
+                    return io::Error::new(io.kind(), tr!("rdp.error", error = io));
                 }
                 src = s.source();
             }
-            io::Error::other(format!("RDP 연결 오류: {e}"))
+            io::Error::other(tr!("rdp.error", error = e))
         }
     }
 }
@@ -276,7 +270,7 @@ fn tls_upgrade(tcp: TcpStream, name: &str) -> io::Result<(Tls, Vec<u8>)> {
     while tls.conn.is_handshaking() {
         tls.conn.complete_io(&mut tls.sock)?;
     }
-    let cert = tls.conn.peer_certificates().and_then(|c| c.first()).ok_or_else(|| io::Error::other("RDP 서버 인증서가 없습니다"))?;
+    let cert = tls.conn.peer_certificates().and_then(|c| c.first()).ok_or_else(|| io::Error::other(tr!("rdp.noCert")))?;
     use x509_cert::der::Decode;
     let cert = x509_cert::Certificate::from_der(cert).map_err(io::Error::other)?;
     let key = cert.tbs_certificate.subject_public_key_info.subject_public_key.as_bytes().ok_or_else(|| io::Error::other("bad server key"))?.to_vec();

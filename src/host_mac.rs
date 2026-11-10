@@ -118,11 +118,11 @@ pub(crate) fn name() -> String {
 pub fn capture_support() -> Result<(), &'static str> {
     let v = NSProcessInfo::processInfo().operatingSystemVersion();
     if !crate::capture_support::macos_supported(v.majorVersion, v.minorVersion) {
-        return Err(crate::capture_support::MACOS_CAPTURE_REQUIREMENT);
+        return Err(crate::capture_support::macos_capture_requirement());
     }
     if [c"SCShareableContent", c"SCStream", c"SCContentFilter", c"SCStreamConfiguration"]
         .into_iter().any(|name| AnyClass::get(name).is_none()) {
-        return Err(crate::capture_support::CAPTURE_UNAVAILABLE);
+        return Err(crate::capture_support::capture_unavailable());
     }
     Ok(())
 }
@@ -164,7 +164,7 @@ pub(crate) fn ready() -> Result<(), String> {
     check_intent(&USER_STOPPED)?;
     capture_support().map_err(str::to_owned)?;
     if !CGPreflightScreenCaptureAccess() {
-        return Err("이 Mac에서 화면 기록 권한이 아직 허용되지 않았습니다".into());
+        return Err(tr!("mac.screenNotAllowed").into());
     }
     match screen_unavailable() {
         Some(why) => Err(why.into()),
@@ -194,15 +194,17 @@ fn session_state() -> Option<(bool, bool)> {
 // ---------------------------------------------------------------- consent and clipboard
 
 pub(crate) fn ask_user(peer: &SocketAddr) -> bool {
-    let text = format!("{}에서 이 Mac의 화면을 보고 조작하려고 합니다. 허용할까요?", peer.ip());
+    let text = tr!("mac.consent.text", peer = peer.ip());
+    // The answer names the button: matched with the same label the dialog shows.
+    let (deny, allow) = (tr!("mac.consent.deny"), tr!("mac.consent.allow"));
     let script = format!(
-        "display dialog {} with title \"Itda — 화면 공유 요청\" buttons {{\"거부\", \"허용\"}} default button \"허용\" giving up after 60",
-        applescript_string(&text)
+        "display dialog {} with title {} buttons {{{}, {}}} default button {} giving up after 60",
+        applescript_string(&text), applescript_string(tr!("pcshare.askTitle")), applescript_string(deny), applescript_string(allow), applescript_string(allow)
     );
     std::process::Command::new("/usr/bin/osascript")
         .args(["-e", &script])
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("button returned:허용"))
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("button returned:{allow}")))
         .unwrap_or(false)
 }
 
@@ -350,19 +352,24 @@ type Health = Arc<Mutex<StreamHealth>>;
 const QUIET_PROBE: Duration = Duration::from_secs(8);
 const RECOVERY_BACKOFF: Duration = Duration::from_secs(2);
 const RECOVERY_WINDOW: Duration = Duration::from_secs(60);
-const CAPTURE_STOPPED: &str = "이 Mac에서 화면 공유를 중지했습니다. 다시 공유하려면 이 Mac에서 Itda를 다시 열어 주세요.";
-const CAPTURE_LOST: &str = "고성능 화면 캡처가 멈춰 연결을 종료합니다. 잠시 후 다시 연결해 주세요.";
+/// The person stopped sharing here (macOS's own control): not retried. Recognised by
+/// `is_capture_stopped` in either language (Settings can change it meanwhile).
+fn capture_stopped() -> &'static str { tr!("mac.captureStopped") }
+fn is_capture_stopped(e: &str) -> bool {
+    ["ko", "en"].iter().any(|l| e == crate::i18n::text_in(l, "mac.captureStopped"))
+}
+fn capture_lost() -> &'static str { tr!("mac.captureLost") }
 
 fn intentional_stop(sc_domain: bool, code: isize) -> bool {
     sc_domain && matches!(SCStreamErrorCode(code), SCStreamErrorCode::UserStopped | SCStreamErrorCode::UserDeclined)
 }
 fn check_intent(latch: &AtomicBool) -> Result<(), String> {
-    if latch.load(Ordering::Acquire) { Err(CAPTURE_STOPPED.into()) } else { Ok(()) }
+    if latch.load(Ordering::Acquire) { Err(capture_stopped().into()) } else { Ok(()) }
 }
 fn record_capture_error(latch: &AtomicBool, sc_domain: bool, code: isize, reason: String) -> String {
     if intentional_stop(sc_domain, code) {
         latch.store(true, Ordering::Release);
-        CAPTURE_STOPPED.into()
+        capture_stopped().into()
     } else { reason }
 }
 fn capture_error(error: &NSError) -> String {
@@ -391,7 +398,7 @@ impl Watchdog {
         probe: impl FnOnce() -> Result<(), String>,
         restart: impl FnOnce(bool) -> Result<Option<T>, String>,
         completed: impl Fn() -> Instant) -> Result<Option<T>, String> {
-        if health.user_stopped { return Err(CAPTURE_STOPPED.into()); }
+        if health.user_stopped { return Err(capture_stopped().into()); }
         if self.observed_frames != Some(health.frames) {
             self.observed_frames = Some(health.frames);
             self.probe_failures = 0;
@@ -408,7 +415,7 @@ impl Watchdog {
             self.probed = completed();
             match result {
                 Ok(()) => self.probe_failures = 0,
-                Err(error) if error == CAPTURE_STOPPED => return Err(error),
+                Err(error) if is_capture_stopped(&error) => return Err(error),
                 Err(error) => {
                     self.probe_failures += 1;
                     // A single delay after wake/load is not evidence that the stream is broken.
@@ -416,10 +423,10 @@ impl Watchdog {
                 }
             }
         }
-        if self.reason.as_deref() == Some(CAPTURE_STOPPED) { return Err(CAPTURE_STOPPED.into()); }
+        if self.reason.as_deref().is_some_and(is_capture_stopped) { return Err(capture_stopped().into()); }
         if self.reason.is_none() || now < self.retry_at { return Ok(None); }
         self.attempts.retain(|at| now.saturating_duration_since(*at) < RECOVERY_WINDOW);
-        if self.attempts.len() >= 3 { return Err(CAPTURE_LOST.into()); }
+        if self.attempts.len() >= 3 { return Err(capture_lost().into()); }
         self.attempts.push(now);
         crate::log!("hp: restarting stalled capture: {}", self.reason.as_deref().unwrap_or_default());
         // Stop first ONLY after an explicit delegate error. Probe suspicion retains the old stream.
@@ -435,11 +442,11 @@ impl Watchdog {
                 Ok(capture) // None means the old stream recovered while a candidate failed.
             }
             Err(error) => {
-                if error == CAPTURE_STOPPED { return Err(error); }
+                if is_capture_stopped(&error) { return Err(error); }
                 crate::log!("hp: capture restart failed: {error}");
                 self.failures += 1;
                 self.retry_at = completed + RECOVERY_BACKOFF;
-                if self.failures >= 2 { Err(CAPTURE_LOST.into()) } else { Ok(None) }
+                if self.failures >= 2 { Err(capture_lost().into()) } else { Ok(None) }
             }
         }
     }
@@ -500,7 +507,7 @@ define_class!(
         fn stopped(&self, _stream: &SCStream, error: &NSError) {
             let reason = capture_error(error); // Latch immediately, including late/discarded streams.
             let mut health = self.ivars().health.lock().unwrap();
-            health.user_stopped |= reason == CAPTURE_STOPPED;
+            health.user_stopped |= is_capture_stopped(&reason);
             health.error = Some(reason);
         }
     }
@@ -538,8 +545,8 @@ pub(crate) fn capture() -> Result<Arc<Mutex<Capture>>, String> {
             crate::log!("hp: screen capture unavailable: {why}");
             // Keep framework diagnostics out of the auth reason (including words
             // like "password" which RFB clients classify as bad credentials).
-            let stopped = why == CAPTURE_STOPPED;
-            let why = if stopped { CAPTURE_STOPPED } else { "이 Mac의 화면 캡처를 시작하지 못했습니다. 잠시 후 다시 시도해 주세요." }.to_string();
+            let stopped = is_capture_stopped(&why);
+            let why = if stopped { capture_stopped() } else { tr!("mac.captureStartFailed") }.to_string();
             *CAPTURE_FAILURE.lock().unwrap() = Some((Instant::now(), why.clone()));
             Err(why)
         }
@@ -605,10 +612,10 @@ impl Capture {
             check_intent(&USER_STOPPED)?;
             c.update();
             let health = c.health.lock().unwrap().clone();
-            if health.user_stopped { return Err(CAPTURE_STOPPED.into()); }
+            if health.user_stopped { return Err(capture_stopped().into()); }
             if let Some(error) = health.error { return Err(error); }
             if c.generation != 0 { return Ok(c); }
-            if Instant::now() >= until { return Err("ScreenCaptureKit이 첫 화면을 보내지 않았습니다".into()); }
+            if Instant::now() >= until { return Err(tr!("mac.noFirstFrame").into()); }
             std::thread::sleep(Duration::from_millis(10));
         }
     }
@@ -767,7 +774,7 @@ fn supervise_capture(weak: std::sync::Weak<Mutex<Capture>>) -> Result<(), String
                 Ok(Some(fresh)) => fresh.health.lock().unwrap().user_stopped,
                 _ => false,
             };
-            let result = if stopped { Err(CAPTURE_STOPPED.into()) } else { result };
+            let result = if stopped { Err(capture_stopped().into()) } else { result };
             match result {
                 Ok(Some(fresh)) => {
                     if !adopt_capture(&weak, fresh, |fresh, old| {
@@ -817,7 +824,7 @@ fn probe_stream(stream: &SCStream, w: usize, h: usize, health: &Health) -> Resul
     let result = wait_capture(&rx).and_then(|error| start_result(Ok(error)));
     // A real image arriving during a delayed command is stronger evidence than its timeout.
     let health = health.lock().unwrap();
-    if health.user_stopped { Err(CAPTURE_STOPPED.into()) }
+    if health.user_stopped { Err(capture_stopped().into()) }
     else if health.error.is_none() && health.frames != before { Ok(()) } else { result }
 }
 
@@ -943,7 +950,7 @@ mod watchdog_tests {
         assert!(step::<FakeCapture>(&mut watch, at + RECOVERY_BACKOFF / 2, &health,
             || unreachable!(), || panic!("retry ignored backoff")).unwrap().is_none());
         assert_eq!(step::<FakeCapture>(&mut watch, at + RECOVERY_BACKOFF, &health,
-            || unreachable!(), || Err("fake restart timed out".into())).err().as_deref(), Some(CAPTURE_LOST));
+            || unreachable!(), || Err("fake restart timed out".into())).err().as_deref(), Some(capture_lost()));
     }
 
     #[test]
@@ -969,10 +976,10 @@ mod watchdog_tests {
         let mut watch = Watchdog::new(at);
         let health = StreamHealth { last_frame: at, frames: 1, error: None, user_stopped: true };
         assert_eq!(step::<FakeCapture>(&mut watch, at, &health,
-            || panic!("user stop was probed"), || panic!("user stop was overridden")).err().as_deref(),Some(CAPTURE_STOPPED));
+            || panic!("user stop was probed"), || panic!("user stop was overridden")).err().as_deref(),Some(capture_stopped()));
         let health = StreamHealth { user_stopped: false, error: Some("stream error".into()), ..health };
         assert_eq!(step::<FakeCapture>(&mut watch, at, &health, || unreachable!(),
-            || Err(CAPTURE_STOPPED.into())).err().as_deref(),Some(CAPTURE_STOPPED));
+            || Err(capture_stopped().into())).err().as_deref(),Some(capture_stopped()));
     }
 
     #[test]
@@ -982,8 +989,8 @@ mod watchdog_tests {
         // Model the callback retaining only application intent, after private old health is gone.
         let late_callback = || record_capture_error(&intent, true, SCStreamErrorCode::UserStopped.0, "stopped".into());
         let _replacement = FakeCapture { frame: 2 };
-        assert_eq!(late_callback(), CAPTURE_STOPPED);
-        assert_eq!(check_intent(&intent), Err(CAPTURE_STOPPED.into()));
+        assert_eq!(late_callback(), capture_stopped());
+        assert_eq!(check_intent(&intent), Err(capture_stopped().into()));
         let _ = record_capture_error(&intent, true, SCStreamErrorCode::InternalError.0, "late other error".into());
         assert!(check_intent(&intent).is_err(), "a later callback erased user intent");
     }
@@ -999,7 +1006,7 @@ mod watchdog_tests {
             tries += 1;
             start_result(Ok(wait_capture(&rx)?))
         });
-        assert_eq!(result, Err(CAPTURE_STOPPED.into()));
+        assert_eq!(result, Err(capture_stopped().into()));
         assert_eq!(tries, 1);
         assert!(check_intent(&intent).is_err());
     }
@@ -1017,8 +1024,8 @@ mod watchdog_tests {
             || unreachable!(), || panic!("unbounded restart loop")).is_err());
         let mut capture = fixed_capture(16,16,vec![7;256]);
         let held = capture.snapshot();
-        capture.failed = Some(CAPTURE_LOST.into());
-        assert_eq!(capture.check().unwrap_err().to_string(), CAPTURE_LOST);
+        capture.failed = Some(capture_lost().into());
+        assert_eq!(capture.check().unwrap_err().to_string(), capture_lost());
         assert_eq!(held.pixels[0],7); // Old immutable pictures survive until their viewer drops them.
     }
 }
@@ -1125,7 +1132,7 @@ fn retry_start<T>(mut create: impl FnMut() -> Result<T, String>) -> Result<T, St
     let mut last = String::new();
     for _ in 0..2 {
         check_intent(&USER_STOPPED)?;
-        match create() { Ok(v) => return Ok(v), Err(e) if e == CAPTURE_STOPPED => return Err(e), Err(e) => last = e }
+        match create() { Ok(v) => return Ok(v), Err(e) if is_capture_stopped(&e) => return Err(e), Err(e) => last = e }
     }
     Err(last)
 }
@@ -1347,7 +1354,7 @@ fn start_result(result: Result<Option<String>, std::sync::mpsc::RecvTimeoutError
     match result {
         Ok(None) => Ok(()),
         Ok(Some(e)) => Err(e),
-        Err(_) => Err("ScreenCaptureKit이 화면 캡처 시작에 응답하지 않았습니다".into()),
+        Err(_) => Err(tr!("mac.startTimeout").into()),
     }
 }
 

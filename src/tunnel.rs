@@ -82,10 +82,10 @@ fn quiet(cmd: &mut Command) -> &mut Command {
 /// ssh_command), so names with '@' (Microsoft accounts, UPNs: me@outlook.com) work.
 pub fn ssh_target(c: &SshCfg) -> io::Result<String> {
     if c.key_alias.starts_with('-') || c.key_alias.chars().any(|v| v.is_control() || v.is_whitespace()) {
-        return Err(err(io::ErrorKind::InvalidInput, "SSH 기기 주소를 확인하세요"));
+        return Err(err(io::ErrorKind::InvalidInput, tr!("ssh.checkAddress")));
     }
     if c.host.is_empty() || c.host.starts_with('-') || c.host.chars().any(|v| v.is_control() || v.is_whitespace() || v == '@') || c.user.starts_with('-') || c.user.chars().any(|v| v.is_control()) {
-        return Err(err(io::ErrorKind::InvalidInput, "SSH 기기 주소와 계정 이름을 확인하세요"));
+        return Err(err(io::ErrorKind::InvalidInput, tr!("ssh.checkAddressUser")));
     }
     Ok(c.host.clone())
 }
@@ -96,7 +96,7 @@ pub fn ssh_command(c: &SshCfg) -> io::Result<Command> {
 pub fn ssh_command_strict(c:&SshCfg)->io::Result<Command> {ssh_command_with_check(c,true)}
 fn ssh_command_with_check(c:&SshCfg,strict:bool)->io::Result<Command> {
     ssh_target(c)?;
-    let exe = ssh_exe().ok_or_else(|| err(io::ErrorKind::NotFound, "OpenSSH 클라이언트를 찾을 수 없습니다"))?;
+    let exe = ssh_exe().ok_or_else(|| crate::rfb::kinded(io::ErrorKind::NotFound, "ssh_missing", tr!("ssh.missing")))?;
     let mut cmd = Command::new(exe);
     // At another address of a known device: only its already trusted key will do.
     let strict = strict || !c.key_alias.is_empty();
@@ -187,23 +187,24 @@ fn err(kind: io::ErrorKind, msg: &str) -> io::Error {
 
 /// Turn ssh's log into the error a person should see.
 pub(crate) fn classify(log: &str) -> io::Error {
+    use crate::rfb::kinded;
     use io::ErrorKind::*;
     let has = |s: &str| log.contains(s);
     if has("REMOTE HOST IDENTIFICATION HAS CHANGED") || has("Host key verification failed") {
-        err(PermissionDenied, "SSH 호스트 키가 바뀌었습니다 — 이전에 접속한 Mac과 다른 기기일 수 있습니다")
+        kinded(PermissionDenied, "ssh_hostkey", tr!("ssh.hostKeyChanged"))
     } else if has("Permission denied") || has("Too many authentication failures") {
-        err(PermissionDenied, "SSH 로그인 실패 — 기기 계정 이름/암호를 확인하세요")
+        kinded(PermissionDenied, "ssh_auth", tr!("ssh.authFailed"))
     } else if has("Could not resolve hostname") {
-        err(NotFound, "호스트를 찾을 수 없습니다")
+        kinded(NotFound, "dns", tr!("conn.hostNotFound"))
     } else if has("Connection refused") {
-        err(ConnectionRefused, "원격 로그인(SSH)이 꺼져 있습니다")
+        kinded(ConnectionRefused, "ssh_refused", tr!("ssh.refused"))
     } else if has("timed out") {
-        err(TimedOut, "SSH 연결 시간 초과")
+        err(TimedOut, tr!("ssh.timeout"))
     } else if has("No route to host") || has("Network is unreachable") {
-        err(Other, "네트워크에 도달할 수 없습니다 (os error 10065)")
+        kinded(Other, "unreachable", tr!("ssh.unreachable"))
     } else {
         let last = log.lines().rev().find(|l| !l.starts_with("debug")).unwrap_or("").trim();
-        err(Other, &format!("SSH 연결 실패: {last}"))
+        err(Other, &tr!("ssh.failed", error = last))
     }
 }
 
@@ -314,7 +315,7 @@ impl Tunnel {
                 kill_and_reap(child);
                 log_debug(&self.log.lock().unwrap());
                 crate::log!("ssh timed out");
-                return Err(err(io::ErrorKind::TimedOut, "SSH 연결 시간 초과"));
+                return Err(err(io::ErrorKind::TimedOut, tr!("ssh.timeout")));
             }
             std::thread::sleep(Duration::from_millis(50));
         }

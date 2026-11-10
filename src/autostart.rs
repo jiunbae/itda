@@ -150,7 +150,7 @@ mod imp {
     }
 
     pub fn set(on: bool) -> Result<(), String> {
-        let Some(service) = service() else { return Err("이 macOS에서는 로그인 항목을 등록할 수 없습니다".into()) };
+        let Some(service) = service() else { return Err(tr!("sys.loginItemUnsupported").into()) };
         if on == state().on() {
             return Ok(());
         }
@@ -164,7 +164,7 @@ mod imp {
             if ok.as_bool() {
                 return Ok(());
             }
-            Err(err.as_ref().map_or_else(|| "알 수 없는 오류".into(), |e| e.localizedDescription().to_string()))
+            Err(err.as_ref().map_or_else(|| tr!("sys.unknownError").into(), |e| e.localizedDescription().to_string()))
         }
     }
 
@@ -182,7 +182,7 @@ mod imp {
         State::Off
     }
     pub fn set(_on: bool) -> Result<(), String> {
-        Err("이 시스템에서는 지원하지 않습니다".into())
+        Err(tr!("sys.unsupported").into())
     }
     pub fn open_settings() {}
 }

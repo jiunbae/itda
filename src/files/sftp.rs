@@ -35,7 +35,7 @@ impl Packet {
             .at
             .checked_add(n)
             .filter(|&e| e <= self.b.len())
-            .ok_or_else(|| err("잘못된 SFTP 응답"))?;
+            .ok_or_else(|| err(tr!("fx.sftp.badReply")))?;
         let start = self.at;
         self.at = end;
         Ok(&self.b[start..end])
@@ -45,11 +45,11 @@ impl Packet {
         Ok(self.take(n)?.to_vec())
     }
     fn text(&mut self) -> io::Result<String> {
-        String::from_utf8(self.bytes()?).map_err(|_| err("UTF-8로 표시할 수 없는 파일 이름입니다"))
+        String::from_utf8(self.bytes()?).map_err(|_| err(tr!("fx.sftp.nameUtf8")))
     }
     fn status(&mut self) -> io::Result<u32> {
         if self.t != 101 {
-            return Err(err("SFTP 상태 응답이 아닙니다"));
+            return Err(err(tr!("fx.sftp.notStatus")));
         }
         let code = self.u32()?;
         if code == 0 || code == 1 || code == 2 {
@@ -58,12 +58,12 @@ impl Packet {
         let text = self.text().unwrap_or_default();
         // The server's own words stay for diagnosis; the common refusals get a reason.
         let reason = match code {
-            3 => "원격 기기에서 권한이 없습니다",
-            4 => "원격 기기가 작업을 거부했습니다. 같은 이름이 있거나 쓸 수 없는 이름인지 확인하세요",
-            5 => "원격 기기가 이 경로나 이름을 받아들이지 않습니다",
-            _ => return Err(err(format!("SFTP: {text} (코드 {code})"))),
+            3 => tr!("fx.sftp.denied"),
+            4 => tr!("fx.sftp.refused"),
+            5 => tr!("fx.sftp.badPath"),
+            _ => return Err(err(tr!("fx.sftp.code", text = text, code = code))),
         };
-        Err(err(format!("{reason} (SFTP 코드 {code}: {text})")))
+        Err(err(tr!("fx.sftp.status", reason = reason, code = code, text = text)))
     }
     fn attrs(&mut self, name: String) -> io::Result<Entry> {
         let f = self.u32()?;
@@ -134,9 +134,9 @@ impl<F: FnMut(u64)> Write for RelayWriter<'_, F> {
         while !self.pending.is_empty() {
             self.control.check()?;
             let mut r = self.dst.packet()?;
-            let i = self.pending.iter().position(|&id| id == r.id).ok_or_else(|| err("SFTP 중계 쓰기 응답 오류"))?;
+            let i = self.pending.iter().position(|&id| id == r.id).ok_or_else(|| err(tr!("fx.sftp.relayReply")))?;
             self.pending.remove(i);
-            let checked = r.status().and_then(|status| if status == 0 { Ok(()) } else { Err(err("SFTP 중계 쓰기 실패")) });
+            let checked = r.status().and_then(|status| if status == 0 { Ok(()) } else { Err(err(tr!("fx.sftp.relayFailed"))) });
             // Drain the rest even after a write rejection: CLOSE and staging cleanup
             // must not mistake an old WRITE reply for their own response.
             if let Err(e) = checked { if failure.is_none() { failure = Some(e); } }
@@ -189,8 +189,8 @@ impl Sftp {
     }
     pub(super) fn start(mut child: Child, control: &Control) -> io::Result<Self> {
         crate::tunnel::register_child(&child);
-        let input = child.stdin.take().ok_or_else(|| err("SSH 입력 없음"))?;
-        let output = child.stdout.take().ok_or_else(|| err("SSH 출력 없음"))?;
+        let input = child.stdin.take().ok_or_else(|| err(tr!("fx.sftp.noInput")))?;
+        let output = child.stdout.take().ok_or_else(|| err(tr!("fx.sftp.noOutput")))?;
         let diagnostics = Arc::new(Mutex::new(String::new()));
         if let Some(pipe) = child.stderr.take() {
             let log = diagnostics.clone();
@@ -223,7 +223,7 @@ impl Sftp {
         s.write_packet(&[1, 0, 0, 0, 3])?;
         let p = s.packet()?;
         if p.t != 2 || p.id != 3 {
-            return Err(err("SFTP v3를 지원하지 않는 서버입니다"));
+            return Err(err(tr!("fx.sftp.v3")));
         }
         Ok(s)
     }
@@ -252,14 +252,14 @@ impl Sftp {
         self.output.read_exact(&mut len).map_err(|_| {
             let log = self.diagnostics.lock().unwrap();
             if log.is_empty() {
-                err("파일 연결이 끊겼습니다. SSH 로그인과 원격 로그인 설정을 확인하세요")
+                err(tr!("fx.sftp.lost"))
             } else {
                 crate::tunnel::classify(&log)
             }
         })?;
         let n = u32::from_be_bytes(len) as usize;
         if !(5..=MAX_PACKET).contains(&n) {
-            return Err(err("SFTP 응답 크기가 잘못되었습니다"));
+            return Err(err(tr!("fx.sftp.badSize")));
         }
         let mut b = vec![0; n];
         self.output.read_exact(&mut b)?;
@@ -282,14 +282,14 @@ impl Sftp {
         let id = self.send(t, b)?;
         let p = self.packet()?;
         if p.id != id {
-            return Err(err("SFTP 요청 순서 불일치"));
+            return Err(err(tr!("fx.sftp.requestOrder")));
         }
         Ok(p)
     }
     fn status_request(&mut self, t: u8, b: &[u8]) -> io::Result<()> {
         let mut p = self.request(t, b)?;
         if p.status()? != 0 {
-            return Err(err("파일 또는 폴더가 없습니다"));
+            return Err(err(tr!("fx.sftp.noEntry")));
         }
         Ok(())
     }
@@ -297,10 +297,10 @@ impl Sftp {
         let mut p = self.request(t, b)?;
         if p.t == 101 {
             p.status()?;
-            return Err(err("파일을 열 수 없습니다"));
+            return Err(err(tr!("fx.sftp.cantOpen")));
         }
         if p.t != 102 {
-            return Err(err("SFTP 핸들 응답 오류"));
+            return Err(err(tr!("fx.sftp.handleReply")));
         }
         p.bytes()
     }
@@ -324,10 +324,10 @@ impl Sftp {
         let mut r = self.request(16, &b)?;
         if r.t == 101 {
             r.status()?;
-            return Err(err("폴더를 찾을 수 없습니다"));
+            return Err(err(tr!("fx.sftp.noFolder")));
         }
         if r.t != 104 || r.u32()? != 1 {
-            return Err(err("SFTP 경로 응답 오류"));
+            return Err(err(tr!("fx.sftp.pathReply")));
         }
         r.text()
     }
@@ -340,11 +340,11 @@ impl Sftp {
             return if code == 2 {
                 Ok(None)
             } else {
-                Err(err("파일 정보를 읽을 수 없습니다"))
+                Err(err(tr!("fx.sftp.cantStat")))
             };
         }
         if r.t != 105 {
-            return Err(err("SFTP 속성 응답 오류"));
+            return Err(err(tr!("fx.sftp.attrsReply")));
         }
         Ok(Some(r.attrs(p.rsplit('/').next().unwrap_or(p).into())?))
     }
@@ -371,7 +371,7 @@ impl Sftp {
             }
             let mut r = self.packet()?;
             let Some(i) = sent.iter().position(|id| *id == r.id) else {
-                return Err(err("SFTP 요청 순서 불일치"));
+                return Err(err(tr!("fx.sftp.requestOrder")));
             };
             sent.remove(i);
             if r.t == 101 {
@@ -379,10 +379,10 @@ impl Sftp {
                     done = true;
                     continue;
                 }
-                break Err(err("폴더 목록을 읽을 수 없습니다"));
+                break Err(err(tr!("fx.sftp.cantList")));
             }
             if r.t != 104 {
-                break Err(err("SFTP 목록 응답 오류"));
+                break Err(err(tr!("fx.sftp.listReply")));
             }
             if !done {
                 sent.push_back(self.send(12, &b)?);
@@ -392,7 +392,7 @@ impl Sftp {
                 break Err(e);
             }
             if out.len() > 200_000 {
-                break Err(err("폴더가 너무 큽니다. 하위 폴더로 이동하세요"));
+                break Err(err(tr!("fx.sftp.folderTooBig")));
             }
         };
         // Replies still due on a refused folder are dropped as they arrive, like the CLOSE.
@@ -488,7 +488,7 @@ impl Sftp {
                         // (A reply the protocol doesn't allow: the server can't be trusted to
                         // answer a CLOSE either.)
                         broken = true;
-                        return Err(err("SFTP 읽기 크기 오류: 전송 중 파일이 바뀌었을 수 있습니다"));
+                        return Err(err(tr!("fx.sftp.readSize")));
                     }
                     out.write_all(&data)?;
                     done += data.len() as u64;
@@ -509,7 +509,7 @@ impl Sftp {
                 let id = r.id;
                 if !queue.iter().any(|q| q.0 == id) || got.contains_key(&id) {
                     broken = true;
-                    return Err(err("SFTP 응답 순서 불일치"));
+                    return Err(err(tr!("fx.sftp.replyOrder")));
                 }
                 if r.t == 101 {
                     // The server refusing the read (still in step, unless the STATUS hasn't
@@ -518,14 +518,14 @@ impl Sftp {
                     broken |= r.b.len().saturating_sub(r.at) < 4;
                     return Err(match r.status() {
                         Err(e) => e,
-                        Ok(_) => err("파일이 전송 중 바뀌었거나 읽을 수 없습니다"),
+                        Ok(_) => err(tr!("fx.sftp.changed")),
                     });
                 }
                 if r.t != 103 {
                     // Any other kind of reply: the transport can't be trusted.
                     queue.retain(|q| q.0 != id);
                     broken = true;
-                    return Err(err("파일이 전송 중 바뀌었거나 읽을 수 없습니다"));
+                    return Err(err(tr!("fx.sftp.changed")));
                 }
                 match r.bytes() {
                     Ok(data) => {
@@ -602,10 +602,10 @@ impl Sftp {
                 let i = pending
                     .iter()
                     .position(|&id| id == r.id)
-                    .ok_or_else(|| err("SFTP 쓰기 응답 오류"))?;
+                    .ok_or_else(|| err(tr!("fx.sftp.writeReply")))?;
                 pending.remove(i);
                 if r.status()? != 0 {
-                    return Err(err("파일 쓰기 실패"));
+                    return Err(err(tr!("fx.sftp.writeFailed")));
                 }
             }
             progress(offset);

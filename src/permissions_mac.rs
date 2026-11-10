@@ -167,7 +167,7 @@ fn open(target: &EventLoopWindowTarget<Wake>) -> Result<(), String> {
         return Ok(());
     }
     let window = WindowBuilder::new()
-        .with_title("Itda — 권한 도우미")
+        .with_title(tr!("macperm.title"))
         .with_inner_size(LogicalSize::new(420., 720.))
         .with_min_inner_size(LogicalSize::new(360., 480.))
         .with_always_on_top(true)
@@ -186,8 +186,8 @@ fn open(target: &EventLoopWindowTarget<Wake>) -> Result<(), String> {
             let Ok(v)=serde_json::from_str::<Value>(req.body()) else{return};
             if v["cmd"]=="permission_drag" {
                 let result=(||{
-                    let app=app_path().ok_or("응용 프로그램 폴더의 Itda 앱을 실행해 주세요")?;
-                    let view=PANE.with(|p|p.borrow().as_ref().map(|p|p.view.webview())).ok_or("권한 도우미가 닫혔습니다")?;
+                    let app=app_path().ok_or(tr!("macperm.openFromApplications"))?;
+                    let view=PANE.with(|p|p.borrow().as_ref().map(|p|p.view.webview())).ok_or(tr!("macperm.helperClosed"))?;
                     super::native_files::drag(&view,json!({"side":"local","path":app.parent(),"items":[{"name":app.file_name().unwrap().to_string_lossy(),"dir":true}]}))
                 })();
                 if let Err(error)=result {let mut v=state();v["error"]=json!(error);reply(v);}
@@ -216,14 +216,14 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
                 return Ok(());
             }
             "guide_reveal" | "guide_copy" => {
-                let app = app_path().ok_or("응용 프로그램 폴더의 Itda 앱을 실행해 주세요")?;
+                let app = app_path().ok_or(tr!("macperm.openFromApplications"))?;
                 if v["cmd"] == "guide_reveal" {
                     std::process::Command::new("/usr/bin/open").arg("-R").arg(&app).spawn().map(crate::tunnel::reap_detached).map_err(|e| e.to_string())?;
                 } else {
                     let pb = NSPasteboard::generalPasteboard();
                     pb.clearContents();
                     unsafe { pb.setString_forType(&NSString::from_str(&app.to_string_lossy()), NSPasteboardTypeString) };
-                    guide_reply(json!({"type":"guide","state":"앱 위치를 복사했어요. + 버튼의 파일 선택 창에서 ⇧⌘G → ⌘V → Return"}));
+                    guide_reply(json!({"type":"guide","state":tr!("macperm.pathCopied")}));
                 }
                 return Ok(());
             }
@@ -270,7 +270,7 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
                 }
             }
             "permission_reveal" => {
-                let app = app_path().ok_or("응용 프로그램 폴더의 Itda 앱을 실행해 주세요")?;
+                let app = app_path().ok_or(tr!("macperm.openFromApplications"))?;
                 std::process::Command::new("/usr/bin/open")
                     .arg("-R")
                     .arg(app)
@@ -279,7 +279,7 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
                     .map_err(|e| e.to_string())?;
             }
             "permission_copy" => {
-                let app = app_path().ok_or("응용 프로그램 폴더의 Itda 앱을 실행해 주세요")?;
+                let app = app_path().ok_or(tr!("macperm.openFromApplications"))?;
                 let pb = NSPasteboard::generalPasteboard();
                 pb.clearContents();
                 if !unsafe {
@@ -288,7 +288,7 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
                         NSPasteboardTypeString,
                     )
                 } {
-                    return Err("앱 위치를 복사하지 못했습니다".into());
+                    return Err(tr!("macperm.copyFailed").into());
                 }
                 let mut v = state();
                 v["copied"] = json!(true);
@@ -315,7 +315,7 @@ pub(super) fn handle(v: Value, target: &EventLoopWindowTarget<Wake>) {
 }
 /// Quit, then open this same app again on the helper (it reports the result there).
 fn restart_app() -> Result<(), String> {
-    let app = app_path().ok_or("응용 프로그램 폴더의 Itda 앱을 실행해 주세요")?;
+    let app = app_path().ok_or(tr!("macperm.openFromApplications"))?;
     crate::home::permission_restart(|| {
         std::process::Command::new("/bin/sh")
             .arg("-c")
@@ -348,7 +348,7 @@ fn request(permission: &str) -> Result<(), String> {
             crate::host_mac::request_permission("access");
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
         }
-        _ => return Err("설정할 권한을 확인해 주세요".into()),
+        _ => return Err(tr!("hp.badPermission").into()),
     };
     std::process::Command::new("/usr/bin/open")
         .arg(url)
@@ -488,8 +488,8 @@ fn guide_reply(v: Value) {
 fn guide_intro() {
     let permission = GUIDE.with(|g| g.borrow().as_ref().map(|g| g.permission.clone()));
     let Some(permission) = permission else { return };
-    let step = if permission == "access" { "1/2 단계 · 키보드·마우스 조작" } else { "2/2 단계 · 화면 보기 (켜면 Itda가 다시 열려요)" };
-    guide_reply(json!({"type":"guide","permission":permission,"step":step,"app_path":app_path(),"state":"설정 창의 목록이 보이면 Itda를 켜세요."}));
+    let step = if permission == "access" { tr!("macperm.step.access") } else { tr!("macperm.step.screen") };
+    guide_reply(json!({"type":"guide","permission":permission,"step":step,"app_path":app_path(),"state":tr!("macperm.turnOn")}));
 }
 
 fn start_guide(permission: &str, target: &EventLoopWindowTarget<Wake>) -> Result<(), String> {
@@ -505,7 +505,7 @@ fn start_guide(permission: &str, target: &EventLoopWindowTarget<Wake>) -> Result
     });
     if !reused {
         let window = WindowBuilder::new()
-            .with_title("Itda 권한 도우미")
+            .with_title(tr!("macperm.guideTitle"))
             .with_inner_size(LogicalSize::new(GUIDE_W, GUIDE_H))
             .with_resizable(false)
             .with_visible(false)
@@ -529,8 +529,8 @@ fn start_guide(permission: &str, target: &EventLoopWindowTarget<Wake>) -> Result
                 if v["cmd"] == "guide_drag" {
                     // Must start inside this mouse-drag event, on the UI thread.
                     let result = (|| {
-                        let app = app_path().ok_or("응용 프로그램 폴더의 Itda 앱을 실행해 주세요")?;
-                        let view = GUIDE.with(|g| g.borrow().as_ref().map(|g| g.pane.view.webview())).ok_or("권한 도우미가 닫혔습니다")?;
+                        let app = app_path().ok_or(tr!("macperm.openFromApplications"))?;
+                        let view = GUIDE.with(|g| g.borrow().as_ref().map(|g| g.pane.view.webview())).ok_or(tr!("macperm.helperClosed"))?;
                         super::native_files::drag(&view, json!({"side":"local","path":app.parent(),"items":[{"name":app.file_name().unwrap().to_string_lossy(),"dir":true}]}))
                     })();
                     if let Err(e) = result { guide_reply(json!({"type":"guide","state":e,"error":true})); }
@@ -646,17 +646,17 @@ fn advance(permission: &str, target: &EventLoopWindowTarget<Wake>) {
         // hint; restart_app atomically closes admission and recounts before launch.
         let busy = super::super::home(|m| m.sessions.len()) + super::file_windows().len() + crate::files::active_jobs();
         if busy == 0 {
-            guide_reply(json!({"type":"guide","done":"모두 허용됐어요. 적용하려고 Itda를 다시 여는 중…"}));
+            guide_reply(json!({"type":"guide","done":tr!("macperm.reopening")}));
             match restart_app() {
                 Ok(()) => { GUIDE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst); return; }
-                Err(e) => { close_guide(); let _ = open(target); let mut v = state(); v["error"] = json!(format!("Itda를 다시 열지 못했어요: {e}")); reply(v); return; }
+                Err(e) => { close_guide(); let _ = open(target); let mut v = state(); v["error"] = json!(tr!("macperm.reopenFailed", error = e)); reply(v); return; }
             }
         }
         // The helper offers "Itda 다시 열기" itself, naming what will close.
         close_guide();
         let _ = open(target);
         let mut v = state();
-        v["notice"] = json!("모두 허용됐어요. 열려 있는 Itda 창과 진행 중인 파일 전송이 끝난 뒤 ‘Itda 다시 열기’를 누르면 적용돼요.");
+        v["notice"] = json!(tr!("macperm.reopenLater"));
         reply(v);
         return;
     }
@@ -717,9 +717,9 @@ fn guide_tick(seq: u64, target: &EventLoopWindowTarget<Wake>) {
         if on {
             GUIDE.with(|g| if let Some(g) = g.borrow_mut().as_mut() { g.done = Some(now) });
             let text = match (permission.as_str(), here) {
-                ("screen", false) => "화면 기록이 켜졌어요. Itda를 다시 열면 적용돼요",
-                ("screen", true) => "화면 기록이 허용됐어요",
-                (_, _) => "키보드·마우스 조작이 허용됐어요",
+                ("screen", false) => tr!("macperm.screenOnReopen"),
+                ("screen", true) => tr!("macperm.screenAllowed"),
+                (_, _) => tr!("macperm.accessAllowed"),
             };
             guide_reply(json!({"type":"guide","done":text}));
             status();

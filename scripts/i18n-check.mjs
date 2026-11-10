@@ -20,45 +20,12 @@ const fail = (m) => errors.push(m);
 const ALLOW = [
   { file: "web/app.js", has: "title = title.replace(/Mac이/g", why: "Korean particles follow the device noun (Korean only)" },
   { file: "web/app.js", has: "lead = lead.replace(/Mac이/g", why: "Korean particles follow the device noun (Korean only)" },
+  { file: "src/hp_upgrade.rs", has: "pub const SCREEN_LOCKED: &str =", why: "wire value between Itdas (older versions compare it)" },
+  { file: "src/hp_upgrade.rs", has: "pub const OTHER_USER: &str =", why: "wire value between Itdas (older versions compare it)" },
 ];
 
-// Files not converted yet (a later change moves their text into the catalogs).
+// Files not converted yet (a later change moves their text into the catalogs). Keep it empty.
 const PENDING = new Set([
-  // Phase 3: text the app renders itself (menus, dialogs, the Windows viewer, errors).
-  "src/autostart.rs",
-  "src/capture_support.rs",
-  "src/curtain_mac.rs",
-  "src/files/drag.rs",
-  "src/files/export.rs",
-  "src/files/locations.rs",
-  "src/files/mod.rs",
-  "src/files/preview.rs",
-  "src/files/preview_image.rs",
-  "src/files/sftp.rs",
-  "src/files/transfer.rs",
-  "src/files/vdrag.rs",
-  "src/files_mac.rs",
-  "src/files_win.rs",
-  "src/gateway.rs",
-  "src/home.rs",
-  "src/home_mac.rs",
-  "src/home_win.rs",
-  "src/host_mac.rs",
-  "src/hp_upgrade.rs",
-  "src/main.rs",
-  "src/net.rs",
-  "src/permissions_mac.rs",
-  "src/rdp.rs",
-  "src/remote_setup.rs",
-  "src/rfb.rs",
-  "src/server.rs",
-  "src/session.rs",
-  "src/share.rs",
-  "src/store.rs",
-  "src/tailscale.rs",
-  "src/tunnel.rs",
-  "src/ui.rs",
-  "src/update.rs",
 ]);
 
 // ---- 1-2: catalogs --------------------------------------------------------------------
@@ -191,7 +158,7 @@ for (const file of [...web, ...rust]) {
     if (!hangul.test(line)) return;
     const orig = src.split("\n")[i];
     if (ALLOW.some((a) => a.file === r && orig.includes(a.has))) return;
-    fail(`${r}:${i + 1}: Hangul outside the catalogs — move it to web/locales (or src/i18n.rs): ${orig.trim().slice(0, 120)}`);
+    fail(`${r}:${i + 1}: Hangul outside the catalogs — move it to web/locales/ (or src/locales/): ${orig.trim().slice(0, 120)}`);
   });
 }
 for (const a of ALLOW) {
