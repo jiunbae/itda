@@ -1296,7 +1296,7 @@ mod tests {
             let cap = cap.clone();
             let worker = std::thread::spawn(move || {
                 let out = Outbox::new(socket).unwrap();
-                let _ = pump(&out, &rx, &AtomicBool::new(false), &cap, (w, h), &AtomicBool::new(false), view_only, &Default::default());
+                let _ = pump(&out, &rx, &AtomicBool::new(false), &cap, (w, h), &AtomicBool::new(false), view_only, &Default::default(), sound_waker(channel().0));
             });
             tx.send(Msg::Encodings(vec![ENC_ZRLE, ENC_VMWARE_CURSOR, ENC_CURSOR, ENC_POINTER_MOTION])).unwrap();
             tx.send(Msg::Request { incremental: false }).unwrap();
