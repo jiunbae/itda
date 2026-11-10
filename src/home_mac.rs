@@ -5,7 +5,7 @@
 use super::{drain, home, is_dark, send, Event, QUEUE};
 use crate::store::{self, Host, Settings};
 use muda::accelerator::{Accelerator, Code, Modifiers};
-use muda::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use muda::{AboutMetadata, CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -644,6 +644,7 @@ const MENU_NEW: &str = "new";
 const MENU_FILE_NEW: &str = "file-window-new";
 const MENU_HELP: &str = "help";
 const MENU_HOME: &str = "home";
+const MENU_LANG: &str = "lang-";
 
 thread_local! {
     /// The menu bar in use (kept alive here; replaced when the language changes).
@@ -668,6 +669,12 @@ fn menu() -> Menu {
     let settings = item(MENU_SETTINGS, tr!("app.menu.settings"), Some((Modifiers::SUPER, Code::Comma)));
     // Not the predefined Quit: it would end the app at once, mid-transfer.
     let quit = item(MENU_QUIT, &tr!("app.menu.quit", app = crate::APP), Some((Modifiers::SUPER, Code::KeyQ)));
+    // Settings → Language, also here: the current choice is checked.
+    let langs: Vec<CheckMenuItem> = super::language_items().into_iter().map(|(v, text, on)| CheckMenuItem::with_id(format!("{MENU_LANG}{v}"), text, true, on, None)).collect();
+    let language = Submenu::new(tr!("app.menu.language"), true);
+    for item in &langs {
+        let _ = language.append(item);
+    }
     let app = Submenu::with_items(
         crate::APP,
         true,
@@ -675,6 +682,7 @@ fn menu() -> Menu {
             &PredefinedMenuItem::about(None, Some(about)),
             &PredefinedMenuItem::separator(),
             &settings,
+            &language,
             &PredefinedMenuItem::separator(),
             &PredefinedMenuItem::services(None),
             &PredefinedMenuItem::separator(),
@@ -719,6 +727,12 @@ fn menu() -> Menu {
 
 fn on_menu(id: &muda::MenuId) {
     if id.as_ref() == MENU_QUIT { super::request_quit(super::QuitReason::User); return; }
+    if let Some(pref) = id.as_ref().strip_prefix(MENU_LANG) {
+        super::set_language(pref);
+        // Rebuilt even when nothing changed: clicking the checked item unchecks it.
+        set_menu();
+        return;
+    }
     if let Some(action)=match id.as_ref(){"file-copy"=>Some("copy"),"file-cut"=>Some("cut"),"file-paste"=>Some("paste"),_=>None}{
         let script=format!("window.ItdaFiles?.nativeEdit({})",json!(action));
         let handled=FILE_PANES.with(|p|{let p=p.borrow();if let Some(p)=p.values().find(|p|p.window.is_focused()){let _=p.view.evaluate_script(&script);true}else{false}})

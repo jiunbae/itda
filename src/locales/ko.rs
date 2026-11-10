@@ -1,6 +1,7 @@
 //! Korean messages for text Rust renders itself (source language). See src/i18n.rs.
 pub(super) const MESSAGES: &[(&str, &str)] = &[
     ("lang.en", "English"),
+    ("lang.ko", "한국어"),
 
     // Connections, SSH, remote setup, high-performance setup, updates, system.
     ("conn.hostNotFound", "호스트를 찾을 수 없습니다"),
@@ -498,6 +499,8 @@ pub(super) const MESSAGES: &[(&str, &str)] = &[
     ("app.menu.home", "Itda 홈"),
     ("app.menu.help", "도움말"),
     ("app.menu.helpItem", "Itda 도움말"),
+    ("app.menu.language", "언어"),
+    ("app.menu.langAuto", "자동 ({lang})"),
     ("app.webview2Missing", "화면 구성 요소(Microsoft Edge WebView2)를 시작할 수 없습니다.\n\n{error}\n\nhttps://go.microsoft.com/fwlink/p/?LinkId=2124703 에서 설치할 수 있습니다."),
     ("app.drag.checkWindow", "끌어 놓을 파일 창을 다시 확인하세요"),
     ("app.tray.watching", "{app} — {count}명이 이 PC를 보는 중"),

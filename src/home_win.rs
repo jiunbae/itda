@@ -37,6 +37,7 @@ const TRAY_OPEN: usize = 1;
 const TRAY_QUIT: usize = 2;
 const TRAY_SHARE: usize = 3;
 const TRAY_HOST0: usize = 100;
+const TRAY_LANG0: usize = 10;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
 
@@ -728,6 +729,14 @@ unsafe fn tray_menu(h: HWND) {
     AppendMenuW(m, MF_SEPARATOR, 0, null());
     let sharing = home(|m| m.settings.web.on || m.settings.share.on);
     AppendMenuW(m, MF_STRING, TRAY_SHARE, wide(if sharing { tr!("app.tray.sharing") } else { tr!("app.tray.share") }).as_ptr());
+    // Settings → Language, also here: the current choice is checked.
+    let langs = super::language_items();
+    let sub = CreatePopupMenu();
+    for (i, (_, text, on)) in langs.iter().enumerate() {
+        AppendMenuW(sub, MF_STRING | if *on { MF_CHECKED } else { MF_UNCHECKED }, TRAY_LANG0 + i, wide(text).as_ptr());
+    }
+    AppendMenuW(m, MF_POPUP, sub as usize, wide(tr!("app.menu.language")).as_ptr());
+    AppendMenuW(m, MF_SEPARATOR, 0, null());
     AppendMenuW(m, MF_STRING, TRAY_QUIT, wide(tr!("app.tray.quit")).as_ptr());
     let mut pt = POINT { x: 0, y: 0 };
     GetCursorPos(&mut pt);
@@ -736,6 +745,7 @@ unsafe fn tray_menu(h: HWND) {
     DestroyMenu(m);
     match cmd {
         TRAY_OPEN => show_home(),
+        c if (TRAY_LANG0..TRAY_LANG0 + langs.len()).contains(&c) => super::set_language(langs[c - TRAY_LANG0].0),
         TRAY_SHARE => {
             show_home();
             send(json!({"type": "go", "page": "share"}));
