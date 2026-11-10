@@ -160,7 +160,7 @@ jobs:
         run: node scripts/device-actions-a11y-e2e.mjs
       - name: Phone web viewer (sign-in, lockout, expiry, login fix, toolbar)
         run: node scripts/viewer-phone-e2e.mjs
-      - name: English interface (home, nearby, viewer toolbar)
+      - name: English interface (home, files, help, permissions, phone viewer)
         run: node scripts/i18n-en-e2e.mjs
       - uses: actions/upload-artifact@v4
         if: always()

@@ -177,9 +177,9 @@ fn open(target: &EventLoopWindowTarget<Wake>) -> Result<(), String> {
         let pos = monitor.position();
         window.set_outer_position(PhysicalPosition::new(pos.x + 24, pos.y + 80));
     }
-    let view=WebViewBuilder::new()
+    let view=WebViewBuilder::new().with_initialization_script(&crate::i18n::init_script())
         .with_custom_protocol("itda".into(),|_,req| {
-            let body=match req.uri().path(){"/permissions.html"|"/permissions.css"|"/permissions.js"|"/icon.svg"=>super::super::asset(req.uri().path()),_=>None};
+            let body=match req.uri().path(){"/permissions.html"|"/permissions.css"|"/permissions.js"|"/icon.svg"|"/i18n.js"|"/locales/ko.js"|"/locales/en.js"=>super::super::asset(req.uri().path()),_=>None};
             match body {Some((body,mime))=>http::Response::builder().header("Content-Type",mime).header("Cache-Control","no-store").body(body).unwrap(),None=>http::Response::builder().status(404).body(Cow::Borrowed(&b"not found"[..])).unwrap()}
         })
         .with_ipc_handler(|req| {
@@ -513,9 +513,10 @@ fn start_guide(permission: &str, target: &EventLoopWindowTarget<Wake>) -> Result
             .build(target)
             .map_err(|e| e.to_string())?;
         let view = WebViewBuilder::new()
+            .with_initialization_script(&crate::i18n::init_script())
             .with_custom_protocol("itda".into(), |_, req| {
                 let body = match req.uri().path() {
-                    "/permission-guide.html" | "/permission-guide.css" | "/permission-guide.js" | "/icon.svg" => super::super::asset(req.uri().path()),
+                    "/permission-guide.html" | "/permission-guide.css" | "/permission-guide.js" | "/icon.svg" | "/i18n.js" | "/locales/ko.js" | "/locales/en.js" => super::super::asset(req.uri().path()),
                     _ => None,
                 };
                 match body {

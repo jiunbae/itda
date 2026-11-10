@@ -1,5 +1,7 @@
-// The interface in English: the home window (home, Nearby, Settings → Language), and the
-// phone web viewer (sign-in, device list, toolbar), against the real web/ frontend. No
+// The interface in English: the home window (home, Nearby, Settings → Language, help), the
+// macOS permission pages, the phone web viewer (sign-in, device list, toolbar), and a file
+// window (Explorer and Finder layouts: list, menus, dialogs, transfers, Home/Network), against
+// the real web/ frontend. No
 // Korean may show except the language's own name and fixture data, no message ID may leak,
 // and a language change redraws. Also: ?lang=en wins over a Korean browser.
 //   PLAYWRIGHT=/path/to/playwright/index.mjs CHROMIUM=/path/to/chrome node scripts/i18n-en-e2e.mjs
@@ -47,7 +49,7 @@ const base = `http://127.0.0.1:${server.address().port}`;
 // Visible Korean (but 한국어 and the fixture's own names) and leaked message IDs.
 const stray = (page, allow = []) => page.evaluate((allow) => {
   const out = [];
-  const keyLike = /\b(viewer|hpSetup|lang|nav|home|settings|editor|toast|share|nearby|common|card|title|top)\.[a-zA-Z]+[\w.]*\b/;
+  const keyLike = /\b(viewer|hpSetup|lang|nav|home|settings|editor|toast|share|nearby|common|card|title|top|files|remoteSetup|transfers|help|perm|permGuide|onboard)\.[a-zA-Z]+[\w.]*\b/;
   const look = (s, where) => {
     if (!s) return;
     let rest = s.replace(/한국어/g, "");
@@ -56,6 +58,7 @@ const stray = (page, allow = []) => page.evaluate((allow) => {
     const k = s.match(keyLike);
     if (k && !/\.(local|com|net)\b/.test(k[0])) out.push(`message ID in ${where}: ${k[0]}`);
   };
+  document.querySelectorAll("details").forEach((d) => (d.open = true));
   look(document.body.innerText, "text");
   for (const e of document.querySelectorAll("[title],[aria-label],[placeholder]")) {
     if (!(e.offsetParent || e.getClientRects().length)) continue;
@@ -148,8 +151,100 @@ try {
   if (shots) await phone.screenshot({ path: path.join(shots, "en-phone-toolbar.png") });
   await ctx.close();
 
+  // ---- File window, Windows (Explorer) and Mac (Finder) -------------------------------------
+  for (const platform of ["windows", "mac"]) {
+    const fc = await browser.newContext({ locale: "en-US", viewport: { width: 1200, height: 800 }, reducedMotion: "reduce",
+      userAgent: platform === "mac" ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" : "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" });
+    await fc.addInitScript(() => {
+      const entry = (name, dir = false, size = 100) => ({ name, dir, size, modified: 1780000000 });
+      const home = "/Users/alex", tree = { [home]: [entry("Documents", true), entry("Notes.txt"), entry("Zebra.pdf", false, 2000)], [home + "/Documents"]: [entry("Alpha.txt")] };
+      window.ipc = { postMessage: (raw) => { const m = JSON.parse(raw); if (m.cmd !== "files") return;
+        const result = { ...m, type: "files_result", ok: true };
+        if (m.op === "connect") result.data = { path: home, entries: tree[home], local_path: home, local_entries: tree[home], rsync: true };
+        else if (m.op === "list") result.data = { path: m.path, entries: tree[m.path] || [] };
+        else if (m.op === "preview") result.data = { mime: "text/plain", text: "Preview fixture" };
+        else return;
+        queueMicrotask(() => itda.recv(result));
+      } };
+    });
+    const fp = await fc.newPage();
+    watch(fp);
+    if (platform === "windows") await fp.route("**/icons.js", (route) => route.fulfill({ contentType: "text/javascript", body: fs.readFileSync(path.join(repo, "web/icons.js"), "utf8").replace("if (/Windows/.test(navigator.userAgent)) return;", "") }));
+    await fp.goto(base + "/");
+    await fp.evaluate(() => { S.hosts = [{ id: "test", name: "Studio Mac", host: "studio.local", os: "mac", kind: "vnc", login_user: "alex", has_pw: true, files: { method: "sftp", user: "alex" } }]; S.settings = { ...S.settings, onboarded: true, theme: "light" }; S.page = "files"; render(); });
+    problems.push(...(await stray(fp)).map((s) => `${platform} file browser: ${s}`));
+    await fp.evaluate(() => ItdaFiles.launch(S.hosts[0]));
+    const layer = fp.locator(".files-layer");
+    await layer.locator("[data-index]").first().waitFor();
+    const heads = (await layer.locator("th").allTextContents()).join("|");
+    assert(heads.includes(platform === "mac" ? "Name ▴|Date modified|Size|Kind" : "Name ▴|Date modified|Type|Size"), `${platform} column headers in English: ${heads}`);
+    assert(await fp.evaluate(() => document.title) === "Studio Mac — Files", `${platform} window title in English`);
+    await layer.locator("[data-index]").filter({ hasText: "Notes.txt" }).first().click();
+    assert(await layer.locator("[data-status]").textContent() === "3 items · 1 selected", `${platform} status in English: ${await layer.locator("[data-status]").textContent()}`);
+    problems.push(...(await stray(fp)).map((s) => `${platform} file list: ${s}`));
+    const click = (a) => layer.locator(`[data-action="${a}"]`).first().evaluate((b) => b.click());
+    for (const menu of ["more", "sort"]) {
+      await click(menu);
+      problems.push(...(await stray(fp)).map((s) => `${platform} ${menu} menu: ${s}`));
+      await fp.keyboard.press("Escape");
+      await fp.evaluate(() => document.querySelectorAll(".files-menu").forEach((e) => e.remove()));
+    }
+    await click("copy"); await click("paste");
+    const dialog = fp.getByRole("dialog", { name: "Copy files", exact: true });
+    await dialog.waitFor();
+    await dialog.locator("summary").click();
+    problems.push(...(await stray(fp)).map((s) => `${platform} copy dialog: ${s}`));
+    if (shots) await fp.screenshot({ path: path.join(shots, `en-files-${platform}-copy.png`) });
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await fp.evaluate(() => ItdaFiles.message({ type: "files_job", window: "app", id: "test", job: "j1", seq: 1, state: "failed", error: "boom", request: { names: ["a", "b"], from: "local", source: "/x", to: "remote", destination: "/y" }, completed_names: ["a"] }));
+    problems.push(...(await stray(fp)).map((s) => `${platform} transfers: ${s}`));
+    if (shots) await fp.screenshot({ path: path.join(shots, `en-files-${platform}.png`) });
+    // A language change redraws the open window (lists, sidebar, tool labels), both ways.
+    await fp.evaluate(() => I18N.setPref("ko"));
+    assert((await layer.locator("th").first().textContent()).startsWith("이름"), `${platform} file window redrew in Korean`);
+    assert(await layer.locator('[data-action="copy"]').getAttribute("title") === "복사", `${platform} tool labels follow the language`);
+    await fp.evaluate(() => I18N.setPref("en"));
+    assert((await layer.locator("th").first().textContent()).startsWith("Name"), `${platform} file window redrew in English`);
+    problems.push(...(await stray(fp)).map((s) => `${platform} after switching back: ${s}`));
+    await layer.locator('[data-action="network"]').first().click();
+    await layer.locator(".files-network h2").waitFor();
+    problems.push(...(await stray(fp)).map((s) => `${platform} network: ${s}`));
+    await fc.close();
+  }
+
+  // ---- Help center (every topic, Mac and Windows) and the macOS permission pages -----------
+  for (const [os, ua] of [["mac", "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36"], ["windows", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"]]) {
+    const hp = await browser.newPage({ locale: "en-US", userAgent: ua, viewport: { width: 1100, height: 800 } });
+    watch(hp);
+    await hp.addInitScript(() => (window.ipc = { postMessage: () => {} }));
+    await hp.goto(base + "/");
+    await hp.evaluate(() => itda.recv({ type: "state", hosts: [], accounts: [], settings: { onboarded: true, theme: "light", lang: "auto", defaults: {}, web: { on: false, port: 8780 }, share: { on: false } } }));
+    for (const topic of ["start", "mac", "windows", "linux", "share", "phone", "macpc", "assist", "outside", "accounts", "settings", "words", "trouble", "keys"]) {
+      await hp.evaluate((t) => { S.helpTopic = t; S.page = "help"; render(); }, topic);
+      problems.push(...(await stray(hp)).map((s) => `help ${os}/${topic}: ${s}`));
+    }
+    await hp.close();
+  }
+  const perm = await browser.newPage({ locale: "en-US", viewport: { width: 420, height: 720 } });
+  watch(perm);
+  await perm.addInitScript(() => (window.ipc = { postMessage: () => {} }));
+  await perm.goto(base + "/permissions.html");
+  const b = { screen: false, access: false, app_path: "/Applications/Itda.app", requested: "screen", requested_seq: 1, version: "1.0.22" };
+  for (const m of [b, { ...b, configured_screen: true, active_transfers: 2 }, { ...b, screen: true, requested: "access" }, { ...b, screen: true, access: true, enabled: true, hp_serving: true }]) {
+    await perm.evaluate((m) => itda.recv({ type: "permissions", ...m }), m);
+    problems.push(...(await stray(perm)).map((s) => `permissions: ${s}`));
+  }
+  const title = await perm.evaluate(() => document.title);
+  assert(title && title === (await perm.evaluate(() => T("perm.title"))) && !/[가-힣]/.test(title), `permission helper title in English: ${title}`);
+  await perm.goto(base + "/permission-guide.html");
+  for (const m of [{ permission: "screen", step: "Step 2 of 2", side: "left", app_path: "/Applications/Itda.app" }, { stale: true }]) {
+    await perm.evaluate((m) => itda.recv({ type: "guide", ...m }), m);
+    problems.push(...(await stray(perm)).map((s) => `permission guide: ${s}`));
+  }
+  await perm.close();
+
   assert(!problems.length, problems.join("\n"));
-  console.log("PASS: English home, Nearby and Settings → Language (saved, redraws), ?lang=en, phone sign-in, list, refusal and toolbar");
+  console.log("PASS: English home, Nearby and Settings → Language (saved, redraws), ?lang=en, phone sign-in, list, refusal and toolbar; file windows (Explorer and Finder) in English and after a language switch; every help topic; permission helper and guide");
 } finally {
   await browser.close();
   server.close();

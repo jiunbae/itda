@@ -24,14 +24,6 @@ const ALLOW = [
 
 // Files not converted yet (a later change moves their text into the catalogs).
 const PENDING = new Set([
-  // Phase 2: the rest of the web UI.
-  "web/files.js",
-  "web/help.js",
-  "web/permission-guide.html",
-  "web/permission-guide.js",
-  "web/permissions.html",
-  "web/permissions.js",
-  "web/remote-setup.js",
   // Phase 3: text the app renders itself (menus, dialogs, the Windows viewer, errors).
   "src/autostart.rs",
   "src/capture_support.rs",
@@ -118,7 +110,8 @@ const web = [
   ...fs.readdirSync(path.join(root, "web")).filter((f) => /\.(js|html)$/.test(f) && f !== "i18n.js").map((f) => path.join(root, "web", f)),
   ...fs.readdirSync(path.join(root, "web/viewer")).filter((f) => /\.(js|html)$/.test(f) && !/^novnc/.test(f)).map((f) => path.join(root, "web/viewer", f)),
 ];
-const rust = walk(path.join(root, "src"), (p) => p.endsWith(".rs") && !/_e2e\.rs$/.test(p));
+// src/locales/ holds the Rust catalogs.
+const rust = walk(path.join(root, "src"), (p) => p.endsWith(".rs") && !/_e2e\.rs$/.test(p) && !rel(p).startsWith("src/locales/"));
 
 // Code with comments blanked out (strings kept), line numbers preserved.
 function stripJs(src) {
@@ -170,7 +163,7 @@ function stripRust(src) {
     return line;
   });
   for (let i = 0; i < lines.length; i++) {
-    if (!/^\s*#\[cfg\(test\)\]\s*$/.test(lines[i]) || !/^\s*(pub(\(crate\))?\s+)?mod\s+\w+\s*\{/.test(lines[i + 1] || "")) continue;
+    if (!/^\s*#\[cfg\((test|all\(test\b[^\]]*\))\)\]\s*$/.test(lines[i]) || !/^\s*(pub(\(crate\))?\s+)?mod\s+\w+\s*\{/.test(lines[i + 1] || "")) continue;
     let depth = 0, j = i + 1;
     for (; j < lines.length; j++) {
       for (const c of lines[j]) { if (c === "{") depth++; else if (c === "}") depth--; }

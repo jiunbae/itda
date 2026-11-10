@@ -4,13 +4,13 @@
  const send=(cmd,extra={})=>window.ipc?.postMessage(JSON.stringify({cmd,...extra}));
  const $=id=>document.getElementById(id);
  const TEXT={
-  screen:{title:'화면 및 시스템 오디오 기록',lead:'위쪽 ‘화면 및 시스템 오디오 기록’ 목록입니다. 아래의 시스템 오디오 전용 목록이 아니에요.'},
-  access:{title:'손쉬운 사용',lead:'연결한 기기에서 이 Mac을 클릭하고 입력하려면 필요해요.'},
+  screen:{title:'permGuide.screen.title',lead:'permGuide.screen.lead'},
+  access:{title:'permGuide.access.title',lead:'permGuide.access.lead'},
  };
  let drag;
  window.itda={recv(m){
   if(m.type!=='guide')return;
-  if(m.permission){$('done').hidden=true;const t=TEXT[m.permission]||TEXT.screen;$('step').textContent=m.step||'';$('title').textContent=t.title;$('lead').textContent=t.lead;}
+  if(m.permission){$('done').hidden=true;const t=TEXT[m.permission]||TEXT.screen;$('step').textContent=m.step||'';$('title').textContent=T(t.title);$('lead').textContent=T(t.lead);}
   if(m.side){const a=$('arrow');a.textContent=m.side==='left'?'←':'→';a.classList.toggle('right',m.side!=='left');}
   if(m.app_path!==undefined)$('path').textContent=m.app_path||'';
   if(m.state!==undefined){const s=$('state');s.textContent=m.state||'';s.classList.toggle('error',!!m.error);}
@@ -24,5 +24,7 @@
  document.addEventListener('pointerup',()=>drag=null);document.addEventListener('pointercancel',()=>drag=null);
  app.addEventListener('dragstart',e=>e.preventDefault());
  document.addEventListener('click',e=>{const a=e.target.closest('[data-act]')?.dataset.act;if(a)send(`guide_${a}`);});
+ I18N.apply();
+ $('done-text').textContent=T('permGuide.done');
  send('guide_ready');
 })();
