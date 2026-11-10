@@ -2001,7 +2001,10 @@ mod test_bridge {
             }
             (false, p) => match super::asset(p) {
                 Some((b, m)) if m.starts_with("text/html") => {
-                    let html = String::from_utf8_lossy(&b).replace("<script src=\"app.js\">", &format!("<script>{SHIM}</script><script src=\"app.js\">"));
+                    // The language goes first, as a window's init script does (i18n.js reads it on load).
+                    let html = String::from_utf8_lossy(&b)
+                        .replacen("<script src=\"i18n.js\">", &format!("<script>{}</script><script src=\"i18n.js\">", crate::i18n::init_script()), 1)
+                        .replace("<script src=\"app.js\">", &format!("<script>{SHIM}</script><script src=\"app.js\">"));
                     ("200 OK", m, html.into_bytes())
                 }
                 Some((b, m)) => ("200 OK", m, b.into_owned()),
