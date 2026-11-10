@@ -1272,6 +1272,71 @@ mod tests {
         assert_eq!(out, [0, 0, 0x49, 0x54, 0, 0, 0, 0, 0xff, 0xff, 0xfe, 0xff, 0, 1, 0x49, 0x54, 0, 0, 0, 0, 0xff, 0xff, 0xfe, 0xff]);
     }
 
+    /// The Mac high-performance pump on the real screen (needs Screen Recording already allowed
+    /// for this terminal; never prompts, never moves the pointer): a viewer that draws the
+    /// pointer gets its shape and Itda's relative-pointer announcement in the first update; a
+    /// view-only viewer gets neither. `cargo test hp_pump_real -- --ignored --nocapture`
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn hp_pump_real_screen_cursor_and_motion() {
+        use super::*;
+        if !objc2_core_graphics::CGPreflightScreenCaptureAccess() {
+            return println!("skipped: Screen Recording not allowed");
+        }
+        let cap = platform::capture().expect("capture");
+        let (w, h) = { let c = cap.lock().unwrap(); (c.w, c.h) };
+        // (cursor rect (w, h, hotspot), motion rect (x, y), picture rects) of the first update.
+        let first = |view_only: bool| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut c = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let (socket, _) = listener.accept().unwrap();
+            let (tx, rx) = channel();
+            let cap = cap.clone();
+            let worker = std::thread::spawn(move || {
+                let out = Outbox::new(socket).unwrap();
+                let _ = pump(&out, &rx, &AtomicBool::new(false), &cap, (w, h), &AtomicBool::new(false), view_only, &Default::default());
+            });
+            tx.send(Msg::Encodings(vec![ENC_ZRLE, ENC_VMWARE_CURSOR, ENC_CURSOR, ENC_POINTER_MOTION])).unwrap();
+            tx.send(Msg::Request { incremental: false }).unwrap();
+            assert_eq!(rd::<1>(&mut c).unwrap()[0], 0, "a FramebufferUpdate");
+            let n = u16::from_be_bytes(rd::<3>(&mut c).unwrap()[1..].try_into().unwrap());
+            let (mut cursor, mut motion, mut picture) = (None, None, 0);
+            for _ in 0..n {
+                let r = rd::<12>(&mut c).unwrap();
+                let at = |i: usize| u16::from_be_bytes([r[i], r[i + 1]]);
+                match i32::from_be_bytes(r[8..].try_into().unwrap()) {
+                    ENC_VMWARE_CURSOR => {
+                        let kind = rd::<2>(&mut c).unwrap()[0];
+                        assert_eq!(kind, 1, "alpha cursor");
+                        let px = crate::rfb::rd_vec(&mut c, at(4) as usize * at(6) as usize * 4).unwrap();
+                        assert!(px.chunks(4).any(|p| p[3] > 0x80), "visible pixels");
+                        cursor = Some((at(4), at(6), at(0), at(2)));
+                    }
+                    ENC_POINTER_MOTION => motion = Some((at(0), at(2))),
+                    ENC_ZRLE => {
+                        let len = u32::from_be_bytes(rd::<4>(&mut c).unwrap()) as usize;
+                        crate::rfb::rd_vec(&mut c, len).unwrap();
+                        picture += 1;
+                    }
+                    e => panic!("encoding {e}"),
+                }
+            }
+            tx.send(Msg::Gone).unwrap();
+            worker.join().unwrap();
+            (cursor, motion, picture)
+        };
+        let (cursor, motion, picture) = first(false);
+        println!("{w}x{h}: cursor {cursor:?}, motion {motion:?}, {picture} ZRLE rects");
+        assert!(cursor.is_some_and(|(cw, ch, ..)| cw >= 8 && ch >= 8), "the pointer's shape");
+        assert_eq!(motion, Some((1, ITDA_MARK)), "relative pointer announced, pointer shown");
+        assert!(picture > 0);
+        let (cursor, motion, picture) = first(true);
+        assert_eq!((cursor, motion), (None, None), "view-only: pointer drawn in, nothing announced");
+        assert!(picture > 0);
+    }
+
     #[test]
     fn nearby_devices_are_this_network_or_tailnet() {
         let near = |s: &str| super::near(s.parse().unwrap());
