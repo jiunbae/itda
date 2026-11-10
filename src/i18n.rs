@@ -96,8 +96,10 @@ pub fn lang() -> &'static str {
 
 /// Script for a web view the app opens: the page starts in the app's language and resolves
 /// "auto" with the system's (see web/i18n.js).
+/// ITDA_LANG also wins over Settings → Language in the page, as it does here.
 pub fn init_script() -> String {
-    format!("window.ITDA_LANG={:?};window.ITDA_OS_LANG={:?};", lang(), forced().map_or(os_lang(), name))
+    let lock = if std::env::var_os("ITDA_LANG").is_some() && forced().is_some() { "window.ITDA_LANG_FORCED=true;" } else { "" };
+    format!("window.ITDA_LANG={:?};window.ITDA_OS_LANG={:?};{lock}", lang(), forced().map_or(os_lang(), name))
 }
 
 #[path = "locales/ko.rs"]

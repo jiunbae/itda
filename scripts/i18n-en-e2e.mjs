@@ -116,6 +116,21 @@ try {
   problems.push(...(await stray(forced)).map((s) => `forced: ${s}`));
   await forced.close();
 
+  // ---- ITDA_LANG=en (what the app injects) wins over a saved Korean choice -----------------
+  const env = await browser.newPage({ locale: "ko-KR", viewport: { width: 1280, height: 800 } });
+  watch(env);
+  await env.addInitScript(() => { window.ipc = { postMessage: () => {} }; window.ITDA_LANG = "en"; window.ITDA_OS_LANG = "ko"; window.ITDA_LANG_FORCED = true; });
+  await env.goto(base + "/");
+  await env.evaluate((hosts) => itda.recv({ type: "state", hosts, accounts: [], settings: { onboarded: true, theme: "light", lang: "ko", defaults: {} } }), hosts);
+  assert(await env.evaluate(() => I18N.lang) === "en", "ITDA_LANG=en overrides the saved choice");
+  await env.close();
+  const plain = await browser.newPage({ locale: "en-US", viewport: { width: 1280, height: 800 } });
+  await plain.addInitScript(() => { window.ipc = { postMessage: () => {} }; window.ITDA_LANG = "en"; });
+  await plain.goto(base + "/");
+  await plain.evaluate((hosts) => itda.recv({ type: "state", hosts, accounts: [], settings: { onboarded: true, theme: "light", lang: "ko", defaults: {} } }), hosts);
+  assert(await plain.evaluate(() => I18N.lang) === "ko", "without ITDA_LANG the saved choice wins over the app's start language");
+  await plain.close();
+
   // ---- Phone web viewer, English browser --------------------------------------------------
   const ctx = await browser.newContext({
     locale: "en-US", viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,

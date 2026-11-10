@@ -3,7 +3,7 @@
 // language; scripts/i18n-check.mjs keeps both catalogs in step and the UI free of literals.
 //
 // Language, first match wins:
-//   ?lang=ko|en in the page URL (tests and recordings)
+//   ?lang=ko|en in the page URL, or ITDA_LANG when the app started (tests and recordings)
 //   the person's choice: Settings → Language in the app (S.settings.lang), or the web
 //     viewer's own picker on a phone (localStorage), passed in with I18N.setPref()
 //   window.ITDA_LANG: what the app resolved when it opened this window
@@ -18,8 +18,11 @@
   const LANGS = ['ko', 'en'];
   const CATALOG = { ko: Object.create(null), en: Object.create(null) };
   const norm = (l) => (String(l || '').toLowerCase().startsWith('ko') ? 'ko' : 'en');
+  // ?lang= in the URL, or the app started with ITDA_LANG (window.ITDA_LANG_FORCED): the
+  // person's choice can't change the language.
   const param = (() => {
-    try { const v = new URLSearchParams(location.search).get('lang'); return LANGS.includes(v) ? v : null; } catch (_) { return null; }
+    try { const v = new URLSearchParams(location.search).get('lang'); if (LANGS.includes(v)) return v; } catch (_) { /* no URL */ }
+    return window.ITDA_LANG_FORCED && LANGS.includes(window.ITDA_LANG) ? window.ITDA_LANG : null;
   })();
   const system = () => norm(window.ITDA_OS_LANG || (navigator.languages && navigator.languages[0]) || navigator.language);
   let pref = 'auto';
@@ -73,7 +76,7 @@
     get locale() { return lang === 'ko' ? 'ko-KR' : 'en-US'; },
     /** The language "auto" picks here. */
     get system() { return system(); },
-    /** The URL forces a language: the choice can't change it. */
+    /** The URL or ITDA_LANG forces a language: the choice can't change it. */
     get forced() { return !!param; },
     add(l, dict) { Object.assign(CATALOG[l], dict); },
     has(key) { return CATALOG.ko[key] !== undefined; },
