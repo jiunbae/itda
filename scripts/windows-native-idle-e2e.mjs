@@ -36,7 +36,7 @@ try{
  assert(hash(candidate)===report.provenance.binary_sha256,'Copied candidate bytes differ');
  originalStartup=control('startup');
  const listener=net.createServer();await new Promise((resolve,reject)=>{listener.once('error',reject);listener.listen(0,'127.0.0.1',resolve);});report.debug_port=listener.address().port;await new Promise(r=>listener.close(r));
- child=spawn(candidate,[],{env:{...process.env,ITDA_DATA_DIR:path.join(root,'data'),ITDA_DEBUG_PORT:String(report.debug_port)},stdio:['ignore','pipe','pipe']});
+ child=spawn(candidate,[],{env:{...process.env,ITDA_LANG:'ko',ITDA_DATA_DIR:path.join(root,'data'),ITDA_DEBUG_PORT:String(report.debug_port)},stdio:['ignore','pipe','pipe']});
  ended=new Promise(resolve=>{child.once('error',error=>resolve({error:error.message}));child.once('exit',(code,signal)=>{exited=true;resolve({code,signal});});});
  let stderr='';child.stderr.on('data',b=>{stderr=(stderr+b).slice(-4000);});child.stdout.on('data',()=>{});
  await wait(()=>{

@@ -345,7 +345,7 @@ fn build_webview(h: HWND, dark: bool, file: Option<&str>, file_window: Option<&s
             format!("?files={host}&fileWindow={}", file_window.unwrap_or(""))
         }).unwrap_or_default()))
         .with_background_color(bg)
-        .with_initialization_script(&format!("window.itdaNativeDrag={};window.ITDA_FILE_PATH={};window.ITDA_WINDOW_CHROME={};", file_window.is_some(), json!(file_path), file.is_some()))
+        .with_initialization_script(&format!("{}window.itdaNativeDrag={};window.ITDA_FILE_PATH={};window.ITDA_WINDOW_CHROME={};", crate::i18n::init_script(), file_window.is_some(), json!(file_path), file.is_some()))
         .with_devtools(devtools)
         .with_hotkeys_zoom(false)
         .with_browser_accelerator_keys(false)

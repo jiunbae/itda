@@ -25,7 +25,7 @@ try {
   // (WebCodecs needs a secure context: a loopback page.)
   const server = http.createServer((_, res) => { res.setHeader("Content-Type", "text/html"); res.end("<!doctype html><title>t</title>"); });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  const page = await browser.newPage();
+  const page = await browser.newPage({locale:'ko-KR'});
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
   server.close();
   const run = (trace) => page.evaluate(async ([block, key, trace]) => {

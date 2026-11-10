@@ -20,7 +20,7 @@ for (let i = 0; ; i++) {
 }
 try {
   for (const mode of ["zrle", "h264"]) {
-    const page = await browser.newPage();
+    const page = await browser.newPage({locale:'ko-KR'});
     page.on('console', (m) => m.type() === 'error' && console.log(`[${mode}] ${m.text()}`));
     await page.goto(`http://127.0.0.1:18791/?mode=${mode}`);
     await page.waitForFunction(() => document.title === 'done', null, { timeout: 20000 });

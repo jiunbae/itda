@@ -21,8 +21,8 @@ const server=http.createServer((req,res)=>{
  if(url.pathname==='/api/hosts'){res.setHeader('Content-Type','application/json');return res.end(JSON.stringify([host]));}
  if(url.pathname==='/api/edit'){res.setHeader('Content-Type','application/json');return res.end('{"ok":true}');}
  const name=url.pathname==='/'?'index.html':url.pathname.slice(1);
- if(!['index.html','viewer.js','viewer.css','monitors.js','interaction.js','novnc.min.js','icon.svg','icon-192.png','manifest.webmanifest','sw.js'].includes(name)){res.writeHead(404);return res.end();}
- let file=path.join(root,'web/viewer',name);if(name==='icon.svg')file=path.join(root,'assets/itda.svg');if(name==='icon-192.png')file=path.join(root,'assets/itda-192.png');
+ if(!['index.html','viewer.js','viewer.css','monitors.js','interaction.js','novnc.min.js','icon.svg','icon-192.png','manifest.webmanifest','sw.js'].includes(name)&&!/^(i18n\.js|locales\/[\w.-]+\.js)$/.test(name)){res.writeHead(404);return res.end();}
+ let file=path.join(root,/^(i18n\.js|locales\/[\w.-]+\.js)$/.test(name)?'web':'web/viewer',name);if(name==='icon.svg')file=path.join(root,'assets/itda.svg');if(name==='icon-192.png')file=path.join(root,'assets/itda-192.png');
  res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':name.endsWith('.svg')?'image/svg+xml':'text/html');res.end(fs.readFileSync(file));
 });
 server.on('connection',s=>{sockets.add(s);s.on('close',()=>sockets.delete(s));});
@@ -66,7 +66,7 @@ if(process.env.FIXTURE_ONLY){console.log(`Fixture: http://127.0.0.1:${port}/?ope
 let browser, page;
 try{
  browser=await pw.chromium.launch({...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{}),headless:true});
- const context=await browser.newContext({viewport:{width:1000,height:720}});
+ const context=await browser.newContext({locale:'ko-KR',viewport:{width:1000,height:720}});
  await context.addInitScript(()=>{const send=WebSocket.prototype.send;window.wirePackets=[];WebSocket.prototype.send=function(data){window.wirePackets.push(data.byteLength);return send.call(this,data);};let RFB;Object.defineProperty(window,'RFB',{get:()=>RFB,set:Base=>{RFB=class extends Base{constructor(...a){super(...a);window.fixtureRfb=this;}};}});window.ipc={postMessage:msg=>(window.ipcEvents||=[]).push(JSON.parse(msg))};});
  page=await context.newPage();const errors=[];context.on('page',p=>p.on('pageerror',e=>errors.push(e.message)));page.on('pageerror',e=>{errors.push(e.message);console.error('PAGE ERROR',e.message);});page.on('console',m=>{if(m.type()==='error')console.error('BROWSER',m.text());});
  await page.goto(`http://127.0.0.1:${port}/?open=monitors-fixture`);

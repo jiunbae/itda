@@ -23,7 +23,7 @@ const assert=(value,msg)=>{if(!value)throw Error(msg);};
 try{
   // A new Mac profile must reach its own folders before adding or connecting a device.
   {
-    const c=await browser.newContext({viewport:{width:1200,height:800},reducedMotion:'reduce',userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'});
+    const c=await browser.newContext({locale:'ko-KR',viewport:{width:1200,height:800},reducedMotion:'reduce',userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'});
     try{
       await c.addInitScript(()=>{
         const entry=(name,dir=false)=>({name,dir,size:100,modified:1780000000});
@@ -69,7 +69,7 @@ try{
       console.log('PASS: Mac fresh profile enters local folders without a device, waits for home, preserves local folders across tabs/network');
     }finally{await c.close();}
   }
-  const c=await browser.newContext({viewport:{width:1200,height:800},reducedMotion:'reduce',userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
+  const c=await browser.newContext({locale:'ko-KR',viewport:{width:1200,height:800},reducedMotion:'reduce',userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
   await c.addInitScript(()=>{
     const entry=(name,dir=false)=>({name,dir,size:100,modified:1780000000});
     const home='C:\\Users\\alex';

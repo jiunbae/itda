@@ -5,7 +5,7 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../web'),p
 const server=http.createServer((req,res)=>{const name=new URL(req.url,'http://localhost').pathname,p=name==='/icon.svg'?path.resolve(root,'../assets/itda.svg'):path.resolve(root,'.'+name);if((name!=='/icon.svg'&&!p.startsWith(root+path.sep))||!fs.existsSync(p)||!fs.statSync(p).isFile()){res.writeHead(404);return res.end();}res.setHeader('Content-Type',p.endsWith('.js')?'text/javascript':p.endsWith('.css')?'text/css':p.endsWith('.svg')?'image/svg+xml':'text/html');res.end(fs.readFileSync(p));});await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const browser=await pw.chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});const assert=(v,m)=>{if(!v)throw Error(m);},out=process.env.SCREENSHOT_DIR||path.join(os.tmpdir(),'itda-permission-qa');fs.mkdirSync(out,{recursive:true});
 try{
- const p=await browser.newPage({viewport:{width:420,height:720}}),errors=[];p.on('pageerror',e=>errors.push(e.message));await p.clock.install();
+ const p=await browser.newPage({locale:'ko-KR',viewport:{width:420,height:720}}),errors=[];p.on('pageerror',e=>errors.push(e.message));await p.clock.install();
  await p.addInitScript(()=>{window.sent=[];window.permissionState={screen:false,access:false,app_path:'/Applications/Itda.app',requested:'screen',requested_seq:1};window.ipc={postMessage:raw=>{const m=JSON.parse(raw);sent.push(m);if(m.cmd==='permission_request'){permissionState.requested=m.permission;permissionState.requested_seq++;}if(m.cmd==='permission_status'||m.cmd==='permission_request')queueMicrotask(()=>itda.recv({type:'permissions',...permissionState}));}};});
  await p.goto(`http://127.0.0.1:${server.address().port}/permissions.html`);await p.getByText('0/2 완료',{exact:false}).waitFor();
  const initialReads=await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_status').length);await p.clock.fastForward(1600);assert(await p.evaluate(()=>sent.filter(m=>m.cmd==='permission_status').length)>initialReads,'Deep-link guide did not automatically read permission status');
@@ -68,7 +68,7 @@ try{
  assert(await p.locator('section.permission:visible').count()===2&&await p.locator('body').evaluate(e=>e.classList.contains('complete')),'Legacy status did not restore the normal helper');
  assert(await p.locator('.reminder').isVisible()&&await p.locator('footer p').isVisible()&&await p.locator('[data-action="status"]').isVisible(),'Legacy status did not restore helper advice');
  // A guide opened without a deep link still polls, recovering a lost initial IPC reply.
- const recovery=await browser.newPage();await recovery.clock.install();
+ const recovery=await browser.newPage({locale:'ko-KR'});await recovery.clock.install();
  await recovery.addInitScript(()=>{window.reads=0;window.ipc={postMessage:raw=>{if(JSON.parse(raw).cmd==='permission_status'&&++reads>1)queueMicrotask(()=>itda.recv({type:'permissions',screen:false,access:false,requested:null,requested_seq:0,app_path:'/Applications/Itda.app'}));}};});
  await recovery.goto(`http://127.0.0.1:${server.address().port}/permissions.html`);await recovery.clock.fastForward(6100);
  assert(await recovery.evaluate(()=>reads)>=2,'Lost first IPC reply permanently blocked checks');
@@ -76,7 +76,7 @@ try{
  assert(await recovery.evaluate(()=>reads)>recoveredReads,'Guide without a requested permission did not poll');await recovery.close();
  // The guide beside System Settings offers manual re-registration for the current
  // app, never an automatic TCC reset against a hardcoded production bundle identity.
- const g=await browser.newPage({viewport:{width:300,height:470}});await g.addInitScript(()=>{window.sent=[];window.ipc={postMessage:raw=>sent.push(JSON.parse(raw))};});
+ const g=await browser.newPage({locale:'ko-KR',viewport:{width:300,height:470}});await g.addInitScript(()=>{window.sent=[];window.ipc={postMessage:raw=>sent.push(JSON.parse(raw))};});
  await g.goto(`http://127.0.0.1:${server.address().port}/permission-guide.html`);await g.evaluate(()=>itda.recv({type:'guide',permission:'screen'}));
  assert(!await g.locator('#stale').evaluate(d=>d.open),'Stale help open before any wait');
  await g.evaluate(()=>itda.recv({type:'guide',stale:true}));assert(await g.locator('#stale').evaluate(d=>d.open),'Stale help not opened');

@@ -20,7 +20,7 @@ await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const browser = await pw.chromium.launch(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {});
 try {
   for (const ua of ["Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"]) {
-    const page = await browser.newPage({ userAgent: ua });
+    const page = await browser.newPage({locale:'ko-KR', userAgent: ua });
     const errors = [];
     page.on("pageerror", (e) => errors.push(e.message));
     await page.addInitScript(() => (window.ipc = { postMessage: (s) => (window.sent ??= []).push(JSON.parse(s)) }));

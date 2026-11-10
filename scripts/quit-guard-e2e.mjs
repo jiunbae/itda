@@ -19,7 +19,7 @@ const base=`http://127.0.0.1:${server.address().port}`;
 const browser=await pw.chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
 const assert=(value,msg)=>{if(!value)throw Error(msg);};
 try{
-  const c=await browser.newContext({viewport:{width:1200,height:800},reducedMotion:'reduce'});
+  const c=await browser.newContext({locale:'ko-KR',viewport:{width:1200,height:800},reducedMotion:'reduce'});
   await c.addInitScript(()=>{window.testPackets=[];window.ipc={postMessage:raw=>testPackets.push(JSON.parse(raw))};});
   const p=await c.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
   await p.goto(base+'/web/');

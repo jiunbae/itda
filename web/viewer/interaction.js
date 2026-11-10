@@ -42,14 +42,14 @@ export function hpKeys(send, hp) {
         return send(out, code, down);
     };
 }
-// [id, label, default shortcut, its keys, macOS symbolic hotkey number]
+// [id, label's message ID (web/i18n.js), default shortcut, its keys, macOS symbolic hotkey number]
 export const macActions = [
-    ['mission','Mission Control','⌃ ↑',[0xffe3,0xff52],32],
-    ['expose','앱 Exposé','⌃ ↓',[0xffe3,0xff54],33],
-    ['desktop','데스크탑 보기','F11',[0xffc8],36],
-    ['space-left','이전 데스크탑','⌃ ←',[0xffe3,0xff51],79],
-    ['space-right','다음 데스크탑','⌃ →',[0xffe3,0xff53],81],
-    ['spotlight','Spotlight','⌘ Space',[0xffeb,0x20],64],
+    ['mission','viewer.mac.mission','⌃ ↑',[0xffe3,0xff52],32],
+    ['expose','viewer.mac.expose','⌃ ↓',[0xffe3,0xff54],33],
+    ['desktop','viewer.mac.desktop','F11',[0xffc8],36],
+    ['space-left','viewer.mac.spaceLeft','⌃ ←',[0xffe3,0xff51],79],
+    ['space-right','viewer.mac.spaceRight','⌃ →',[0xffe3,0xff53],81],
+    ['spotlight','viewer.keys.spotlight','⌘ Space',[0xffeb,0x20],64],
 ];
 // Itda's high-performance server takes an action as one of its own keysyms (a range no
 // keyboard sends) and uses that Mac's shortcut for it, which may not be the default one.
@@ -62,5 +62,5 @@ export function sendMacAction(action, hp, send) {
     sendChord(null, hp ? [ACTION_KEYSYM + action[4]] : action[3], send);
 }
 export function macMenu() {
-    return `<h3>Mac 화면 동작</h3><div class="keys">${macActions.map(([id,label,key])=>`<button data-mac-action="${id}">${label}<small>${key}</small></button>`).join('')}</div><p class="note">원격 Mac의 기본 키보드 단축키를 보냅니다. 원격 Mac에서 단축키를 변경하거나 끈 경우 해당 설정을 확인하세요.</p>`;
+    return `<h3>${T('viewer.mac.title')}</h3><div class="keys">${macActions.map(([id,label,key])=>`<button data-mac-action="${id}">${T(label)}<small>${key}</small></button>`).join('')}</div><p class="note">${T('viewer.mac.note')}</p>`;
 }

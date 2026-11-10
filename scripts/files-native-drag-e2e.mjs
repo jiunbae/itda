@@ -30,7 +30,7 @@ let browser;
 try {
   browser = await pw[engine].launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
   for (const platform of ['windows', 'mac']) {
-    const context = await browser.newContext({ viewport: { width: 1200, height: 800 }, reducedMotion: 'reduce',
+    const context = await browser.newContext({locale:'ko-KR', viewport: { width: 1200, height: 800 }, reducedMotion: 'reduce',
       userAgent: platform === 'windows' ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' });
     const page = await context.newPage(), pageErrors = [];
     page.on('pageerror', error => pageErrors.push(error.message));

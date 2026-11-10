@@ -8,34 +8,37 @@
 <link rel="stylesheet" href="files.css">
 <link rel="stylesheet" href="help.css">
 <script src="icons.js"></script>
+<script src="i18n.js"></script>
+<script src="locales/ko.js"></script>
+<script src="locales/en.js"></script>
 </head>
 <body>
 <div class="app">
   <aside class="sidebar">
     <div class="brand">
       <div class="logo" aria-hidden="true"></div>
-      <div class="brand-text"><b>Itda</b><small>내 기기를 잇다</small></div>
+      <div class="brand-text"><b>Itda</b><small data-i18n="brand.tagline"></small></div>
     </div>
-    <nav id="nav" class="nav" aria-label="보기"></nav>
+    <nav id="nav" class="nav" data-i18n-attr="aria-label:nav.label"></nav>
     <div class="nav nav-bottom">
-      <button class="nav-item nav-update" id="nav-update" aria-label="새 버전" data-page="settings" hidden><span class="i">&#xE896;</span><span class="label">새 버전</span></button>
-      <button class="nav-item" data-page="help" aria-label="도움말" title="도움말"><span class="i">&#xE897;</span><span class="label">도움말</span></button>
-      <button class="nav-item" data-page="settings" aria-label="설정" title="설정"><span class="i">&#xE713;</span><span class="label">설정</span></button>
+      <button class="nav-item nav-update" id="nav-update" data-i18n-attr="aria-label:nav.update" data-page="settings" hidden><span class="i">&#xE896;</span><span class="label" data-i18n="nav.update"></span></button>
+      <button class="nav-item" data-page="help" data-i18n-attr="aria-label:nav.help;title:nav.help"><span class="i">&#xE897;</span><span class="label" data-i18n="nav.help"></span></button>
+      <button class="nav-item" data-page="settings" data-i18n-attr="aria-label:nav.settings;title:nav.settings"><span class="i">&#xE713;</span><span class="label" data-i18n="nav.settings"></span></button>
     </div>
   </aside>
   <main class="main">
     <header class="topbar">
-      <h1 id="title">모든 연결</h1>
+      <h1 id="title"></h1>
       <div class="search">
         <span class="i">&#xE721;</span>
-        <input id="search" type="text" autocomplete="off" spellcheck="false" placeholder="검색하거나 주소를 입력해 바로 연결">
+        <input id="search" type="text" autocomplete="off" spellcheck="false">
         <kbd>Ctrl F</kbd>
       </div>
-      <div class="seg" id="viewToggle" role="group" aria-label="보기 방식">
-        <button data-view="grid" title="카드 보기"><span class="i">&#xF0E2;</span></button>
-        <button data-view="list" title="목록 보기"><span class="i">&#xE8FD;</span></button>
+      <div class="seg" id="viewToggle" role="group" data-i18n-attr="aria-label:top.viewToggle">
+        <button data-view="grid" data-i18n-attr="title:top.view.grid"><span class="i">&#xF0E2;</span></button>
+        <button data-view="list" data-i18n-attr="title:top.view.list"><span class="i">&#xE8FD;</span></button>
       </div>
-      <button class="btn primary" id="newBtn" title="새 연결 (Ctrl+N)"><span class="i">&#xE710;</span><span class="label-text">새 연결</span></button>
+      <button class="btn primary" id="newBtn"><span class="i">&#xE710;</span><span class="label-text"></span></button>
     </header>
     <section id="content" class="content" tabindex="-1"></section>
   </main>

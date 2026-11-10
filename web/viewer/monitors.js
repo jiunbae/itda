@@ -123,7 +123,7 @@ export class MonitorController {
     }
     disconnect(notifyNative=true) { this.closeWindows(notifyNative); this.connection=null; this.screens=[]; this.last=''; }
     openWindows(userGesture) {
-        if(this.screens.length<2) { if(userGesture) this.e.toast('모니터 정보가 하나뿐입니다. 수동 화면 분할을 선택할 수 있습니다.'); return; }
+        if(this.screens.length<2) { if(userGesture) this.e.toast(T('viewer.mon.onlyOne')); return; }
         const main=this.selected||this.screens[0];
         let blocked=false;
         for(const screen of this.screens) {
@@ -138,18 +138,18 @@ export class MonitorController {
             const child=window.open(url.href,`itda-monitor-${this.e.S.host.id}-${screen.id}`,'popup,width=1100,height=740');
             if(child) this.children.set(screen.id,child); else blocked=true;
         }
-        if(blocked) this.e.toast('별도 창이 차단되었습니다. 모니터 메뉴의 창 열기를 다시 누르거나 팝업을 허용하세요.');
+        if(blocked) this.e.toast(T('viewer.mon.blocked'));
     }
     menu() {
         const n=this.screens.length;
         const unknown=this.screens.some(s=>s.unknown);
         const width=Math.max(1,...this.screens.map(s=>s.x+s.w)),height=Math.max(1,...this.screens.map(s=>s.y+s.h));
         const diagramHeight=Math.max(90,Math.min(180,height/width*420));
-        return `<h3>모니터</h3><div class="monitor-layout" aria-label="원격 화면 배치" style="height:${diagramHeight}px">${this.screens.map((s,i)=>`<button data-monitor="${s.id}" style="left:${s.x/width*100}%;top:${s.y/height*100}%;width:${s.w/width*100}%;height:${s.h/height*100}%" class="${this.selected?.id===s.id?'on':''}" title="${s.w}×${s.h}">${s.manual?'영역':'모니터'} ${i+1}<small>${s.w} × ${s.h}</small></button>`).join('')}</div>
-          <div class="monitor-options"><button data-monitor-mode="1" ${this.opts.monitor_mode===1?'class="on"':''}>전체 모니터 한눈에 보기</button><button data-monitor-mode="2" ${n<2?'disabled':''}>모니터마다 창 열기${this.children.size?' · 다시 표시':''}</button>
-          <label><input type="checkbox" data-monitor-full ${this.opts.monitor_fullscreen?'checked':''}> 분리한 창을 로컬 모니터에 전체 화면으로 배치</label>
-          <label>화면 구성 <select data-monitor-layout>${[[0,'서버가 알려준 모니터'],[1,'수동: 가로 2영역'],[2,'수동: 세로 2영역'],[3,'수동: 가로 3영역'],[4,'수동: 2 × 2영역']].map(([v,t])=>`<option value="${v}" ${v===(this.opts.monitor_layout||0)?'selected':''}>${t}</option>`).join('')}</select></label></div>
-          <p class="note">${unknown?'서버가 개별 모니터 배치를 제공하지 않아 하나의 화면으로 표시합니다. 필요하면 수동 분할을 선택하세요. ':''}${this.e.S.host?.kind==='rdp'?'RDP는 원격 PC의 물리 모니터가 아닌 로그인 세션의 가상 화면을 보여줍니다. ':''}분리한 창도 같은 연결을 공유합니다. 여러 영역을 표시할 때 해상도 자동 변경은 중지됩니다.</p>`;
+        return `<h3>${T('viewer.tool.monitors')}</h3><div class="monitor-layout" aria-label="${T('viewer.mon.layoutLabel')}" style="height:${diagramHeight}px">${this.screens.map((s,i)=>`<button data-monitor="${s.id}" style="left:${s.x/width*100}%;top:${s.y/height*100}%;width:${s.w/width*100}%;height:${s.h/height*100}%" class="${this.selected?.id===s.id?'on':''}" title="${s.w}×${s.h}">${T(s.manual?'viewer.mon.area':'viewer.mon.monitor',{n:i+1})}<small>${s.w} × ${s.h}</small></button>`).join('')}</div>
+          <div class="monitor-options"><button data-monitor-mode="1" ${this.opts.monitor_mode===1?'class="on"':''}>${T('viewer.mon.all')}</button><button data-monitor-mode="2" ${n<2?'disabled':''}>${T('viewer.mon.windows')}${this.children.size?` · ${T('viewer.mon.showAgain')}`:''}</button>
+          <label><input type="checkbox" data-monitor-full ${this.opts.monitor_fullscreen?'checked':''}> ${T('viewer.mon.fullscreen')}</label>
+          <label>${T('viewer.mon.layout')} <select data-monitor-layout>${[[0,'viewer.mon.layout.reported'],[1,'viewer.mon.layout.cols2'],[2,'viewer.mon.layout.rows2'],[3,'viewer.mon.layout.cols3'],[4,'viewer.mon.layout.grid']].map(([v,t])=>`<option value="${v}" ${v===(this.opts.monitor_layout||0)?'selected':''}>${T(t)}</option>`).join('')}</select></label></div>
+          <p class="note">${[unknown&&T('viewer.mon.note.unknown'),this.e.S.host?.kind==='rdp'&&T('viewer.mon.note.rdp'),T('viewer.mon.note')].filter(Boolean).join(' ')}</p>`;
     }
     bindMenu(sheet) {
         sheet.querySelectorAll('[data-monitor]').forEach(b=>b.onclick=()=>{this.select(Number(b.dataset.monitor));sheet.hidden=true;});
@@ -162,9 +162,9 @@ export function startMirror(env,id) {
     const owner=window.opener?.ItdaMonitorOwner;
     const status=document.querySelector('#status'), tools=document.querySelector('#tools'), holder=document.querySelector('#screen');
     document.querySelector('#view').hidden=false;
-    if(!owner) {status.hidden=false;status.textContent='원래 연결 창을 찾을 수 없습니다. Itda에서 연결을 다시 여세요.';return;}
+    if(!owner) {status.hidden=false;status.textContent=T('viewer.mirror.noOwner');return;}
     env.S.host=owner.state().host; env.S.fit=true;
-    document.title=`${env.S.host?.label||'Itda'} — 모니터`;
+    document.title=`${env.S.host?.label||'Itda'} — ${T('viewer.mirror.title')}`;
     const wheel=new WheelInput();
     const canvas=document.createElement('canvas'); canvas.tabIndex=0; canvas.className='monitor-canvas'; holder.append(canvas);
     let keyboard=new window.ItdaKeyboard(canvas), last=-1, geometry='', bounds=null, held=new Set(), buttons=0, point=null, stopped=false;
@@ -177,8 +177,8 @@ export function startMirror(env,id) {
     const seen=()=>{try{owner.seen(id,!document.hidden&&!stopped);}catch{}};
     document.addEventListener('visibilitychange',seen); window.addEventListener('pagehide',()=>{stopped=true;seen();}); seen();
     env.S.rfb={sendKey:(k,c,d)=>owner.key(k,c,d,id),focus:()=>canvas.focus(),clipboardPasteFrom:()=>{},disconnect:release};
-    tools.innerHTML='<button data-mirror="fit" title="맞춤 / 실제 크기">맞춤 / 1:1</button><button data-mirror="full">전체 화면</button><button data-mirror="single" title="한 창으로 돌아가기">한 창으로</button><button data-mirror="close" title="이 창 닫기">닫기</button>';
-    if(macHost(env.S.host))tools.insertAdjacentHTML('afterbegin','<button data-mirror=mac-actions title="Mission Control · Exposé">Mac 화면 동작</button>');
+    tools.innerHTML=`<button data-mirror="fit" title="${T('viewer.mirror.fitTip')}">${T('viewer.mirror.fit')}</button><button data-mirror="full">${T('viewer.tool.full')}</button><button data-mirror="single" title="${T('viewer.mirror.singleTip')}">${T('viewer.mirror.single')}</button><button data-mirror="close" title="${T('viewer.mirror.closeTip')}">${T('viewer.close')}</button>`;
+    if(macHost(env.S.host))tools.insertAdjacentHTML('afterbegin',`<button data-mirror=mac-actions title="Mission Control · Exposé">${T('viewer.mac.title')}</button>`);
     const sheet=document.querySelector('#sheet');
     sheet.onclick=e=>{const action=macActions.find(a=>a[0]===e.target.closest('[data-mac-action]')?.dataset.macAction);if(!action)return;if(!owner.state().viewOnly)sendMacAction(action,owner.state().hp,(k,down)=>owner.key(k,null,down,id));sheet.hidden=true;canvas.focus();};
     tools.onclick=e=>{const a=e.target.closest('[data-mirror]')?.dataset.mirror;if(a==='mac-actions'){sheet.innerHTML=macMenu();sheet.hidden=!sheet.hidden;}if(a==='fit'){env.S.fit=!env.S.fit;last=-1;}if(a==='full'){if(env.app)owner.windowAction('full',id);else if(document.fullscreenElement)document.exitFullscreen();else document.documentElement.requestFullscreen?.();}if(a==='single')owner.mode(0);if(a==='close'){if(env.app)owner.windowAction('close',id);else window.close();}};
@@ -201,12 +201,12 @@ export function startMirror(env,id) {
     },{passive:false});
     function draw(){
         if(stopped)return;
-        if(window.opener?.closed){release();status.hidden=false;status.textContent='연결이 종료됐습니다';return;}
-        let state;try{state=owner.state();}catch{status.hidden=false;status.textContent='연결을 확인할 수 없습니다';return;}
+        if(window.opener?.closed){release();status.hidden=false;status.textContent=T('viewer.mirror.ended');return;}
+        let state;try{state=owner.state();}catch{status.hidden=false;status.textContent=T('viewer.mirror.unknown');return;}
         env.S.viewOnly=state.viewOnly;
         bounds=state.screens.find(s=>s.id===id);
         status.hidden=!!state.connected&&!!bounds;
-        if(!status.hidden)status.textContent=bounds?'다시 연결하는 중…':'이 모니터가 분리되었습니다. 원래 창에서 모니터를 선택하세요.';
+        if(!status.hidden)status.textContent=T(bounds?'viewer.mirror.reconnecting':'viewer.mirror.gone');
         if(bounds&&state.canvas&&state.connected){
             const size=`${bounds.x},${bounds.y},${bounds.w},${bounds.h},${holder.clientWidth},${holder.clientHeight},${env.S.fit}`;
             if(last!==state.frame||geometry!==size){
@@ -219,7 +219,7 @@ export function startMirror(env,id) {
                 canvas.getContext('2d').drawImage(state.canvas,bounds.x,bounds.y,bounds.w,bounds.h,0,0,pixelW,pixelH);
                 canvas.style.cursor=state.cursor;
                 last=state.frame;geometry=size;
-                document.title=`${state.host?.label||'Itda'} — ${bounds.manual?'영역':'모니터'} ${state.screens.indexOf(bounds)+1}`;
+                document.title=`${state.host?.label||'Itda'} — ${T(bounds.manual?'viewer.mon.area':'viewer.mon.monitor',{n:state.screens.indexOf(bounds)+1})}`;
             }
         }
         requestAnimationFrame(draw);
