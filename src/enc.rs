@@ -244,6 +244,11 @@ pub struct Screen {
 /// and its displays.
 /// "Open H.264" (RFB encoding 50): a rectangle of Annex B H.264, as noVNC decodes it.
 pub const ENC_H264: i32 = 50;
+/// Itda's own pseudo-encoding ('ITDB'): every view of this connection is hidden (another tab,
+/// minimized, a locked phone), so a few frames a second will do.
+pub const ENC_ITDA_BACKGROUND: i32 = 0x4954_4442;
+/// Shortest time between updates for such a viewer.
+pub const BACKGROUND_FRAME: std::time::Duration = std::time::Duration::from_millis(200);
 /// Reset the decoder context of this rectangle before decoding (flags of an H.264 rectangle).
 pub const H264_RESET: u32 = 1;
 

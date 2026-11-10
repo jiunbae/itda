@@ -15,7 +15,7 @@ use crate::rfb::{self, Raw, Rx, ENC_CURSOR, ENC_DESKTOP_SIZE, ENC_EXT_DESKTOP_SI
 use ironrdp_displaycontrol::client::DisplayControlClient;
 use ironrdp_dvc::DrdynvcClient;
 use crate::demand::{self, Demand};
-use crate::enc::{Cursor, Damage, Encoder, PixelFormat, Update, ENC_VMWARE_CURSOR};
+use crate::enc::{Cursor, Damage, Encoder, PixelFormat, Update, BACKGROUND_FRAME, ENC_ITDA_BACKGROUND, ENC_VMWARE_CURSOR};
 use crate::outbox::Outbox;
 use ironrdp_blocking::Framed;
 use ironrdp_connector::sspi;
@@ -694,7 +694,9 @@ impl Bridge {
         let cursor_due = self.cursor.is_some() && (self.encs.contains(&ENC_CURSOR) || self.encs.contains(&ENC_VMWARE_CURSOR));
         let ext = self.encs.contains(&ENC_EXT_DESKTOP_SIZE);
         let ext_due = ext && (!self.ext_told || self.resize_reply.is_some());
-        if (incremental && self.damage.is_empty() && !cursor_due && !self.resized && !ext_due) || self.last_sent.elapsed() < FRAME {
+        // A viewer nobody is looking at gets a few frames a second (damage piles up meanwhile).
+        let gap = if self.encs.contains(&ENC_ITDA_BACKGROUND) { BACKGROUND_FRAME } else { FRAME };
+        if (incremental && self.damage.is_empty() && !cursor_due && !self.resized && !ext_due) || self.last_sent.elapsed() < gap {
             return Ok(());
         }
         let (w, h) = (self.image.width() as usize, self.image.height() as usize);

@@ -149,7 +149,7 @@ const viewerTrace = (() => {
     },
   };
 })();
-const monitors = new MonitorController({S,app:APP,post,api,render:renderTools,toast,close:leave});
+const monitors = new MonitorController({S,app:APP,post,api,render:renderTools,toast,close:leave,visibility:()=>syncBackground()});
 const opt = (k, dflt) => (S.host && S.host.opts && k in S.host.opts ? S.host.opts[k] : dflt);
 // What to call the remote device in messages.
 const dev = () => (isWin(S.host) ? 'PC' : S.host && kindOf(S.host) === 'linux' ? '기기' : 'Mac');
@@ -667,6 +667,7 @@ function open(h) {
     status(null);
     rfb.focus();
     flushPaste();
+    syncBackground();
     dimToolsSoon();
     // High-performance mode is the saved choice; say so when this connection didn't get it.
     if (APP && S.host?.hp?.on) refreshHpMode(h, rfb, attempt);
@@ -1270,5 +1271,13 @@ document.addEventListener('fullscreenchange', () => {
   if (document.fullscreenElement) k.lock().catch(() => {});
   else k.unlock();
 });
+// Nobody looking (this window and every monitor window hidden: another tab, minimized, a
+// locked phone): the server drops to a few frames a second until someone looks again.
+function syncBackground() {
+  if (MIRROR !== null || !S.rfb || !('itdaBackground' in S.rfb)) return;
+  S.rfb.itdaBackground = document.hidden && !monitors.anyVisible();
+}
+document.addEventListener('visibilitychange', syncBackground);
+
 window.addEventListener('beforeunload', () => { if (MIRROR === null) close(false); });
 boot();

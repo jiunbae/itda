@@ -28,6 +28,31 @@ s=s.replace(needle,'''            this._resize(this._FBU.width, this._FBU.height
 needle='''        this._display.resize(this._fbWidth, this._fbHeight);'''
 assert s.count(needle)==1
 s=s.replace(needle,needle+'''\n        this.dispatchEvent(new CustomEvent("desktopresize", {detail: {width, height}}));''',1)
+# Itda's "nobody is looking" hint (pseudo-encoding 'ITDB', server.rs): every view hidden, so
+# the server sends a few frames a second instead of the full rate. Re-sent with SetEncodings.
+needle='''        encs.push(encodings.pseudoEncodingExtendedMouseButtons);
+'''
+assert s.count(needle)==1
+s=s.replace(needle,needle+'''        if (this._itdaBackground) {
+            encs.push(0x49544442);
+        }
+''',1)
+needle='''    get qualityLevel() {'''
+assert s.count(needle)==1
+s=s.replace(needle,'''    get itdaBackground() {
+        return !!this._itdaBackground;
+    }
+    set itdaBackground(on) {
+        if (!!this._itdaBackground === !!on) {
+            return;
+        }
+        this._itdaBackground = !!on;
+        if (this._rfbConnectionState === 'connected') {
+            this._sendEncodings();
+        }
+    }
+
+'''+needle,1)
 p.write_text(s)
 
 # A frame can arrive in several slices (Intel Macs' hardware encoder: 4 per frame); noVNC cut

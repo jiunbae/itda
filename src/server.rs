@@ -16,7 +16,7 @@
 //! with GDI; macOS captures without it and draws it into a copy of the picture).
 
 use crate::demand::{self, Demand};
-use crate::enc::{ext_desktop_size, screens_in, Encoder, PixelFormat, Screen, Update, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, ENC_H264, ENC_VMWARE_CURSOR, ENC_ZRLE};
+use crate::enc::{ext_desktop_size, screens_in, Encoder, PixelFormat, Screen, Update, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, ENC_H264, ENC_ITDA_BACKGROUND, ENC_VMWARE_CURSOR, ENC_ZRLE, BACKGROUND_FRAME};
 use crate::outbox::Outbox;
 use crate::rfb::{vnc_response, ENC_EXT_CLIPBOARD, PIXEL_FORMAT};
 use std::io::{self, BufReader, Read, Write};
@@ -648,7 +648,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         lock_watch.check(Instant::now())?;
         // Wake for the viewer's messages, the next capture when an update is due, or a
         // clipboard check. Captures stay FRAME apart also when the screen doesn't change.
-        let gap = if video.is_some() { VIDEO_FRAME } else { FRAME };
+        let gap = if encs.contains(&ENC_ITDA_BACKGROUND) { BACKGROUND_FRAME } else if video.is_some() { VIDEO_FRAME } else { FRAME };
         let wait = match demand.due() {
             Some(_) if out.room() && video.is_some() && cfg!(target_os = "macos") => video_wait(gap, last_capture.elapsed(), arrived || redo),
             Some(_) if out.room() => gap.saturating_sub(last_capture.elapsed()),
