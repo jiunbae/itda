@@ -2,6 +2,7 @@
 import RFB from './package/core/rfb.js';
 import Display from './package/core/display.js';
 import Keyboard from './package/core/input/keyboard.js';
+import { Player } from './audio.js';
 window.RFB = RFB;
 window.ItdaKeyboard = Keyboard;
 const clip = RFB.prototype._updateClip, scale = RFB.prototype._updateScale;
@@ -108,8 +109,74 @@ RFB.prototype._handleMessage=function(){
 };
 RFB.prototype._disconnect=function(){
     clearTimeout(this._itdaResume);this._itdaResume=null;
+    this._itdaPlayer?.close();this._itdaPlayer=null;
     return disconnect.call(this);
 };
+
+// The remote machine's sound: QEMU Audio (pseudo-encoding -259). Listed only while the viewer
+// wants sound, so other servers see the same encodings as before; the server confirms with an
+// empty -259 rectangle, then gets the format (S16, stereo, 48 kHz) and enable / disable.
+const ENC_AUDIO=-259;
+const audioSendEncodings=RFB.prototype._sendEncodings, audioHandleRect=RFB.prototype._handleRect, normalMsg=RFB.prototype._normalMsg;
+RFB.prototype._sendEncodings=function(){
+    const encodings=RFB.messages.clientEncodings;
+    if(this._itdaAudioOn)RFB.messages.clientEncodings=(sock,encs)=>encodings(sock,[...encs,ENC_AUDIO]);
+    try{return audioSendEncodings.call(this);}finally{RFB.messages.clientEncodings=encodings;}
+};
+RFB.prototype._handleRect=function(){
+    if(this._FBU.encoding!==ENC_AUDIO)return audioHandleRect.call(this);
+    const first=!this._itdaAudioServer;
+    this._itdaAudioServer=true;
+    if(first&&this._itdaAudioOn)this._itdaAudioSend(true);
+    this.dispatchEvent(new CustomEvent('audiosupport'));
+    return true;
+};
+RFB.prototype._itdaAudioSend=function(on){
+    const s=this._sock;
+    if(on){s.sQpush8(255);s.sQpush8(1);s.sQpush16(2);s.sQpush8(3);s.sQpush8(2);s.sQpush32(48000);}
+    s.sQpush8(255);s.sQpush8(1);s.sQpush16(on?0:1);
+    s.flush();
+};
+// Server message 255/1: stream begin (1), end (0), data (2: length, samples). Taken only once
+// all of it has arrived.
+RFB.prototype._normalMsg=function(){
+    const s=this._sock;
+    if(this._FBU.rects>0||s.rQpeek8()!==255)return normalMsg.call(this);
+    if(s.rQwait('QEMU message',4))return false;
+    const h=s.rQpeekBytes(4,false);
+    if(h[1]!==1){this._fail('Unexpected QEMU server message '+h[1]);return true;}
+    const op=(h[2]<<8)|h[3];
+    if(op===2){
+        if(s.rQwait('QEMU audio',8))return false;
+        const b=s.rQpeekBytes(8,false), len=((b[4]<<24)|(b[5]<<16)|(b[6]<<8)|b[7])>>>0;
+        if(len>(4<<20)){this._fail('QEMU audio data too long');return true;}
+        if(s.rQwait('QEMU audio',8+len))return false;
+        s.rQskipBytes(8);
+        const data=s.rQshiftBytes(len,false);
+        if(this._itdaAudioOn)this._itdaPlayer?.push(data);
+        return true;
+    }
+    s.rQskipBytes(4);
+    if(op===1)this._itdaPlayer?.begin();
+    return true;
+};
+// Turn sound on or off. The first time, call it from a click or key, or the browser keeps the
+// sound waiting (itdaAudioWaiting) until the next one (itdaAudioResume).
+RFB.prototype.itdaAudio=function(on){
+    on=!!on;
+    if(on&&!this._itdaPlayer){try{this._itdaPlayer=new Player();}catch(e){return false;}}
+    if(on)this._itdaPlayer.resume();
+    const was=!!this._itdaAudioOn;
+    this._itdaAudioOn=on;
+    if(!on){this._itdaPlayer?.close();this._itdaPlayer=null;}
+    if(this._rfbConnectionState==='connected'&&on!==was){
+        if(this._itdaAudioServer)this._itdaAudioSend(on);
+        else if(on)this._sendEncodings(); // (answered by the confirmation in the next update)
+    }
+    return true;
+};
+RFB.prototype.itdaAudioResume=function(){this._itdaPlayer?.resume();};
+RFB.prototype.itdaAudioWaiting=function(){return !!this._itdaPlayer&&!this._itdaPlayer.running;};
 const flip = Display.prototype.flip;
 Display.prototype.flip = function (queued) {
     const dirty = this._damageBounds.right > this._damageBounds.left && this._damageBounds.bottom > this._damageBounds.top;

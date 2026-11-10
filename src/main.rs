@@ -63,6 +63,12 @@ mod session;
 #[cfg(any(windows, target_os = "macos"))]
 mod rate;
 #[cfg(any(windows, target_os = "macos"))]
+mod audio;
+#[cfg(target_os = "macos")]
+mod audio_mac;
+#[cfg(windows)]
+mod audio_win;
+#[cfg(any(windows, target_os = "macos"))]
 mod server;
 #[cfg(windows)]
 mod share;

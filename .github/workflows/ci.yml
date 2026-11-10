@@ -144,6 +144,8 @@ jobs:
         run: node scripts/editor-e2e.mjs
       - name: Monitors and pointer batching
         run: node scripts/monitors-e2e.mjs
+      - name: Remote sound in the web viewer (QEMU Audio)
+        run: node scripts/audio-e2e.mjs
       - name: Viewer mode diagnostics and drop/reconnect ownership
         run: node scripts/viewer-mode-e2e.mjs
       - name: Undecodable high-performance video falls back at once

@@ -3,8 +3,8 @@
 //! control this PC.
 //!
 //! One capture of the whole virtual desktop (all monitors; Desktop Duplication, else GDI)
-//! shared by all viewers, SendInput for mouse and keyboard, the clipboard, and the
-//! on-screen "allow?" prompt.
+//! shared by all viewers, SendInput for mouse and keyboard, the clipboard, the on-screen
+//! "allow?" prompt, and the sound output for viewers that listen (audio_win.rs).
 
 pub use crate::server::{kick_all, open_local, running, start, stop, viewers, Config, ON_CHANGE};
 use std::collections::HashMap;
@@ -19,6 +19,9 @@ use windows_sys::Win32::System::DataExchange::*;
 use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+/// The PC's sound for viewers that ask for it (WASAPI loopback).
+pub(crate) use crate::audio_win::{audio_capture, audio_supported};
 
 pub(crate) const KIND: &str = "PC";
 pub(crate) const MDNS_TXT: &[(&str, &str)] = &[("itda", "1"), ("os", "windows")];
@@ -42,7 +45,7 @@ pub(crate) fn video(w: usize, h: usize) -> Option<crate::server::Video> {
 
 pub(crate) fn ask_user(peer: &SocketAddr) -> bool {
     let text = format!(
-        "{}에서 이 PC의 화면을 보고 조작하려고 합니다.\n\n허용할까요?\n\n(허용하면 연결이 끝날 때까지 화면과 입력이 공유됩니다. 알림 영역의 Itda에서 언제든 끊을 수 있습니다.)",
+        "{}에서 이 PC의 화면을 보고 조작하려고 합니다.\n\n허용할까요?\n\n(허용하면 연결이 끝날 때까지 화면과 입력이 공유되고, 상대가 소리를 켜면 이 PC의 소리도 들립니다. 알림 영역의 Itda에서 언제든 끊을 수 있습니다.)",
         peer.ip()
     );
     let t = crate::ui::wide(&text);

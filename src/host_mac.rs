@@ -10,7 +10,8 @@
 //! - input: CGEvent posted to the HID tap, Mac key codes and modifiers; ⌘ stays Command
 //!   (needs Accessibility permission);
 //! - clipboard: the general pasteboard;
-//! - consent: an on-screen "allow?" dialog unless the viewer is trusted (server.rs).
+//! - consent: an on-screen "allow?" dialog unless the viewer is trusted (server.rs);
+//! - sound: ScreenCaptureKit's audio capture on a stream of its own (audio_mac.rs).
 
 use crate::h264_mac::H264;
 use crate::server::{VideoEncode, Video};
@@ -88,6 +89,9 @@ fn render_cursor(image: &NSImage, hot: NSPoint, scale: f64) -> Option<crate::enc
     let (hx, hy) = ((hot.x * scale) as u16, (hot.y * scale) as u16);
     Some(crate::enc::Cursor { w: w as u16, h: h as u16, hx: hx.min(w as u16 - 1), hy: hy.min(h as u16 - 1), px })
 }
+
+/// The Mac's sound for viewers that ask for it (macOS 13+).
+pub(crate) use crate::audio_mac::{audio_capture, audio_supported};
 
 pub(crate) const KIND: &str = "Mac";
 pub(crate) const MDNS_TXT: &[(&str, &str)] = &[("itda", "1"), ("os", "mac"), ("hp", "1")];
