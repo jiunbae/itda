@@ -8,9 +8,14 @@
 //! for viewers that ask for it when the platform has an encoder: the whole screen as one video
 //! rectangle while it changes, then a lossless ZRLE repaint of what changed once it stands
 //! still (4:2:0 video blurs text and colour edges).
+//!
+//! Viewers that ask for a cursor pseudo-encoding (VMware's alpha cursor, or RFB Cursor) draw
+//! the pointer themselves where the platform can say what it looks like (Windows): they get
+//! its shape when it changes, and the picture without it while the pointer is where they put
+//! it, so moving it sends no pixels. When someone else moves it, it's drawn in again.
 
 use crate::demand::{self, Demand};
-use crate::enc::{ext_desktop_size, screens_in, Encoder, PixelFormat, Screen, Update, ENC_EXT_DESKTOP_SIZE, ENC_H264, ENC_ZRLE};
+use crate::enc::{ext_desktop_size, screens_in, Encoder, PixelFormat, Screen, Update, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, ENC_H264, ENC_VMWARE_CURSOR, ENC_ZRLE};
 use crate::outbox::Outbox;
 use crate::rfb::{vnc_response, ENC_EXT_CLIPBOARD, PIXEL_FORMAT};
 use std::io::{self, BufReader, Read, Write};
@@ -38,6 +43,28 @@ pub struct Config {
     pub view_only: bool,
     /// Listen on this machine only (reached through an SSH tunnel), not the network.
     pub local_only: bool,
+}
+
+/// The pointer as the platform sees it: its cursor (an id, 0 when hidden) and where it is in
+/// desktop coordinates.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Pointer {
+    pub(crate) shape: usize,
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+}
+
+/// Where this viewer last put the pointer (framebuffer coordinates) and when.
+type Steer = Arc<Mutex<Option<(u16, u16, Instant)>>>;
+
+/// How long after its own move the pointer counts as the viewer's even if it isn't there
+/// yet (input is applied asynchronously).
+const STEER_GRACE: Duration = Duration::from_millis(250);
+
+/// Is the viewer the one moving the pointer, now at (x, y) in the framebuffer? Then the
+/// viewer's own pointer shows it; otherwise (someone at this PC, another viewer) it's drawn in.
+fn steering(steer: Option<(u16, u16, Instant)>, x: i32, y: i32, now: Instant) -> bool {
+    steer.is_some_and(|(vx, vy, at)| now.duration_since(at) < STEER_GRACE || ((vx as i32 - x).abs() <= 1 && (vy as i32 - y).abs() <= 1))
 }
 
 struct Running {
@@ -358,14 +385,16 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
     })));
     let reader = c.try_clone()?;
     let cfg2 = cfg.clone();
+    let steer: Steer = Arc::default();
+    let steer2 = steer.clone();
     std::thread::spawn(move || {
         // The waker keeps the channel open, so say when the viewer is gone (also on a panic).
         let gone = Gone(tx);
         let mut input = platform::Input::new(cfg2.cmd_as_ctrl, cfg2.view_only);
-        let _ = read_client(BufReader::new(reader), &gone.0, &mut input, cfg2.view_only);
+        let _ = read_client(BufReader::new(reader), &gone.0, &mut input, cfg2.view_only, &steer2);
         input.release_all();
     });
-    let r = Outbox::new(c.try_clone()?).and_then(|out| pump(&out, &rx, &woken, &cap, size, stop, cfg.view_only));
+    let r = Outbox::new(c.try_clone()?).and_then(|out| pump(&out, &rx, &woken, &cap, size, stop, cfg.view_only, &steer));
     drop(waker);
     let _ = c.shutdown(Shutdown::Both);
     VIEWERS.lock().unwrap().retain(|(i, _, _)| *i != id);
@@ -393,7 +422,7 @@ fn capture_before_auth<T>(out: &mut impl Write, minor: u32, create: impl FnOnce(
 
 /// Client → server messages. Input is applied right here; the rest goes to the pump.
 /// `view_only`: besides input, the viewer's clipboard isn't taken either.
-fn read_client(mut r: BufReader<TcpStream>, tx: &Sender<Msg>, input: &mut platform::Input, view_only: bool) -> io::Result<()> {
+fn read_client(mut r: BufReader<TcpStream>, tx: &Sender<Msg>, input: &mut platform::Input, view_only: bool, steer: &Steer) -> io::Result<()> {
     loop {
         // A held Ctrl/Alt/Win must not outlive the person holding it: a phone that goes to
         // sleep mid-gesture keeps the socket open but silent, and the PC would keep zooming
@@ -436,7 +465,11 @@ fn read_client(mut r: BufReader<TcpStream>, tx: &Sender<Msg>, input: &mut platfo
             }
             5 => {
                 let b: [u8; 5] = rd(&mut r)?;
-                input.pointer(b[0], u16::from_be_bytes([b[1], b[2]]), u16::from_be_bytes([b[3], b[4]]));
+                let (x, y) = (u16::from_be_bytes([b[1], b[2]]), u16::from_be_bytes([b[3], b[4]]));
+                if !view_only {
+                    *steer.lock().unwrap() = Some((x, y, Instant::now()));
+                }
+                input.pointer(b[0], x, y);
             }
             6 => {
                 let b: [u8; 7] = rd(&mut r)?;
@@ -548,7 +581,7 @@ impl Drop for Gone {
     }
 }
 
-fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platform::Capture>, mut size: (usize, usize), stop: &AtomicBool, view_only: bool) -> io::Result<()> {
+fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platform::Capture>, mut size: (usize, usize), stop: &AtomicBool, view_only: bool, steer: &Steer) -> io::Result<()> {
     let mut pf = PixelFormat::parse(&PIXEL_FORMAT);
     let mut encs: Vec<i32> = Vec::new();
     let mut demand = Demand::default();
@@ -581,6 +614,10 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
     let mut clip_seq = platform::clipboard_seq();
     let mut clip_check = Instant::now();
     let mut ext_clip = false;
+    // The cursor shape this viewer was last sent (when it draws the pointer itself).
+    let mut sent_shape: Option<usize> = None;
+    #[cfg(target_os = "macos")]
+    let _ = steer; // (ScreenCaptureKit draws the pointer in)
     #[cfg(target_os = "macos")]
     let mut lock_watch = platform::LockWatch::new();
     loop {
@@ -630,6 +667,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                         reply.extend(clip_msg(CLIP_CAPS | CLIP_TEXT | CLIP_REQUEST | CLIP_PEEK | CLIP_NOTIFY | CLIP_PROVIDE, &CLIP_MAX.to_be_bytes()));
                     }
                     reset = true;
+                    sent_shape = None;
                     encs = e;
                     told = None; // (re)introduce the displays
                 }
@@ -707,10 +745,25 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         let g = cap.generation();
         #[cfg(not(target_os = "macos"))]
         { seen = g.wrapping_add(u64::from(cap.fresh_since(g))); }
+        // A viewer that draws the pointer itself gets its shape, and the picture without it
+        // while the pointer is where the viewer put it (a view-only viewer never moves it).
+        let local_cursor = platform::LOCAL_CURSOR && !view_only && (encs.contains(&ENC_CURSOR) || encs.contains(&ENC_VMWARE_CURSOR));
+        let pointer = if local_cursor { platform::pointer() } else { None };
         #[cfg(not(target_os = "macos"))]
-        let (w, h, frame) = cap.grab();
+        let draw_cursor = pointer.is_none_or(|p| !steering(*steer.lock().unwrap(), p.x - ox, p.y - oy, Instant::now()));
+        #[cfg(not(target_os = "macos"))]
+        let (w, h, frame) = cap.grab(draw_cursor);
         size = (w, h);
         u.start();
+        let mut new_shape = None;
+        if let Some(p) = pointer.filter(|p| sent_shape != Some(p.shape)) {
+            if let Some(c) = platform::cursor_shape(p.shape) {
+                if c.encode(&mut u.buf, &pf, &encs) {
+                    u.rects += 1;
+                }
+                new_shape = Some(p.shape);
+            }
+        }
         let ext = encs.contains(&ENC_EXT_DESKTOP_SIZE);
         if ext && ((w, h) != (w0, h0) || screens_read.elapsed() >= Duration::from_secs(1)) {
             screens_read = Instant::now();
@@ -792,6 +845,10 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
             Some(_) => {
                 if last_change.elapsed() >= REFINE && exact[..] != frame[..] {
                     enc.changes(&mut u, frame, &exact, w, h, exact.len() != frame.len(), |x, y, tw, th| demand.covers(x, y, tw, th), &pf, zrle)?;
+                } else if exact[..] != frame[..] {
+                    // Not repainted yet (an update with only a new cursor shape): the viewer's
+                    // picture is still the lossy one.
+                    lossless = false;
                 }
             }
             None => enc.changes(&mut u, frame, &prev, w, h, full, |x, y, tw, th| demand.covers(x, y, tw, th), &pf, zrle)?,
@@ -805,6 +862,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         }
         demand.sent(u.buf.len(), &mut u.buf);
         out.send(std::mem::replace(&mut u.buf, out.buffer()))?;
+        sent_shape = new_shape.or(sent_shape);
         crate::trace::since("update", last_capture);
         prev.clear();
         prev.extend_from_slice(frame);
@@ -898,7 +956,7 @@ mod tests {
         let (tx, rx) = channel();
         let worker = std::thread::spawn(move || {
             let out = Outbox::new(socket).unwrap();
-            pump(&out, &rx, &AtomicBool::new(false), &cap, (w, h), &AtomicBool::new(false), true).unwrap();
+            pump(&out, &rx, &AtomicBool::new(false), &cap, (w, h), &AtomicBool::new(false), true, &Default::default()).unwrap();
         });
         tx.send(Msg::Encodings(vec![ENC_H264, ENC_ZRLE])).unwrap();
         tx.send(Msg::Request { incremental: false }).unwrap();
@@ -980,6 +1038,18 @@ mod tests {
         assert_eq!(video_wait(VIDEO_FRAME, VIDEO_FRAME + ms(5), true), Duration::ZERO);
         // None arrived (or the one named was already taken): don't spin, poll as a fallback.
         assert_eq!(video_wait(VIDEO_FRAME, VIDEO_FRAME + ms(5), false), VIDEO_POLL);
+    }
+
+    #[test]
+    fn pointer_is_the_viewers_where_it_left_it_or_just_after() {
+        use super::steering;
+        use std::time::{Duration, Instant};
+        let now = Instant::now();
+        let long_ago = now - Duration::from_secs(5);
+        assert!(!steering(None, 10, 10, now), "a viewer that never moved it");
+        assert!(steering(Some((10, 10, long_ago)), 11, 9, now), "still where the viewer put it");
+        assert!(!steering(Some((10, 10, long_ago)), 40, 10, now), "moved by someone else");
+        assert!(steering(Some((10, 10, now)), 40, 10, now), "the viewer's move not applied yet");
     }
 
     #[test]

@@ -34,6 +34,17 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+/// ScreenCaptureKit draws the pointer into the picture; viewers don't get its shape.
+pub(crate) const LOCAL_CURSOR: bool = false;
+
+pub(crate) fn pointer() -> Option<crate::server::Pointer> {
+    None
+}
+
+pub(crate) fn cursor_shape(_shape: usize) -> Option<crate::enc::Cursor> {
+    None
+}
+
 pub(crate) const KIND: &str = "Mac";
 pub(crate) const MDNS_TXT: &[(&str, &str)] = &[("itda", "1"), ("os", "mac"), ("hp", "1")];
 /// Default port: next to Apple's 5900, which stays Apple's.
