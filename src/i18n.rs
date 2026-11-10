@@ -1,7 +1,10 @@
 //! Interface language: Korean or English.
 //!
 //! The web UI translates itself (web/i18n.js with the catalogs in web/locales/); this module
-//! picks the language the app's own windows open in and holds the catalog files they load.
+//! picks the language the app's own windows open in, holds the catalog files they load, and
+//! translates the text Rust renders itself (menus, dialogs, the Windows viewer, errors):
+//! `tr!("menu.quit")`, `tr!("err.port", port = p, error = e)`, with the messages in
+//! src/locales/{ko,en}.rs keyed by stable IDs. Korean is the source language.
 //! Order: the `ITDA_LANG` environment variable (`ko`/`en`, for tests and recordings), then
 //! Settings → Language (`auto`/`ko`/`en`), then the system's language: Korean when it
 //! starts with "ko", otherwise English.
@@ -28,9 +31,11 @@ fn name(c: u8) -> &'static str {
 
 fn forced() -> Option<u8> {
     static F: OnceLock<Option<u8>> = OnceLock::new();
-    *F.get_or_init(|| match std::env::var("ITDA_LANG").ok()?.as_str() {
-        "ko" => Some(KO),
-        "en" => Some(EN),
+    *F.get_or_init(|| match std::env::var("ITDA_LANG").ok().as_deref() {
+        Some("ko") => Some(KO),
+        Some("en") => Some(EN),
+        // Unit tests check the Korean text unless they ask otherwise.
+        _ if cfg!(test) => Some(KO),
         _ => None,
     })
 }
@@ -95,9 +100,116 @@ pub fn init_script() -> String {
     format!("window.ITDA_LANG={:?};window.ITDA_OS_LANG={:?};", lang(), forced().map_or(os_lang(), name))
 }
 
+#[path = "locales/ko.rs"]
+mod ko;
+#[path = "locales/en.rs"]
+mod en;
+type Table = &'static [(&'static str, &'static str)];
+const KO_ALL: Table = ko::MESSAGES;
+const EN_ALL: Table = en::MESSAGES;
+
+fn find(table: Table, key: &str) -> Option<&'static str> {
+    table.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
+}
+
+/// A message in the current language (Korean when English lacks it; the ID when neither has it).
+pub fn text(key: &'static str) -> &'static str {
+    text_in(lang(), key)
+}
+
+pub fn text_in(l: &str, key: &'static str) -> &'static str {
+    let t = if l == "ko" { KO_ALL } else { EN_ALL };
+    find(t, key).or_else(|| find(KO_ALL, key)).unwrap_or(key)
+}
+
+/// `{name}` placeholders filled in; unknown ones stay as they are.
+pub fn fill(t: &str, vars: &[(&str, &dyn std::fmt::Display)]) -> String {
+    let mut out = String::with_capacity(t.len() + 16);
+    let mut rest = t;
+    while let Some(i) = rest.find('{') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        match after.find('}').map(|j| (&after[..j], j)) {
+            Some((name, j)) if let Some((_, v)) = vars.iter().find(|(n, _)| *n == name) => {
+                out.push_str(&v.to_string());
+                rest = &after[j + 1..];
+            }
+            _ => {
+                out.push('{');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `tr!("id")` → `&'static str`; `tr!("id", name = value, ...)` → `String` with `{name}` filled.
+macro_rules! tr {
+    ($key:literal) => {
+        $crate::i18n::text($key)
+    };
+    ($key:literal, $($name:ident = $value:expr),+ $(,)?) => {
+        $crate::i18n::fill($crate::i18n::text($key), &[$((stringify!($name), &$value as &dyn ::std::fmt::Display)),+])
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn holes(s: &str) -> Vec<String> {
+        let mut v: Vec<String> = s.split('{').skip(1).filter_map(|p| p.split_once('}').map(|(n, _)| n.to_string())).filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')).collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    #[test]
+    fn rust_catalogs_match() {
+        let mut seen = std::collections::HashSet::new();
+        for (k, _) in KO_ALL.iter() {
+            assert!(seen.insert(*k), "{k}: defined twice in Korean");
+        }
+        let mut seen_en = std::collections::HashSet::new();
+        for (k, v) in EN_ALL.iter() {
+            assert!(seen_en.insert(*k), "{k}: defined twice in English");
+            let ko = find(KO_ALL, k).unwrap_or_else(|| panic!("{k}: in English but not Korean"));
+            assert_eq!(holes(ko), holes(v), "{k}: placeholders differ");
+            assert!(!v.chars().any(|c| ('가'..='힣').contains(&c)), "{k}: English text has Hangul");
+        }
+        for (k, _) in KO_ALL.iter() {
+            assert!(find(EN_ALL, k).is_some(), "{k}: in Korean but not English");
+        }
+    }
+
+    #[test]
+    fn every_tr_id_exists() {
+        // tr!("id", ...) in the sources names a message in the catalogs.
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![src];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() { stack.push(p); continue; }
+                if p.extension().is_none_or(|x| x != "rs") || p.ends_with("i18n.rs") { continue; }
+                let s = std::fs::read_to_string(&p).unwrap();
+                for (i, _) in s.match_indices("tr!(\"") {
+                    if s[..i].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_') { continue; }
+                    let id = s[i + 5..].split('"').next().unwrap();
+                    assert!(find(KO_ALL, id).is_some(), "{}: tr!(\"{id}\") is not in src/locales", p.display());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn filling_placeholders() {
+        assert_eq!(fill("포트 {port}을(를) 열 수 없습니다: {error}", &[("port", &5900), ("error", &"busy")]), "포트 5900을(를) 열 수 없습니다: busy");
+        assert_eq!(fill("{a} {missing} {", &[("a", &1)]), "1 {missing} {");
+        assert_eq!(text_in("en", "lang.en"), "English");
+        assert_eq!(text_in("ko", "nope.nothing"), "nope.nothing");
+    }
 
     #[test]
     fn language_tags() {

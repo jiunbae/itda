@@ -61,6 +61,28 @@ pub fn addr(host: &str) -> String {
     }
 }
 
+/// An error whose `classify` category doesn't depend on its (translated) text.
+#[derive(Debug)]
+struct Kinded(&'static str, String);
+
+impl std::fmt::Display for Kinded {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(&self.1)
+    }
+}
+
+impl std::error::Error for Kinded {}
+
+/// `io::Error` of `kind` that `classify` reports as `class` ("ssh_auth", "dns", ...).
+pub fn kinded(kind: io::ErrorKind, class: &'static str, msg: impl Into<String>) -> io::Error {
+    io::Error::new(kind, Kinded(class, msg.into()))
+}
+
+/// The server turned down the password itself (not a reason it gave, like a locked screen).
+pub fn auth_failed(e: &io::Error) -> bool {
+    e.get_ref().and_then(|i| i.downcast_ref::<Kinded>()).is_some_and(|k| k.0 == "auth")
+}
+
 pub fn err<T>(msg: impl Into<String>) -> io::Result<T> {
     Err(io::Error::new(io::ErrorKind::Other, msg.into()))
 }
@@ -116,23 +138,19 @@ pub fn connect(addr: &str, creds: &Creds) -> io::Result<Session> {
 /// Coarse error category, for user-facing explanations.
 pub fn classify(e: &io::Error) -> &'static str {
     use io::ErrorKind::*;
+    if let Some(k) = e.get_ref().and_then(|i| i.downcast_ref::<Kinded>()) {
+        return k.0;
+    }
+    // "declined": the reason a remote Itda sends (server.rs), in English on the wire.
     let msg = e.to_string();
     match (e.kind(), e.raw_os_error()) {
-        _ if msg.contains("SSH 호스트 키") => "ssh_hostkey",
-        _ if msg.contains("SSH 로그인 실패") => "ssh_auth",
-        _ if msg.contains("원격 로그인(SSH)") => "ssh_refused",
-        _ if msg.contains("ssh.exe 없음") => "ssh_missing",
-        _ if msg.contains("화면 공유가 꺼져") => "refused",
         _ if msg.contains("declined") => "declined",
-        (PermissionDenied, _) if msg.contains("사용자 이름을 입력") => "need_user",
         (PermissionDenied, _) => "auth",
         (_, Some(11001 | 11002 | 11004)) => "dns",
-        _ if msg.contains("호스트를 찾을 수 없습니다") => "dns",
         (ConnectionRefused, _) => "refused",
         (TimedOut | WouldBlock, _) => "timeout",
         (_, Some(10051 | 10065)) => "unreachable",
         (ConnectionReset | ConnectionAborted | UnexpectedEof, _) => "reset",
-        _ if msg.contains("VNC 서버가 아닙니다") => "not_vnc",
         _ => "other",
     }
 }
@@ -141,7 +159,7 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
     progress("resolve");
     let mut addrs: Vec<_> = addr.to_socket_addrs()?.collect();
     if addrs.is_empty() {
-        return err("호스트를 찾을 수 없습니다");
+        return Err(kinded(io::ErrorKind::Other, "dns", tr!("conn.hostNotFound")));
     }
     // .local names often resolve to both IPv6 link-local and IPv4: try each, IPv4 first
     // (a Windows PC's link-local IPv6 is usually firewalled and only times out).
@@ -173,7 +191,7 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
     let mut v = [0u8; 12];
     r.read_exact(&mut v)?;
     if &v[..4] != b"RFB " {
-        return err("VNC 서버가 아닙니다");
+        return Err(kinded(io::ErrorKind::Other, "not_vnc", tr!("rfb.notVnc")));
     }
     let minor: u32 = std::str::from_utf8(&v[8..11]).ok().and_then(|s| s.parse().ok()).unwrap_or(3);
     let minor = match minor {
@@ -187,13 +205,13 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
 
     let sec = if minor == 3 {
         match rd_u32(&mut r)? {
-            0 => return err(format!("화면 공유 서버가 연결을 거부했습니다: {}", rd_reason(&mut r)?)),
+            0 => return err(tr!("rfb.refused", reason = rd_reason(&mut r)?)),
             t => t as u8,
         }
     } else {
         let n = rd_u8(&mut r)? as usize;
         if n == 0 {
-            return err(format!("화면 공유 서버가 연결을 거부했습니다: {}", rd_reason(&mut r)?));
+            return err(tr!("rfb.refused", reason = rd_reason(&mut r)?));
         }
         let types = rd_vec(&mut r, n)?;
         let has = |t| types.contains(&t);
@@ -203,11 +221,11 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
         } else if has(2) {
             2
         } else if has(30) {
-            return Err(denied("이 Mac은 계정 로그인이 필요합니다 — 사용자 이름을 입력하세요"));
+            return Err(kinded(io::ErrorKind::PermissionDenied, "need_user", tr!("rfb.needUser")));
         } else if has(1) {
             1
         } else {
-            return err(format!("이 화면 공유 서버의 인증 방식을 지원하지 않습니다 (서버가 제공하는 방식: {types:?})"));
+            return err(tr!("rfb.authTypes", types = format!("{types:?}")));
         };
         crate::log!("security types {types:?} -> {pick}");
         w.write_all(&[pick])?;
@@ -220,7 +238,7 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
         1 => {}
         2 => vnc_auth(&mut r, &mut w, &creds.pass)?,
         30 => ard_auth(&mut r, &mut w, &creds.user, &creds.pass)?,
-        t => return err(format!("이 화면 공유 서버의 인증 방식을 지원하지 않습니다 ({t})")),
+        t => return err(tr!("rfb.authType", kind = t)),
     }
     if sec != 1 || minor == 8 {
         if rd_u32(&mut r)? != 0 {
@@ -230,7 +248,7 @@ fn authenticate(addr: &str, creds: &Creds) -> io::Result<Raw> {
             if !why.trim().is_empty() && !why.to_ascii_lowercase().contains("authentic") && !why.to_ascii_lowercase().contains("password") {
                 return Err(denied(why.trim().to_string()));
             }
-            return Err(denied(format!("인증 실패 — 사용자 이름/비밀번호를 확인하세요 {why}")));
+            return Err(kinded(io::ErrorKind::PermissionDenied, "auth", tr!("rfb.authFailed", reason = why)));
         }
     }
 
@@ -262,7 +280,7 @@ pub const MAX_PIXELS: usize = 100 << 20;
 /// A screen size from a server, before anything is allocated for it.
 pub fn check_size(w: usize, h: usize) -> io::Result<()> {
     if w > MAX_SIDE || h > MAX_SIDE || w * h > MAX_PIXELS {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("화면 공유 서버가 너무 큰 화면 크기를 보냈습니다 ({w}x{h})")));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, tr!("rfb.tooLarge", width = w, height = h)));
     }
     Ok(())
 }
@@ -346,12 +364,12 @@ fn ard_auth(r: &mut impl Read, w: &mut impl Write, user: &str, pass: &str) -> io
     let klen = rd_u16(r)? as usize;
     // (A server's own key length: Apple's is 128. Zero or tiny would also panic modpow.)
     if !(16..=512).contains(&klen) {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Apple 인증 키 길이가 올바르지 않습니다"));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, tr!("rfb.ardKeyLength")));
     }
     let p = BigUint::from_bytes_be(&rd_vec(r, klen)?);
     let server_pub = BigUint::from_bytes_be(&rd_vec(r, klen)?);
     if p <= BigUint::from(2u8) {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Apple 인증 키가 올바르지 않습니다"));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, tr!("rfb.ardKey")));
     }
 
     let mut xb = vec![0u8; klen];

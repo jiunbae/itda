@@ -54,6 +54,8 @@ pub struct Shared {
     pub clip_in: Mutex<Option<String>>,
     pub cursor: Mutex<Option<Cursor>>,
     pub error: Mutex<Option<String>>,
+    /// `error` is the server turning down the credentials (`rfb::auth_failed`).
+    pub error_auth: AtomicBool,
     /// Connection status shown in the title ("" = connected).
     pub status: Mutex<String>,
     out: Mutex<TcpStream>,
@@ -76,7 +78,7 @@ pub fn sh() -> &'static Shared {
 }
 
 pub fn init(out: TcpStream, w: u16, h: u16) -> io::Result<()> {
-    let fb = Fb::new(w as usize, h as usize).ok_or_else(|| io::Error::other("화면을 그릴 메모리가 부족합니다"))?;
+    let fb = Fb::new(w as usize, h as usize).ok_or_else(|| io::Error::other(tr!("net.noMemory")))?;
     let s = Shared {
         fb: Mutex::new(fb),
         screens: Mutex::new(Vec::new()),
@@ -85,6 +87,7 @@ pub fn init(out: TcpStream, w: u16, h: u16) -> io::Result<()> {
         clip_in: Mutex::new(None),
         cursor: Mutex::new(None),
         error: Mutex::new(None),
+        error_auth: AtomicBool::new(false),
         status: Mutex::new(String::new()),
         sock: AtomicU64::new(out.as_raw_socket()),
         out: Mutex::new(out),
@@ -185,7 +188,7 @@ pub fn spawn(mut reader: BufReader<Rx>, dial: Dial, creds: Creds) {
         crate::log!("disconnected: {e}");
         let s = sh();
         if !s.auto_reconnect.load(Relaxed) {
-            *s.error.lock().unwrap() = Some(format!("연결이 끊어졌습니다 ({e})"));
+            *s.error.lock().unwrap() = Some(tr!("net.lost", error = e));
             s.post(WM_NETERR);
             return;
         }
@@ -194,7 +197,7 @@ pub fn spawn(mut reader: BufReader<Rx>, dial: Dial, creds: Creds) {
             attempt += 1;
             s.attempt.store(attempt, Relaxed);
             crate::session::emit(serde_json::json!({"ev": "reconnecting", "n": attempt}));
-            s.set_status(format!("다시 연결하는 중… ({attempt}번째 시도)"));
+            s.set_status(tr!("net.reconnecting", n = attempt));
             let ms = if attempt == 1 { 300 } else { (500u64 << attempt.min(5)).min(8000) };
             std::thread::sleep(Duration::from_millis(ms));
             match dial().and_then(|addr| connect(&addr, &creds)) {
@@ -206,7 +209,7 @@ pub fn spawn(mut reader: BufReader<Rx>, dial: Dial, creds: Creds) {
                     let (w, h) = (sess.width as u32, sess.height as u32);
                     if s.size() != (w, h) {
                         if !s.fb.lock().unwrap().resize(w as usize, h as usize) {
-                            *s.error.lock().unwrap() = Some("화면 크기를 바꿀 메모리가 부족합니다".into());
+                            *s.error.lock().unwrap() = Some(tr!("net.noResizeMemory").into());
                             s.post(WM_NETERR);
                             return;
                         }
@@ -221,6 +224,7 @@ pub fn spawn(mut reader: BufReader<Rx>, dial: Dial, creds: Creds) {
                     break sess.reader;
                 }
                 Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+                    s.error_auth.store(auth_failed(&e), Relaxed);
                     *s.error.lock().unwrap() = Some(e.to_string());
                     s.post(WM_NETERR);
                     return;
@@ -241,7 +245,7 @@ fn wait_msg(r: &mut BufReader<Rx>, s: &Shared) -> io::Result<()> {
             Ok(_) => return Ok(()),
             Err(e) if matches!(e.kind(), io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock) => {
                 if probed {
-                    return err("Mac 응답 없음");
+                    return err(tr!("net.noResponse"));
                 }
                 s.send(&update_request(false, 0, 0, 1, 1));
                 probed = true;
@@ -287,7 +291,7 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                         _ => false,
                     };
                     if outside {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, "화면 공유 서버가 화면 밖의 영역을 보냈습니다"));
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, tr!("net.outside")));
                     }
                     match enc {
                         ENC_RAW => {
@@ -363,7 +367,7 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                             }
                             s.post(WM_RESIZED);
                         }
-                        e => return err(format!("지원하지 않는 인코딩 {e}")),
+                        e => return err(tr!("net.encoding", encoding = e)),
                     }
                 }
                 if resized {
@@ -393,14 +397,14 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                     crate::clip::on_classic(s, data);
                 }
             }
-            t => return err(format!("알 수 없는 서버 메시지 {t}")),
+            t => return err(tr!("net.message", kind = t)),
         }
     }
 }
 
 fn resize(s: &Shared, w: usize, h: usize) -> io::Result<()> {
     if !s.fb.lock().unwrap().resize(w, h) {
-        return Err(io::Error::other("화면 크기를 바꿀 메모리가 부족합니다"));
+        return Err(io::Error::other(tr!("net.noResizeMemory")));
     }
     s.fb_w.store(w as u32, Relaxed);
     s.fb_h.store(h as u32, Relaxed);

@@ -182,7 +182,7 @@ fn unique_target(dst: &mut Endpoint, to: &str, dir: bool) -> io::Result<String> 
             return Ok(candidate);
         }
     }
-    Err(error("사용 가능한 복사본 이름이 없습니다"))
+    Err(error(tr!("fx.transfer.noCopyName")))
 }
 struct Context {
     control: Arc<Control>,
@@ -221,21 +221,18 @@ impl Context {
     ) -> io::Result<()> {
         self.control.check()?;
         if depth > 128 {
-            return Err(error("폴더가 너무 깊습니다"));
+            return Err(error(tr!("fx.transfer.tooDeep")));
         }
         let before = src
             .stat(from)?
-            .ok_or_else(|| error("원본 파일이 없습니다"))?;
+            .ok_or_else(|| error(tr!("fx.transfer.noSource")))?;
         if before.link {
-            return Err(error(format!(
-                "심볼릭 링크는 자동으로 따라가지 않습니다: {}",
-                before.name
-            )));
+            return Err(error(tr!("fx.transfer.symlink", name = before.name)));
         }
         let mut to = destination_leaf(to, self.target_windows);
         let mut existing = dst.stat(&to)?;
         if existing.is_some() && self.policy == "exclusive" {
-            return Err(error("대상에 같은 이름의 파일이 있습니다"));
+            return Err(error(tr!("fx.transfer.targetExists")));
         }
         if existing.is_some() && self.policy == "skip" {
             return Ok(());
@@ -259,10 +256,7 @@ impl Context {
             let created = existing.is_none();
             if let Some(e) = existing {
                 if !e.dir {
-                    return Err(error(format!(
-                        "폴더와 파일 이름이 충돌합니다: {}",
-                        before.name
-                    )));
+                    return Err(error(tr!("fx.transfer.folderVsFile", name = before.name)));
                 }
             } else {
                 dst.mkdir(&to)?;
@@ -289,20 +283,14 @@ impl Context {
         }
         if let Some(e) = existing {
             if e.dir {
-                return Err(error(format!(
-                    "파일과 폴더 이름이 충돌합니다: {}",
-                    before.name
-                )));
+                return Err(error(tr!("fx.transfer.fileVsFolder", name = before.name)));
             }
             if !self.moving && e.size == before.size && e.modified == before.modified {
                 self.done += 1;
                 return Ok(());
             }
             if self.policy != "replace" {
-                return Err(error(format!(
-                    "같은 이름의 파일이 있습니다: {}",
-                    before.name
-                )));
+                return Err(error(tr!("fx.transfer.fileExists", name = before.name)));
             }
         }
         // Stage to a unique name in the destination directory. Cancellation never destroys
@@ -314,7 +302,7 @@ impl Context {
         } else {
             Path::new(&to)
                 .parent()
-                .ok_or_else(|| error("대상 폴더가 없습니다"))?
+                .ok_or_else(|| error(tr!("fx.transfer.noTargetFolder")))?
                 .join(temporary)
                 .to_string_lossy()
                 .into_owned()
@@ -389,29 +377,29 @@ impl Context {
             }
             let after = src
                 .stat(from)?
-                .ok_or_else(|| error("전송 중 원본이 사라졌습니다"))?;
+                .ok_or_else(|| error(tr!("fx.transfer.sourceGone")))?;
             let staged = dst
                 .stat(&staging)?
-                .ok_or_else(|| error("전송 결과를 확인할 수 없습니다"))?;
+                .ok_or_else(|| error(tr!("fx.transfer.unverified")))?;
             if before.size != after.size
                 || before.modified != after.modified
                 || staged.size != before.size
             {
-                return Err(error("전송 중 파일이 변경되었습니다. 원본은 유지했습니다"));
+                return Err(error(tr!("fx.transfer.changed")));
             }
             if self.moving
                 && src.hash(from, before.size, &control)?
                     != dst.hash(&staging, before.size, &control)?
             {
                 return Err(error(
-                    "복사 결과의 해시가 일치하지 않습니다. 원본은 유지했습니다",
+                    tr!("fx.transfer.hash"),
                 ));
             }
             control.check()?;
             let replace = dst.stat(&to)?.is_some();
             if replace && self.policy != "replace" {
                 return Err(error(
-                    "대상에 같은 이름의 파일이 생겼습니다. 다시 확인해 주세요",
+                    tr!("fx.transfer.raced"),
                 ));
             }
             // The staged copy stays 0600 until now; it takes the source's permissions just
@@ -424,9 +412,9 @@ impl Context {
                 control.check()?;
                 let latest = src
                     .stat(from)?
-                    .ok_or_else(|| error("원본이 변경되었습니다"))?;
+                    .ok_or_else(|| error(tr!("fx.transfer.sourceChanged")))?;
                 if latest.size != before.size || latest.modified != before.modified {
-                    return Err(error("원본이 변경되어 삭제하지 않았습니다"));
+                    return Err(error(tr!("fx.transfer.notRemoved")));
                 }
                 src.remove(from, false)?;
             }
@@ -441,13 +429,13 @@ impl Context {
 }
 #[cfg(target_os = "macos")]
 pub(super) fn export_batch(files: &[super::export::File], targets: &[PathBuf], emit: Emit) -> io::Result<()> {
-    let file=files.first().ok_or_else(||error("파일을 선택하세요"))?;
-    if files.len()!=targets.len() || files.iter().any(|f|f.id!=file.id||f.remote!=file.remote){return Err(error("복사할 파일 위치를 확인하세요"));}
+    let file=files.first().ok_or_else(||error(tr!("fx.chooseFile")))?;
+    if files.len()!=targets.len() || files.iter().any(|f|f.id!=file.id||f.remote!=file.remote){return Err(error(tr!("fx.transfer.copyPlace")));}
     let control=Arc::new(Control::default());
     // A Finder promise's write: its queue counts it (and keeps counting after this job).
     control.promise.store(super::PROMISE_WRITE.with(|p| p.get()), Ordering::Relaxed);
     let job=crate::store::new_id();
-    if !super::admit(&job, &file.id, &control) { return Err(error(super::CLOSING)); }
+    if !super::admit(&job, &file.id, &control) { return Err(error(super::closing())); }
     emit(json!({"type":"files_job","id":file.id,"job":job,"state":"queued","kind":"export","file":file.name}));
     let result: io::Result<()>=(|| {
         let _slot=slot(&control)?;
@@ -487,7 +475,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
     let job = crate::store::new_id();
     let control = Arc::new(Control::default());
     if !super::admit(&job, &key, &control) {
-        emit(json!({"type":"files_job","id":id,"job":job,"req":req,"state":"failed","error":super::CLOSING,"completed_names":[]}));
+        emit(json!({"type":"files_job","id":id,"job":job,"req":req,"state":"failed","error":super::closing(),"completed_names":[]}));
         return;
     }
     {
@@ -495,7 +483,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
         if q.len() > 32 {
             q.remove(&job);
             emit(
-                json!({"type":"files_job","id":id,"job":job,"req":req,"state":"failed","error":"대기 중인 전송이 많습니다. 일부 작업이 끝난 뒤 다시 시도하세요","completed_names":[]}),
+                json!({"type":"files_job","id":id,"job":job,"req":req,"state":"failed","error":tr!("fx.transfer.queueFull"),"completed_names":[]}),
             );
             return;
         }
@@ -514,14 +502,14 @@ pub fn start(v: Value, host: Host, emit: Emit) {
             if !(v["from"] == "remote" || v["from"] == "local")
                 || !(v["to"] == "remote" || v["to"] == "local")
             {
-                return Err(error("전송 위치가 올바르지 않습니다"));
+                return Err(error(tr!("fx.transfer.badPlace")));
             }
             // Only the remote ends need a device connection: this computer's own files are
             // copied without one (a file window with no device yet).
             let dst_c = if to_remote || (from_remote && same_device) { Some(connection(&key)?) } else { None };
             let src_c = match (&source_key, from_remote) {
                 (_, false) => None,
-                (Some(_), true) if !same_device => Some(held_source.map_err(|_| error("원본 기기의 파일 연결이 닫혔습니다. 그 기기의 탭이나 창을 다시 열어 주세요"))?.ok_or_else(|| error("원본 기기의 파일 연결을 확인하세요"))?),
+                (Some(_), true) if !same_device => Some(held_source.map_err(|_| error(tr!("fx.transfer.sourceClosed")))?.ok_or_else(|| error(tr!("fx.transfer.sourceCheck")))?),
                 _ => dst_c.clone(),
             };
             let (src_c, dst_c) = (src_c.filter(|_| from_remote), dst_c.filter(|_| to_remote));
@@ -534,7 +522,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                 dst_path = remote_path(&dst_path, &c.home);
             }
             if src_path.is_empty() || dst_path.is_empty() {
-                return Err(error("전송할 위치를 확인하세요"));
+                return Err(error(tr!("fx.transfer.checkPlace")));
             }
             let src_windows = src_c.as_ref().map_or(cfg!(windows), |c| c.windows);
             let dst_windows = dst_c.as_ref().map_or(cfg!(windows), |c| c.windows);
@@ -543,13 +531,13 @@ pub fn start(v: Value, host: Host, emit: Emit) {
             let moving = v["move"] == true;
             let policy = get(&v, "policy");
             if !["skip", "keep", "replace"].contains(&policy.as_str()) {
-                return Err(error("이름 충돌 처리 방법을 선택하세요"));
+                return Err(error(tr!("fx.transfer.policy")));
             }
             let names = v["names"]
                 .as_array()
-                .ok_or_else(|| error("파일을 선택하세요"))?;
+                .ok_or_else(|| error(tr!("fx.chooseFile")))?;
             if names.is_empty() || names.len() > 10_000 {
-                return Err(error("전송할 파일 수를 확인하세요"));
+                return Err(error(tr!("fx.transfer.count")));
             }
             let mut src = Endpoint::new(src_c.as_deref(), &control)?;
             let mut dst = Endpoint::new(dst_c.as_deref(), &control)?;
@@ -602,10 +590,10 @@ pub fn start(v: Value, host: Host, emit: Emit) {
             if dst_windows {
                 let mut unique = std::collections::HashSet::new();
                 for n in names {
-                    let n = n.as_str().ok_or_else(|| error("잘못된 파일 이름"))?;
+                    let n = n.as_str().ok_or_else(|| error(tr!("fx.badName")))?;
                     name(n)?;
                     windows_target(n, n)?;
-                    if !unique.insert(windows_name_key(n)) { return Err(error("Windows에서 같은 이름이 되는 파일이 여러 개 있습니다. 이름을 바꾼 뒤 복사하세요")); }
+                    if !unique.insert(windows_name_key(n)) { return Err(error(tr!("fx.transfer.windowsDupes"))); }
                     // rsync can rename the top-level argument explicitly; only names
                     // inside a folder need the component-by-component SFTP path.
                     let mut changes = false;
@@ -622,7 +610,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
             }
             for n in names {
                 control.check()?;
-                let n = n.as_str().ok_or_else(|| error("잘못된 파일 이름"))?;
+                let n = n.as_str().ok_or_else(|| error(tr!("fx.badName")))?;
                 name(n)?;
                 let from = if from_remote {
                     join(&src_path, n)?
@@ -650,12 +638,12 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                     && (f == t || t.starts_with(&format!("{}/", f.trim_end_matches('/'))))
                 {
                     return Err(error(
-                        "원본과 같은 위치 또는 원본 폴더 안으로 복사할 수 없습니다",
+                        tr!("fx.transfer.intoSelf"),
                     ));
                 }
                 let entry = src
                     .stat(&from)?
-                    .ok_or_else(|| error("원본 파일이 없습니다"))?;
+                    .ok_or_else(|| error(tr!("fx.transfer.noSource")))?;
                 partial = Some((n.to_string(), entry.dir));
                 let destination = dst.stat(&to)?;
                 if destination
@@ -663,11 +651,11 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                     .is_some_and(|d| d.dir != entry.dir || d.link)
                 {
                     return Err(error(
-                        "파일/폴더 종류가 충돌하거나 대상이 심볼릭 링크입니다",
+                        tr!("fx.transfer.kindConflict"),
                     ));
                 }
                 if requested == "rsync" && cx.normalizing_tree {
-                    return Err(error("Windows에 한글 파일명을 완성형으로 저장하려면 자동 또는 일반 전송을 선택하세요"));
+                    return Err(error(tr!("fx.transfer.nfcRsync")));
                 }
                 let candidate = !cx.normalizing_tree && (requested == "rsync" || entry.dir || destination.is_some())
                     && requested != "sftp"
@@ -683,14 +671,14 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                 };
                 if requested == "rsync" && !can_delta {
                     return Err(error(
-                        "이 작업은 rsync를 사용할 수 없습니다. 자동 또는 일반 전송을 선택하세요",
+                        tr!("fx.transfer.rsyncNotHere"),
                     ));
                 }
                 if can_delta {
                     emit(
-                        json!({"type":"files_job","id":id,"job":job,"state":"running","file":n,"engine":"rsync","detail":"변경된 파일과 블록을 비교하고 있습니다"}),
+                        json!({"type":"files_job","id":id,"job":job,"state":"running","file":n,"engine":"rsync","detail":tr!("fx.transfer.rsyncComparing")}),
                     );
-                    let rc = rsync_end.as_ref().ok_or_else(|| error("rsync를 사용할 수 없습니다"))?;
+                    let rc = rsync_end.as_ref().ok_or_else(|| error(tr!("fx.transfer.rsyncUnavailable")))?;
                     match run_rsync(&rc.cfg, &from, &to, from_remote, entry.dir, &control) {
                         Ok(()) => cx.done += 1,
                         // Asked for rsync: say why it failed. Chosen automatically: an rsync
@@ -700,7 +688,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
                         Err(e) => {
                             crate::log!("files: rsync failed, copying over SFTP instead: {e}");
                             emit(
-                                json!({"type":"files_job","id":id,"job":job,"state":"running","file":n,"engine":"sftp","detail":"rsync를 쓸 수 없어 일반 전송으로 복사합니다"}),
+                                json!({"type":"files_job","id":id,"job":job,"state":"running","file":n,"engine":"sftp","detail":tr!("fx.transfer.rsyncFallback")}),
                             );
                             cx.copy(&mut src, &mut dst, &from, &to, 0)?;
                         }
@@ -720,7 +708,7 @@ pub fn start(v: Value, host: Host, emit: Emit) {
         // A cancel ends the job's SSH sessions, so the error may only be their broken pipe.
         let error = result.err().map(|e| {
             if cancelled {
-                "전송을 취소했습니다".to_string()
+                tr!("fx.cancelled").to_string()
             } else {
                 e.to_string()
             }
@@ -736,14 +724,14 @@ pub fn start(v: Value, host: Host, emit: Emit) {
 fn windows_tree(src: &mut Endpoint, path: &str, shown: &str, depth: usize, c: &Control) -> io::Result<bool> {
     c.check()?;
     if depth > 128 {
-        return Err(error("폴더가 너무 깊습니다"));
+        return Err(error(tr!("fx.transfer.tooDeep")));
     }
     let mut changes = false;
     let mut unique = std::collections::HashSet::new();
     for e in src.list(path)? {
         let shown = format!("{shown}/{}", e.name);
         windows_target(&e.name, &shown)?;
-        if !unique.insert(windows_name_key(&e.name)) { return Err(error(format!("Windows에서 같은 이름이 되는 파일이 여러 개 있습니다: {shown}"))); }
+        if !unique.insert(windows_name_key(&e.name)) { return Err(error(tr!("fx.transfer.windowsDupe", name = shown))); }
         changes |= destination_name(&e.name,true) != e.name;
         if e.dir && !e.link {
             changes |= windows_tree(src, &join(path, &e.name)?, &shown, depth + 1, c)?;
@@ -773,13 +761,13 @@ fn rsync_local_path(path: &str) -> io::Result<String> {
     {
         let exe = rsync_exe()
             .and_then(|p| p.parent().map(|p| p.join("cygpath.exe")))
-            .ok_or_else(|| error("호환되는 rsync 경로 변환 도구가 없습니다"))?;
+            .ok_or_else(|| error(tr!("fx.transfer.rsyncNoTool")))?;
         let out = Command::new(exe).args(["-u", "--", path]).output()?;
         if !out.status.success() {
-            return Err(error("rsync 파일 경로를 변환할 수 없습니다"));
+            return Err(error(tr!("fx.transfer.rsyncPath")));
         }
         let value =
-            String::from_utf8(out.stdout).map_err(|_| error("rsync 경로 인코딩을 확인하세요"))?;
+            String::from_utf8(out.stdout).map_err(|_| error(tr!("fx.transfer.rsyncEncoding")))?;
         Ok(value.trim_end_matches(['\r', '\n']).to_string())
     }
     #[cfg(not(windows))]
@@ -800,7 +788,7 @@ fn rsync_word(s: &str) -> io::Result<String> {
     } else if !s.contains('"') && !s.contains('\\') {
         Ok(format!("\"{s}\""))
     } else {
-        Err(error("rsync에 넘길 수 없는 경로입니다 (따옴표). 일반 전송을 선택하세요"))
+        Err(error(tr!("fx.transfer.rsyncQuote")))
     }
 }
 fn run(mut cmd: Command, c: &Control, timeout: Option<Duration>) -> io::Result<()> {
@@ -848,17 +836,14 @@ fn run(mut cmd: Command, c: &Control, timeout: Option<Duration>) -> io::Result<(
             let mut ch = child.lock().unwrap();
             let _ = ch.kill();
             let _ = ch.wait();
-            return Err(error("SSH 기능 확인 시간 초과"));
+            return Err(error(tr!("fx.transfer.sshProbeTimeout")));
         }
         if let Some(status) = child.lock().unwrap().try_wait()? {
             let _ = logger.join();
             return if status.success() {
                 Ok(())
             } else {
-                Err(error(format!(
-                    "rsync 전송 실패: {}",
-                    log.lock().unwrap().trim()
-                )))
+                Err(error(tr!("fx.transfer.rsyncFailed", error = log.lock().unwrap().trim())))
             };
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -898,7 +883,7 @@ fn rsync_command(cfg: &SshCfg, from: &str, to: &str, download: bool, dir: bool) 
     let target = if target.contains(':') { format!("[{target}]") } else { target };
     let suffix = if dir { "/" } else { "" };
     let remote = |p: &str| format!("{target}:{}", quote(&format!("{p}{suffix}")));
-    let mut cmd = Command::new(rsync_exe().ok_or_else(|| error("rsync를 찾을 수 없습니다"))?);
+    let mut cmd = Command::new(rsync_exe().ok_or_else(|| error(tr!("fx.transfer.rsyncMissing")))?);
     for (k, v) in ssh.get_envs() {
         if let Some(v) = v {
             cmd.env(k, v);

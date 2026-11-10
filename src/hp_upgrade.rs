@@ -57,6 +57,7 @@ pub fn password_key(id: &str) -> String {
 
 /// What a Mac's high-performance sharing answers while its screen is locked (the viewer then
 /// gets Screen Sharing, where it can be unlocked). Matched by the connecting side.
+/// Protocol text, not translated: viewers of every version match these exact words.
 pub const SCREEN_LOCKED: &str = "화면이 잠겨 있어 고성능 모드로 보여 줄 수 없습니다";
 /// Its refusal while another user's session has the screen (fast user switching).
 pub const OTHER_USER: &str = "다른 사용자가 이 Mac 화면을 쓰고 있어 고성능 모드로 보여 줄 수 없습니다";
@@ -74,16 +75,16 @@ pub fn start_sharing(cfg: &SshCfg) -> io::Result<()> {
     let port = if cfg.vnc_port == 0 { crate::host_mac_port() } else { cfg.vnc_port };
     run(cfg, &format!(r#"
 set -e
-[ "$(id -un)" = "$(stat -f%Su /dev/console)" ] || {{ echo 'error=이 Mac 화면에 로그인한 계정이 아닙니다'; exit 3; }}
-[ -f "$HOME/Library/Application Support/Itda/hp-sharing" ] || {{ echo 'error=이 Mac에서 고성능 공유가 꺼져 있습니다'; exit 3; }}
+[ "$(id -un)" = "$(stat -f%Su /dev/console)" ] || {{ echo 'error=not-console'; exit 3; }}
+[ -f "$HOME/Library/Application Support/Itda/hp-sharing" ] || {{ echo 'error=sharing-off'; exit 3; }}
 app=""
 for a in /Applications/Itda.app "$HOME/Applications/Itda.app"; do [ -d "$a" ] && {{ app=$a; break; }}; done
-[ -n "$app" ] || {{ echo 'error=Itda가 설치되어 있지 않습니다'; exit 5; }}
-pgrep -f "$app/Contents/MacOS/" >/dev/null && {{ echo 'error=Itda가 실행 중이지만 응답하지 않습니다'; exit 6; }}
+[ -n "$app" ] || {{ echo 'error=not-installed'; exit 5; }}
+pgrep -f "$app/Contents/MacOS/" >/dev/null && {{ echo 'error=not-responding'; exit 6; }}
 {BACKGROUND}
 open -g -j "$app" $bg
 for i in $(seq 1 40); do nc -z -w 1 127.0.0.1 {port} 2>/dev/null && exit 0; sleep 0.5; done
-echo 'error=Itda가 고성능 공유를 시작하지 못했습니다'; exit 6
+echo 'error=not-started'; exit 6
 "#), None).map(|_| ())
 }
 
@@ -106,10 +107,30 @@ fn run(cfg: &SshCfg, script: &str, upload: Option<&mut dyn Read>) -> io::Result<
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        let why = text.lines().chain(err.lines()).rev().find(|l| l.starts_with("error=")).map(|l| l.trim_start_matches("error=").to_string());
-        return Err(io::Error::other(why.unwrap_or_else(|| format!("원격 명령이 실패했습니다: {}", err.trim()))));
+        let why = text.lines().chain(err.lines()).rev().find(|l| l.starts_with("error=")).map(|l| script_error(l.trim_start_matches("error=")));
+        return Err(io::Error::other(why.unwrap_or_else(|| tr!("hp.remoteFailed", error = err.trim()))));
     }
     Ok(text)
+}
+
+/// The person's words for a script's `error=` code (`code` or `code value`).
+fn script_error(line: &str) -> String {
+    let (code, value) = line.split_once(' ').unwrap_or((line, ""));
+    match code {
+        "not-console" => tr!("hp.notConsole").into(),
+        "sharing-off" => tr!("hp.sharingOff").into(),
+        "not-installed" => tr!("hp.notInstalled").into(),
+        "not-responding" => tr!("hp.notResponding").into(),
+        "not-started" => tr!("hp.notStarted").into(),
+        "connect-console" => tr!("hp.connectConsole").into(),
+        "remote-not-installed" => tr!("hp.remoteNotInstalled").into(),
+        "not-mac" => tr!("hp.notMac").into(),
+        "console-user" => tr!("hp.consoleUser", user = value),
+        "bad-bundle" => tr!("hp.badBundle").into(),
+        "download-failed" => tr!("hp.downloadFailed").into(),
+        "checksum" => tr!("hp.checksum").into(),
+        _ => line.to_string(),
+    }
 }
 
 fn field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
@@ -175,13 +196,13 @@ if [ "$age" -ge 0 ] && [ "$age" -le 15 ] && lsof -nP -a -c itda -iTCP:{port} -sT
 
 /// The guide and system settings open on the remote Mac, never on the viewer's computer.
 pub fn show_permissions(cfg: &SshCfg, permission: Option<&str>) -> io::Result<()> {
-    let suffix=match permission {None=>"",Some("screen")=>"/screen",Some("access")=>"/access",_=>return Err(io::Error::other("설정할 권한을 확인해 주세요"))};
+    let suffix=match permission {None=>"",Some("screen")=>"/screen",Some("access")=>"/access",_=>return Err(io::Error::other(tr!("hp.badPermission")))};
     run(cfg,&format!(r#"
 set -e
-[ "$(id -un)" = "$(stat -f%Su /dev/console)" ] || {{ echo 'error=이 Mac 화면에 로그인한 계정으로 연결해 주세요'; exit 3; }}
+[ "$(id -un)" = "$(stat -f%Su /dev/console)" ] || {{ echo 'error=connect-console'; exit 3; }}
 app=""
 for a in /Applications/Itda.app "$HOME/Applications/Itda.app"; do [ -d "$a" ] && {{ app=$a; break; }}; done
-[ -n "$app" ] || {{ echo 'error=원격 Mac에 Itda가 설치되어 있지 않습니다'; exit 5; }}
+[ -n "$app" ] || {{ echo 'error=remote-not-installed'; exit 5; }}
 # (Started here if it isn't running: then only its helper shows, not the home window.)
 {BACKGROUND}
 if pgrep -f "$app/Contents/MacOS/" >/dev/null; then open -a "$app" 'itda://permissions{suffix}'; else open -a "$app" 'itda://permissions{suffix}' $bg; fi
@@ -189,12 +210,12 @@ if pgrep -f "$app/Contents/MacOS/" >/dev/null; then open -a "$app" 'itda://permi
 }
 
 pub fn upgrade(cfg: &SshCfg, source: &Source, progress: &dyn Fn(&str)) -> io::Result<Ready> {
-    progress("Mac 확인 중");
+    progress(tr!("hp.stage.checking"));
     let probe = run(cfg, &format!(r#"
 set -e
-[ "$(uname -s)" = Darwin ] || {{ echo "error=Mac이 아닙니다"; exit 3; }}
+[ "$(uname -s)" = Darwin ] || {{ echo "error=not-mac"; exit 3; }}
 me=$(id -un); console=$(stat -f%Su /dev/console)
-[ "$me" = "$console" ] || {{ echo "error=이 Mac 화면에 로그인한 계정($console)으로 연결해야 고성능 모드를 켤 수 있습니다"; exit 3; }}
+[ "$me" = "$console" ] || {{ echo "error=console-user $console"; exit 3; }}
 app=""
 for a in /Applications/Itda.app "$HOME/Applications/Itda.app"; do [ -d "$a" ] && {{ app=$a; break; }}; done
 echo "app=$app"
@@ -202,9 +223,9 @@ echo "app=$app"
 echo "arch=$(uname -m)"
 echo "macos=$(sw_vers -productVersion)"
 "#), None)?;
-    let version = field(&probe, "macos").ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "대상 Mac의 macOS 버전을 확인할 수 없습니다"))?;
+    let version = field(&probe, "macos").ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, tr!("hp.noMacosVersion")))?;
     if !crate::capture_support::macos_version_supported(version) {
-        return Err(io::Error::new(io::ErrorKind::Unsupported, format!("대상 Mac(macOS {version})에서는 고성능 공유를 사용할 수 없습니다. macOS 12.3 이상이 필요합니다. 기본 화면 연결과 파일 브라우저를 이용해 주세요.")));
+        return Err(io::Error::new(io::ErrorKind::Unsupported, tr!("hp.macosTooOld", version = version)));
     }
     let have = field(&probe, "ver").filter(|v| !v.is_empty());
     let mut ready = Ready::default();
@@ -214,7 +235,7 @@ echo "macos=$(sw_vers -productVersion)"
         (None, _) => true,
     };
     if need {
-        progress("Itda 설치 중");
+        progress(tr!("hp.stage.installing"));
         // Install into /Applications when that's writable here, else ~/Applications; quit a
         // running Itda first so the new one replaces it.
         let install = format!(r#"
@@ -222,7 +243,7 @@ set -e
 T=$(mktemp -d /tmp/itda-hp.XXXX)
 {fetch}
 ditto -x -k "$T/Itda.zip" "$T/x"
-[ -d "$T/x/Itda.app" ] || {{ echo "error=설치 파일이 올바르지 않습니다"; exit 4; }}
+[ -d "$T/x/Itda.app" ] || {{ echo "error=bad-bundle"; exit 4; }}
 dest=/Applications
 [ -w /Applications ] || {{ dest="$HOME/Applications"; mkdir -p "$dest"; }}
 [ -n {app} ] && dest=$(dirname {app})
@@ -234,10 +255,10 @@ echo "installed=$(defaults read "$dest/Itda.app/Contents/Info" CFBundleShortVers
             app = q(field(&probe, "app").unwrap_or("")),
             fetch = match source {
                 Source::Release(v) => format!(
-                    r#"curl -fsSL {zip} -o "$T/Itda.zip" || {{ echo "error=Itda를 내려받지 못했습니다"; exit 4; }}
+                    r#"curl -fsSL {zip} -o "$T/Itda.zip" || {{ echo "error=download-failed"; exit 4; }}
 want=$(curl -fsSL {sums} | awk '$2=="Itda-macos-universal.zip"{{print $1}}')
 got=$(shasum -a 256 "$T/Itda.zip" | cut -c1-64)
-[ -n "$want" ] && [ "$want" = "$got" ] || {{ echo "error=내려받은 Itda의 체크섬이 맞지 않습니다"; exit 4; }}"#,
+[ -n "$want" ] && [ "$want" = "$got" ] || {{ echo "error=checksum"; exit 4; }}"#,
                     zip = q(&format!("{RELEASES}/v{v}/Itda-macos-universal.zip")),
                     sums = q(&format!("{RELEASES}/v{v}/SHA256SUMS.txt"))
                 ),
@@ -251,14 +272,14 @@ got=$(shasum -a 256 "$T/Itda.zip" | cut -c1-64)
         let out = run(cfg, &install, None)?;
         ready.installed = field(&out, "installed").map(str::to_string);
     }
-    progress("고성능 공유를 켜는 중");
+    progress(tr!("hp.stage.starting"));
     let out = run(cfg, &format!(r#"
 set -e
 data="$HOME/Library/Application Support/Itda"
 mkdir -p "$data"; echo 1 > "$data/hp-sharing"; since=$(mktemp /tmp/itda-hp-since.XXXX)
 app=""
 for a in /Applications/Itda.app "$HOME/Applications/Itda.app"; do [ -d "$a" ] && {{ app=$a; break; }}; done
-[ -n "$app" ] || {{ echo "error=Itda가 설치되어 있지 않습니다"; exit 5; }}
+[ -n "$app" ] || {{ echo "error=not-installed"; exit 5; }}
 # A running Itda started before the switch doesn't serve yet: restart it, hidden.
 if pgrep -f "$app/Contents/MacOS/" >/dev/null && ! nc -z 127.0.0.1 5910 2>/dev/null; then
   osascript -e 'tell application id "{BUNDLE_ID}" to quit' >/dev/null 2>&1 || true; sleep 2; pkill -f "$app/Contents/MacOS/" || true
@@ -267,7 +288,7 @@ fi
 pgrep -f "$app/Contents/MacOS/" >/dev/null || open -g -j "$app" $bg
 # A status written after this point: the serving Itda is alive (it rewrites it every 2 s).
 for i in $(seq 1 60); do [ "$data/hp-status" -nt "$since" ] && [ -f "$data/hp-password" ] && nc -z -w 1 127.0.0.1 5910 2>/dev/null && break; sleep 0.5; done
-[ "$data/hp-status" -nt "$since" ] && nc -z -w 1 127.0.0.1 5910 2>/dev/null || {{ rm -f "$since"; echo "error=Itda가 고성능 공유를 시작하지 못했습니다"; exit 6; }}
+[ "$data/hp-status" -nt "$since" ] && nc -z -w 1 127.0.0.1 5910 2>/dev/null || {{ rm -f "$since"; echo "error=not-started"; exit 6; }}
 rm -f "$since"
 cat "$data/hp-status"
 echo "password=$(cat "$data/hp-password")"
@@ -279,7 +300,7 @@ echo "password=$(cat "$data/hp-password")"
     ready.port = kv("port").parse().unwrap_or(crate::host_mac_port());
     ready.password = field(&out, "password").unwrap_or("").to_string();
     if ready.password.len() < 6 {
-        return Err(io::Error::other("고성능 공유 암호를 읽지 못했습니다"));
+        return Err(io::Error::other(tr!("hp.noPassword")));
     }
     if !ready.screen || !ready.access { ready.helper_error=show_permissions(cfg,None).err().map(|e|e.to_string()); }
     std::thread::sleep(Duration::from_millis(200));

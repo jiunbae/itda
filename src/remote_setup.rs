@@ -137,8 +137,19 @@ fn package_identities(package: &Package) -> Value {
     })
 }
 
-fn error(s: &str) -> io::Error {
-    io::Error::other(s)
+fn error(s: impl Into<String>) -> io::Error {
+    io::Error::other(s.into())
+}
+/// The person's words for an `error=` code from mac_install's script; other lines (the
+/// Windows script's exception text) pass through.
+fn script_error(line: &str) -> String {
+    match line {
+        "checksum" => tr!("setup.bundleChecksum").into(),
+        "bad-signature" => tr!("setup.badSignature").into(),
+        "not-official" => tr!("setup.notOfficial").into(),
+        "bad-version" => tr!("setup.badVersion").into(),
+        _ => line.to_string(),
+    }
 }
 fn mapped(origin: &str, kind: &str, id: &str) -> String {
     let hash = Sha256::digest(format!("itda-config-v1\0{origin}\0{kind}\0{id}"));
@@ -148,7 +159,7 @@ fn origin(root: &Path) -> io::Result<String> {
     let path = root.join("sharing-origin");
     match fs::read_to_string(&path) {
         Ok(s) if !s.trim().is_empty() => Ok(s.trim().into()),
-        Ok(_) => Err(error("설정 공유 식별자가 올바르지 않습니다")),
+        Ok(_) => Err(error(tr!("setup.badOrigin"))),
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             let value = random_id()?;
             write_private_new(&path, value.as_bytes())?;
@@ -169,15 +180,15 @@ fn source_key(path: &str) -> io::Result<Vec<u8>> {
         })
         .unwrap_or_else(|| PathBuf::from(path));
     let file = fs::File::open(path)
-        .map_err(|_| error("선택한 계정의 SSH 개인키 파일을 읽지 못했습니다"))?;
+        .map_err(|_| error(tr!("setup.keyUnreadable")))?;
     if !file.metadata()?.is_file() {
-        return Err(error("SSH 개인키는 일반 파일이어야 합니다"));
+        return Err(error(tr!("setup.keyNotFile")));
     }
     let mut bytes = Vec::new();
     file.take(MAX_KEY + 1).read_to_end(&mut bytes)?;
     if bytes.is_empty() || bytes.len() as u64 > MAX_KEY {
         bytes.zeroize();
-        return Err(error("SSH 개인키 파일 크기가 올바르지 않습니다"));
+        return Err(error(tr!("setup.keySize")));
     }
     Ok(bytes)
 }
@@ -189,21 +200,17 @@ fn validate_account_bindings(hosts: &[Host], account_ids: &HashSet<&str>) -> io:
         } else if !host.host.is_empty() {
             host.host.as_str()
         } else {
-            "이름 없는 연결"
+            tr!("setup.unnamed")
         };
         if !host.account.is_empty() && !account_ids.contains(host.account.as_str()) {
-            return Err(error(&format!(
-                "‘{name}’의 연결 계정을 찾을 수 없습니다. 연결을 편집해 계정을 다시 선택한 뒤 공유해 주세요."
-            )));
+            return Err(error(tr!("setup.missingAccount", name = name)));
         }
         // Empty inherits the device login; custom uses the entered files.user.
         if !host.files.account.is_empty()
             && host.files.account != "custom"
             && !account_ids.contains(host.files.account.as_str())
         {
-            return Err(error(&format!(
-                "‘{name}’의 파일 연결 계정을 찾을 수 없습니다. 파일 열기에서 계정을 다시 선택한 뒤 공유해 주세요."
-            )));
+            return Err(error(tr!("setup.missingFilesAccount", name = name)));
         }
     }
     Ok(())
@@ -230,7 +237,7 @@ fn selected_profiles(
             .iter()
             .any(|id| !hosts.iter().any(|h| &h.id == *id))
     {
-        return Err(error("공유할 연결을 다시 선택해 주세요"));
+        return Err(error(tr!("setup.reselect")));
     }
     let selected_hosts: Vec<_> = hosts
         .iter()
@@ -300,7 +307,7 @@ fn snapshot_with_origin(
                 bytes: source_key(&a.ssh_key)?,
             });
             if keys.iter().map(|k| k.bytes.len() as u64).sum::<u64>() > MAX_PACKAGE / 4 {
-                return Err(error("선택한 SSH 개인키의 전체 크기가 너무 큽니다"));
+                return Err(error(tr!("setup.keysTooLarge")));
             }
             add(SecretKind::KeyPass, &a.id, &store::acct_keypass(&a.id))?;
         }
@@ -381,7 +388,7 @@ fn read_line_secret(r: &mut impl Read) -> io::Result<Zeroizing<Vec<u8>>> {
             return Ok(line);
         }
         if line.len() > 64 * 1024 {
-            return Err(error("키체인 도우미의 응답이 너무 깁니다"));
+            return Err(error(tr!("setup.keychainReplyLong")));
         }
         line.push(b[0]);
     }
@@ -410,7 +417,7 @@ impl SessionVault {
         let base = store::override_base().unwrap_or_default();
         let run = format!("\"{}\" --vault-helper {port} \"{}\" \"{}\"", self.app.display(), base.display(), dir.display());
         if run.len() > 261 {
-            return Err(error("Itda 설치 경로가 너무 길어 비밀번호 도우미를 시작하지 못했습니다"));
+            return Err(error(tr!("setup.helperPathLong")));
         }
         let schtasks = crate::update::system_tool("schtasks.exe");
         let task_ok = |args: &[&str]| {
@@ -431,11 +438,11 @@ impl SessionVault {
             }
         }
         if !task_ok(&["/Create", "/F", "/TN", &task, "/SC", "ONCE", "/ST", "00:00", "/IT", "/RL", "LIMITED", "/TR", &run]) {
-            return Err(error("비밀번호 도우미 작업을 만들지 못했습니다"));
+            return Err(error(tr!("setup.helperTask")));
         }
         let _task = Task(&task_ok, &task);
         if !task_ok(&["/Run", "/TN", &task]) {
-            return Err(error("비밀번호 도우미를 시작하지 못했습니다. 원격 PC에 이 계정으로 로그인되어 있는지 확인하세요"));
+            return Err(error(tr!("setup.helperStart")));
         }
         // Any local program could connect: only the one that shows the token is kept, others
         // are dropped and waiting goes on until the deadline.
@@ -450,10 +457,10 @@ impl SessionVault {
                     }
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock && std::time::Instant::now() < until => std::thread::sleep(std::time::Duration::from_millis(100)),
-                Err(_) => return Err(error("비밀번호 도우미가 응답하지 않습니다. 원격 PC에 이 계정으로 로그인되어 있는지 확인하세요")),
+                Err(_) => return Err(error(tr!("setup.helperNoReply"))),
             }
             if std::time::Instant::now() >= until {
-                return Err(error("비밀번호 도우미가 응답하지 않습니다. 원격 PC에 이 계정으로 로그인되어 있는지 확인하세요"));
+                return Err(error(tr!("setup.helperNoReply")));
             }
         };
         stream.set_nonblocking(false)?;
@@ -482,14 +489,14 @@ impl SessionVault {
             .stderr(Stdio::null())
             .status()?;
         if !started.success() {
-            return Err(error("이 Mac의 로그인 세션에서 키체인 도우미를 열지 못했습니다. 화면에 로그인한 계정인지 확인하세요"));
+            return Err(error(tr!("setup.keychainHelperOpen")));
         }
         let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
         let stream = loop {
             match listener.accept() {
                 Ok((s, _)) => break s,
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock && std::time::Instant::now() < until => std::thread::sleep(std::time::Duration::from_millis(100)),
-                Err(_) => return Err(error("키체인 도우미가 응답하지 않습니다. 원격 Mac 화면에 로그인되어 있는지 확인하세요")),
+                Err(_) => return Err(error(tr!("setup.keychainHelperNoReply"))),
             }
         };
         stream.set_nonblocking(false)?;
@@ -499,7 +506,7 @@ impl SessionVault {
     }
     fn call(&self, op: &str, key: &str, value: Option<&str>) -> io::Result<Option<Zeroizing<String>>> {
         if self.poisoned.get() {
-            return Err(error("키체인 도우미와의 연결이 끊겨 저장 결과를 확인할 수 없습니다"));
+            return Err(error(tr!("setup.keychainHelperLost")));
         }
         if self.link.borrow().is_none() {
             if let Err(e) = self.start() {
@@ -524,12 +531,12 @@ impl SessionVault {
         })();
         match outcome {
             Ok(reply) if reply.ok => Ok(reply.value.map(Zeroizing::new)),
-            Ok(reply) => Err(error(reply.error.as_deref().unwrap_or("키체인에 저장하지 못했습니다"))),
+            Ok(reply) => Err(error(reply.error.as_deref().unwrap_or(tr!("setup.keychainSaveFailed")))),
             Err(_) => {
                 // Unknown outcome: no further request may share or replace this channel.
                 self.poisoned.set(true);
                 self.link.take();
-                Err(error("키체인 도우미와의 연결이 끊겨 저장 결과를 확인할 수 없습니다"))
+                Err(error(tr!("setup.keychainHelperLost")))
             }
         }
     }
@@ -566,7 +573,7 @@ fn vault_helper(base: &str, socket: &Path) -> io::Result<()> {
         std::env::set_var("ITDA_DATA_DIR", base);
     }
     let mine = unsafe { libc_getuid() };
-    let unsafe_path = || error("키체인 도우미의 경로가 안전하지 않습니다");
+    let unsafe_path = || error(tr!("setup.keychainHelperPath"));
     let dir = socket.parent().ok_or_else(unsafe_path)?;
     let meta = fs::symlink_metadata(dir)?;
     if meta.file_type().is_symlink() || !meta.is_dir() || meta.uid() != mine || meta.mode() & 0o077 != 0 {
@@ -614,7 +621,7 @@ fn vault_helper(port: &str, base: &str, dir: &Path) -> io::Result<()> {
     } else {
         std::env::set_var("ITDA_DATA_DIR", base);
     }
-    let unsafe_path = || error("비밀번호 도우미의 경로가 안전하지 않습니다");
+    let unsafe_path = || error(tr!("setup.helperPath"));
     let port: u16 = port.parse().map_err(|_| unsafe_path())?;
     let root = fs::canonicalize(store::dir())?;
     let real = fs::canonicalize(dir)?;
@@ -645,12 +652,12 @@ fn serve_vault(stream: &mut (impl Read + Write), vault: &mut impl Vault) -> io::
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
             Err(e) => return Err(e),
         };
-        let request: Request = serde_json::from_slice(&line).map_err(|_| error("알 수 없는 요청"))?;
+        let request: Request = serde_json::from_slice(&line).map_err(|_| error(tr!("setup.unknownRequest")))?;
         let value = request.value.map(Zeroizing::new);
         let result = match request.op.as_str() {
             "get" => vault.get(&request.key).map(|v| v.map(Zeroizing::new)),
             "set" => vault.set(&request.key, value.as_deref().map(String::as_str)).map(|()| None),
-            _ => Err(error("알 수 없는 요청")),
+            _ => Err(error(tr!("setup.unknownRequest"))),
         };
         #[derive(Serialize)]
         struct Reply<'a> {
@@ -677,14 +684,14 @@ extern "C" {
 fn read_json<T: serde::de::DeserializeOwned + Default>(root: &Path, name: &str) -> io::Result<T> {
     match fs::read(root.join(name)) {
         Ok(bytes) => serde_json::from_slice(&bytes)
-            .map_err(|_| error("원격 기기의 기존 설정을 읽지 못해 변경하지 않았습니다")),
+            .map_err(|_| error(tr!("setup.readExisting"))),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(T::default()),
         Err(e) => Err(e),
     }
 }
 fn private_dir(path: &Path) -> io::Result<()> {
     if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
-        return Err(error("공유 설정 폴더가 심볼릭 링크라 변경하지 않았습니다"));
+        return Err(error(tr!("setup.symlink")));
     }
     fs::create_dir_all(path)?;
     #[cfg(unix)]
@@ -699,7 +706,7 @@ fn private_dir(path: &Path) -> io::Result<()> {
             process::Command,
         };
         if fs::symlink_metadata(path)?.file_attributes() & 0x400 != 0 {
-            return Err(error("공유 설정 폴더가 링크라 변경하지 않았습니다"));
+            return Err(error(tr!("setup.link")));
         }
         let script = format!(
             r#"$ErrorActionPreference='Stop';$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;$acl=New-Object Security.AccessControl.DirectorySecurity;$acl.SetOwner($sid);$acl.SetAccessRuleProtection($true,$false);$acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow')));$system=New-Object Security.Principal.SecurityIdentifier('S-1-5-18');$acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($system,'FullControl','ContainerInherit,ObjectInherit','None','Allow')));[IO.Directory]::SetAccessControl('{}',$acl)"#,
@@ -715,7 +722,7 @@ fn private_dir(path: &Path) -> io::Result<()> {
             .status()?
             .success();
         if !ok {
-            return Err(error("개인키 폴더의 접근 권한을 설정하지 못했습니다"));
+            return Err(error(tr!("setup.keyDirPerms")));
         }
     }
     Ok(())
@@ -751,7 +758,7 @@ fn lock_at(root: &Path) -> io::Result<ConfigurationLock> {
         .write(true)
         .open(root.join("configuration.lock"))?;
     f.try_lock().map_err(|_| {
-        error("이 기기의 Itda가 설정을 사용 중입니다. Itda를 종료한 뒤 다시 시도하세요")
+        error(tr!("setup.inUse"))
     })?;
     Ok(ConfigurationLock(f))
 }
@@ -768,7 +775,7 @@ fn validate(p: &Package) -> io::Result<()> {
         || p.keys.len() > 1000
         || p.secrets.len() > 50000
     {
-        return Err(error("공유할 설정의 형식이나 크기가 올바르지 않습니다"));
+        return Err(error(tr!("setup.badPackage")));
     }
     for ids in [
         p.hosts.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(),
@@ -776,7 +783,7 @@ fn validate(p: &Package) -> io::Result<()> {
     ] {
         let unique: HashSet<_> = ids.iter().collect();
         if unique.len() != ids.len() || ids.iter().any(|s| s.is_empty()) {
-            return Err(error("공유 설정에 중복되거나 빈 식별자가 있습니다"));
+            return Err(error(tr!("setup.duplicateId")));
         }
     }
     // Secrets must belong to a section actually selected in this package. Check
@@ -787,7 +794,7 @@ fn validate(p: &Package) -> io::Result<()> {
         SecretKind::Account | SecretKind::KeyPass => account_ids.contains(secret.owner.as_str()),
         SecretKind::Host | SecretKind::Hp | SecretKind::Files => host_ids.contains(secret.owner.as_str()),
     }) {
-        return Err(error("공유할 암호의 계정 또는 연결이 선택되지 않았습니다"));
+        return Err(error(tr!("setup.secretOwner")));
     }
     validate_account_bindings(&p.hosts, &account_ids)?;
     let key_ids: HashSet<_> = p.keys.iter().map(|k| &k.account).collect();
@@ -799,7 +806,7 @@ fn validate(p: &Package) -> io::Result<()> {
                 || !p.accounts.iter().any(|a| a.id == k.account)
         })
     {
-        return Err(error("공유할 SSH 개인키가 올바르지 않습니다"));
+        return Err(error(tr!("setup.badKey")));
     }
     Ok(())
 }
@@ -854,7 +861,7 @@ fn apply_locked(root: &Path, p: &Package, vault: &mut dyn Vault) -> io::Result<V
                 let path = folder.join(format!("{}-{digest}", a.id));
                 match fs::read(&path) {
                     Ok(existing) if existing == key.bytes => {}
-                    Ok(_) => return Err(error("기존 SSH 키와 충돌해 설정을 변경하지 않았습니다")),
+                    Ok(_) => return Err(error(tr!("setup.keyConflict"))),
                     Err(e) if e.kind() == io::ErrorKind::NotFound => {
                         write_private_new(&path, &key.bytes)?;
                         created_keys.push(path.clone());
@@ -917,27 +924,27 @@ fn apply_locked(root: &Path, p: &Package, vault: &mut dyn Vault) -> io::Result<V
                     SecretKind::Account => store::acct_key(
                         account_ids
                             .get(&secret.owner)
-                            .ok_or_else(|| error("암호의 계정이 없습니다"))?,
+                            .ok_or_else(|| error(tr!("setup.noPasswordAccount")))?,
                     ),
                     SecretKind::KeyPass => store::acct_keypass(
                         account_ids
                             .get(&secret.owner)
-                            .ok_or_else(|| error("개인키의 계정이 없습니다"))?,
+                            .ok_or_else(|| error(tr!("setup.noKeyAccount")))?,
                     ),
                     SecretKind::Host => host_ids
                         .get(&secret.owner)
-                        .ok_or_else(|| error("암호의 연결이 없습니다"))?
+                        .ok_or_else(|| error(tr!("setup.noPasswordHost")))?
                         .clone(),
                     SecretKind::Hp => crate::hp_upgrade::password_key(
                         host_ids
                             .get(&secret.owner)
-                            .ok_or_else(|| error("공유 암호의 연결이 없습니다"))?,
+                            .ok_or_else(|| error(tr!("setup.noSharedPasswordHost")))?,
                     ),
                     SecretKind::Files => crate::files::password_key(
                         hosts
                             .iter()
                             .find(|h| Some(&h.id) == host_ids.get(&secret.owner))
-                            .ok_or_else(|| error("파일 연결의 계정이 없습니다"))?,
+                            .ok_or_else(|| error(tr!("setup.noFilesAccount")))?,
                     ),
                 };
                 old_secrets.push((key.clone(), vault.get(&key)?.map(Zeroizing::new)));
@@ -963,7 +970,7 @@ fn apply_locked(root: &Path, p: &Package, vault: &mut dyn Vault) -> io::Result<V
                 }
             }
             if !rollback_ok {
-                return Err(error("설정 적용과 복구에 실패했습니다. configuration-backups 폴더의 원본을 보존했습니다"));
+                return Err(error(tr!("setup.restoreFailed")));
             }
             committed_any = false;
             return Err(e);
@@ -981,7 +988,7 @@ fn apply_locked(root: &Path, p: &Package, vault: &mut dyn Vault) -> io::Result<V
 fn random_id() -> io::Result<String> {
     let mut bytes = [0u8; 24];
     getrandom::getrandom(&mut bytes)
-        .map_err(|_| error("안전한 작업 식별자를 만들지 못했습니다"))?;
+        .map_err(|_| error(tr!("setup.taskId")))?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
@@ -993,7 +1000,7 @@ fn other_app_running() -> io::Result<bool> {
             .arg("-u")
             .output()?;
         if !uid.status.success() {
-            return Err(error("사용자 확인에 실패했습니다"));
+            return Err(error(tr!("setup.userCheck")));
         }
         let out = std::process::Command::new("/bin/ps")
             .args([
@@ -1004,7 +1011,7 @@ fn other_app_running() -> io::Result<bool> {
             ])
             .output()?;
         if !out.status.success() {
-            return Err(error("실행 중인 앱을 확인하지 못했습니다"));
+            return Err(error(tr!("setup.runningCheck")));
         }
         Ok(String::from_utf8_lossy(&out.stdout).lines().any(|line| {
             let line = line.trim();
@@ -1035,7 +1042,7 @@ fn other_app_running() -> io::Result<bool> {
             ])
             .output()?;
         if !out.status.success() {
-            return Err(error("실행 중인 앱을 확인하지 못했습니다"));
+            return Err(error(tr!("setup.runningCheck")));
         }
         running_from(&String::from_utf8_lossy(&out.stdout))
     }
@@ -1045,13 +1052,13 @@ fn other_app_running() -> io::Result<bool> {
 /// owner can't be read is refused rather than taken as someone else's.
 #[cfg_attr(not(any(windows, test)), allow(dead_code))]
 fn running_from(counts: &str) -> io::Result<bool> {
-    let bad = || error("실행 중인 앱 응답이 올바르지 않습니다");
+    let bad = || error(tr!("setup.runningReply"));
     let mut n = counts.split_whitespace().map(|v| v.parse::<u32>());
     let (own, unknown) = (n.next().ok_or_else(bad)?.map_err(|_| bad())?, n.next().ok_or_else(bad)?.map_err(|_| bad())?);
     if own > 0 {
         Ok(true)
     } else if unknown > 0 {
-        Err(error("이 계정의 것인지 확인할 수 없는 Itda가 실행 중입니다. 원격 PC에서 Itda를 종료한 뒤 다시 시도하세요"))
+        Err(error(tr!("setup.foreignRunning")))
     } else {
         Ok(false)
     }
@@ -1069,7 +1076,7 @@ fn idle_lock(root: &Path, close: bool) -> io::Result<ConfigurationLock> {
     }
     if !close {
         return Err(error(
-            "원격 Itda가 실행 중입니다. 종료 후 적용을 선택하거나 원격 앱을 직접 종료하세요",
+            tr!("setup.remoteRunning"),
         ));
     }
     private_dir(root)?;
@@ -1085,7 +1092,7 @@ fn idle_lock(root: &Path, close: bool) -> io::Result<ConfigurationLock> {
             }
         }
         if std::time::Instant::now() >= until {
-            return Err(error("원격 Itda를 안전하게 종료하지 못했습니다. 원격 앱을 직접 종료한 뒤 다시 시도하세요"));
+            return Err(error(tr!("setup.closeFailed")));
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
@@ -1099,10 +1106,7 @@ fn replace_staged(stage: &Path, target: &Path, backup: &Path) -> io::Result<()> 
     }
     if let Err(e) = fs::rename(stage, target) {
         if existed && fs::rename(backup, target).is_err() {
-            return Err(error(&format!(
-                "앱 교체와 복구에 실패했습니다. 이전 앱을 {} 에 보존했습니다: {e}",
-                backup.display()
-            )));
+            return Err(error(tr!("setup.replaceFailed", path = backup.display(), error = e)));
         }
         return Err(e);
     }
@@ -1117,12 +1121,12 @@ fn install_staged() -> io::Result<PathBuf> {
             .ancestors()
             .nth(3)
             .filter(|p| p.file_name().is_some_and(|n| n == "Itda.app"))
-            .ok_or_else(|| error("정식 앱 번들에서 설치를 실행해야 합니다"))?
+            .ok_or_else(|| error(tr!("setup.bundleRequired")))?
             .to_path_buf();
         let system = PathBuf::from("/Applications/Itda.app");
         let user = std::env::var_os("HOME")
             .map(PathBuf::from)
-            .ok_or_else(|| error("사용자 폴더가 없습니다"))?
+            .ok_or_else(|| error(tr!("setup.noHome")))?
             .join("Applications/Itda.app");
         let target = if system.exists() {
             system
@@ -1142,7 +1146,7 @@ fn install_staged() -> io::Result<PathBuf> {
     };
     #[cfg(target_os = "windows")]
     let target = PathBuf::from(
-        std::env::var_os("LOCALAPPDATA").ok_or_else(|| error("사용자 앱 폴더가 없습니다"))?,
+        std::env::var_os("LOCALAPPDATA").ok_or_else(|| error(tr!("setup.noAppData")))?,
     )
     .join("Programs/Itda/itda.exe");
     let parent = target.parent().unwrap();
@@ -1163,7 +1167,7 @@ fn install_staged() -> io::Result<PathBuf> {
                 .status()?
                 .success()
             {
-                return Err(error("앱을 준비하지 못했습니다"));
+                return Err(error(tr!("setup.prepareApp")));
             }
         }
         #[cfg(target_os = "windows")]
@@ -1191,7 +1195,7 @@ fn provision(root: &Path, p: &Package, close: bool, launch: bool) -> io::Result<
         .open(root.join("provision.lock"))?;
     deployment
         .try_lock()
-        .map_err(|_| error("다른 원격 설치가 진행 중입니다. 완료 후 다시 시도하세요"))?;
+        .map_err(|_| error(tr!("setup.busy")))?;
     let _deployment = ConfigurationLock(deployment);
     let config = idle_lock(root, close)?;
     // No mutation until the package, processes, and both locks have been checked.
@@ -1205,15 +1209,11 @@ fn provision(root: &Path, p: &Package, close: bool, launch: bool) -> io::Result<
         apply_locked(root, p, &mut NativeVault)
     }
     .map_err(|e| {
-        error(&format!(
-            "앱 설치는 완료됐지만 설정 공유에 실패했습니다: {e}"
-        ))
+        error(tr!("setup.installedShareFailed", error = e))
     })?;
     #[cfg(not(any(target_os = "macos", windows)))]
     let mut result = apply_locked(root, p, &mut NativeVault).map_err(|e| {
-        error(&format!(
-            "앱 설치는 완료됐지만 설정 공유에 실패했습니다: {e}"
-        ))
+        error(tr!("setup.installedShareFailed", error = e))
     })?;
     drop(config);
     if launch {
@@ -1233,7 +1233,7 @@ fn provision(root: &Path, p: &Package, close: bool, launch: bool) -> io::Result<
             } == 0
                 || session == 0
             {
-                return Err(error("Windows의 SSH 세션에서는 앱 창을 열 수 없습니다"));
+                return Err(error(tr!("setup.noWindowFromSsh")));
             }
             std::process::Command::new(&app)
                 .stdin(Stdio::null())
@@ -1243,7 +1243,7 @@ fn provision(root: &Path, p: &Package, close: bool, launch: bool) -> io::Result<
                 .map(|_| true)
         })();
         if !matches!(start, Ok(true)) {
-            result["launch_error"]=json!("설치와 설정 공유는 완료됐지만 앱을 열지 못했습니다. 원격 기기에서 Itda를 직접 열어 주세요");
+            result["launch_error"]=json!(tr!("setup.launchFailed"));
         }
     }
     result["version"] = json!(env!("CARGO_PKG_VERSION"));
@@ -1276,10 +1276,10 @@ pub fn import_mode() -> bool {
         let mut raw = Zeroizing::new(Vec::new());
         io::stdin().take(MAX_PACKAGE + 1).read_to_end(&mut raw)?;
         if raw.len() as u64 > MAX_PACKAGE {
-            return Err(error("공유 설정이 너무 큽니다"));
+            return Err(error(tr!("setup.tooLarge")));
         }
         let p: Package = serde_json::from_slice(&raw)
-            .map_err(|_| error("공유 설정의 형식이 올바르지 않습니다"))?;
+            .map_err(|_| error(tr!("setup.badFormat")))?;
         if mode == "--provision-configuration" {
             provision(
                 &store::dir(),
@@ -1331,7 +1331,7 @@ impl Drop for Busy {
 }
 pub fn begin() -> io::Result<Busy> {
     if BUSY.swap(true, std::sync::atomic::Ordering::AcqRel) {
-        return Err(error("원격 설치 작업이 이미 진행 중입니다"));
+        return Err(error(tr!("setup.alreadyRunning")));
     }
     Ok(Busy)
 }
@@ -1372,7 +1372,7 @@ fn trusted_fingerprints(cfg: &crate::tunnel::SshCfg) -> io::Result<Vec<String>> 
         .stdin(Stdio::null())
         .output()?;
     if !output.status.success() {
-        return Err(error("SSH 설정을 읽지 못했습니다"));
+        return Err(error(tr!("setup.sshConfig")));
     }
     let text = String::from_utf8_lossy(&output.stdout);
     let field = |name: &str| {
@@ -1380,7 +1380,7 @@ fn trusted_fingerprints(cfg: &crate::tunnel::SshCfg) -> io::Result<Vec<String>> 
             .find_map(|line| line.strip_prefix(&format!("{name} ")))
             .map(str::trim)
     };
-    let host = field("hostname").ok_or_else(|| error("SSH 기기 이름을 확인하지 못했습니다"))?;
+    let host = field("hostname").ok_or_else(|| error(tr!("setup.sshHost")))?;
     let port = field("port").unwrap_or("22");
     let lookup = match field("hostkeyalias").filter(|v| *v != "none") {
         Some(alias) => alias.to_owned(),
@@ -1398,7 +1398,7 @@ fn trusted_fingerprints(cfg: &crate::tunnel::SshCfg) -> io::Result<Vec<String>> 
     // key is never shown as a trusted fingerprint (ssh refuses it anyway).
     let files: Vec<_> = crate::tunnel::known_hosts_files().into_iter().filter(|f| f.is_file()).collect();
     if files.is_empty() {
-        return Err(error("처음 SSH로 연결하는 기기입니다. 먼저 Itda의 파일 열기 또는 SSH 화면 연결에서 기기를 확인한 뒤 다시 시도하세요. 원격 설치에서는 새 SSH 호스트 키를 자동 수락하지 않습니다"));
+        return Err(error(tr!("setup.firstSsh")));
     }
     let mut found = Vec::new();
     for known in &files {
@@ -1419,7 +1419,7 @@ fn trusted_fingerprints(cfg: &crate::tunnel::SshCfg) -> io::Result<Vec<String>> 
         }
     }
     if found.is_empty() {
-        return Err(error("이 기기의 SSH 호스트 키를 아직 신뢰하지 않았습니다. 먼저 파일 열기 또는 SSH 화면 연결에서 기기를 확인한 뒤 다시 시도하세요"));
+        return Err(error(tr!("setup.untrustedKey")));
     }
     let mut child = std::process::Command::new(&keygen)
         .args(["-l", "-E", "sha256", "-f", "-"])
@@ -1436,7 +1436,7 @@ fn trusted_fingerprints(cfg: &crate::tunnel::SshCfg) -> io::Result<Vec<String>> 
         .map(str::to_owned)
         .collect();
     if !output.status.success() || fingerprints.is_empty() {
-        return Err(error("신뢰한 SSH 키의 지문을 확인하지 못했습니다"));
+        return Err(error(tr!("setup.fingerprint")));
     }
     Ok(fingerprints)
 }
@@ -1489,12 +1489,12 @@ fn run(cfg: &crate::tunnel::SshCfg, command: &str, input: &[u8]) -> io::Result<S
     };
     let write = writer
         .join()
-        .map_err(|_| error("원격 전송 작업이 중단됐습니다"))?;
+        .map_err(|_| error(tr!("setup.transferStopped")))?;
     let out = out.join().unwrap_or_default();
     let err = err.join().unwrap_or_default();
     if timed_out {
         return Err(error(
-            "원격 작업 응답 시간이 초과됐습니다. 원격 앱에서 적용 여부를 확인한 뒤 다시 시도하세요",
+            tr!("setup.timeout"),
         ));
     }
     if !status.success() {
@@ -1507,7 +1507,7 @@ fn run(cfg: &crate::tunnel::SshCfg, command: &str, input: &[u8]) -> io::Result<S
             .chain(stderr.lines())
             .find(|line| line.starts_with("error="))
         {
-            return Err(error(line.trim_start_matches("error=")));
+            return Err(error(script_error(line.trim_start_matches("error="))));
         }
         if let Some(v) = stderr
             .lines()
@@ -1517,17 +1517,17 @@ fn run(cfg: &crate::tunnel::SshCfg, command: &str, input: &[u8]) -> io::Result<S
             return Err(error(
                 v["error"]
                     .as_str()
-                    .unwrap_or("원격 설정 적용에 실패했습니다"),
+                    .unwrap_or(tr!("setup.applyFailed")),
             ));
         }
         // (The Windows script throws this in English: PowerShell's stderr over SSH isn't UTF-8.)
         if stderr.contains("Checksum verification failed") {
-            return Err(error("내려받은 Itda 파일이 릴리스와 다릅니다 (체크섬 불일치). 잠시 뒤 다시 시도하세요"));
+            return Err(error(tr!("setup.checksum")));
         }
         return Err(crate::tunnel::classify(&stderr));
     }
     write?;
-    String::from_utf8(out).map_err(|_| error("원격 기기의 응답을 읽지 못했습니다"))
+    String::from_utf8(out).map_err(|_| error(tr!("setup.badReply")))
 }
 const MAC_PROBE: &str = r#"set -e
 [ "$(uname -s)" = Darwin ] || { echo 'itda-unsupported-platform'; exit 0; }
@@ -1613,7 +1613,7 @@ fn probe(cfg: &crate::tunnel::SshCfg) -> io::Result<Remote> {
     match run(cfg, "/bin/bash -s", MAC_PROBE.as_bytes()) {
         Ok(out) => {
             if out.lines().any(|l| l == "itda-unsupported-platform") {
-                return Err(error("원격 설치는 macOS와 Windows를 지원합니다"));
+                return Err(error(tr!("setup.unsupported")));
             }
             if let Some(r) = out
                 .lines()
@@ -1629,7 +1629,7 @@ fn probe(cfg: &crate::tunnel::SshCfg) -> io::Result<Remote> {
     out.lines()
         .find_map(parse_probe)
         .ok_or_else(|| {
-            error("원격 설치는 macOS와 Windows를 지원합니다. SSH와 운영체제를 확인하세요")
+            error(tr!("setup.unsupportedCheck"))
         })
 }
 const WIN_VAULT_PROBE: &str = r#"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
@@ -1663,7 +1663,7 @@ fn check_remote_vault(cfg: &crate::tunnel::SshCfg) -> io::Result<()> {
     if desktop.lines().filter_map(|s| serde_json::from_str::<Value>(s).ok()).any(|v| v["desktop"] == true) {
         return Ok(());
     }
-    Err(error("비밀번호를 저장하려면 원격 PC에 이 계정으로 로그인되어 있어야 합니다. 로그인한 뒤 다시 시도하거나, 비밀번호 공유를 해제하고 앱과 프로필만 설치하세요"))
+    Err(error(tr!("setup.needDesktop")))
 }
 
 /// Whether this account has a desktop session on the PC (`quser` lists it, any state).
@@ -1681,12 +1681,12 @@ pub fn prepare(
     let fingerprints = trusted_fingerprints(&cfg)?;
     // Refuse stale local bindings without SSH, secret/key reads or origin writes.
     drop(selected_profiles(&hosts, &accounts, &choice)?);
-    progress("SSH 연결과 원격 기기를 확인하고 있어요…");
+    progress(tr!("setup.stage.probe"));
     let remote = probe(&cfg)?;
     if crate::update::newer(&remote.version, env!("CARGO_PKG_VERSION")) {
-        return Err(error("원격 Itda가 더 최신 버전입니다. 이 기기의 Itda를 먼저 업데이트하세요. 원격 앱과 설정은 변경하지 않았습니다"));
+        return Err(error(tr!("setup.remoteNewer")));
     }
-    progress("선택한 설정을 준비하고 있어요…");
+    progress(tr!("setup.stage.prepare"));
     let package = snapshot(&hosts, &accounts, &settings, &choice)?;
     validate(&package)?;
     if remote.platform == "windows" && !package.secrets.is_empty() {
@@ -1720,12 +1720,12 @@ base=__BASE__
 /usr/bin/curl -fLsS --proto '=https' --max-time 30 "$base/SHA256SUMS.txt" -o "$T/sums"
 want=$(awk '$2=="Itda-macos-universal.zip"{print $1}' "$T/sums")
 got=$(shasum -a 256 "$T/Itda.zip" | cut -c1-64)
-[ -n "$want" ] && [ "$want" = "$got" ] || { echo 'error=설치 파일의 체크섬이 일치하지 않습니다'; exit 4; }
+[ -n "$want" ] && [ "$want" = "$got" ] || { echo 'error=checksum'; exit 4; }
 ditto -x -k "$T/Itda.zip" "$T/unpack"
 new="$T/unpack/Itda.app"
-codesign --verify --deep --strict "$new" >/dev/null 2>&1 || { echo 'error=설치 앱의 서명이 올바르지 않습니다'; exit 4; }
-codesign -dv --verbose=2 "$new" 2>&1 | grep -q '^TeamIdentifier=728FW73BS8$' || { echo 'error=정식 Itda 서명을 확인하지 못했습니다'; exit 4; }
-[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$new/Contents/Info.plist")" = __VERSION__ ] || { echo 'error=설치 버전이 올바르지 않습니다'; exit 4; }
+codesign --verify --deep --strict "$new" >/dev/null 2>&1 || { echo 'error=bad-signature'; exit 4; }
+codesign -dv --verbose=2 "$new" 2>&1 | grep -q '^TeamIdentifier=728FW73BS8$' || { echo 'error=not-official'; exit 4; }
+[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$new/Contents/Info.plist")" = __VERSION__ ] || { echo 'error=bad-version'; exit 4; }
 "$new/Contents/MacOS/itda" --provision-configuration __FLAGS__
 "#;
     format!(
@@ -1785,38 +1785,38 @@ pub fn install(token: &str, progress: &dyn Fn(&str)) -> io::Result<Value> {
             .is_some_and(|p| p.token == token && std::time::Instant::now() < p.expires)
         {
             return Err(error(
-                "연결 확인이 만료됐습니다. 원격 기기를 다시 확인하세요",
+                tr!("setup.expired"),
             ));
         }
         stored.take().unwrap()
     };
     let version = env!("CARGO_PKG_VERSION");
     if !version.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
-        return Err(error("설치 버전이 올바르지 않습니다"));
+        return Err(error(tr!("setup.badVersion")));
     }
     let current = probe(&plan.cfg)?;
     if crate::update::newer(&current.version, version) {
         return Err(error(
-            "원격 Itda가 더 최신 버전으로 변경됐습니다. 이 기기를 먼저 업데이트하세요",
+            tr!("setup.remoteUpdated"),
         ));
     }
     let raw = Zeroizing::new(serde_json::to_vec(&plan.package)?);
     if raw.len() as u64 > MAX_PACKAGE {
-        return Err(error("공유 설정이 너무 큽니다"));
+        return Err(error(tr!("setup.tooLarge")));
     }
     let command = if plan.remote.platform == "mac" {
         mac_install(version, plan.choice.close_running, plan.choice.launch)
     } else {
         win_install(version, plan.choice.close_running, plan.choice.launch)
     };
-    progress("정식 앱을 확인한 뒤 원격 설치와 설정 공유를 진행하고 있어요…");
+    progress(tr!("setup.stage.install"));
     let response = run(&plan.cfg, &command, &raw)?;
     let result = response
         .lines()
         .find_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter(|v| v["ok"] == true)
-        .ok_or_else(|| error("원격 설정 적용을 확인하지 못했습니다"))?;
-    let mut result = json!({"hosts":result["hosts"].as_u64().ok_or_else(||error("원격 적용 결과가 올바르지 않습니다"))?,"accounts":result["accounts"].as_u64().ok_or_else(||error("원격 적용 결과가 올바르지 않습니다"))?,"ok":true,"launch_error":result["launch_error"].as_str()});
+        .ok_or_else(|| error(tr!("setup.notConfirmed")))?;
+    let mut result = json!({"hosts":result["hosts"].as_u64().ok_or_else(||error(tr!("setup.badResult")))?,"accounts":result["accounts"].as_u64().ok_or_else(||error(tr!("setup.badResult")))?,"ok":true,"launch_error":result["launch_error"].as_str()});
     result["type"] = json!("remote_setup");
     result["complete"] = json!(true);
     result["version"] = json!(version);

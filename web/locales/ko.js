@@ -2116,4 +2116,25 @@ I18N.add('ko', {
   'permGuide.screen.lead': '위쪽 ‘화면 및 시스템 오디오 기록’ 목록입니다. 아래의 시스템 오디오 전용 목록이 아니에요.',
   'permGuide.access.title': '손쉬운 사용',
   'permGuide.access.lead': '연결한 기기에서 이 Mac을 클릭하고 입력하려면 필요해요.',
+
+  // Web viewer: errors and close reasons the PC's gateway sends (src/gateway.rs, the same
+  // text as its gw.* messages), shown in the phone's language.
+  'srv.pinLocked': '잠시 후 다시 시도하세요 (PIN을 여러 번 틀렸습니다)',
+  'srv.pinWrong': 'PIN이 맞지 않습니다',
+  'srv.loginRequired': '로그인이 필요합니다',
+  'srv.thisPc': '{name} (이 PC)',
+  'srv.badRequest': '잘못된 요청입니다',
+  'srv.unknownRequest': '알 수 없는 요청입니다',
+  'srv.notFound': '연결을 찾을 수 없습니다',
+  'srv.badViewOpts': '잘못된 보기 설정입니다',
+  'srv.needAddress': '주소를 입력하세요',
+  'srv.needUser': '사용자 이름을 입력하세요',
+  'srv.pcNotResponding': 'PC의 Itda가 응답하지 않습니다',
+  'srv.hpUndecodable': '이 기기에서 그 Mac의 고성능 영상을 표시하지 못했습니다',
+  'srv.hpNoPassword': '이 기기에 고성능 공유 암호가 없습니다',
+  'srv.hpUnreachable': '원격 Mac의 Itda 고성능 공유에 연결하지 못했습니다',
+  'srv.hpPasswordChanged': '원격 Mac의 고성능 공유 암호가 바뀌었습니다',
+  'srv.hpLocked': '그 Mac의 화면이 잠겨 기본 화면 공유로 다시 연결합니다',
+  'srv.hpOtherUser': '다른 사용자가 그 Mac 화면을 쓰기 시작해 기본 화면 공유로 다시 연결합니다',
+  'srv.deviceClosed': '원격 기기와의 연결이 끊겼습니다',
 });

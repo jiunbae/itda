@@ -188,6 +188,11 @@ async function api(path, body) {
   const data = await r.json().catch(() => ({}));
   return { ok: r.ok, status: r.status, data };
 }
+// What the PC's gateway says, which may be in another language than this page: the message it
+// names (`code`, or a close reason that is one, srv.*) in this page's language, else its text.
+const srvText = (text, code, vars) => (code && I18N.has(code) ? T(code, vars) : /^srv\.\w+$/.test(text || '') && I18N.has(text) ? T(text) : text);
+// This PC (the first card when it shares its screen) in this page's language.
+const ownHosts = (list) => (list || []).map((h) => (h.this && h.host ? { ...h, label: T('srv.thisPc', { name: h.host }) } : h));
 
 // ---------------------------------------------------------------- sign in & list
 
@@ -263,7 +268,7 @@ $('#loginForm').addEventListener('submit', async (e) => {
     return loadHosts();
   }
   if (r.status === 429) { $('#pin').value = ''; return lockedOut(); }
-  tx($('#loginError'), r.status === 401 ? () => T('viewer.login.wrongPin') : r.data.error || (() => T('viewer.login.failed')));
+  tx($('#loginError'), r.status === 401 ? () => T('viewer.login.wrongPin') : r.data.error ? () => srvText(r.data.error, r.data.code) : () => T('viewer.login.failed'));
   $('#pin').select();
 });
 
@@ -305,7 +310,7 @@ async function loadHosts() {
   const [r, a] = await Promise.all([api('/api/hosts'), api('/api/accounts')]);
   if (r.status === 401) return S.signedIn ? expired() : signIn();
   S.signedIn = true;
-  S.hosts = r.data || [];
+  S.hosts = ownHosts(r.data);
   S.accounts = a.ok ? a.data || [] : [];
   renderHosts();
   renderAccounts();
@@ -410,8 +415,8 @@ async function saveEdit(body, after) {
   const r = await api('/api/edit', body);
   if (btn) btn.disabled = false;
   if (r.status === 401) return expired();
-  if (!r.ok) { $('#edErr').textContent = r.data.error || T('viewer.ed.saveFailed'); return false; }
-  S.hosts = r.data.hosts || S.hosts;
+  if (!r.ok) { $('#edErr').textContent = srvText(r.data.error, r.data.code) || T('viewer.ed.saveFailed'); return false; }
+  S.hosts = r.data.hosts ? ownHosts(r.data.hosts) : S.hosts;
   S.accounts = r.data.accounts || S.accounts;
   renderHosts();
   renderAccounts();
@@ -746,7 +751,7 @@ function open(h) {
       const code = closeInfo ? closeInfo.code : 0;
       const known = CLOSE_TEXT[code];
       const reason = closeInfo && closeInfo.reason;
-      const say = () => (known ? known(h) : [T('viewer.err.lost.title'), reason || T('viewer.err.lost.text')]);
+      const say = () => (known ? known(h) : [T('viewer.err.lost.title'), srvText(reason) || T('viewer.err.lost.text')]);
       status('error', () => say()[0], () => say()[1], code);
       if (known) return;
       // The gateway refuses a WebSocket without a live session before it opens (no close code):
@@ -771,7 +776,7 @@ const LOCKED_CLOSE = 4030;
 function lockedDrop(h, info) {
   if (info?.code !== LOCKED_CLOSE || !h?.hp?.on || (S.lockDropAt != null && Date.now() - S.lockDropAt < 15000)) return false;
   S.lockDropAt = Date.now();
-  toast(info.reason || T('viewer.toast.lockedDrop'));
+  toast(srvText(info.reason) || T('viewer.toast.lockedDrop'));
   open(h);
   return true;
 }
@@ -780,7 +785,7 @@ function lockedDrop(h, info) {
 // after that reconnects on its own, like the Windows viewer.
 function appDropped(h, info, gen) {
   const code = info ? info.code : 0;
-  const msg = (info && info.reason) || T('viewer.app.lost');
+  const msg = (info && srvText(info.reason)) || T('viewer.app.lost');
   if (!S.ever) return post({ ev: 'error', kind: KIND_OF[code] || 'other', msg });
   if (opt('reconnect', true) && S.tries < RETRIES && !KIND_OF[code]?.includes('auth')) {
     S.tries += 1;
@@ -901,7 +906,7 @@ function refreshHpMode(h, rfb, attempt) {
     if (typeof m?.hp !== 'boolean') throw Error('mode unknown');
     S.hpMode = m.hp ? 'active' : 'fallback';
     S.hpActual = m.hp;
-    S.hpFallback = m.hp ? null : m.reason || T('viewer.hp.connectFailed');
+    S.hpFallback = m.hp ? null : srvText(m.reason, m.code) || T('viewer.hp.connectFailed');
     S.hpFallbackSetup = !m.hp && !!m.setup;
     S.hpQuality = null;
     renderTools();

@@ -44,12 +44,8 @@ pub(crate) fn video(w: usize, h: usize) -> Option<crate::server::Video> {
 }
 
 pub(crate) fn ask_user(peer: &SocketAddr) -> bool {
-    let text = format!(
-        "{}에서 이 PC의 화면을 보고 조작하려고 합니다.\n\n허용할까요?\n\n(허용하면 연결이 끝날 때까지 화면과 입력이 공유되고, 상대가 소리를 켜면 이 PC의 소리도 들립니다. 알림 영역의 Itda에서 언제든 끊을 수 있습니다.)",
-        peer.ip()
-    );
-    let t = crate::ui::wide(&text);
-    let title = crate::ui::wide("Itda — 화면 공유 요청");
+    let t = crate::ui::wide(&tr!("pcshare.askText", peer = peer.ip()));
+    let title = crate::ui::wide(tr!("pcshare.askTitle"));
     unsafe { MessageBoxW(null_mut(), t.as_ptr(), title.as_ptr(), MB_YESNO | MB_ICONQUESTION | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL) == IDYES }
 }
 

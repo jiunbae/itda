@@ -1,8 +1,12 @@
 //! The optional Mac capture feature has a newer floor than the viewer and file browser.
 #[cfg(target_os = "macos")]
-pub const MACOS_CAPTURE_REQUIREMENT: &str = "고성능 공유에는 macOS 12.3 이상이 필요합니다. 기본 화면 연결과 파일 브라우저를 이용해 주세요.";
+pub fn macos_capture_requirement() -> &'static str {
+    tr!("hp.captureRequirement")
+}
 #[cfg(target_os = "macos")]
-pub const CAPTURE_UNAVAILABLE: &str = "고성능 캡처 기능을 불러오지 못했습니다. Itda를 다시 설치하거나 기본 화면 연결을 이용해 주세요.";
+pub fn capture_unavailable() -> &'static str {
+    tr!("hp.captureUnavailable")
+}
 
 pub fn macos_supported(major: isize, minor: isize) -> bool {
     major >= 0 && minor >= 0 && (major, minor) >= (12, 3)

@@ -5,6 +5,9 @@
 // gateway's subset is used.
 #![cfg_attr(not(windows), allow(dead_code))]
 
+// Interface language and the tr! macro: first, so every module below can use tr!.
+#[macro_use]
+mod i18n;
 // Portable core: protocols, storage, discovery, the web gateway.
 #[cfg(test)]
 mod cu_e2e;
@@ -31,7 +34,6 @@ mod demand;
 mod enc;
 mod files;
 mod gateway;
-mod i18n;
 mod outbox;
 mod img;
 mod log;
@@ -84,17 +86,6 @@ mod home;
 
 /// Product name shown to people.
 pub const APP: &str = "Itda";
-
-const USAGE: &str = "itda [host[:port]] [-u user] [-p password] [--swap]
-
-인자 없이 실행하면 Itda 홈(주소록)이 열립니다.
-  host         주소만 주면 홈에서 바로 그 Mac에 연결합니다
-  -u user      Mac 계정 이름 (Apple 계정 로그인)
-  -p password  비밀번호 (또는 ITDA_PASSWORD 환경변수) — 주면 홈 없이 바로 접속
-  --swap       Ctrl ↔ Cmd 바꾸기
-
-접속 중 단축키 (Ctrl+Alt+…): Enter 전체 화면 · 0 맞춤 · 1 실제 크기 · S 통계 · V 보기 전용
-                           P 스크린샷 · I 연결 정보 · T 툴바 고정 · R 재연결 · M 메뉴";
 
 /// ssh asking for the password: answer and leave before touching logs or windows.
 fn askpass_mode() {
@@ -167,9 +158,9 @@ fn main() {
     log::init(if managed { "session" } else { "" });
     std::panic::set_hook(Box::new(|p| {
         crate::log!("PANIC: {p}");
-        session::emit(serde_json::json!({"ev": "error", "kind": "other", "msg": format!("내부 오류: {p}")}));
+        session::emit(serde_json::json!({"ev": "error", "kind": "other", "msg": tr!("app.internalError", error = p)}));
         if !session::managed() {
-            ui::message(&format!("내부 오류로 종료합니다:\n{p}\n\n로그: {}", log::path().display()), true);
+            ui::message(&tr!("app.internalErrorQuit", error = p, log = log::path().display()), true);
         }
     }));
     if managed {
@@ -187,7 +178,7 @@ fn main() {
             "--swap" => swap = true,
             "--login" => autostart::AT_LOGIN.store(true, std::sync::atomic::Ordering::Relaxed),
             _ if host.is_none() && !a.starts_with('-') => host = Some(a),
-            _ => return ui::message(USAGE, false),
+            _ => return ui::message(tr!("app.usage"), false),
         }
     }
 

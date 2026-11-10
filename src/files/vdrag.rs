@@ -54,12 +54,12 @@ impl Drop for Download {
 impl Remote {
     /// The drag's source: the open file connection of `files[0].id`.
     pub fn of(files: &[export::File]) -> io::Result<Arc<Remote>> {
-        let first = files.first().ok_or_else(|| error("파일을 선택하세요"))?;
+        let first = files.first().ok_or_else(|| error(tr!("fx.chooseFile")))?;
         let cfg = connection(&first.id)?.cfg.clone();
         let remote = Self::new(Box::new(move |c| Sftp::connect(&cfg, c)));
         // Admitted and registered in one step: a quit that closed admissions counts it, or
         // it doesn't start.
-        *remote.batch.lock().unwrap() = super::admit_stream(&remote.control).ok_or_else(|| error(super::CLOSING))?;
+        *remote.batch.lock().unwrap() = super::admit_stream(&remote.control).ok_or_else(|| error(super::closing()))?;
         Ok(remote)
     }
 
@@ -104,7 +104,7 @@ impl Remote {
         let mut out = Vec::new();
         for f in files {
             let path = f.path()?.to_string_lossy().replace('\\', "/");
-            let e = s.stat(&path)?.ok_or_else(|| error(format!("파일이 없습니다: {}", f.name)))?;
+            let e = s.stat(&path)?.ok_or_else(|| error(tr!("fx.drag.noFile", name = f.name)))?;
             if e.link {
                 continue;
             }
@@ -112,7 +112,7 @@ impl Remote {
         }
         let mut unique = std::collections::HashSet::new();
         for item in &out {
-            if !unique.insert(windows_name_key(&item.rel)) { return Err(error(format!("Windows에서 같은 이름이 되는 파일이 여러 개 있습니다: {}",item.rel))); }
+            if !unique.insert(windows_name_key(&item.rel)) { return Err(error(tr!("fx.transfer.windowsDupe", name = item.rel))); }
         }
         *self.idle.lock().unwrap() = Some(s);
         Ok(out)
@@ -173,16 +173,16 @@ impl Remote {
 
 fn walk(s: &mut Sftp, path: &str, rel: &str, e: &Entry, out: &mut Vec<Item>) -> io::Result<()> {
     if out.len() >= LIMIT {
-        return Err(error("한 번에 끌어 놓을 수 있는 항목 수(10,000개)를 넘었습니다"));
+        return Err(error(tr!("fx.drag.tooMany")));
     }
     for part in rel.split('\\') {
         if name(part).is_err() || windows_target(part,rel).is_err() {
-            return Err(error(format!("Windows에서 쓸 수 없는 파일 이름입니다: {}", rel.replace('\\', "/"))));
+            return Err(error(tr!("fx.name.windowsItem", name = rel.replace('\\', "/"))));
         }
     }
     // The receiver's own folder path is added in front; keep well under MAX_PATH.
     if destination_name(rel,true).encode_utf16().count() >= 200 {
-        return Err(error(format!("경로가 너무 깁니다: {}", rel.replace('\\', "/"))));
+        return Err(error(tr!("fx.drag.pathTooLong", path = rel.replace('\\', "/"))));
     }
     out.push(Item { rel: destination_name(rel,true), dir: e.dir, size: if e.dir { 0 } else { e.size }, modified: e.modified, path: path.to_string() });
     if e.dir {
@@ -208,7 +208,7 @@ impl Write for Chan<'_> {
             match self.tx.try_send(Ok(chunk)) {
                 Ok(()) => return Ok(b.len()),
                 // The reader is gone (the receiver cancelled): stop downloading.
-                Err(TrySendError::Disconnected(_)) => return Err(io::Error::new(io::ErrorKind::BrokenPipe, "읽기를 멈췄습니다")),
+                Err(TrySendError::Disconnected(_)) => return Err(io::Error::new(io::ErrorKind::BrokenPipe, tr!("fx.drag.readStopped"))),
                 Err(TrySendError::Full(Ok(back))) => {
                     self.control.check()?;
                     chunk = back;
@@ -307,7 +307,7 @@ impl Read for Reader {
         }
         // Stopped: nothing more is handed out, buffered or not (the file isn't complete).
         if self.delivered < self.size && self.control.check().is_err() {
-            return self.fail(io::Error::other("전송을 중단했습니다"));
+            return self.fail(io::Error::other(tr!("fx.drag.stopped")));
         }
         while self.at == self.buf.len() {
             // The whole advertised size is out: end of file, without waiting for the download.
@@ -316,7 +316,7 @@ impl Read for Reader {
                 return Ok(0);
             }
             if self.live == 0 {
-                return Err(io::Error::other(if self.refused { super::CLOSING } else { "전송이 중단되었습니다" }));
+                return Err(io::Error::other(if self.refused { super::closing() } else { tr!("fx.drag.interrupted") }));
             }
             match self.rx.recv() {
                 Ok(Ok(b)) => (self.buf, self.at) = (b, 0),
@@ -324,7 +324,7 @@ impl Read for Reader {
                 // The download ended short of the size (stopped, or the connection went): an
                 // error, never a shorter file passed off as complete.
                 Err(_) => {
-                    let why = if self.control.check().is_err() { "전송을 중단했습니다" } else { "원격 파일을 끝까지 읽지 못했습니다" };
+                    let why = if self.control.check().is_err() { tr!("fx.drag.stopped") } else { tr!("fx.drag.incomplete") };
                     return self.fail(io::Error::other(why));
                 }
             }

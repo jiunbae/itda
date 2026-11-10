@@ -85,7 +85,7 @@ impl Control {
         if self.cancel.load(Ordering::Relaxed) {
             Err(io::Error::new(
                 io::ErrorKind::Interrupted,
-                "전송을 취소했습니다",
+                tr!("fx.cancelled"),
             ))
         } else {
             Ok(())
@@ -167,8 +167,16 @@ impl<T> PreviewSlot<T> {
         state.0 = None;
     }
 }
-const NO_FILE: &str = "파일이 없습니다";
-const NOT_A_FILE: &str = "일반 파일을 선택하세요";
+/// A preview's refusal of the file itself (missing, not a regular file): the session that found
+/// it stays usable. Recognized by type, not by its (translated) text.
+#[derive(Debug)]
+struct FileRefusal(&'static str);
+impl std::fmt::Display for FileRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.0) }
+}
+impl std::error::Error for FileRefusal {}
+fn refusal(text: &'static str) -> io::Error { io::Error::other(FileRefusal(text)) }
+fn is_refusal(e: &io::Error) -> bool { e.get_ref().is_some_and(|e| e.is::<FileRefusal>()) }
 static CONNECTIONS: OnceLock<Mutex<HashMap<String, Arc<Connection>>>> = OnceLock::new();
 fn connections() -> &'static Mutex<HashMap<String, Arc<Connection>>> {
     CONNECTIONS.get_or_init(Default::default)
@@ -243,7 +251,11 @@ fn set_accepting(on: bool) { ACCEPTING.store(on, std::sync::atomic::Ordering::Se
 thread_local! { static ACCEPTING_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) }; }
 #[cfg(test)]
 fn set_accepting(on: bool) { ACCEPTING_HERE.with(|a| a.set(on)) }
-pub(crate) const CLOSING: &str = "Itda를 종료하는 중이라 새 전송을 시작하지 않았습니다";
+/// Why a transfer asked for while Itda is quitting didn't start.
+pub(crate) fn closing() -> &'static str { tr!("fx.closing") }
+/// That text as the tests see it (they run in Korean).
+#[cfg(test)]
+pub(crate) use tests::CLOSING;
 /// Registers a job unless Itda is closing; checked and inserted under the registry's lock, so
 /// a quit that closed admissions and then found nothing running can't miss one.
 fn admit(job: &str, key: &str, control: &Arc<Control>) -> bool {
@@ -290,13 +302,13 @@ pub fn name(n: &str) -> io::Result<()> {
         || n.chars().any(|c| c.is_control() || c == '/' || c == '\\')
     {
         return Err(error(
-            "파일 이름에 경로 구분자나 제어 문자를 넣을 수 없습니다",
+            tr!("fx.name.separator"),
         ));
     }
     // On Windows, "C:x" joined to a folder replaces it (drive-relative) and "a:b" names a
     // stream of "a": a remote name like that would be written outside the target folder.
     if cfg!(windows) && !windows_name(n) {
-        return Err(error("Windows에서 쓸 수 없는 파일 이름입니다"));
+        return Err(error(tr!("fx.name.windows")));
     }
     Ok(())
 }
@@ -317,7 +329,7 @@ fn windows_target(n: &str, shown: &str) -> io::Result<()> {
     if windows_name(&destination_name(n, true)) {
         Ok(())
     } else {
-        Err(error(format!("Windows에서 쓸 수 없는 파일 이름입니다: {shown}")))
+        Err(error(tr!("fx.name.windowsItem", name = shown)))
     }
 }
 
@@ -443,7 +455,7 @@ fn local_entry_with(p: &Path, m: std::fs::Metadata) -> io::Result<Entry> {
         name: p
             .file_name()
             .and_then(|n| n.to_str())
-            .ok_or_else(|| error("파일 이름을 표시할 수 없습니다"))?
+            .ok_or_else(|| error(tr!("fx.name.unshowable")))?
             .into(),
         dir: m.is_dir(),
         link: m.file_type().is_symlink(),
@@ -513,7 +525,7 @@ fn cfg(h: &Host, login: &Login, password: Option<String>) -> io::Result<SshCfg> 
     };
     if user.trim().is_empty() {
         return Err(error(
-            "파일에 접근할 기기의 계정 이름을 입력하세요. Itda 화면 공유 암호와는 별도입니다",
+            tr!("fx.account"),
         ));
     }
     let pass = password
@@ -583,7 +595,7 @@ pub fn remember_clipboard_source(clip: &Value) {
 }
 fn transfer_source(key: &str, clipboard: Option<&str>, drag_token: Option<&str>) -> io::Result<Arc<Connection>> {
     #[cfg(any(target_os = "macos", windows))]
-    if let Some(token) = drag_token { return drag::source(key, token).ok_or_else(|| io::Error::other("끌어 놓은 파일의 연결이 만료되었습니다. 다시 끌어 놓아 주세요")); }
+    if let Some(token) = drag_token { return drag::source(key, token).ok_or_else(|| io::Error::other(tr!("fx.drag.expired"))); }
     #[cfg(not(any(target_os = "macos", windows)))]
     let _ = drag_token;
     if let Some(cid) = clipboard {
@@ -806,7 +818,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                         let canonical = std::fs::canonicalize(&p)?;
                         let mut file = std::fs::File::open(&canonical)?;
                         let metadata = file.metadata()?;
-                        if !metadata.is_file() { return Err(error("일반 파일을 선택하세요")); }
+                        if !metadata.is_file() { return Err(error(tr!("fx.notAFile"))); }
                         if metadata.len() > limit { return Ok(json!({"too_large":true})); }
                         if mime != "text/plain" {
                             if let Ok(modified) = metadata.modified().and_then(|m| m.duration_since(UNIX_EPOCH).map_err(io::Error::other)) {
@@ -837,9 +849,9 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                                 }
                                 None => session.insert(Sftp::connect(&c.cfg, &control)?),
                             };
-                            let entry = s.stat(&p)?.ok_or_else(|| error(NO_FILE))?;
+                            let entry = s.stat(&p)?.ok_or_else(|| refusal(tr!("fx.noFile")))?;
                             if entry.dir || entry.link {
-                                return Err(error(NOT_A_FILE));
+                                return Err(refusal(tr!("fx.notAFile")));
                             }
                             if entry.size > limit {
                                 return Ok(None);
@@ -864,7 +876,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                         // decides that under the same lock as a newer preview's stop).
                         let usable = match &result {
                             Ok(_) => true,
-                            Err(e) => [NOT_A_FILE, NO_FILE].contains(&e.to_string().as_str()),
+                            Err(e) => is_refusal(e),
                         };
                         c.previews.finish(&control, session.filter(|_| usable));
                         if cached_remote.is_none() { if let Ok(Some(bytes)) = &result {
@@ -880,7 +892,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                     };
                     if bytes.len() as u64 > limit { return Ok(json!({"too_large":true})); }
                     if mime == "text/plain" { return Ok(json!({"mime":mime,"text":String::from_utf8_lossy(&bytes)})); }
-                    if ticket.as_ref().is_some_and(|t| !preview::current(t)) { return Err(io::Error::new(io::ErrorKind::Interrupted, "이전 미리보기입니다")); }
+                    if ticket.as_ref().is_some_and(|t| !preview::current(t)) { return Err(io::Error::new(io::ErrorKind::Interrupted, tr!("fx.preview.stale"))); }
                     let prepared = if mime == "application/pdf" {
                         #[cfg(target_os = "macos")]
                         { let Some(png) = pdf_preview(&bytes, ticket.as_ref())? else { return Ok(json!({"unsupported":true})); };
@@ -896,7 +908,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
 
                 "reveal_folder" => {
                     if v["side"] != "local" {
-                        return Err(error("이 컴퓨터의 폴더를 선택하세요"));
+                        return Err(error(tr!("fx.localFolder")));
                     }
                     let p = local_folder(&get(&v, "path"))?;
                     #[cfg(target_os = "macos")]
@@ -915,16 +927,16 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                     } else {
                         if !previewable(&p) {
                             return Err(error(
-                                "이 형식은 원격에서 바로 열 수 없습니다. 내 기기로 복사한 뒤 열어 주세요",
+                                tr!("fx.openRemote"),
                             ));
                         }
                         let c = connection(&key)?;
                         let p = remote_path(&p, &c.home);
                         let control = Control::default();
                         let mut s = Sftp::connect(&c.cfg, &control)?;
-                        let entry = s.stat(&p)?.ok_or_else(|| error("파일이 없습니다"))?;
+                        let entry = s.stat(&p)?.ok_or_else(|| error(tr!("fx.noFile")))?;
                         if entry.dir || entry.link {
-                            return Err(error("일반 파일을 선택하세요"));
+                            return Err(error(tr!("fx.notAFile")));
                         }
                         let root = crate::store::dir()
                             .join("file-previews")
@@ -950,7 +962,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                         open_local(
                             target
                                 .to_str()
-                                .ok_or_else(|| error("파일 경로를 표시할 수 없습니다"))?,
+                                .ok_or_else(|| error(tr!("fx.path.unshowable")))?,
                         )?;
                     }
                     Ok(json!({"preview":v["side"]=="remote"}))
@@ -996,14 +1008,14 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                     name(&n)?;
                     // "" is Windows' This PC (the drive list), never a folder to change.
                     if v["side"] == "local" && p.is_empty() {
-                        return Err(error("내 PC에서는 드라이브를 열 수만 있습니다"));
+                        return Err(error(tr!("fx.thisPcDrives")));
                     }
                     let mut undo = Value::Null;
                     if v["side"] == "local" {
                         let source = Path::new(&p).join(&n);
                         let source = source
                             .to_str()
-                            .ok_or_else(|| error("파일 경로를 표시할 수 없습니다"))?;
+                            .ok_or_else(|| error(tr!("fx.path.unshowable")))?;
                         if op == "mkdir" {
                             std::fs::create_dir(source)?;
                         } else {
@@ -1016,14 +1028,14 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                                 std::fs::create_dir_all(&trash)?;
                                 if std::fs::symlink_metadata(&trash)?.file_type().is_symlink() {
                                     return Err(error(
-                                        "보관함이 심볼릭 링크입니다. 다른 폴더를 사용해 주세요",
+                                        tr!("fx.trash.symlink"),
                                     ));
                                 }
                                 trash.join(format!("{}-{n}", crate::store::new_id()))
                             };
                             let target = target
                                 .to_str()
-                                .ok_or_else(|| error("파일 경로를 표시할 수 없습니다"))?;
+                                .ok_or_else(|| error(tr!("fx.path.unshowable")))?;
                             rename_local(source, target, false)?;
                             undo = json!({"side":"local","from":target,"to":source});
                         }
@@ -1037,7 +1049,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                         // make a device-named file) and a name that is already taken.
                         let taken = |s: &mut Sftp, path: &str, shown: &str| -> io::Result<()> {
                             if s.stat(path)?.is_some() {
-                                return Err(error(format!("같은 이름의 항목이 있습니다: {shown}")));
+                                return Err(error(tr!("fx.itemExists", name = shown)));
                             }
                             Ok(())
                         };
@@ -1065,7 +1077,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                                 match s.stat(&trash)? {
                                     None => s.mkdir(&trash)?,
                                     Some(e) if !e.dir || e.link => {
-                                        return Err(error("보관함 폴더를 사용할 수 없습니다"))
+                                        return Err(error(tr!("fx.trash.unusable")))
                                     }
                                     _ => {}
                                 }
@@ -1077,7 +1089,7 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
                     }
                     Ok(json!({"undo":undo}))
                 }
-                _ => Err(error("지원하지 않는 파일 작업입니다")),
+                _ => Err(error(tr!("fx.unsupportedOp"))),
             }
         })();
         if mutates_files(&op) { preview_cache::invalidate_all(); }
@@ -1149,7 +1161,7 @@ fn pdf_preview(bytes: &[u8], ticket: Option<&preview::Ticket>) -> io::Result<Opt
         loop {
             if ticket.is_some_and(|t| !preview::current(t)) {
                 let _ = child.kill(); let _ = child.wait();
-                return Err(io::Error::new(io::ErrorKind::Interrupted, "이전 미리보기입니다"));
+                return Err(io::Error::new(io::ErrorKind::Interrupted, tr!("fx.preview.stale")));
             }
             if let Some(status) = child.try_wait()? {
                 if !status.success() { return Ok(None); }
@@ -1174,7 +1186,7 @@ fn connection(id: &str) -> io::Result<Arc<Connection>> {
         .unwrap()
         .get(id)
         .cloned()
-        .ok_or_else(|| error("먼저 파일 연결을 열어 주세요"))
+        .ok_or_else(|| error(tr!("fx.openFirst")))
 }
 pub fn native_target(host: &Host) -> io::Result<String> {
     if !host.files.share.is_empty() {
@@ -1199,7 +1211,7 @@ pub fn native_target(host: &Host) -> io::Result<String> {
 }
 pub fn smb_target(address: &str, windows: bool) -> io::Result<String> {
     if address.chars().any(|c| c.is_control()) {
-        return Err(error("주소에 제어 문자를 넣을 수 없습니다"));
+        return Err(error(tr!("fx.smb.control")));
     }
     let address = address.trim();
     let url = address
@@ -1211,7 +1223,7 @@ pub fn smb_target(address: &str, windows: bool) -> io::Result<String> {
         s.replace('\\', "/")
     } else {
         return Err(error(
-            "smb://기기/공유폴더 또는 \\\\기기\\공유폴더 형식으로 입력하세요",
+            tr!("fx.smb.format"),
         ));
     };
     let (server, path) = rest.split_once('/').unwrap_or((&rest, ""));
@@ -1226,7 +1238,7 @@ pub fn smb_target(address: &str, windows: bool) -> io::Result<String> {
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_')))
     {
         return Err(error(
-            "기기 주소를 확인하세요. 계정과 암호는 Finder·탐색기에서 입력합니다",
+            tr!("fx.smb.host"),
         ));
     }
     let mut parts = Vec::new();
@@ -1239,7 +1251,7 @@ pub fn smb_target(address: &str, windows: bool) -> io::Result<String> {
                     .get(1..3)
                     .and_then(|b| std::str::from_utf8(b).ok())
                     .and_then(|h| u8::from_str_radix(h, 16).ok())
-                    .ok_or_else(|| error("공유폴더 주소의 % 표기를 확인하세요"))?;
+                    .ok_or_else(|| error(tr!("fx.smb.percent")))?;
                 decoded.push(n);
                 rest = &rest[3..];
             } else {
@@ -1248,13 +1260,13 @@ pub fn smb_target(address: &str, windows: bool) -> io::Result<String> {
             }
         }
         let text =
-            String::from_utf8(decoded).map_err(|_| error("공유폴더 이름을 UTF-8로 입력하세요"))?;
+            String::from_utf8(decoded).map_err(|_| error(tr!("fx.smb.utf8")))?;
         name(&text)?;
         if text
             .chars()
             .any(|c| matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|'))
         {
-            return Err(error("공유폴더 이름을 확인하세요"));
+            return Err(error(tr!("fx.smb.name")));
         }
         parts.push(text);
     }
@@ -1310,11 +1322,11 @@ pub fn open_native(address: &str) -> io::Result<()> {
 }
 fn local_folder(p: &str) -> io::Result<String> {
     if p.is_empty() || p.chars().any(|c| c.is_control()) {
-        return Err(error("폴더 경로가 올바르지 않습니다"));
+        return Err(error(tr!("fx.path.badFolder")));
     }
     let p = canonical(p)?;
     if !Path::new(&p).is_dir() {
-        return Err(error("폴더를 선택하세요"));
+        return Err(error(tr!("fx.chooseFolder")));
     }
     Ok(p)
 }
@@ -1322,7 +1334,7 @@ fn local_folder(p: &str) -> io::Result<String> {
 /// single argument rather than interpreting a remote item as a program.
 fn open_local(p: &str) -> io::Result<()> {
     if p.chars().any(|c| c.is_control()) {
-        return Err(error("파일 경로가 올바르지 않습니다"));
+        return Err(error(tr!("fx.path.badFile")));
     }
     #[cfg(target_os = "macos")]
     {
@@ -1345,7 +1357,7 @@ fn open_local(p: &str) -> io::Result<()> {
             )
         };
         if (result as isize) <= 32 {
-            return Err(error("기본 앱에서 파일을 열 수 없습니다"));
+            return Err(error(tr!("fx.openDefault")));
         }
     }
     Ok(())
@@ -1355,7 +1367,7 @@ fn open_local(p: &str) -> io::Result<()> {
 /// not be overwritten unless the user explicitly chose replacement.
 fn rename_local(from: &str, to: &str, replace: bool) -> io::Result<()> {
     if from.contains('\0') || to.contains('\0') {
-        return Err(error("파일 경로에 NUL 문자를 넣을 수 없습니다"));
+        return Err(error(tr!("fx.path.nul")));
     }
     #[cfg(target_os = "macos")]
     {
@@ -1366,8 +1378,8 @@ fn rename_local(from: &str, to: &str, replace: bool) -> io::Result<()> {
                 flags: u32,
             ) -> std::ffi::c_int;
         }
-        let from = std::ffi::CString::new(from).map_err(|_| error("잘못된 원본 경로"))?;
-        let to = std::ffi::CString::new(to).map_err(|_| error("잘못된 대상 경로"))?;
+        let from = std::ffi::CString::new(from).map_err(|_| error(tr!("fx.path.badSource")))?;
+        let to = std::ffi::CString::new(to).map_err(|_| error(tr!("fx.path.badTarget")))?;
         if unsafe { renamex_np(from.as_ptr(), to.as_ptr(), if replace { 0 } else { 4 }) } != 0 {
             return Err(io::Error::last_os_error());
         }
@@ -1402,7 +1414,7 @@ fn rename_local(from: &str, to: &str, replace: bool) -> io::Result<()> {
         if !replace && Path::new(to).try_exists()? {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                "같은 이름의 파일이 있습니다",
+                tr!("fx.fileExists"),
             ));
         }
         std::fs::rename(from, to)
@@ -1460,6 +1472,9 @@ pub fn shutdown() {
 
 #[cfg(test)]
 mod tests {
+    pub(crate) const CLOSING: &str = "Itda를 종료하는 중이라 새 전송을 시작하지 않았습니다";
+    #[test]
+    fn closing_text() { assert_eq!(super::closing(), CLOSING); }
     /// This PC: the system drive is listed as a folder named like Explorer's drive letter.
     #[cfg(windows)]
     #[test]
@@ -1786,7 +1801,7 @@ mod preview_pipeline_tests {
 /// the very permit the newer request needs. Return every taken idle session on admission error.
 fn preview_remote_begin<T>(slot: &PreviewSlot<T>, generation: u64, ticket: Option<&preview::Ticket>) -> io::Result<(Arc<Control>, Option<T>, preview_image::Work)> {
     let Some((control, kept)) = slot.begin(generation) else {
-        return Err(io::Error::new(io::ErrorKind::Interrupted, "더 최근 미리보기가 있습니다"));
+        return Err(io::Error::new(io::ErrorKind::Interrupted, tr!("fx.preview.newer")));
     };
     match preview_image::work(ticket) {
         Ok(work) => Ok((control, kept, work)),

@@ -112,7 +112,7 @@ pub fn start(port: u16) -> io::Result<()> {
         return Ok(());
     }
     stop();
-    let l = TcpListener::bind(("0.0.0.0", port)).map_err(|e| io::Error::new(e.kind(), format!("포트 {port}을(를) 열 수 없습니다: {e}")))?;
+    let l = TcpListener::bind(("0.0.0.0", port)).map_err(|e| io::Error::new(e.kind(), tr!("pcshare.portBusy", port = port, error = e)))?;
     let port = l.local_addr()?.port(); // the real one, also when asked for 0
     let stop = Arc::new(AtomicBool::new(false));
     let thread = serve(l, false, stop.clone())?;
@@ -407,6 +407,13 @@ fn json_resp(c: &mut TcpStream, status: &str, v: serde_json::Value) -> io::Resul
     respond(c, status, "application/json; charset=utf-8", "", v.to_string().as_bytes())
 }
 
+/// An error for the web viewer, which may be in another language than this PC: `code` is the
+/// message it shows in its own (`srv.*` in web/locales/, the same text as `gw.*` here), `error`
+/// this PC's text for when it has no such message.
+fn api_error(code: &str, text: &str) -> serde_json::Value {
+    json!({"error": text, "code": code})
+}
+
 fn token_of(req: &Req) -> Option<String> {
     req.headers.get("cookie")?.split(';').find_map(|kv| kv.trim().strip_prefix("itda=").map(str::to_string))
 }
@@ -451,7 +458,7 @@ fn login(c: &mut TcpStream, req: &Req, peer: SocketAddr) -> io::Result<()> {
         let mut g = FAILS.lock().unwrap();
         let f = g.get_or_insert_with(Fails::default);
         if locked(&mut f.all) || f.per.get_mut(&from).is_some_and(locked) {
-            return json_resp(c, "429 Too Many Requests", json!({"error": "잠시 후 다시 시도하세요 (PIN을 여러 번 틀렸습니다)"}));
+            return json_resp(c, "429 Too Many Requests", api_error("srv.pinLocked", tr!("gw.pinLocked")));
         }
     }
     let pin = serde_json::from_slice::<serde_json::Value>(&req.body).ok().and_then(|v| v["pin"].as_str().map(str::to_string)).unwrap_or_default();
@@ -477,7 +484,7 @@ fn login(c: &mut TcpStream, req: &Req, peer: SocketAddr) -> io::Result<()> {
             f.all.1 = Some(Instant::now() + LOCKOUT);
         }
         crate::log!("web: wrong PIN from {from} ({n})");
-        return json_resp(c, "401 Unauthorized", json!({"error": "PIN이 맞지 않습니다"}));
+        return json_resp(c, "401 Unauthorized", api_error("srv.pinWrong", tr!("gw.pinWrong")));
     }
     if let Some(f) = FAILS.lock().unwrap().as_mut() {
         f.per.remove(&from);
@@ -552,7 +559,7 @@ fn hosts_json() -> serde_json::Value {
     #[cfg(windows)]
     if crate::share::running().is_some() {
         let name = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows".into());
-        list.insert(0, json!({"id": THIS_PC, "label": format!("{name} (이 PC)"), "host": name, "this": true, "kind": "vnc", "os": "windows", "has_pw": true}));
+        list.insert(0, json!({"id": THIS_PC, "label": tr!("gw.thisPc", name = name), "host": name, "this": true, "kind": "vnc", "os": "windows", "has_pw": true}));
     }
     json!(list)
 }
@@ -713,8 +720,6 @@ thread_local! {
     /// This connection is to the Mac's high-performance sharing (not Screen Sharing).
     static HP_LIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
-/// Why a connection used Screen Sharing after the viewer asked (?nohp=1).
-const HP_UNDECODABLE: &str = "이 기기에서 그 Mac의 고성능 영상을 표시하지 못했습니다";
 /// How long the Screen Sharing session that unlocked a Mac outlives the last connection to it:
 /// the viewer may be reconnecting (to high-performance once it's unlocked, back to Screen
 /// Sharing after video it couldn't decode, after a drop).
@@ -825,17 +830,17 @@ fn record_mode(id: &str, v: serde_json::Value) {
 /// Add, change or remove a connection or account from the browser.
 fn edit(c: &mut TcpStream, req: &Req) -> io::Result<()> {
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(&req.body) else {
-        return json_resp(c, "400 Bad Request", json!({"error": "잘못된 요청입니다"}));
+        return json_resp(c, "400 Bad Request", api_error("srv.badRequest", tr!("gw.badRequest")));
     };
     let str_of = |k: &str| v.get(k).and_then(|x| x.as_str()).map(|s| s.trim().to_string());
     let id = str_of("id").unwrap_or_default();
     let cmd = match str_of("cmd").as_deref() {
         Some("viewer_opts") => {
             let Some(mut h) = store::load_hosts().into_iter().find(|h| h.id == id) else {
-                return json_resp(c, "404 Not Found", json!({"error":"연결을 찾을 수 없습니다"}));
+                return json_resp(c, "404 Not Found", api_error("srv.notFound", tr!("gw.notFound")));
             };
             let Ok(opts) = serde_json::from_value::<store::HostOpts>(v["opts"].clone()) else {
-                return json_resp(c, "400 Bad Request", json!({"error":"잘못된 보기 설정입니다"}));
+                return json_resp(c, "400 Bad Request", api_error("srv.badViewOpts", tr!("gw.badViewOpts")));
             };
             h.opts = opts;
             json!({"cmd":"save_host","host":h})
@@ -863,7 +868,7 @@ fn edit(c: &mut TcpStream, req: &Req) -> io::Result<()> {
                 h.ssh.on = on && !h.is_rdp();
             }
             if h.host.is_empty() {
-                return json_resp(c, "400 Bad Request", json!({"error": "주소를 입력하세요"}));
+                return json_resp(c, "400 Bad Request", api_error("srv.needAddress", tr!("gw.needAddress")));
             }
             if h.id.is_empty() {
                 h.id = store::new_id();
@@ -879,7 +884,7 @@ fn edit(c: &mut TcpStream, req: &Req) -> io::Result<()> {
                 }
             }
             if a.user.is_empty() {
-                return json_resp(c, "400 Bad Request", json!({"error": "사용자 이름을 입력하세요"}));
+                return json_resp(c, "400 Bad Request", api_error("srv.needUser", tr!("gw.needUser")));
             }
             if a.id.is_empty() {
                 a.id = store::new_id();
@@ -887,7 +892,7 @@ fn edit(c: &mut TcpStream, req: &Req) -> io::Result<()> {
             json!({"cmd": "save_account", "account": a, "password": str_of("password").unwrap_or_default()})
         }
         Some(k @ ("delete_host" | "delete_account")) if !id.is_empty() && id != THIS_PC => json!({"cmd": k, "id": id}),
-        _ => return json_resp(c, "400 Bad Request", json!({"error": "알 수 없는 요청입니다"})),
+        _ => return json_resp(c, "400 Bad Request", api_error("srv.unknownRequest", tr!("gw.unknownRequest"))),
     };
     let saved = ["/host/id", "/account/id", "/id"].iter().find_map(|p| cmd.pointer(p).cloned());
     let done = match ON_EDIT.get() {
@@ -897,7 +902,7 @@ fn edit(c: &mut TcpStream, req: &Req) -> io::Result<()> {
     if done {
         json_resp(c, "200 OK", json!({"ok": true, "id": saved, "hosts": hosts_json(), "accounts": accounts_json()}))
     } else {
-        json_resp(c, "503 Service Unavailable", json!({"error": "PC의 Itda가 응답하지 않습니다"}))
+        json_resp(c, "503 Service Unavailable", api_error("srv.pcNotResponding", tr!("gw.pcNotResponding")))
     }
 }
 
@@ -1010,7 +1015,7 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             proxy(c, &id, peer, local, size)
         }
         (_, _) if p.starts_with("/api/") || p.starts_with("/thumb/") => {
-            json_resp(&mut c, "401 Unauthorized", json!({"error": "로그인이 필요합니다"}))
+            json_resp(&mut c, "401 Unauthorized", api_error("srv.loginRequired", tr!("gw.loginRequired")))
         }
         _ => respond(&mut c, "404 Not Found", "text/plain", "", b"not found"),
     }
@@ -1038,15 +1043,15 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u3
         #[cfg(windows)]
         let r = crate::share::open_local(peer);
         #[cfg(not(windows))]
-        let r = Err(io::Error::new(io::ErrorKind::ConnectionRefused, "이 기기에서는 화면 공유를 제공하지 않습니다"));
+        let r = Err(io::Error::new(io::ErrorKind::ConnectionRefused, tr!("gw.noScreenSharing")));
         r
     } else {
         let Some(host) = store::load_hosts().into_iter().find(|h| h.id == id) else {
-            return fail(4004, "연결을 찾을 수 없습니다".into());
+            return fail(4004, tr!("gw.notFound").into());
         };
         let login = store::resolve(&host, &store::load_accounts());
         let Some(pass) = local.then(|| typed(id)).flatten().or_else(|| login.pass.clone()) else {
-            return fail(4001, "이 연결에는 저장된 암호가 없습니다. 연결을 편집해 암호를 저장하세요.".into());
+            return fail(4001, tr!("gw.noPassword").into());
         };
         open_host(&host, &login, pass, &mut tunnel, size)
     };
@@ -1076,7 +1081,7 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
         // out); at the LAN address there must be one already.
         let saved = store::rdp_key(&host.id);
         if at_lan && saved.is_none() {
-            return Err(rfb::denied("저장된 기기인지 확인할 수 없어 같은 네트워크 주소로 연결하지 않았습니다"));
+            return Err(rfb::denied(tr!("gw.lanUnverified")));
         }
         let (raw, key) = crate::rdp::open(&host.host, &login.user, &pass, size.filter(|_| host.opts.resize), saved.as_deref())?;
         if saved.is_none() {
@@ -1088,7 +1093,8 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
     // can't be reached (Itda not running there, SSH refused), fall back to the usual way.
     if host.hp.on && NO_HP.with(|n| n.get()) {
         crate::log!("high-performance sharing on {}: the viewer couldn't decode its video, using Screen Sharing", host.host);
-        record_mode(&host.id, json!({"hp": false, "setup": false, "locked": false, "reason": HP_UNDECODABLE}));
+        // (Why it used Screen Sharing: the viewer said it couldn't show the video.)
+        record_mode(&host.id, json!({"hp": false, "setup": false, "locked": false, "reason": tr!("gw.hpUndecodable"), "code": "srv.hpUndecodable"}));
     } else if host.hp.on {
         match open_hp(host, login, &pass) {
             Ok((t, raw)) => {
@@ -1107,12 +1113,12 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
                 // The viewer shows what it actually got, not the saved choice.
                 // Set up again (not retried) when it's high-performance sharing itself that is off
                 // or no longer matches; SSH problems keep their own message.
-                let setup = e.get_ref().is_some_and(|r| r.is::<HpSetup>());
+                let setup = e.get_ref().and_then(|r| r.downcast_ref::<HpSetup>()).map(|s| s.code);
                 // (Locked, or another user has the screen: either way the viewer watches for it to
                 // be over and switches back.)
                 let why = unavailable(&e);
                 LOCKED_FALLBACK.with(|l| l.set(why.is_some()));
-                record_mode(&host.id, json!({"hp": false, "setup": setup, "locked": why.is_some(), "other_user": why == Some(Unavailable::OtherUser), "reason": e.to_string()}));
+                record_mode(&host.id, json!({"hp": false, "setup": setup.is_some(), "locked": why.is_some(), "other_user": why == Some(Unavailable::OtherUser), "reason": e.to_string(), "code": setup}));
             }
         }
     }
@@ -1134,7 +1140,7 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
         *tunnel = Some(t);
         rfb::open(&a, &creds)
     } else if at_lan {
-        Err(rfb::denied("같은 네트워크 주소로는 SSH로만 연결합니다"))
+        Err(rfb::denied(tr!("gw.lanSshOnly")))
     } else {
         rfb::open(&rfb::addr(&host.host), &creds)
     }
@@ -1144,15 +1150,19 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
 /// High-performance sharing itself is off or out of step on that Mac (SSH worked): setting it
 /// up again is the fix, not a retry.
 #[derive(Debug)]
-pub(crate) struct HpSetup(&'static str);
+pub(crate) struct HpSetup {
+    /// The web viewer's message for it (srv.*).
+    code: &'static str,
+    text: &'static str,
+}
 impl std::fmt::Display for HpSetup {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { f.write_str(self.0) }
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { f.write_str(self.text) }
 }
 impl std::error::Error for HpSetup {}
 
 pub(crate) fn open_hp(host: &store::Host, login: &store::Login, ssh_pass: &str) -> io::Result<(Arc<Tunnel>, rfb::Raw)> {
-    let setup = |why| io::Error::new(io::ErrorKind::NotFound, HpSetup(why));
-    let pass = store::get_password(&crate::hp_upgrade::password_key(&host.id)).ok_or_else(|| setup("이 기기에 고성능 공유 암호가 없습니다"))?;
+    let setup = |code, text| io::Error::new(io::ErrorKind::NotFound, HpSetup { code, text });
+    let pass = store::get_password(&crate::hp_upgrade::password_key(&host.id)).ok_or_else(|| setup("srv.hpNoPassword", tr!("gw.hpNoPassword")))?;
     let cfg = crate::hp_upgrade::ssh_cfg_with(host, login, ssh_pass.to_string());
     let t = Tunnel::open(cfg.clone())?;
     let quiet = |e: &io::Error| matches!(e.kind(), io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted);
@@ -1170,9 +1180,9 @@ pub(crate) fn open_hp(host: &store::Host, login: &store::Login, ssh_pass: &str) 
     }
     let raw = raw.map_err(|e| match e.kind() {
         // Nothing answering behind the tunnel: sharing isn't on, or Itda isn't running there.
-        io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted => setup("원격 Mac의 Itda 고성능 공유에 연결하지 못했습니다"),
+        io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted => setup("srv.hpUnreachable", tr!("gw.hpUnreachable")),
         // The password it has changed (e.g. Itda was reinstalled there).
-        io::ErrorKind::PermissionDenied if e.to_string().starts_with("인증 실패") => setup("원격 Mac의 고성능 공유 암호가 바뀌었습니다"),
+        io::ErrorKind::PermissionDenied if rfb::auth_failed(&e) => setup("srv.hpPasswordChanged", tr!("gw.hpPasswordChanged")),
         _ => e,
     })?;
     Ok((t, raw))
@@ -1200,10 +1210,13 @@ fn locked_refusal(e: &io::Error) -> bool {
 /// Close code for a high-performance session that ended because the Mac's screen locked or
 /// another user took it (the viewer reconnects at once and gets Screen Sharing).
 const LOCKED_CLOSE: u16 = 4030;
+/// The close reasons the gateway gives itself are the web viewer's message IDs (srv.* in
+/// web/locales/): the viewer may be in another language than this PC, and shows any other
+/// reason (an error from the device) as it is.
 fn unavailable_close_text(u: Unavailable) -> &'static str {
     match u {
-        Unavailable::Locked => "그 Mac의 화면이 잠겨 기본 화면 공유로 다시 연결합니다",
-        Unavailable::OtherUser => "다른 사용자가 그 Mac 화면을 쓰기 시작해 기본 화면 공유로 다시 연결합니다",
+        Unavailable::Locked => "srv.hpLocked",
+        Unavailable::OtherUser => "srv.hpOtherUser",
     }
 }
 
@@ -1231,7 +1244,7 @@ const HP_LOCKED_PROBE: Duration = Duration::from_secs(3);
 fn device_closed(why: Option<Unavailable>) -> (u16, &'static str) {
     match why {
         Some(u) => (LOCKED_CLOSE, unavailable_close_text(u)),
-        None => (1000, "원격 기기와의 연결이 끊겼습니다"),
+        None => (1000, "srv.deviceClosed"),
     }
 }
 
@@ -1368,10 +1381,16 @@ mod tests {
     /// The lock answer the gateway matches is the one the Mac's sharing gives.
     #[test]
     fn locked_refusals_are_recognised() {
-        let refused = std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("인증 실패: {}", crate::hp_upgrade::SCREEN_LOCKED));
+        // (As rfb::open gives them: a refusal with the Mac's reason, not a wrong password.)
+        let refused = crate::rfb::denied(crate::hp_upgrade::SCREEN_LOCKED);
         assert_eq!(super::unavailable(&refused), Some(super::Unavailable::Locked));
-        let taken = std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("인증 실패: {}", crate::hp_upgrade::OTHER_USER));
+        assert!(!crate::rfb::auth_failed(&refused));
+        let taken = crate::rfb::denied(crate::hp_upgrade::OTHER_USER);
         assert_eq!(super::unavailable(&taken), Some(super::Unavailable::OtherUser));
+        assert!(!crate::rfb::auth_failed(&taken));
+        // A wrong password whose reason happened to quote one is still recognised as the lock.
+        let wrapped = crate::rfb::kinded(std::io::ErrorKind::PermissionDenied, "auth", tr!("rfb.authFailed", reason = crate::hp_upgrade::SCREEN_LOCKED));
+        assert_eq!(super::unavailable(&wrapped), Some(super::Unavailable::Locked));
         assert!(!super::locked_refusal(&std::io::Error::other("원격 Mac의 Itda 고성능 공유에 연결하지 못했습니다")));
     }
 

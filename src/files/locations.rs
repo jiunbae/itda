@@ -46,7 +46,7 @@ pub fn device_from_url(url: &str) -> Option<String> {
 fn regular(path: &Path) -> io::Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(m) if m.is_file() && !m.file_type().is_symlink() => Ok(true),
-        Ok(_) => Err(error("연결 바로가기 경로가 일반 파일이 아닙니다")),
+        Ok(_) => Err(error(tr!("fx.places.notFile"))),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e),
     }
@@ -81,7 +81,7 @@ pub fn write(hosts: &[Host], root: &Path) -> io::Result<()> {
     let _guard = LOCK.lock().unwrap();
     match fs::symlink_metadata(root) {
         Ok(m) if !m.is_dir() || m.file_type().is_symlink() => {
-            return Err(error("연결 폴더 경로를 확인하세요"))
+            return Err(error(tr!("fx.places.folder")))
         }
         Ok(_) => {}
         Err(e) if e.kind() == io::ErrorKind::NotFound => fs::create_dir_all(root)?,
@@ -90,17 +90,17 @@ pub fn write(hosts: &[Host], root: &Path) -> io::Result<()> {
     let manifest = root.join(".itda-links.json");
     let previous: HashSet<String> = if regular(&manifest)? {
         if fs::metadata(&manifest)?.len() > 1 << 20 {
-            return Err(error("연결 바로가기 목록이 너무 큽니다"));
+            return Err(error(tr!("fx.places.tooLarge")));
         }
         serde_json::from_slice(&fs::read(&manifest)?)
-            .map_err(|_| error("연결 바로가기 목록을 읽을 수 없습니다"))?
+            .map_err(|_| error(tr!("fx.places.unreadable")))?
     } else {
         HashSet::new()
     };
     for old in &previous {
         name(old)?;
         if !old.ends_with(".inetloc") {
-            return Err(error("연결 바로가기 목록을 확인하세요"));
+            return Err(error(tr!("fx.places.check")));
         }
     }
     let mut next = HashSet::new();
@@ -120,7 +120,7 @@ pub fn write(hosts: &[Host], root: &Path) -> io::Result<()> {
         let path = root.join(&leaf);
         if regular(&path)? && !previous.contains(&leaf) {
             return Err(error(
-                "같은 이름의 사용자 파일이 있어 연결 바로가기를 만들지 않았습니다",
+                tr!("fx.places.userFile"),
             ));
         }
         let url = device_url(&h.id);

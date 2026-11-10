@@ -180,7 +180,7 @@ pub fn run(quick: Option<String>) {
             Err(e) => {
                 crate::log!("webview: {e}");
                 crate::ui::message(
-                    &format!("화면 구성 요소(Microsoft Edge WebView2)를 시작할 수 없습니다.\n\n{e}\n\nhttps://go.microsoft.com/fwlink/p/?LinkId=2124703 에서 설치할 수 있습니다."),
+                    &tr!("app.webview2Missing", error = e),
                     true,
                 );
                 return;
@@ -231,7 +231,7 @@ pub(super) fn native_file_drag(v: Value) {
 
 fn reject_drag(v: &Value, page: &str) {
     let id=crate::files::scoped_id(v["id"].as_str().unwrap_or(""),&json!(page));
-    super::post(Event::Page(json!({"type":"files_native_drag_end","id":id,"gesture":v["gesture"],"error":"끌어 놓을 파일 창을 다시 확인하세요","trace":{"phase":"rejected","entered_ole":false,"ole_drop_committed":false,"cancelled_after_commit":false,"query_count":0,"first_query":false,"cancelled":true,"escape_seen":false,"focus_verified":false}})));
+    super::post(Event::Page(json!({"type":"files_native_drag_end","id":id,"gesture":v["gesture"],"error":tr!("app.drag.checkWindow"),"trace":{"phase":"rejected","entered_ole":false,"ole_drop_committed":false,"cancelled_after_commit":false,"query_count":0,"first_query":false,"cancelled":true,"escape_seen":false,"focus_verified":false}})));
 }
 
 fn focus_drag_webview(source: isize, gesture: &std::sync::Arc<crate::files_win::gesture::Gesture>) {
@@ -400,12 +400,27 @@ pub fn home_focused() -> bool {
     unsafe { GetForegroundWindow() == hwnd() && IsWindowVisible(hwnd()) != 0 }
 }
 
+/// A file window's title: its device, or the network page.
+fn files_title(id: &str) -> String {
+    home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| tr!("app.files.windowTitle", name = h.label())).unwrap_or_else(|| tr!("app.files.networkTitle").into()))
+}
+
+/// Settings → Language changed: the tray tooltip and the file windows' titles follow (the tray
+/// menu is built each time it opens; a connection window's title is the device's own name).
+pub fn language_changed() {
+    tray_tip(crate::share::viewers().len());
+    FILE_PANES.with(|p| for (window, (h, _)) in p.borrow().iter() {
+        let host = FILE_HOSTS.with(|f| f.borrow().get(window).cloned()).unwrap_or_default();
+        unsafe { SetWindowTextW(*h as HWND, wide(&files_title(&host)).as_ptr()); }
+    });
+}
+
 pub fn files_window_context(window: &str, id: &str, page: &str) {
     let h = FILE_PANES.with(|p| p.borrow().get(window).map(|(h,_)| *h));
     if let Some(h) = h {
         // A reloaded page has a new token: the old page is gone, so its transfers become the app's.
         if let Some(old) = FILE_PAGES.with(|p| p.borrow_mut().insert(window.into(), page.into())).filter(|old| old != page) { crate::files::release_page(&old); }
-        let title = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| format!("{} — 파일", h.label())).unwrap_or_else(|| "네트워크 — Itda".into()));
+        let title = files_title(id);
         unsafe { SetWindowTextW(h as HWND, wide(&title).as_ptr()); }
         FILE_HOSTS.with(|p| {p.borrow_mut().insert(window.into(), id.into());}); super::send_hosts();
     }
@@ -420,7 +435,7 @@ fn file_window(id: &str, close: bool, new: bool, path: Option<&str>) {
         }
         if close { return; }
         let window_id = crate::store::new_id();
-        let title = home(|m| m.hosts.iter().find(|h| h.id == id).map(|h| format!("{} — 파일", h.label())).unwrap_or_else(|| "네트워크 — Itda".into()));
+        let title = files_title(id);
         let h = CreateWindowExW(0, wide("itda_home").as_ptr(), wide(&title).as_ptr(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1000, 740, null_mut(), null_mut(), GetModuleHandleW(null()), null());
         if h.is_null() { return; }
         CHROMELESS.with(|c| c.borrow_mut().insert(h as isize));
@@ -516,10 +531,10 @@ pub fn screenshots_dir() -> std::path::PathBuf {
 pub fn pick_file(field: String) {
     use windows_sys::Win32::UI::Controls::Dialogs::*;
     let mut buf = vec![0u16; 1024];
-    let filter = wide("SSH 개인 키\0id_*;*.pem;*.key\0모든 파일\0*.*\0");
+    let filter = wide(&format!("{}\0id_*;*.pem;*.key\0{}\0*.*\0", tr!("app.pickKey.private"), tr!("app.pickKey.all")));
     let start = std::env::var_os("USERPROFILE").map(|p| std::path::PathBuf::from(p).join(".ssh")).filter(|p| p.is_dir());
     let start_w = start.map(|p| wide(&p.to_string_lossy()));
-    let title = wide("SSH 키 파일 선택");
+    let title = wide(tr!("app.pickKey.title"));
     let mut ofn: OPENFILENAMEW = unsafe { std::mem::zeroed() };
     ofn.lStructSize = size_of::<OPENFILENAMEW>() as u32;
     ofn.hwndOwner = hwnd();
@@ -667,7 +682,7 @@ pub fn tray_tip(viewers: usize) {
     unsafe {
         let mut d = tray_data(hwnd());
         d.uFlags = NIF_TIP;
-        let tip = if viewers == 0 { crate::APP.to_string() } else { format!("{} — {viewers}명이 이 PC를 보는 중", crate::APP) };
+        let tip = if viewers == 0 { crate::APP.to_string() } else { tr!("app.tray.watching", app = crate::APP, count = viewers) };
         copy_w(&mut d.szTip, &tip);
         Shell_NotifyIconW(NIM_MODIFY, &d);
     }
@@ -698,7 +713,7 @@ pub fn show_home() {
 
 unsafe fn tray_menu(h: HWND) {
     let m = CreatePopupMenu();
-    AppendMenuW(m, MF_STRING | MF_DEFAULT, TRAY_OPEN, wide("Itda 열기").as_ptr());
+    AppendMenuW(m, MF_STRING | MF_DEFAULT, TRAY_OPEN, wide(tr!("app.tray.open")).as_ptr());
     let mut recent = home(|m| m.hosts.clone());
     recent.sort_by(|a, b| b.last_used.cmp(&a.last_used));
     recent.truncate(6);
@@ -706,14 +721,14 @@ unsafe fn tray_menu(h: HWND) {
         AppendMenuW(m, MF_SEPARATOR, 0, null());
         for (i, x) in recent.iter().enumerate() {
             let live = home(|mm| mm.sessions.contains_key(&x.id));
-            let label = format!("{}{}", x.label(), if live { "  (연결됨)" } else { "" });
+            let label = if live { tr!("app.tray.connected", name = x.label()) } else { x.label().to_string() };
             AppendMenuW(m, MF_STRING, TRAY_HOST0 + i, wide(&label).as_ptr());
         }
     }
     AppendMenuW(m, MF_SEPARATOR, 0, null());
     let sharing = home(|m| m.settings.web.on || m.settings.share.on);
-    AppendMenuW(m, MF_STRING, TRAY_SHARE, wide(if sharing { "공유 중 — QR·주소 보기" } else { "다른 기기에서 보기 (공유)…" }).as_ptr());
-    AppendMenuW(m, MF_STRING, TRAY_QUIT, wide("종료").as_ptr());
+    AppendMenuW(m, MF_STRING, TRAY_SHARE, wide(if sharing { tr!("app.tray.sharing") } else { tr!("app.tray.share") }).as_ptr());
+    AppendMenuW(m, MF_STRING, TRAY_QUIT, wide(tr!("app.tray.quit")).as_ptr());
     let mut pt = POINT { x: 0, y: 0 };
     GetCursorPos(&mut pt);
     SetForegroundWindow(h);
@@ -836,7 +851,7 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
         WM_QUERYENDSESSION if h == hwnd() => {
             let n = crate::files::active_jobs();
             if n > 0 {
-                let why = wide(&format!("파일 전송 {n}개가 진행 중입니다"));
+                let why = wide(&tr!("app.shutdown.transfers", count = n));
                 ShutdownBlockReasonCreate(h, why.as_ptr());
                 super::request_quit_later(super::QuitReason::User);
                 return 0;
@@ -855,7 +870,7 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
                         m.settings.clone()
                     });
                     store::save_settings(&st);
-                    super::notify("Itda는 계속 실행 중입니다", "알림 영역 아이콘에서 다시 열거나 종료할 수 있습니다.");
+                    super::notify(tr!("app.tray.stillRunning"), tr!("app.tray.stillRunningText"));
                 }
             } else {
                 // Closing the home ends the app: asked first while files are being copied.
