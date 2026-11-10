@@ -66,7 +66,7 @@ export async function capturePlates({pw,out,log=console.log}){
       const t=url.pathname.match(/\/thumb\/(\w+)\.png$/);
       if(t){res.setHeader('Content-Type','image/png');return res.end(desk[t[1]==='b2'||t[1]==='e5'?2:1].png);}
       let name=url.pathname;
-      if(name==='/viewer/')name='/web/viewer/index.html';else if(name.startsWith('/viewer/'))name='/web'+name;else if(name==='/web/')name='/web/index.html';
+      if(name==='/viewer/')name='/web/viewer/index.html';else if(/^\/viewer\/(i18n\.js|locales\/)/.test(name))name='/web'+name.slice(7);else if(name.startsWith('/viewer/'))name='/web'+name;else if(name==='/web/')name='/web/index.html';
       const file=name.endsWith('/icon.svg')?path.join(root,'assets/itda.svg'):name.endsWith('/icon-192.png')?path.join(root,'assets/itda-192.png'):path.resolve(root,'.'+name);
       if(!file.startsWith(root+path.sep)||!fs.existsSync(file)||!fs.statSync(file).isFile()){res.writeHead(404);return res.end();}
       res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':name.endsWith('.png')?'image/png':name.endsWith('.svg')?'image/svg+xml':name.endsWith('.webmanifest')?'application/manifest+json':'text/html');
@@ -116,7 +116,7 @@ export async function capturePlates({pw,out,log=console.log}){
       const v=page.viewportSize();(layout[plate]||={size:[v.width*d,v.height*d]})[key]=[b.x*d,b.y*d,b.width*d,b.height*d];};
 
     // 3. The Mac app's windows (home, nearby, files, viewer): light theme, Mac layout, 2x.
-    const mac=await browser.newContext({viewport:{width:1100,height:700},deviceScaleFactor:2,reducedMotion:'reduce',locale:'ko-KR',timezoneId:'Asia/Seoul',userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'});
+    const mac=await browser.newContext({viewport:{width:1100,height:700},deviceScaleFactor:2,reducedMotion:'reduce',locale:'en-US',timezoneId:'America/Los_Angeles',userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'});
     await mac.clock.install({time:new Date('2026-11-10T01:24:00Z')});
     await mac.addInitScript(({entries})=>{
       window.ipc={postMessage:raw=>{
@@ -191,7 +191,7 @@ export async function capturePlates({pw,out,log=console.log}){
       // The remote pointer hides (a game): Itda offers to lock the mouse.
       const peer=peers.at(-1);await p.waitForSelector('[data-t="mouse-lock"]');
       peer.send(update([rect(0,0x4954,0,0,-257)]));
-      await p.waitForFunction(()=>[...document.querySelectorAll('.toast,#toast')].some(t=>/마우스/.test(t.textContent)));
+      await p.waitForFunction(()=>[...document.querySelectorAll('.toast,#toast')].some(t=>/lock the mouse/i.test(t.textContent)));
     });
     // Two remote displays, each on its own (chosen through the viewer's monitor menu).
     dualScreens=true;
@@ -201,7 +201,7 @@ export async function capturePlates({pw,out,log=console.log}){
     await mac.close();
 
     // 4. The phone: the web viewer in a phone browser, list then the same Mac.
-    const phone=await browser.newContext({viewport:{width:390,height:844},deviceScaleFactor:3,isMobile:true,hasTouch:true,reducedMotion:'reduce',locale:'ko-KR',timezoneId:'Asia/Seoul',userAgent:'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'});
+    const phone=await browser.newContext({viewport:{width:390,height:844},deviceScaleFactor:3,isMobile:true,hasTouch:true,reducedMotion:'reduce',locale:'en-US',timezoneId:'America/Los_Angeles',userAgent:'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'});
     const pp=await phone.newPage();
     await pp.goto(base+'/viewer/');
     await pp.waitForSelector('text=Studio Mac');
