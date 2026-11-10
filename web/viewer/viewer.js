@@ -1345,6 +1345,9 @@ document.addEventListener('pointerlockchange', () => {
   const r = S.rfb;
   if (!r) return;
   r._itdaLocked = relLocked();
+  // The click that locked it pressed a button through noVNC, whose release now comes here; noVNC
+  // sends its stored mask with every absolute move, so it must forget the press.
+  if (r._itdaLocked) { r._mouseButtonMask = 0; clearTimeout(r._mouseMoveTimer); r._mouseMoveTimer = null; }
   if (!r._itdaLocked) {
     if (rel.mask) r.itdaRelative(0, 0, 0); // no button stays down on the other side
     rel.mask = rel.dx = rel.dy = 0;
@@ -1370,6 +1373,7 @@ for (const type of ['mousedown', 'mouseup']) document.addEventListener(type, (e)
 document.addEventListener('wheel', (e) => {
   if (!relLocked()) return;
   e.preventDefault();
+  e.stopPropagation(); // noVNC's own wheel handler would send it again, as an absolute event
   const bit = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? (e.deltaX > 0 ? 64 : 32) : (e.deltaY > 0 ? 16 : 8);
   relSend();
   S.rfb.itdaRelative(0, 0, rel.mask | bit);

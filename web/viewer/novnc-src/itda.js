@@ -80,7 +80,12 @@ RFB.prototype._handleRect=function(){
     return true;
 };
 RFB.prototype._handleMouse=function(ev){
-    if(this._itdaLocked&&ev.type!=='click')return;
+    // The live lock, not only the flag set on pointerlockchange (which arrives after the
+    // events of the click that locked it).
+    if((this._itdaLocked||(this._canvas&&document.pointerLockElement===this._canvas))&&ev.type!=='click'){
+        clearTimeout(this._mouseMoveTimer);this._mouseMoveTimer=null; // no delayed absolute move
+        return;
+    }
     return handleMouse.call(this,ev);
 };
 RFB.prototype.itdaRelative=function(dx,dy,mask){
