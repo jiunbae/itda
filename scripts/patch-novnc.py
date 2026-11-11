@@ -53,6 +53,57 @@ s=s.replace(needle,'''    get itdaBackground() {
     }
 
 '''+needle,1)
+# The same hint for servers that don't know it (Apple Screen Sharing, other VNC servers): they
+# send an update for each request, so while every view is hidden the next request waits until
+# a second after the last one. Itda's servers use Continuous Updates and never get here.
+needle='''                if (ret && !this._enabledContinuousUpdates) {
+                    RFB.messages.fbUpdateRequest(this._sock, true, 0, 0,
+                                                 this._fbWidth, this._fbHeight);
+                }'''
+assert s.count(needle)==1
+s=s.replace(needle,'''                if (ret && !this._enabledContinuousUpdates) {
+                    this._itdaRequestNext();
+                }''',1)
+needle='''    get itdaBackground() {'''
+assert s.count(needle)==1
+s=s.replace(needle,'''    _itdaRequestNext() {
+        if (!this._itdaBackground) {
+            this._itdaSendRequest();
+            return;
+        }
+        if (this._itdaPacer) {
+            return;
+        }
+        const wait = Math.max(0, (this._itdaLastRequest || 0) + 1000 - Date.now());
+        this._itdaPacer = setTimeout(() => {
+            this._itdaPacer = null;
+            this._itdaSendRequest();
+        }, wait);
+    }
+    _itdaSendRequest() {
+        if (this._rfbConnectionState !== 'connected') {
+            return;
+        }
+        this._itdaLastRequest = Date.now();
+        RFB.messages.fbUpdateRequest(this._sock, true, 0, 0, this._fbWidth, this._fbHeight);
+    }
+
+'''+needle,1)
+# Seen again: a held-back request goes out now.
+needle='''        this._itdaBackground = !!on;'''
+assert s.count(needle)==1
+s=s.replace(needle,needle+'''
+        if (!on && this._itdaPacer) {
+            clearTimeout(this._itdaPacer);
+            this._itdaPacer = null;
+            this._itdaSendRequest();
+        }''',1)
+needle='''        clearTimeout(this._resizeTimeout);
+        clearTimeout(this._mouseMoveTimer);'''
+assert s.count(needle)==1
+s=s.replace(needle,needle+'''
+        clearTimeout(this._itdaPacer);
+        this._itdaPacer = null;''',1)
 p.write_text(s)
 
 # A frame can arrive in several slices (Intel Macs' hardware encoder: 4 per frame); noVNC cut
