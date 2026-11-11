@@ -150,6 +150,8 @@ jobs:
         run: node scripts/audio-e2e.mjs
       - name: Relative pointer lock and the background hint
         run: node scripts/viewer-pointer-e2e.mjs
+      - name: Hidden viewer paces servers without Continuous Updates
+        run: node scripts/viewer-hidden-pacing-e2e.mjs
       - name: Viewer mode diagnostics and drop/reconnect ownership
         run: node scripts/viewer-mode-e2e.mjs
       - name: Undecodable high-performance video falls back at once
