@@ -556,7 +556,9 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
             update_scroll(h);
             rebuild_cursor(h);
             toolbar::layout();
+            update_view();
         }
+        WM_ACTIVATEAPP => update_view(),
         WM_RESIZED => {
             update_scroll(h);
             rebuild_cursor(h);
@@ -577,6 +579,7 @@ unsafe extern "system" fn wndproc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LR
         WM_CLIPBOARDUPDATE => clip_out(h),
         WM_SETFOCUS => {
             clip_out(h);
+            update_view();
             return DefWindowProcW(h, m, wp, lp);
         }
         WM_HSCROLL => on_scroll(h, SB_HORZ, (wp & 0xffff) as i32),
@@ -959,7 +962,26 @@ unsafe fn update_title(h: HWND) {
 }
 
 /// Once a second: stats line, toast expiry, first thumbnail.
+/// Tell the network side whether anyone can see the remote screen: a window of this session
+/// in front (live), all behind other windows (background), or all minimized or hidden (paused).
+unsafe fn update_view() {
+    let main = sh().hwnd.load(Relaxed) as HWND;
+    let mut windows = child_hwnds();
+    windows.push(main);
+    let shown: Vec<HWND> = windows.into_iter().filter(|&w| IsWindowVisible(w) != 0 && IsIconic(w) == 0).collect();
+    let front = GetForegroundWindow();
+    let v = if shown.is_empty() {
+        net::VIEW_PAUSED
+    } else if shown.contains(&front) {
+        net::VIEW_LIVE
+    } else {
+        net::VIEW_BACKGROUND
+    };
+    sh().set_view(v);
+}
+
 unsafe fn tick(h: HWND) {
+    update_view();
     let (bytes, upd) = (RX_BYTES.load(Relaxed), sh().updates.load(Relaxed));
     let rtt = sh().rtt_ms();
     let (stats, toast_gone, thumb_due) = ui(|u| {
@@ -1261,6 +1283,7 @@ unsafe extern "system" fn child_proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) ->
         // A display window coming forward offers the clipboard like the main window does.
         WM_SETFOCUS => {
             clip_out(sh().hwnd.load(Relaxed) as HWND);
+            update_view();
             return DefWindowProcW(h, m, wp, lp);
         }
         WM_PAINT => paint(h),
@@ -1268,6 +1291,7 @@ unsafe extern "system" fn child_proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) ->
         WM_SIZE => {
             InvalidateRect(h, null(), 0);
             rebuild_cursor(h);
+            update_view();
         }
         WM_SETCURSOR if (lp & 0xffff) as u32 == HTCLIENT => {
             SetCursor(ui(|u| u.cursor).unwrap_or_else(|| LoadCursorW(null_mut(), IDC_ARROW)));
