@@ -6,9 +6,9 @@ use flate2::{Decompress, FlushDecompress};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::os::windows::io::AsRawSocket;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering::*};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, AtomicU8, Ordering::*};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows_sys::Win32::Networking::WinSock::{WSAIoctl, TCP_INFO_v0};
 use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
@@ -20,6 +20,16 @@ pub const WM_STATUS: u32 = WM_APP + 5;
 pub const WM_CLIP: u32 = WM_APP + 6;
 
 const SIO_TCP_INFO: u32 = 0xd800_0027;
+/// Who is looking at the remote screen (`Shared::set_view`). Each update is requested only
+/// after the last one arrived, so this sets how fast the Mac sends: as fast as it can while
+/// a window is in front; BACKGROUND_EVERY apart while they're all behind other windows; not
+/// at all while they're all minimized (the liveness probe still runs, 1x1 every few seconds).
+/// A busy Mac screen otherwise streams tens of Mbps to a window nobody is watching.
+pub const VIEW_LIVE: u8 = 0;
+pub const VIEW_BACKGROUND: u8 = 1;
+pub const VIEW_PAUSED: u8 = 2;
+const BACKGROUND_EVERY: Duration = Duration::from_millis(500);
+
 /// Silence longer than this at a message boundary triggers a liveness probe.
 const IDLE_PROBE: Duration = Duration::from_secs(4);
 
@@ -69,6 +79,11 @@ pub struct Shared {
     pub fb_h: AtomicU32,
     pub updates: AtomicU64,
     pending: AtomicBool,
+    /// VIEW_LIVE / VIEW_BACKGROUND / VIEW_PAUSED.
+    view: AtomicU8,
+    /// An update arrived and the next one wasn't requested yet (not live).
+    owed: AtomicBool,
+    last_request: Mutex<Instant>,
 }
 
 static SHARED: OnceLock<Shared> = OnceLock::new();
@@ -98,6 +113,9 @@ pub fn init(out: TcpStream, w: u16, h: u16) -> io::Result<()> {
         fb_h: AtomicU32::new(h as u32),
         updates: AtomicU64::new(0),
         pending: AtomicBool::new(false),
+        view: AtomicU8::new(VIEW_LIVE),
+        owed: AtomicBool::new(false),
+        last_request: Mutex::new(Instant::now()),
     };
     let _ = SHARED.set(s);
     Ok(())
@@ -125,7 +143,37 @@ impl Shared {
 
     fn request(&self, incremental: bool) {
         let (w, h) = self.size();
+        *self.last_request.lock().unwrap() = Instant::now();
         self.send(&update_request(incremental, 0, 0, w as u16, h as u16));
+    }
+
+    /// An update arrived: ask for the next one now, later, or when someone looks again.
+    fn request_next(&self) {
+        if self.view.load(SeqCst) == VIEW_LIVE {
+            self.request(true);
+        } else {
+            self.owed.store(true, SeqCst);
+        }
+    }
+
+    /// UI side: whether any window shows the remote screen (see VIEW_LIVE).
+    pub fn set_view(&self, v: u8) {
+        if self.view.swap(v, SeqCst) != v {
+            crate::log!("view: {}", ["live", "background", "paused"][v as usize % 3]);
+            self.pace();
+        }
+    }
+
+    /// Send an owed request if the view allows it now.
+    fn pace(&self) {
+        let due = match self.view.load(SeqCst) {
+            VIEW_LIVE => true,
+            VIEW_BACKGROUND => self.last_request.lock().unwrap().elapsed() >= BACKGROUND_EVERY,
+            _ => false,
+        };
+        if due && self.owed.swap(false, SeqCst) {
+            self.request(true);
+        }
     }
 
     pub fn post(&self, msg: u32) {
@@ -182,6 +230,11 @@ pub type Dial = std::sync::Arc<dyn Fn() -> io::Result<String> + Send + Sync>;
 
 /// Receive on a background thread; on connection loss, reconnect with backoff.
 pub fn spawn(mut reader: BufReader<Rx>, dial: Dial, creds: Creds) {
+    // Requests held back while nobody is looking go out from here.
+    std::thread::spawn(|| loop {
+        std::thread::sleep(Duration::from_millis(50));
+        sh().pace();
+    });
     std::thread::spawn(move || loop {
         let _ = reader.get_ref().0.set_read_timeout(Some(IDLE_PROBE));
         let e = recv_loop(reader).unwrap_err();
@@ -271,8 +324,9 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                 updates += 1;
                 s.updates.fetch_add(1, Relaxed);
                 let verbose = updates <= 3;
-                // Ask for the next frame now so the server encodes it while we decode this one.
-                s.request(true);
+                // Ask for the next frame now so the server encodes it while we decode this one
+                // (unless nobody is looking: request_next).
+                s.request_next();
                 let mut resized = false;
                 for _ in 0..n {
                     let x = rd_u16(&mut r)? as usize;
@@ -445,4 +499,53 @@ fn make_cursor(w: usize, h: usize, hx: usize, hy: usize, pix: &[u8], mask: &[u8]
         }
     }
     Cursor { w, h, hx, hy, px }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    /// What the viewer asked the server for since the last call (10-byte update requests).
+    fn requests(peer: &mut TcpStream) -> usize {
+        peer.set_read_timeout(Some(Duration::from_millis(150))).unwrap();
+        let mut n = 0;
+        let mut buf = [0u8; 10];
+        while peer.read_exact(&mut buf).is_ok() {
+            assert_eq!(buf[0], 3, "FramebufferUpdateRequest");
+            assert_eq!(buf[1], 1, "incremental");
+            n += 1;
+        }
+        n
+    }
+
+    #[test]
+    fn nobody_looking_means_no_new_frames() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let out = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = l.accept().unwrap();
+        init(out, 64, 32).unwrap();
+        let s = sh();
+        // In front: each update asks for the next at once.
+        s.request_next();
+        assert_eq!(requests(&mut peer), 1);
+        // Minimized: updates keep nothing coming, however long it waits.
+        s.set_view(VIEW_PAUSED);
+        s.request_next();
+        s.pace();
+        assert_eq!(requests(&mut peer), 0);
+        // Restored: the held-back request goes out once.
+        s.set_view(VIEW_LIVE);
+        assert_eq!(requests(&mut peer), 1);
+        s.pace();
+        assert_eq!(requests(&mut peer), 0);
+        // Behind other windows: at most one request per BACKGROUND_EVERY.
+        s.set_view(VIEW_BACKGROUND);
+        s.request_next();
+        s.pace();
+        assert_eq!(requests(&mut peer), 0, "too soon after the last one");
+        std::thread::sleep(BACKGROUND_EVERY);
+        s.pace();
+        assert_eq!(requests(&mut peer), 1);
+    }
 }
