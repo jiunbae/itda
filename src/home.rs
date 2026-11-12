@@ -43,9 +43,19 @@ const HELP_IMG: &[(&str, &[u8])] = &[
     ("itda-web", include_bytes!("../web/help/itda-web.webp")),
     ("phone-login", include_bytes!("../web/help/phone-login.webp")),
     ("phone-list", include_bytes!("../web/help/phone-list.webp")),
-    ("phone-edit", include_bytes!("../web/help/phone-edit.webp")),
     ("phone-view", include_bytes!("../web/help/phone-view.webp")),
     ("phone-keys", include_bytes!("../web/help/phone-keys.webp")),
+    // English (help.js asks for these when the app is in English).
+    ("en/itda-home", include_bytes!("../web/help/en/itda-home.webp")),
+    ("en/itda-nearby", include_bytes!("../web/help/en/itda-nearby.webp")),
+    ("en/itda-accounts", include_bytes!("../web/help/en/itda-accounts.webp")),
+    ("en/itda-account-edit", include_bytes!("../web/help/en/itda-account-edit.webp")),
+    ("en/itda-edit", include_bytes!("../web/help/en/itda-edit.webp")),
+    ("en/itda-share", include_bytes!("../web/help/en/itda-share.webp")),
+    ("en/itda-web", include_bytes!("../web/help/en/itda-web.webp")),
+    ("en/phone-login", include_bytes!("../web/help/en/phone-login.webp")),
+    ("en/phone-list", include_bytes!("../web/help/en/phone-list.webp")),
+    ("en/phone-keys", include_bytes!("../web/help/en/phone-keys.webp")),
 ];
 
 /// Messages from worker threads, drained on the UI thread.

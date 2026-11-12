@@ -12,11 +12,15 @@ Install the Playwright dependencies described in [CONTRIBUTING.md](../CONTRIBUTI
 node scripts/site-capture.mjs
 # Also refresh the shared app-help images (requires cwebp):
 node scripts/site-capture.mjs --help-images
+# The same in English: help images into web/help/en/ (site captures go to a scratch folder):
+CAPTURE_LANG=en node scripts/site-capture.mjs --help-images
 ```
+
+The help center shows `web/help/en/` images when the app is in English. `phone-view.webp` has no words and serves both languages; it is also the remote screen behind the captured key sheet (`phone-keys`).
 
 `PLAYWRIGHT` can point to an existing Playwright `index.mjs`, `CHROMIUM` to a browser executable, and `CAPTURE_DIR` to an alternative output directory. The script checks that nearby devices are present, columns retain ancestors, gallery preview loads and the Windows toolbar icon is sized correctly. It generates light/dark images, whole-window overviews at 2× density, readable file details, mobile variants and the social preview. Keep overview images uncropped; use the existing responsive detail crops where the landing page needs readable controls on a small screen.
 
-The current capture set was refreshed on 2026-10-24 from the product frontend at `03d832b7` on `main`, including the accessibility contrast and file-navigation updates. Re-running the capture on 2026-11-10 at v1.0.22 produced identical images. The seven help-center images use the same capture set. This records source provenance, not an installed or released build. Screenshots omit the app version so a docs-only or release version bump does not make otherwise current UI images obsolete. Recreate them after changes to tabs, commands, navigation, device cards, account editing or sharing. Do not label fictional data as a live connection or use captures as proof of native transfer/permission behavior.
+The current capture set was refreshed on 2026-10-24 from the product frontend at `03d832b7` on `main`, including the accessibility contrast and file-navigation updates. Re-running the capture on 2026-11-10 at v1.0.22 produced identical images. The help-center images use the same capture set, plus the account editor, the phone sign-in and the key sheet (2026-11-12, Korean and English). This records source provenance, not an installed or released build. Screenshots omit the app version so a docs-only or release version bump does not make otherwise current UI images obsolete. Recreate them after changes to tabs, commands, navigation, device cards, account editing or sharing. Do not label fictional data as a live connection or use captures as proof of native transfer/permission behavior.
 
 ## Recreate the film
 

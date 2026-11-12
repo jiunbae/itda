@@ -123,9 +123,13 @@ function iosShare() {
 
 // ---------------------------------------------------------------- real screenshots
 
+// English shots in web/help/en/ (scripts/site-capture.mjs --help-images); phone-view has no words.
+const EN_SHOT = new Set(['itda-home', 'itda-nearby', 'itda-accounts', 'itda-account-edit', 'itda-edit', 'itda-share', 'itda-web', 'phone-login', 'phone-list', 'phone-keys']);
+const shotSrc = (name) => `help/${I18N.lang === 'en' && EN_SHOT.has(name) ? 'en/' : ''}${name}.webp`;
+
 function shot(name, caption, kind = 'desk') {
   const [w, h] = name === 'phone-list' ? [780, 1440] : kind === 'phone' ? [780, 1215] : [1400, 834];
-  return `<figure class="shot ${kind}"><img ${name === 'phone-list' ? 'style="aspect-ratio:780 / 1440" ' : ''}src="help/${name}.webp" alt="${esc(caption)}" width="${w}" height="${h}" decoding="async"><figcaption>${caption}</figcaption></figure>`;
+  return `<figure class="shot ${kind}"><img ${name === 'phone-list' ? 'style="aspect-ratio:780 / 1440" ' : ''}src="${shotSrc(name)}" alt="${esc(caption)}" width="${w}" height="${h}" decoding="async"><figcaption>${caption}</figcaption></figure>`;
 }
 
 function step(n, title, body, figure = '') {
