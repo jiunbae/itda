@@ -355,6 +355,8 @@ pub(crate) struct Input {
     down: HashMap<u32, Pressed>,
     /// Last key event, for releasing forgotten modifiers.
     pub(crate) last_key: Instant,
+    /// Jamo from a viewer typing Korean, composed into syllables (src/hangul.rs).
+    hangul: crate::hangul::Composer,
 }
 
 #[derive(Clone, Copy)]
@@ -383,7 +385,7 @@ fn key_input(vk: u16, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
 
 impl Input {
     pub(crate) fn new(cmd_as_ctrl: bool, view_only: bool) -> Input {
-        Input { cmd_as_ctrl, view_only, buttons: 0, down: HashMap::new(), last_key: Instant::now() }
+        Input { cmd_as_ctrl, view_only, buttons: 0, down: HashMap::new(), last_key: Instant::now(), hangul: Default::default() }
     }
 
     fn is_modifier(p: &Pressed) -> bool {
@@ -453,6 +455,35 @@ impl Input {
             return;
         }
         self.last_key = Instant::now();
+        let mut sym = sym;
+        if let Some(j) = crate::hangul::jamo(sym) {
+            // A viewer typing Korean. With Ctrl/Alt/Win held it is a shortcut on that key
+            // (Ctrl+ㅊ is Ctrl+C), released the same way; otherwise the syllable grows.
+            let key = crate::hangul::latin(j).map(|l| l as u32);
+            match key {
+                Some(k) if (down && self.modifiers_held()) || (!down && self.down.contains_key(&k)) => {
+                    self.hangul.reset();
+                    sym = k;
+                }
+                _ => {
+                    if down {
+                        let edit = self.hangul.feed(j);
+                        for _ in 0..edit.back {
+                            send(&[key_input(VK_BACK, 0, 0), key_input(VK_BACK, 0, KEYEVENTF_KEYUP)]);
+                        }
+                        let mut b = [0u16; 2];
+                        for ch in edit.text.chars() {
+                            for u in ch.encode_utf16(&mut b).iter().copied() {
+                                send(&[key_input(0, u, KEYEVENTF_UNICODE), key_input(0, u, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP)]);
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
+        } else if down && !(0xffe1..=0xffee).contains(&sym) && sym != 0xfe03 {
+            self.hangul.reset(); // any other key (not Shift and the like) ends the syllable
+        }
         if !down {
             if let Some(p) = self.down.remove(&sym) {
                 Self::release(p);
@@ -520,6 +551,9 @@ impl Input {
         i.r#type = INPUT_MOUSE;
         let mut data: i32 = 0;
         let changed = mask ^ self.buttons;
+        if changed & mask & 7 != 0 {
+            self.hangul.reset(); // a click moves the text cursor
+        }
         let press = |bit: u8| changed & bit != 0 && mask & bit != 0;
         let lift = |bit: u8| changed & bit != 0 && mask & bit == 0;
         if press(1) { flags |= MOUSEEVENTF_LEFTDOWN; }

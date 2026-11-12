@@ -1398,6 +1398,8 @@ pub(crate) struct Input {
     last_click: (Instant, u16, u16, i64),
     /// Where the pointer is now (button releases on cleanup happen here).
     at: (u16, u16),
+    /// Jamo from a viewer typing Korean, composed into syllables (src/hangul.rs).
+    hangul: crate::hangul::Composer,
 }
 
 /// Mac key codes (ANSI layout) for X keysyms; the bool marks modifiers (with their flag).
@@ -1529,6 +1531,17 @@ fn screen_action(id: u32) {
     }
 }
 
+/// Type one character as it is, whatever key would make it.
+fn type_char(ch: char) {
+    let mut b = [0u16; 2];
+    let units = ch.encode_utf16(&mut b);
+    for d in [true, false] {
+        let e = CGEvent::new_keyboard_event(None, 0, d);
+        unsafe { CGEvent::keyboard_set_unicode_string(e.as_deref(), units.len() as _, units.as_ptr()) };
+        post(e);
+    }
+}
+
 fn post(e: Option<CFRetained<CGEvent>>) {
     // (Marked as the viewer's: it passes the curtain, which stops this Mac's own input.)
     CGEvent::set_integer_value_field(e.as_deref(), CGEventField::EventSourceUserData, crate::curtain_mac::VIEWER_EVENT);
@@ -1537,7 +1550,7 @@ fn post(e: Option<CFRetained<CGEvent>>) {
 
 impl Input {
     pub(crate) fn new(_cmd_as_ctrl: bool, view_only: bool) -> Input {
-        Input { frame_size: frame_dimensions(), view_only, buttons: 0, down: HashMap::new(), flags: CGEventFlags(0), last_key: Instant::now(), last_click: (Instant::now() - Duration::from_secs(5), 0, 0, 0), at: (0, 0) }
+        Input { frame_size: frame_dimensions(), view_only, buttons: 0, down: HashMap::new(), flags: CGEventFlags(0), last_key: Instant::now(), last_click: (Instant::now() - Duration::from_secs(5), 0, 0, 0), at: (0, 0), hangul: Default::default() }
     }
 
     pub(crate) fn modifiers_held(&self) -> bool {
@@ -1572,20 +1585,41 @@ impl Input {
             }
             return;
         }
+        let mut sym = sym;
+        if let Some(j) = crate::hangul::jamo(sym) {
+            // A viewer typing Korean. With ⌘/⌃/⌥ held it is a shortcut on that key (⌘ㅊ is
+            // ⌘C), released the same way; otherwise the syllable being typed grows.
+            let key = crate::hangul::latin(j).map(|l| l as u32);
+            let shortcut = self.flags.0 & (CGEventFlags::MaskCommand.0 | CGEventFlags::MaskControl.0 | CGEventFlags::MaskAlternate.0) != 0;
+            match key {
+                Some(k) if (down && shortcut) || (!down && self.down.contains_key(&k)) => {
+                    self.hangul.reset();
+                    sym = k;
+                }
+                _ => {
+                    if down {
+                        let edit = self.hangul.feed(j);
+                        for _ in 0..edit.back {
+                            for d in [true, false] {
+                                post(CGEvent::new_keyboard_event(None, 51, d)); // Delete (backspace)
+                            }
+                        }
+                        edit.text.chars().for_each(type_char);
+                    }
+                    return;
+                }
+            }
+        } else if down && keycode(sym).is_none_or(|k| k.1.is_none()) {
+            self.hangul.reset(); // any other key (not Shift and the like) ends the syllable
+        }
         let (code, flag) = match keycode(sym) {
             Some(k) => k,
             None => {
                 // Not on the keyboard map: type the character itself.
-                if !down {
-                    return;
-                }
-                let Some(ch) = char::from_u32(if sym >= 0x0100_0000 { sym - 0x0100_0000 } else { sym }) else { return };
-                let mut b = [0u16; 2];
-                let units = ch.encode_utf16(&mut b);
-                for d in [true, false] {
-                    let e = CGEvent::new_keyboard_event(None, 0, d);
-                    unsafe { CGEvent::keyboard_set_unicode_string(e.as_deref(), units.len() as _, units.as_ptr()) };
-                    post(e);
+                if down {
+                    if let Some(ch) = char::from_u32(if sym >= 0x0100_0000 { sym - 0x0100_0000 } else { sym }) {
+                        type_char(ch);
+                    }
                 }
                 return;
             }
@@ -1631,6 +1665,9 @@ impl Input {
         }
         self.at = (x, y);
         let changed = mask ^ self.buttons;
+        if changed & mask & 7 != 0 {
+            self.hangul.reset(); // a click moves the text cursor
+        }
         let mouse = |kind: CGEventType, button: CGMouseButton, clicks: i64| {
             let e = CGEvent::new_mouse_event(None, kind, at, button);
             CGEvent::set_flags(e.as_deref(), self.flags);
