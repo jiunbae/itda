@@ -2,19 +2,25 @@
 import http from 'node:http';
 import {execFileSync} from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const pw=await import(process.env.PLAYWRIGHT?pathToFileURL(process.env.PLAYWRIGHT).href:'playwright');
-const out=path.resolve(process.env.CAPTURE_DIR||path.join(root,'docs/img'));
+// CAPTURE_LANG=en: the same captures in English (into a scratch folder unless CAPTURE_DIR is
+// set; docs/img keeps the Korean site images), and --help-images writes web/help/en/.
+const LANG=process.env.CAPTURE_LANG==='en'?'en':'ko';
+const LOCALE=LANG==='en'?'en-US':'ko-KR';
+const L=(ko,en)=>LANG==='en'?en:ko;
+const out=path.resolve(process.env.CAPTURE_DIR||(LANG==='en'?path.join(os.tmpdir(),'itda-capture-en'):path.join(root,'docs/img')));
 fs.mkdirSync(out,{recursive:true});
 const hosts=[
-  {id:'a1',name:'Studio Mac',os:'mac',host:'studio.local',user:'alex',favorite:true,group:'작업 공간',last_used:1780000000,remote_size:'2560×1600'},
-  {id:'b2',name:'Office PC',os:'windows',host:'office.local',user:'',favorite:true,group:'작업 공간',last_used:1779999800,remote_size:'1920×1080'},
-  {id:'d4',name:'MacBook Air',os:'mac',host:'air.local',user:'alex',favorite:true,group:'개인',last_used:1779998000,remote_size:'2560×1664'},
-  {id:'e5',name:'Home PC',os:'windows',host:'home.local',user:'',favorite:false,group:'개인',last_used:1779997000,remote_size:'1920×1080'},
-  {id:'f6',name:'Build Server',os:'linux',host:'build.local',user:'alex',favorite:false,group:'개발',last_used:1779996000,remote_size:'1920×1080'},
-  {id:'c3',name:'Dev Server',os:'linux',host:'dev.local',user:'alex',favorite:false,group:'개발',last_used:1779999000,remote_size:'1920×1080'},
+  {id:'a1',name:'Studio Mac',os:'mac',host:'studio.local',user:'alex',favorite:true,group:L('작업 공간','Workspace'),last_used:1780000000,remote_size:'2560×1600'},
+  {id:'b2',name:'Office PC',os:'windows',host:'office.local',user:'',favorite:true,group:L('작업 공간','Workspace'),last_used:1779999800,remote_size:'1920×1080'},
+  {id:'d4',name:'MacBook Air',os:'mac',host:'air.local',user:'alex',favorite:true,group:L('개인','Personal'),last_used:1779998000,remote_size:'2560×1664'},
+  {id:'e5',name:'Home PC',os:'windows',host:'home.local',user:'',favorite:false,group:L('개인','Personal'),last_used:1779997000,remote_size:'1920×1080'},
+  {id:'f6',name:'Build Server',os:'linux',host:'build.local',user:'alex',favorite:false,group:L('개발','Development'),last_used:1779996000,remote_size:'1920×1080'},
+  {id:'c3',name:'Dev Server',os:'linux',host:'dev.local',user:'alex',favorite:false,group:L('개발','Development'),last_used:1779999000,remote_size:'1920×1080'},
 ].map(h=>({...h,label:h.name,kind:'vnc',has_pw:true,login_user:h.user,account:'',ssh:{on:h.os==='linux'},files:{method:'sftp',user:'alex',path:'/Users/alex/Documents'},opts:{}}));
 const entries=[['Brand assets',true,0],['Projects',true,0],['Screenshots',true,0],['Design notes.md',false,2850],['Project brief.pdf',false,182400],['Release checklist.txt',false,1260],['Roadmap.md',false,5460]].map(([name,dir,size])=>({name,dir,size,modified:1780000000,link:false}));
 const sockets=new Set();
@@ -22,6 +28,7 @@ const server=http.createServer((req,res)=>{
   if(req.url.startsWith('/api/')){res.setHeader('Content-Type','application/json');return res.end(JSON.stringify(req.url.endsWith('/me')?{local:true}:req.url.endsWith('/hosts')?hosts.map(h=>({...h,ssh:h.ssh.on})):[]));}
   let name=new URL(req.url,'http://localhost').pathname;
   if(name==='/viewer/')name='/web/viewer/index.html';
+  else if(name==='/viewer/i18n.js'||name.startsWith('/viewer/locales/'))name='/web'+name.slice(7); // as the gateway serves them
   else if(name.startsWith('/viewer/'))name='/web'+name;
   else if(name==='/web/')name='/web/index.html';
   const file=name.endsWith('/icon.svg')?path.join(root,'assets/itda.svg'):name.endsWith('/icon-192.png')?path.join(root,'assets/itda-192.png'):path.resolve(root,'.'+name);
@@ -33,7 +40,7 @@ await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const base=`http://127.0.0.1:${server.address().port}`;
 const browser=await pw.chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
 try{
-  const context=await browser.newContext({viewport:{width:1440,height:900},deviceScaleFactor:1,reducedMotion:'reduce',locale:'ko-KR',timezoneId:'Asia/Seoul',userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'});
+  const context=await browser.newContext({viewport:{width:1440,height:900},deviceScaleFactor:1,reducedMotion:'reduce',locale:LOCALE,timezoneId:'Asia/Seoul',userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'});
   await context.clock.install({time:new Date('2026-10-20T06:00:00Z')});
   await context.addInitScript(({hosts,entries})=>{
     window.fixtureHosts=hosts;window.fixtureEntries=entries;
@@ -53,11 +60,11 @@ try{
   const page=await context.newPage();
   const prepare=async(theme='light')=>{
     await page.goto(base+'/web/');
-    await page.evaluate(({hosts,theme})=>{
-      S.hosts=hosts;S.accounts=[{id:'sample',name:'작업 계정',user:'alex',has_pw:true,uses:2}];S.version='';
+    await page.evaluate(({hosts,theme,acctName})=>{
+      S.hosts=hosts;S.accounts=[{id:'sample',name:acctName,user:'alex',has_pw:true,uses:2}];S.version='';
       S.settings={...S.settings,onboarded:true,theme,view:'grid'};S.online={a1:true,b2:true,c3:true,d4:true,e5:true,f6:true};S.computer='My Mac';S.sysDark=theme==='dark';
       S.hosts.forEach(h=>h.last_used=Math.floor(Date.now()/1000)-120);applyTheme();render();
-    },{hosts,theme});
+    },{hosts,theme,acctName:L('작업 계정','Work account')});
     await page.evaluate(()=>document.fonts.ready);
   };
   for(const theme of ['light','dark']){
@@ -112,7 +119,7 @@ try{
   await context.close();
   // Whole-window views at 2x density, plus the actual Windows-specific file layout.
   for(const platform of ['mac','windows']){
-    const c=await browser.newContext({viewport:{width:1100,height:800},deviceScaleFactor:2,reducedMotion:'reduce',locale:'ko-KR',timezoneId:'Asia/Seoul',userAgent:platform==='mac'?'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)':'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
+    const c=await browser.newContext({viewport:{width:1100,height:800},deviceScaleFactor:2,reducedMotion:'reduce',locale:LOCALE,timezoneId:'Asia/Seoul',userAgent:platform==='mac'?'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)':'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
     await c.clock.install({time:new Date('2026-10-20T06:00:00Z')});
     await c.addInitScript(({entries,platform})=>{window.ipc={postMessage:raw=>{const m=JSON.parse(raw);if(m.cmd==='files'&&m.op==='connect')queueMicrotask(()=>itda.recv({type:'files_result',id:m.id,window:m.window,op:'connect',ok:true,data:{path:'/Users/alex/Documents',entries,local_path:platform==='mac'?'/Users/alex':'C:\\Users\\alex',local_entries:entries,rsync:true}}));}};},{entries,platform});
     const p=await c.newPage(); const pageErrors=[];p.on("pageerror",e=>pageErrors.push(e.message));
@@ -158,21 +165,52 @@ try{
     await c.close();
   }
   for(const [name,width,height]of [['phone-list',390,720]]){
-    const p=await browser.newPage({viewport:{width,height},deviceScaleFactor:2,reducedMotion:'reduce',colorScheme:'light',locale:'ko-KR',timezoneId:'Asia/Seoul',isMobile:true,hasTouch:true});
+    const p=await browser.newPage({viewport:{width,height},deviceScaleFactor:2,reducedMotion:'reduce',colorScheme:'light',locale:LOCALE,timezoneId:'Asia/Seoul',isMobile:true,hasTouch:true});
     await p.goto(base+'/viewer/');await p.locator('.host[data-id="a1"]').waitFor();await p.evaluate(()=>document.fonts.ready);
     await p.screenshot({path:path.join(out,name+'.png')});await p.close();
   }
+  if(LANG==='ko'){
   const og=await browser.newPage({locale:'ko-KR',viewport:{width:1200,height:630},colorScheme:'dark'});
   await og.goto(base+'/docs/index.html?lang=ko');
   const stage=await og.locator('.stage').innerHTML();
   await og.setContent(`<!doctype html><html lang="ko" data-lang="ko"><head><base href="${base}/docs/"><link rel="stylesheet" href="style.css"><style>body{width:1200px;height:630px;background:radial-gradient(ellipse at 70% 55%,#32305c,#100f1d 70%);display:grid;grid-template-columns:390px 1fr;gap:30px;align-items:center;padding:48px;overflow:hidden}.brand{font-size:28px;margin-bottom:36px}.brand img{width:44px;height:44px}h1{font-size:52px;line-height:1.18;letter-spacing:-.04em;margin:0 0 20px}.og-copy p{font-size:19px;color:#b7b4d3;line-height:1.7}.og-devices{width:640px}.og-devices .device-scene{padding-bottom:24px}.og-devices figcaption{display:none}.og-copy small{color:#a4a1ff;font-size:16px}.device-scene>.device-phone{width:22%}</style></head><body><div class="og-copy"><div class="brand"><img src="favicon.svg" alt="">Itda</div><h1>내 기기를,<br><span class="grad">잇다.</span></h1><p>Windows · Mac · 휴대폰<br>화면 공유와 파일 브라우저</p><small>무료 · 오픈 소스</small></div><div class="og-devices">${stage}</div></body></html>`);
   await og.evaluate(async()=>{await document.fonts.ready;await Promise.all([...document.images].map(i=>i.decode()));});
   await og.screenshot({path:path.join(out,'og.png')});await og.close();
+  }
   // Optional refresh of shared help images embedded in the app (requires cwebp).
   if(process.argv.includes('--help-images')){
-    const help=path.join(root,'web/help');
-    const sources={'itda-home':'home-window-light','itda-nearby':'nearby-window','itda-accounts':'accounts-light','itda-edit':'editor','itda-share':'share-windows','itda-web':'share-windows','phone-list':'phone-list'};
+    await helpOnly(browser,base);
+    const help=path.join(root,'web/help',LANG==='en'?'en':'');
+    fs.mkdirSync(help,{recursive:true});
+    const sources={'itda-home':'home-window-light','itda-nearby':'nearby-window','itda-accounts':'accounts-light','itda-account-edit':'account-edit','itda-edit':'editor','itda-share':'share-windows','itda-web':'share-windows','phone-list':'phone-list','phone-login':'phone-login','phone-keys':'phone-keys'};
     for(const [name,source]of Object.entries(sources))execFileSync('cwebp',['-quiet','-q','92',path.join(out,source+'.png'),'-o',path.join(help,name+'.webp')]);
   }
   console.log('Captured product frontend with fictional data: desktop, files, nearby, editor, phone and readable details');
 }finally{await browser.close();for(const s of sockets)s.destroy();await new Promise(r=>server.close(r));}
+
+// Help-only views: the account editor (Windows, dark), the phone sign-in and the key sheet.
+// phone-view.webp has no words; it stays one image for both languages and backs the key sheet.
+async function helpOnly(browser,base){
+  const w=await browser.newPage({viewport:{width:1400,height:833},deviceScaleFactor:1,reducedMotion:'reduce',locale:LOCALE,timezoneId:'Asia/Seoul',userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'});
+  await w.route('**/icons.js',route=>route.fulfill({contentType:'text/javascript',body:fs.readFileSync(path.join(root,'web/icons.js'),'utf8').replace("if (/Windows/.test(navigator.userAgent)) return;",'')}));
+  await w.addInitScript(()=>{window.ipc={postMessage:()=>{}};});
+  await w.goto(base+'/web/');
+  await w.evaluate(({hosts,acct})=>{S.hosts=hosts.map(h=>({...h,account:h.os==='linux'?'':'design'}));S.accounts=[acct,{id:'home',name:acct.home,user:'alex',has_pw:true,uses:2}];S.version='';S.settings={...S.settings,onboarded:true,theme:'dark',view:'grid'};S.online=Object.fromEntries(hosts.map(h=>[h.id,true]));S.computer='My PC';S.sysDark=true;S.hosts.forEach(h=>h.last_used=Math.floor(Date.now()/1000)-120);applyTheme();render();openAccount({id:'design'});},
+    {hosts,acct:{id:'design',name:L('회사 디자인팀','Design team'),home:L('집','Home'),user:'design',has_pw:true,ssh_key:'C:\\Users\\alex\\.ssh\\id_ed25519',has_keypass:true,uses:1}});
+  await w.locator('#modals [data-key="account"]').waitFor();await w.evaluate(()=>document.fonts.ready);await w.waitForTimeout(400);
+  await w.locator('#a-user').focus();
+  await w.screenshot({path:path.join(out,'account-edit.png')});await w.close();
+  const phone={viewport:{width:390,height:606},deviceScaleFactor:2,reducedMotion:'reduce',colorScheme:'dark',locale:LOCALE,timezoneId:'Asia/Seoul',isMobile:true,hasTouch:true,userAgent:'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'};
+  const p=await browser.newPage(phone);
+  await p.route('**/api/me',route=>route.fulfill({status:401,contentType:'application/json',body:'{}'}));
+  await p.goto(base+'/viewer/');await p.locator('#login:not([hidden])').waitFor();await p.evaluate(()=>document.fonts.ready);await p.waitForTimeout(200);
+  await p.screenshot({path:path.join(out,'phone-login.png')});await p.close();
+  // The key sheet over the remote screen of phone-view.webp; the connection never opens.
+  const k=await browser.newPage(phone);
+  await k.addInitScript(()=>{window.WebSocket=class extends EventTarget{constructor(u){super();this.url=u;this.readyState=0;this.binaryType='arraybuffer';}send(){}close(){}};});
+  await k.goto(base+'/viewer/');await k.locator('.host[data-id="a1"] .open').tap();await k.locator('#view:not([hidden])').waitFor();
+  const bg='data:image/webp;base64,'+fs.readFileSync(path.join(root,'web/help/phone-view.webp')).toString('base64');
+  await k.evaluate(bg=>{document.querySelector('#status').hidden=true;const s=document.querySelector('#screen');s.innerHTML='';Object.assign(s.style,{background:`#000 url(${bg}) center/100% 100% no-repeat`});},bg);
+  await k.locator('#tools [data-t=keys]').tap();await k.locator('#sheet:not([hidden])').waitFor();await k.evaluate(()=>document.fonts.ready);await k.waitForTimeout(300);
+  await k.screenshot({path:path.join(out,'phone-keys.png')});await k.close();
+}

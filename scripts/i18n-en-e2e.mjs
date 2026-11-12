@@ -228,6 +228,7 @@ try {
   }
 
   // ---- Help center (every topic, Mac and Windows) and the macOS permission pages -----------
+  const helpShots = new Set();
   for (const [os, ua] of [["mac", "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36"], ["windows", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"]]) {
     const hp = await browser.newPage({ locale: "en-US", userAgent: ua, viewport: { width: 1100, height: 800 } });
     watch(hp);
@@ -237,9 +238,22 @@ try {
     for (const topic of ["start", "mac", "windows", "linux", "share", "phone", "macpc", "assist", "outside", "accounts", "settings", "words", "trouble", "keys"]) {
       await hp.evaluate((t) => { S.helpTopic = t; S.page = "help"; render(); }, topic);
       problems.push(...(await stray(hp)).map((s) => `help ${os}/${topic}: ${s}`));
+      // Screenshots: the English set (web/help/en/), except phone-view, which has no words.
+      const imgs = await hp.evaluate(async () => {
+        const all = [...document.querySelectorAll(".shot img")];
+        await Promise.all(all.map((i) => (i.complete ? 0 : new Promise((r) => { i.onload = i.onerror = r; }))));
+        return all.map((i) => ({ src: new URL(i.src).pathname, ok: i.naturalWidth > 0 }));
+      });
+      for (const i of imgs) {
+        if (!i.ok) problems.push(`help ${os}/${topic}: screenshot did not load: ${i.src}`);
+        if (!/\/help\/(en\/|phone-view\.webp$)/.test(i.src)) problems.push(`help ${os}/${topic}: Korean screenshot in English: ${i.src}`);
+        helpShots.add(i.src);
+      }
     }
     await hp.close();
   }
+  // Every English screenshot shows up somewhere (10 of them, plus the shared phone-view).
+  if (helpShots.size < 11) problems.push(`help: only ${helpShots.size} screenshots seen: ${[...helpShots].join(", ")}`);
   const perm = await browser.newPage({ locale: "en-US", viewport: { width: 420, height: 720 } });
   watch(perm);
   await perm.addInitScript(() => (window.ipc = { postMessage: () => {} }));
