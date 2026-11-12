@@ -34,6 +34,7 @@ mod demand;
 mod enc;
 mod files;
 mod gateway;
+mod hangul;
 mod outbox;
 mod img;
 mod log;
