@@ -485,6 +485,7 @@ define_class!(
             if kind != SCStreamOutputType::Screen {
                 return;
             }
+            let _pool = crate::pool::Pool::new();
             // Idle frames (nothing changed) carry no image.
             if let Some(image) = unsafe { sample.image_buffer() } {
                 { let mut h = self.ivars().health.lock().unwrap(); h.last_frame = Instant::now(); h.frames = h.frames.wrapping_add(1); }
@@ -747,6 +748,7 @@ fn supervise_capture(weak: std::sync::Weak<Mutex<Capture>>) -> Result<(), String
         let mut watchdog = Watchdog::new(Instant::now());
         loop {
             std::thread::sleep(Duration::from_millis(500));
+            let _pool = crate::pool::Pool::new();
             let (w, h, native, stream, health) = {
                 let Some(capture) = weak.upgrade() else { return; };
                 let c = capture.lock().unwrap();
@@ -1578,7 +1580,7 @@ impl Input {
             if down {
                 let tx = ACTIONS.get_or_init(|| {
                     let (tx, rx) = std::sync::mpsc::sync_channel::<u32>(4);
-                    std::thread::spawn(move || rx.into_iter().for_each(screen_action));
+                    std::thread::spawn(move || rx.into_iter().for_each(|a| crate::pool::run(|| screen_action(a))));
                     tx
                 });
                 let _ = tx.try_send(sym - ACTION_KEYSYM);
@@ -1797,6 +1799,7 @@ pub fn start_background() {
         // fresh one (also when sharing was already running), and sees permissions granted.
         std::thread::spawn(|| loop {
             std::thread::sleep(Duration::from_secs(2));
+            let _pool = crate::pool::Pool::new();
             let (screen, access) = permissions();
             write_status(screen, access);
         });
