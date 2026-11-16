@@ -52,6 +52,7 @@ pub fn release_free_memory() {
 
 /// Run `f` in a pool of its own.
 #[inline]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn run<T>(f: impl FnOnce() -> T) -> T {
     let _pool = Pool::new();
     f()

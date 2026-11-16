@@ -23,7 +23,7 @@ const SIO_TCP_INFO: u32 = 0xd800_0027;
 /// Who is looking at the remote screen (`Shared::set_view`). Each update is requested only
 /// after the last one arrived, so this sets how fast the Mac sends: as fast as it can while
 /// a window is in front; BACKGROUND_EVERY apart while they're all behind other windows; not
-/// at all while they're all minimized (the liveness probe still runs, 1x1 every few seconds).
+/// at all while they're all minimized (the liveness probe still runs, every PAUSED_PROBE).
 /// A busy Mac screen otherwise streams tens of Mbps to a window nobody is watching.
 pub const VIEW_LIVE: u8 = 0;
 pub const VIEW_BACKGROUND: u8 = 1;
@@ -32,6 +32,11 @@ const BACKGROUND_EVERY: Duration = Duration::from_millis(500);
 
 /// Silence longer than this at a message boundary triggers a liveness probe.
 const IDLE_PROBE: Duration = Duration::from_secs(4);
+/// While every window is minimized, silence is expected: probe this rarely instead. A probe is
+/// a non-incremental request, which an H.264 server (Itda's own) answers with a key frame of
+/// the whole screen, about 280 KB at 1920x1080: every IDLE_PROBE, that alone kept a minimized
+/// viewer pulling ~70 KB/s from a busy Mac.
+const PAUSED_PROBE: Duration = Duration::from_secs(30);
 
 pub struct Cursor {
     pub w: usize,
@@ -162,6 +167,17 @@ impl Shared {
             crate::log!("view: {}", ["live", "background", "paused"][v as usize % 3]);
             self.pace();
         }
+    }
+
+    /// Silence at a message boundary: time to check the link is alive? (Rarely while paused.)
+    fn probe_due(&self) -> bool {
+        self.view.load(SeqCst) != VIEW_PAUSED || self.last_request.lock().unwrap().elapsed() >= PAUSED_PROBE
+    }
+
+    /// The liveness probe: a 1x1 refresh, which any server answers.
+    fn probe(&self) {
+        *self.last_request.lock().unwrap() = Instant::now();
+        self.send(&update_request(false, 0, 0, 1, 1));
     }
 
     /// Send an owed request if the view allows it now.
@@ -300,8 +316,10 @@ fn wait_msg(r: &mut BufReader<Rx>, s: &Shared) -> io::Result<()> {
                 if probed {
                     return err(tr!("net.noResponse"));
                 }
-                s.send(&update_request(false, 0, 0, 1, 1));
-                probed = true;
+                if s.probe_due() {
+                    s.probe();
+                    probed = true;
+                }
             }
             Err(e) => return Err(e),
         }
@@ -547,5 +565,20 @@ mod tests {
         std::thread::sleep(BACKGROUND_EVERY);
         s.pace();
         assert_eq!(requests(&mut peer), 1);
+        // The liveness probe: whenever silence lasts, except while minimized, where it waits
+        // PAUSED_PROBE since the last request.
+        assert!(s.probe_due(), "behind other windows");
+        s.set_view(VIEW_PAUSED);
+        assert!(!s.probe_due(), "just asked");
+        *s.last_request.lock().unwrap() = Instant::now() - PAUSED_PROBE;
+        assert!(s.probe_due(), "silent for PAUSED_PROBE");
+        s.probe();
+        let mut probe = [0u8; 10];
+        peer.read_exact(&mut probe).unwrap();
+        assert_eq!(probe, [3, 0, 0, 0, 0, 0, 0, 1, 0, 1], "a non-incremental 1x1 request");
+        assert_eq!(requests(&mut peer), 0);
+        assert!(!s.probe_due(), "the probe counts as asking");
+        s.set_view(VIEW_LIVE);
+        assert!(s.probe_due());
     }
 }
