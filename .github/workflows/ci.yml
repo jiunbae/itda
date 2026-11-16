@@ -25,6 +25,8 @@ jobs:
       - name: Version and resources
         shell: pwsh
         run: ./scripts/windows-version-check.ps1
+      - name: Starts on a fresh Windows (no Visual C++ runtime needed)
+        run: node scripts/windows-deps-check.mjs target/release/itda.exe
       - name: Release preview child protocol
         run: node scripts/preview-decode-test.mjs target/release/itda.exe
       - name: Size

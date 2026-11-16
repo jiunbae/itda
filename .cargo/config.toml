@@ -1,0 +1,9 @@
+# The Windows exe carries the C runtime inside itself (static CRT): a fresh Windows without
+# the Visual C++ Redistributable has no VCRUNTIME140.dll, and Itda would not even start.
+# (scripts/windows-release.ps1 sets CARGO_ENCODED_RUSTFLAGS, which replaces these: it adds
+# the same flag itself.)
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
