@@ -4,7 +4,9 @@
 # and dependency file names would otherwise carry them. The last matching prefix wins.
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path $PSScriptRoot)
-$env:CARGO_ENCODED_RUSTFLAGS = "--remap-path-prefix=$env:USERPROFILE=~`u{1f}--remap-path-prefix=$PWD=itda"
+# These replace .cargo/config.toml's rustflags, so the static C runtime is asked for here too
+# (no VCRUNTIME140.dll needed: a fresh Windows has none).
+$env:CARGO_ENCODED_RUSTFLAGS = "-Ctarget-feature=+crt-static`u{1f}--remap-path-prefix=$env:USERPROFILE=~`u{1f}--remap-path-prefix=$PWD=itda"
 cargo build --release
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 $exe = Get-Item target/release/itda.exe
