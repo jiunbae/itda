@@ -36,6 +36,14 @@ node scripts/files-windows-e2e.mjs
 
 Other focused suites include `files-tabs-e2e.mjs`, `files-network-local-e2e.mjs`, `editor-e2e.mjs`, `permissions-e2e.mjs`, `remote-setup-e2e.mjs`, `update-e2e.mjs`, and `monitors-e2e.mjs`. See `.github/workflows/ci.yml` for current CI coverage. Browser IPC fixtures verify the frontend, not real SSH, native OS drag acceptance, macOS permission grants or physical monitor behavior. Record those runtime checks separately when relevant.
 
+### Before a release: memory and runtime
+
+CI can't watch a real screen, so these runs on real machines gate every release:
+
+- **Mac sharing memory:** install the CI build on a Mac that shares at high performance (jiun-mini), then run `scripts/hp-soak-gate.sh <ssh-host> 120 150`. A view-only viewer watches for two minutes, and the gate fails if Itda's footprint grows by more than 150 MB. 1.0.25 grew 918 MB a minute; 1.0.26 settled at about +40 MB.
+- **Windows:** use the Windows 11 test VM only (Proxmox VM 220), never a personal PC. The release exe must start and open its window in the signed-in session. CI's `windows-deps-check.mjs` already refuses an exe that needs the Visual C++ runtime. For a change to sharing, also watch the VM's share with `hp_soak_viewer` and check that memory and handle counts return to where they started after each viewer.
+- In use, Itda logs its own memory to `itda.log`: a `memory:` line at each new 256 MB step and every hour, and a warning past 1 GiB with the number of viewers.
+
 For public screenshots and site checks, follow [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md). Performance methodology and reproducible quality probes are in [scripts/hp-quality.md](scripts/hp-quality.md) and [scripts/hp-performance.md](scripts/hp-performance.md).
 
 
