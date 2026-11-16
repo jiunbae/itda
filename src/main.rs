@@ -36,6 +36,7 @@ mod files;
 mod gateway;
 mod hangul;
 mod outbox;
+mod pool;
 mod img;
 mod log;
 mod mdns;

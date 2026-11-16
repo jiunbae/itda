@@ -146,6 +146,7 @@ pub fn start(cfg: Config) -> io::Result<()> {
                 Ok((s, peer)) => {
                     let (cfg, flag) = (c2.clone(), flag.clone());
                     std::thread::spawn(move || {
+                        let _pool = crate::pool::Pool::new();
                         if let Err(e) = serve(s, peer, &cfg, &flag) {
                             crate::log!("share {peer}: {e}");
                         }
@@ -178,6 +179,7 @@ pub fn open_local(peer: SocketAddr) -> io::Result<crate::rfb::Raw> {
     let pass = cfg.password.clone();
     std::thread::spawn(move || {
         if let Ok((s, _)) = l.accept() {
+            let _pool = crate::pool::Pool::new();
             if let Err(e) = serve(s, peer, &cfg, &stop) {
                 crate::log!("share {peer} (web): {e}");
             }
@@ -418,6 +420,7 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
     std::thread::spawn(move || {
         // The waker keeps the channel open, so say when the viewer is gone (also on a panic).
         let gone = Gone(tx);
+        let _pool = crate::pool::Pool::new();
         let mut input = platform::Input::new(cfg2.cmd_as_ctrl, cfg2.view_only);
         let _ = read_client(BufReader::new(reader), &gone.0, &mut input, cfg2.view_only, &steer2);
         input.release_all();
@@ -429,6 +432,7 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
     VIEWERS.lock().unwrap().retain(|(i, _, _)| *i != id);
     changed();
     crate::log!("share {peer}: viewer left");
+    crate::pool::release_free_memory();
     r
 }
 
@@ -453,6 +457,7 @@ fn capture_before_auth<T>(out: &mut impl Write, minor: u32, create: impl FnOnce(
 /// `view_only`: besides input, the viewer's clipboard isn't taken either.
 fn read_client(mut r: BufReader<TcpStream>, tx: &Sender<Msg>, input: &mut platform::Input, view_only: bool, steer: &Steer) -> io::Result<()> {
     loop {
+        let _pool = crate::pool::Pool::new(); // (input and the pasteboard autorelease)
         // A held Ctrl/Alt/Win must not outlive the person holding it: a phone that goes to
         // sleep mid-gesture keeps the socket open but silent, and the PC would keep zooming
         // every app on Ctrl+wheel. Release modifiers after a quiet spell or a long hold.
@@ -702,6 +707,8 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
     #[cfg(target_os = "macos")]
     let mut lock_watch = platform::LockWatch::new();
     loop {
+        // One pool a turn: AppKit calls here (the cursor, the pasteboard) autorelease.
+        let _pool = crate::pool::Pool::new();
         if stop.load(Relaxed) {
             return Ok(());
         }
@@ -1270,6 +1277,97 @@ mod tests {
         super::pointer_motion(&mut out, true);
         super::pointer_motion(&mut out, false);
         assert_eq!(out, [0, 0, 0x49, 0x54, 0, 0, 0, 0, 0xff, 0xff, 0xfe, 0xff, 0, 1, 0x49, 0x54, 0, 0, 0, 0, 0xff, 0xff, 0xfe, 0xff]);
+    }
+
+    /// `ITDA_SOAK_ADDR=127.0.0.1:port ITDA_SOAK_PASS_FILE=… ITDA_SOAK_SECS=60`: watch a running
+    /// high-performance share as a view-only viewer would (H.264, the pointer's shape and
+    /// motion, a request every 16 ms; nothing is ever typed or clicked), to measure that
+    /// server's memory from outside while it serves.
+    #[test]
+    #[ignore]
+    fn hp_soak_viewer() {
+        use super::*;
+        use std::io::Write;
+        let Ok(addr) = std::env::var("ITDA_SOAK_ADDR") else { return println!("skipped: no ITDA_SOAK_ADDR") };
+        let pass = std::fs::read_to_string(std::env::var("ITDA_SOAK_PASS_FILE").unwrap()).unwrap().trim().to_string();
+        let secs: u64 = std::env::var("ITDA_SOAK_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
+        let raw = crate::rfb::open(&addr, &crate::rfb::Creds { user: String::new(), pass }).expect("signed in");
+        let crate::rfb::Raw { mut reader, mut writer, width, height, .. } = raw;
+        let got = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let got2 = got.clone();
+        std::thread::spawn(move || {
+            let mut b = vec![0u8; 1 << 16];
+            while let Ok(n) = reader.read(&mut b) {
+                if n == 0 { break; }
+                got2.fetch_add(n, Relaxed);
+            }
+        });
+        let encs = [ENC_H264, ENC_ZRLE, ENC_VMWARE_CURSOR, ENC_CURSOR, ENC_POINTER_MOTION];
+        let mut m = vec![2u8, 0, 0, encs.len() as u8];
+        for e in encs {
+            m.extend_from_slice(&e.to_be_bytes());
+        }
+        writer.write_all(&m).unwrap();
+        let req = |inc: u8| [&[3u8, inc, 0, 0, 0, 0][..], &width.to_be_bytes(), &height.to_be_bytes()].concat();
+        writer.write_all(&req(0)).unwrap();
+        let until = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < until {
+            if writer.write_all(&req(1)).is_err() { break; }
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        println!("soak: {secs} s, {} MB received", got.load(Relaxed) >> 20);
+    }
+
+    /// A viewer's pump on the real screen for 20 s: the process's footprint stays flat (it
+    /// grew by about 120 KB a turn while AppKit's autoreleased objects piled up in the pump
+    /// thread, which has no run loop to drain them).
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn hp_pump_real_screen_memory_stays_flat() {
+        use super::*;
+        if !objc2_core_graphics::CGPreflightScreenCaptureAccess() {
+            return println!("skipped: Screen Recording not allowed");
+        }
+        unsafe extern "C" {
+            fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut [u64; 64]) -> i32;
+        }
+        let footprint = || {
+            let mut b = [0u64; 64];
+            assert_eq!(unsafe { proc_pid_rusage(std::process::id() as i32, 2, &mut b) }, 0);
+            b[9] >> 20 // rusage_info_v2.ri_phys_footprint (after the 16-byte uuid), in MB
+        };
+        let cap = platform::capture().expect("capture");
+        let (w, h) = { let c = cap.lock().unwrap(); (c.w, c.h) };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut c = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (socket, _) = listener.accept().unwrap();
+        let (tx, rx) = channel();
+        let done = Arc::new(AtomicBool::new(false));
+        let stop = done.clone();
+        let worker = std::thread::spawn(move || {
+            let out = Outbox::new(socket).unwrap();
+            let _ = pump(&out, &rx, &AtomicBool::new(false), &cap, (w, h), &stop, false, &Default::default(), sound_waker(channel().0));
+        });
+        std::thread::spawn(move || std::io::copy(&mut c, &mut std::io::sink()));
+        tx.send(Msg::Encodings(vec![ENC_ZRLE, ENC_VMWARE_CURSOR, ENC_CURSOR, ENC_POINTER_MOTION])).unwrap();
+        tx.send(Msg::Request { incremental: false }).unwrap();
+        let ask = |secs: u64| {
+            let until = Instant::now() + Duration::from_secs(secs);
+            while Instant::now() < until {
+                let _ = tx.send(Msg::Request { incremental: true });
+                std::thread::sleep(Duration::from_millis(16));
+            }
+        };
+        ask(3);
+        let before = footprint();
+        ask(20);
+        let after = footprint();
+        done.store(true, Relaxed);
+        let _ = tx.send(Msg::Gone);
+        worker.join().unwrap();
+        println!("footprint {before} MB -> {after} MB over 20 s");
+        assert!(after < before + 100, "the pump's footprint grew from {before} MB to {after} MB");
     }
 
     /// The Mac high-performance pump on the real screen (needs Screen Recording already allowed

@@ -60,6 +60,7 @@ define_class!(
         #[unsafe(method(stream:didOutputSampleBuffer:ofType:))]
         fn sample(&self, _stream: &SCStream, sample: &CMSampleBuffer, kind: SCStreamOutputType) {
             if kind == SCStreamOutputType::Audio {
+                let _pool = crate::pool::Pool::new();
                 let mut buf = self.ivars().buf.lock().unwrap();
                 if let Some((rate, ch)) = unsafe { samples(sample, &mut buf) } {
                     (self.ivars().sink.lock().unwrap())(&buf, rate, ch);

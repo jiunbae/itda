@@ -87,7 +87,7 @@ pub fn start() {
         let mut ticks = 0u32;
         loop {
             ticks += 1;
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tick(&mut empty_since, &mut escaped, ticks)));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::pool::run(|| tick(&mut empty_since, &mut escaped, ticks))));
             if r.is_err() {
                 let _ = std::fs::remove_file(flag());
                 if UP.load(Ordering::Relaxed) {
