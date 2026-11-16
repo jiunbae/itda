@@ -135,6 +135,8 @@ fn is_dark(s: &Settings) -> bool {
 }
 
 pub fn run(quick: Option<String>) {
+    #[cfg(any(windows, target_os = "macos"))]
+    crate::memwatch::start();
     plat::run(quick);
 }
 

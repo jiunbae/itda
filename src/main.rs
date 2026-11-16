@@ -37,6 +37,8 @@ mod gateway;
 mod hangul;
 mod outbox;
 mod pool;
+#[cfg(any(windows, target_os = "macos"))]
+mod memwatch;
 mod img;
 mod log;
 mod mdns;
