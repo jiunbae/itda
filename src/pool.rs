@@ -36,12 +36,13 @@ impl Drop for Pool {
     }
 }
 
-/// Give memory malloc holds free back to the system (macOS), e.g. once a viewer has left:
-/// what a burst freed otherwise stays counted against Itda, and is swapped out under pressure
-/// rather than dropped.
+/// Give memory held free back to the system (macOS), e.g. once a viewer has left: what a
+/// burst freed otherwise stays counted against Itda, and is swapped out under pressure rather
+/// than dropped. Big blocks (frames) wait in Itda's own cache, everything else in malloc's.
 pub fn release_free_memory() {
     #[cfg(target_os = "macos")]
     {
+        crate::bigalloc::flush();
         unsafe extern "C" {
             fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
         }
@@ -88,5 +89,30 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    /// A viewer's 4K frames (about 33 MB each), once freed, stop counting against Itda when it
+    /// hands free memory back. Until then malloc keeps them cached as "Malloc Large (empty)".
+    #[test]
+    fn freed_frames_leave_the_footprint() {
+        unsafe extern "C" {
+            fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut [u64; 64]) -> i32;
+        }
+        let footprint = || {
+            let mut b = [0u64; 64];
+            assert_eq!(unsafe { proc_pid_rusage(std::process::id() as i32, 2, &mut b) }, 0);
+            b[9] >> 20
+        };
+        release_free_memory();
+        let base = footprint();
+        let frames: Vec<Vec<u32>> = (0..4).map(|i| vec![i + 1; 3840 * 2160]).collect();
+        assert!(footprint() >= base + 120, "four frames are counted");
+        drop(frames);
+        let freed = footprint();
+        release_free_memory();
+        let after = footprint();
+        println!("base {base} MB, freed {freed} MB, returned {after} MB");
+        // (Other tests run alongside: judge by what this release itself dropped.)
+        assert!(after + 100 < freed, "base {base} MB, freed {freed} MB, after returning {after} MB");
     }
 }
