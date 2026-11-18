@@ -325,7 +325,26 @@ fn near(ip: std::net::IpAddr) -> bool {
     }
 }
 
-fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) -> io::Result<()> {
+/// Serve one connection, then hand back the memory it freed. Only here is everything it held
+/// gone, the shared capture's 4K frames included (about 33 MB each). Freed earlier, malloc kept
+/// them cached: a 7-second viewer left 127 MB counted against Itda for hours. The capture
+/// stream winds down on its own threads, so look again once it has settled.
+fn serve(c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) -> io::Result<()> {
+    let r = crate::pool::run(|| serve_viewer(c, peer, cfg, stop));
+    crate::pool::release_free_memory();
+    std::thread::spawn(|| {
+        std::thread::sleep(SETTLE);
+        if VIEWERS.lock().unwrap().is_empty() {
+            crate::pool::release_free_memory();
+        }
+    });
+    r
+}
+
+/// How long a departed viewer's capture takes to wind down.
+const SETTLE: Duration = Duration::from_secs(10);
+
+fn serve_viewer(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) -> io::Result<()> {
     c.set_nodelay(true)?;
     c.set_read_timeout(Some(Duration::from_secs(30)))?;
     c.write_all(b"RFB 003.008\n")?;
@@ -432,7 +451,6 @@ fn serve(mut c: TcpStream, peer: SocketAddr, cfg: &Config, stop: &AtomicBool) ->
     VIEWERS.lock().unwrap().retain(|(i, _, _)| *i != id);
     changed();
     crate::log!("share {peer}: viewer left");
-    crate::pool::release_free_memory();
     r
 }
 
@@ -1302,7 +1320,11 @@ mod tests {
                 got2.fetch_add(n, Relaxed);
             }
         });
-        let encs = [ENC_H264, ENC_ZRLE, ENC_VMWARE_CURSOR, ENC_CURSOR, ENC_POINTER_MOTION];
+        // ITDA_SOAK_ENCODINGS=zrle: what Itda's own Mac and Windows viewers ask for (no H.264).
+        let encs: Vec<i32> = match std::env::var("ITDA_SOAK_ENCODINGS").as_deref() {
+            Ok("zrle") => vec![ENC_ZRLE, 1, 0, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, -223, crate::rfb::ENC_EXT_CLIPBOARD],
+            _ => vec![ENC_H264, ENC_ZRLE, ENC_VMWARE_CURSOR, ENC_CURSOR, ENC_POINTER_MOTION],
+        };
         let mut m = vec![2u8, 0, 0, encs.len() as u8];
         for e in encs {
             m.extend_from_slice(&e.to_be_bytes());

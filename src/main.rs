@@ -37,6 +37,11 @@ mod gateway;
 mod hangul;
 mod outbox;
 mod pool;
+#[cfg(target_os = "macos")]
+mod bigalloc;
+#[cfg(target_os = "macos")]
+#[global_allocator]
+static ALLOC: bigalloc::Alloc = bigalloc::Alloc;
 #[cfg(any(windows, target_os = "macos"))]
 mod memwatch;
 mod img;
