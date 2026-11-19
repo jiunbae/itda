@@ -19,7 +19,7 @@ use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 pub(crate) const ENC_H264: i32 = 50;
-const ENC_ITDA_SCALED_VIDEO: i32 = 0x4954_4453; // = enc::ENC_ITDA_SCALED_VIDEO
+use crate::enc::ENC_ITDA_SCALED_VIDEO;
 const W: usize = 1920;
 const H: usize = 1080;
 

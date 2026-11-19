@@ -22,7 +22,7 @@ pub const ENC_EXT_CLIPBOARD: i32 = 0xc0a1_e5ce_u32 as i32;
 /// 'ITDS': this viewer scales an H.264 picture smaller than its rectangle (same aspect, even
 /// size) up to fill it, so the server may encode fewer pixels than it shows. Every size change
 /// comes as H264_RESET with an IDR.
-pub const ENC_ITDA_SCALED_VIDEO: i32 = 0x4954_4453; // = enc::ENC_ITDA_SCALED_VIDEO
+pub use crate::enc::ENC_ITDA_SCALED_VIDEO;
 
 /// Total bytes received from the server (for the stats display).
 pub static RX_BYTES: AtomicU64 = AtomicU64::new(0);
