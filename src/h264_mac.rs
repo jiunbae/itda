@@ -2,9 +2,15 @@
 //! fed 0x00RRGGBB frames (BGRA in memory), giving Annex B access units. Real-time, no frame
 //! reordering, low-latency rate control; key frames carry SPS and PPS so a decoder can start
 //! (or restart) from any of them.
+//!
+//! The encoded picture may be smaller than the frames it's given (dynamic video resolution,
+//! vscale.rs): captured buffers are scaled by a VTPixelTransferSession (on the GPU), CPU
+//! frames by an area-average downscale, into the encoder's own buffer. (VTCompressionSession
+//! does take a larger buffer than its size without an error, and doesn't simply crop it, but
+//! what it does with it isn't documented: see `session_given_other_sizes`.)
 use objc2_core_foundation::{CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType};
 use objc2_core_media::{kCMTimeInvalid, CMFormatDescription, CMSampleBuffer, CMTime, CMVideoFormatDescriptionGetH264ParameterSetAtIndex};
-use objc2_core_video::{kCVPixelFormatType_32BGRA, CVPixelBuffer, CVPixelBufferCreate, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress};
+use objc2_core_video::{kCVPixelFormatType_32BGRA, CVPixelBuffer, CVPixelBufferCreate, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight, CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress};
 use objc2_video_toolbox::*;
 use std::ffi::c_void;
 use std::ptr::{null_mut, NonNull};
@@ -25,6 +31,10 @@ pub struct H264 {
     buffer: CFRetained<CVPixelBuffer>,
     pub width: usize,
     pub height: usize,
+    /// The size of the frames it's given (larger than width x height when scaling).
+    pub src: (usize, usize),
+    /// Scales captured buffers of another size (made when first needed).
+    transfer: Option<CFRetained<VTPixelTransferSession>>,
     clock: FrameClock,
 }
 
@@ -57,10 +67,32 @@ fn set(session: &VTCompressionSession, key: &CFString, value: &CFType) -> bool {
     unsafe { VTSessionSetProperty(&*s, key, Some(value)) == 0 }
 }
 
+/// A transfer session that scales a whole buffer into a whole buffer, averaging (not
+/// skipping) pixels when it shrinks, without waiting for other GPU work.
+fn transfer_session() -> Result<CFRetained<VTPixelTransferSession>, String> {
+    let mut raw: *mut VTPixelTransferSession = null_mut();
+    let st = unsafe { VTPixelTransferSession::create(None, NonNull::from(&mut raw)) };
+    let t = NonNull::new(raw).filter(|_| st == 0).ok_or_else(|| format!("VTPixelTransferSessionCreate {st}"))?;
+    let t = unsafe { CFRetained::from_raw(t) };
+    let vs = &*t as *const VTPixelTransferSession as *const VTSession;
+    unsafe {
+        VTSessionSetProperty(&*vs, kVTPixelTransferPropertyKey_ScalingMode, Some(kVTScalingMode_Normal));
+        VTSessionSetProperty(&*vs, kVTPixelTransferPropertyKey_DownsamplingMode, Some(kVTDownsamplingMode_Average));
+        VTSessionSetProperty(&*vs, kVTPixelTransferPropertyKey_RealTime, Some(CFBoolean::new(true)));
+    }
+    Ok(t)
+}
+
 impl H264 {
     /// An encoder for width x height frames (even sizes) at about `bitrate` bits a second.
     pub fn new(width: usize, height: usize, bitrate: i64) -> Result<H264, String> {
-        let (width, height) = (width & !1, height & !1);
+        H264::scaled(width, height, width, height, bitrate)
+    }
+
+    /// An encoder for src_w x src_h frames that encodes them at width x height (rounded down
+    /// to even, at most the frames' size).
+    pub fn scaled(src_w: usize, src_h: usize, width: usize, height: usize, bitrate: i64) -> Result<H264, String> {
+        let (width, height) = (width.min(src_w) & !1, height.min(src_h) & !1);
         if width < 16 || height < 16 {
             return Err("frame too small".into());
         }
@@ -104,7 +136,7 @@ impl H264 {
         };
         let r = unsafe { CVPixelBufferCreate(None, width, height, kCVPixelFormatType_32BGRA, Some(attrs.as_opaque()), NonNull::from(&mut pb)) };
         let buffer = NonNull::new(pb).filter(|_| r == 0).ok_or_else(|| format!("CVPixelBufferCreate {r}"))?;
-        Ok(H264 { session, out, buffer: unsafe { CFRetained::from_raw(buffer) }, width, height, clock: FrameClock::default() })
+        Ok(H264 { session, out, buffer: unsafe { CFRetained::from_raw(buffer) }, width, height, src: (src_w, src_h), transfer: None, clock: FrameClock::default() })
     }
 
     /// Aim for `bitrate` bits a second from the next frame on (a running session accepts it).
@@ -112,25 +144,50 @@ impl H264 {
         unsafe { set(&self.session, kVTCompressionPropertyKey_AverageBitRate, &CFNumber::new_i64(bitrate)) }
     }
 
-    /// Encode one frame (`px`: rows of `stride` pixels, at least width x height); `key` forces
+    /// Encode one frame (`px`: rows of `stride` pixels, of the frames' size `src`); `key` forces
     /// an IDR with parameter sets. Waits for the encoder, so the result is this frame's.
     pub fn encode(&mut self, px: &[u32], stride: usize, key: bool) -> Result<Unit, String> {
+        let (sw, sh) = self.src;
+        let scale = (self.width, self.height) != (sw & !1, sh & !1);
         unsafe {
             let pb = &*self.buffer;
             CVPixelBufferLockBaseAddress(pb, CVPixelBufferLockFlags(0));
             let base = CVPixelBufferGetBaseAddress(pb) as *mut u8;
             let bpr = CVPixelBufferGetBytesPerRow(pb);
-            for y in 0..self.height {
-                let src = &px[y * stride..y * stride + self.width];
-                std::ptr::copy_nonoverlapping(src.as_ptr() as *const u8, base.add(y * bpr), self.width * 4);
+            if scale {
+                assert!(px.len() >= (sh - 1) * stride + sw && bpr.is_multiple_of(4));
+                let dst = std::slice::from_raw_parts_mut(base as *mut u32, bpr / 4 * self.height);
+                crate::vscale::downscale(px, stride, sw, sh, dst, bpr / 4, self.width, self.height);
+            } else {
+                for y in 0..self.height {
+                    let src = &px[y * stride..y * stride + self.width];
+                    std::ptr::copy_nonoverlapping(src.as_ptr() as *const u8, base.add(y * bpr), self.width * 4);
+                }
             }
             CVPixelBufferUnlockBaseAddress(pb, CVPixelBufferLockFlags(0));
         }
-        self.encode_buffer(&self.buffer.clone(), key)
+        self.encode_ready(&self.buffer.clone(), key)
     }
 
-    /// Encode a ready pixel buffer (e.g. a captured IOSurface) of this encoder's size.
+    /// Encode a ready pixel buffer (e.g. a captured IOSurface), of this encoder's size or, when
+    /// it scales, of the frames' size.
     pub fn encode_buffer(&mut self, pb: &CVPixelBuffer, key: bool) -> Result<Unit, String> {
+        let size = (CVPixelBufferGetWidth(pb), CVPixelBufferGetHeight(pb));
+        // (An odd-sized capture goes in as it is, as before scaling existed.)
+        if (size.0 & !1, size.1 & !1) == (self.width, self.height) {
+            return self.encode_ready(pb, key);
+        }
+        if self.transfer.is_none() {
+            self.transfer = Some(transfer_session()?);
+        }
+        let st = unsafe { self.transfer.as_ref().unwrap().transfer_image(pb, &self.buffer) };
+        if st != 0 {
+            return Err(format!("VTPixelTransferSessionTransferImage {st}"));
+        }
+        self.encode_ready(&self.buffer.clone(), key)
+    }
+
+    fn encode_ready(&mut self, pb: &CVPixelBuffer, key: bool) -> Result<Unit, String> {
         let pts = unsafe { CMTime::new(self.clock.next(Instant::now()), 1_000_000) };
         let props = key.then(|| unsafe {
             CFDictionary::<CFString, CFType>::from_slices(&[kVTEncodeFrameOptionKey_ForceKeyFrame], &[CFBoolean::new(true).as_ref()])
@@ -154,6 +211,9 @@ impl H264 {
 
 impl Drop for H264 {
     fn drop(&mut self) {
+        if let Some(t) = &self.transfer {
+            unsafe { t.invalidate() };
+        }
         unsafe { self.session.invalidate() };
     }
 }
@@ -209,7 +269,7 @@ fn parameter_set(fd: &CMFormatDescription, index: usize) -> Option<&[u8]> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -277,6 +337,195 @@ mod tests {
         assert!(next.data.len() < first.data.len() / 4, "an almost unchanged frame should be small");
         let again = e.encode(&px, w, true).unwrap();
         assert!(again.key && types(&again.data)[..2] == [7, 8]);
+    }
+
+    /// Exp-Golomb reader over an RBSP.
+    struct Bits<'a>(&'a [u8], usize);
+    impl Bits<'_> {
+        fn bit(&mut self) -> u32 {
+            let b = (self.0[self.1 / 8] >> (7 - self.1 % 8)) & 1;
+            self.1 += 1;
+            b as u32
+        }
+        fn bits(&mut self, n: u32) -> u32 {
+            (0..n).fold(0, |v, _| v << 1 | self.bit())
+        }
+        fn ue(&mut self) -> u32 {
+            let mut zeros = 0;
+            while self.bit() == 0 {
+                zeros += 1;
+            }
+            (1 << zeros) - 1 + self.bits(zeros)
+        }
+        fn se(&mut self) -> i32 {
+            let v = self.ue() as i32;
+            if v % 2 == 1 { (v + 1) / 2 } else { -v / 2 }
+        }
+    }
+
+    /// The picture size an Annex B stream's SPS declares (after its cropping).
+    pub(crate) fn sps_size(b: &[u8]) -> Option<(usize, usize)> {
+        let at = (0..b.len().saturating_sub(4)).find(|&i| b[i..i + 4] == START && b[i + 4] & 0x1f == 7)? + 5;
+        let end = (at..b.len().saturating_sub(3)).find(|&i| b[i..i + 4] == START).unwrap_or(b.len());
+        // Emulation prevention bytes out.
+        let mut rbsp = Vec::new();
+        for &x in &b[at..end] {
+            if x == 3 && rbsp.ends_with(&[0, 0]) {
+                continue;
+            }
+            rbsp.push(x);
+        }
+        let mut r = Bits(&rbsp, 0);
+        let profile = r.bits(8);
+        r.bits(16); // constraint flags, level
+        r.ue(); // sps id
+        let mut chroma = 1;
+        if [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135].contains(&profile) {
+            chroma = r.ue();
+            if chroma == 3 {
+                r.bit();
+            }
+            r.ue();
+            r.ue();
+            r.bit();
+            if r.bit() == 1 {
+                for i in 0..if chroma == 3 { 12 } else { 8 } {
+                    if r.bit() == 1 {
+                        let (mut last, mut next) = (8i32, 8i32);
+                        for _ in 0..if i < 6 { 16 } else { 64 } {
+                            if next != 0 {
+                                next = (last + r.se() + 256) % 256;
+                            }
+                            last = if next == 0 { last } else { next };
+                        }
+                    }
+                }
+            }
+        }
+        r.ue(); // log2_max_frame_num
+        match r.ue() {
+            0 => { r.ue(); }
+            1 => {
+                r.bit();
+                r.se();
+                r.se();
+                for _ in 0..r.ue() {
+                    r.se();
+                }
+            }
+            _ => {}
+        }
+        r.ue(); // max refs
+        r.bit();
+        let w = (r.ue() + 1) * 16;
+        let map_units = r.ue() + 1;
+        let frame_mbs_only = r.bit();
+        let h = map_units * 16 * (2 - frame_mbs_only);
+        if frame_mbs_only == 0 {
+            r.bit();
+        }
+        r.bit();
+        let (mut cw, mut ch) = (0, 0);
+        if r.bit() == 1 {
+            let (sx, sy) = if chroma == 0 { (1, 2 - frame_mbs_only) } else { (2, 2 * (2 - frame_mbs_only)) };
+            cw = (r.ue() + r.ue()) * sx;
+            ch = (r.ue() + r.ue()) * sy;
+        }
+        Some(((w - cw) as usize, (h - ch) as usize))
+    }
+
+    /// A BGRA IOSurface buffer filled by `f(x, y)`.
+    fn surface(w: usize, h: usize, f: impl Fn(usize, usize) -> u32) -> CFRetained<CVPixelBuffer> {
+        let mut pb: *mut CVPixelBuffer = null_mut();
+        let attrs = unsafe {
+            CFDictionary::<CFString, CFType>::from_slices(&[objc2_core_video::kCVPixelBufferIOSurfacePropertiesKey], &[CFDictionary::<CFString, CFType>::empty().as_ref()])
+        };
+        assert_eq!(unsafe { CVPixelBufferCreate(None, w, h, kCVPixelFormatType_32BGRA, Some(attrs.as_opaque()), NonNull::from(&mut pb)) }, 0);
+        let pb = unsafe { CFRetained::from_raw(NonNull::new(pb).unwrap()) };
+        unsafe {
+            CVPixelBufferLockBaseAddress(&pb, CVPixelBufferLockFlags(0));
+            let base = CVPixelBufferGetBaseAddress(&pb) as *mut u32;
+            let stride = CVPixelBufferGetBytesPerRow(&pb) / 4;
+            for y in 0..h {
+                for x in 0..w {
+                    *base.add(y * stride + x) = f(x, y);
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(&pb, CVPixelBufferLockFlags(0));
+        }
+        pb
+    }
+
+    /// The encoder's own buffer, read back (what it was last given to encode).
+    fn staged(e: &H264) -> Vec<u32> {
+        let pb = &*e.buffer;
+        unsafe {
+            CVPixelBufferLockBaseAddress(pb, CVPixelBufferLockFlags::ReadOnly);
+            let base = CVPixelBufferGetBaseAddress(pb) as *const u32;
+            let stride = CVPixelBufferGetBytesPerRow(pb) / 4;
+            let v = (0..e.height).flat_map(|y| (0..e.width).map(move |x| *base.add(y * stride + x))).collect();
+            CVPixelBufferUnlockBaseAddress(pb, CVPixelBufferLockFlags::ReadOnly);
+            v
+        }
+    }
+
+    #[test]
+    fn unscaled_stream_declares_its_size() {
+        let (w, h) = (1512, 982);
+        let mut e = H264::new(w, h, 4_000_000).unwrap();
+        let px = vec![0x80_4020u32; w * h];
+        assert_eq!(sps_size(&e.encode(&px, w, true).unwrap().data), Some((w, h)));
+    }
+
+    /// Dynamic resolution: 4K frames (in memory and as a captured buffer) encode as a 2/3
+    /// picture whose stream declares that size, and the picture is the frame scaled (not a
+    /// corner of it).
+    #[test]
+    fn scaled_frames_encode_at_the_smaller_size() {
+        let (sw, sh) = (3840, 2160);
+        let (w, h) = crate::vscale::scaled(sw, sh, 2);
+        // Four quadrants of different colours, so a crop or a misplaced scale shows.
+        let quad = |x: usize, y: usize| [0xff_0000u32, 0x00_ff00, 0x00_00ff, 0xff_ffff][usize::from(x >= sw / 2) + 2 * usize::from(y >= sh / 2)];
+        let px: Vec<u32> = (0..sw * sh).map(|i| quad(i % sw, i / sw)).collect();
+        let check = |e: &H264, what: &str| {
+            let got = staged(e);
+            for (x, y) in [(w / 4, h / 4), (3 * w / 4, h / 4), (w / 4, 3 * h / 4), (3 * w / 4, 3 * h / 4)] {
+                let want = quad(x * sw / w, y * sh / h);
+                let p = got[y * w + x];
+                let near = |s: u32| ((p >> s & 255) as i32 - (want >> s & 255) as i32).abs() <= 2;
+                assert!(near(0) && near(8) && near(16), "{what} ({x},{y}): {p:06x} vs {want:06x}");
+            }
+        };
+        let mut e = H264::scaled(sw, sh, w, h, 16_000_000).unwrap();
+        assert_eq!((e.width, e.height), (2560, 1440));
+        let first = e.encode(&px, sw, true).unwrap();
+        assert!(first.key);
+        assert_eq!(sps_size(&first.data), Some((2560, 1440)));
+        check(&e, "cpu");
+        let next = e.encode(&px, sw, false).unwrap();
+        assert!(!next.key);
+        let mut e = H264::scaled(sw, sh, w, h, 16_000_000).unwrap();
+        let buffer = surface(sw, sh, quad);
+        let first = e.encode_buffer(&buffer, true).unwrap();
+        assert!(first.key && !first.data.is_empty());
+        assert_eq!(sps_size(&first.data), Some((2560, 1440)));
+        check(&e, "transfer");
+        assert!(!e.encode_buffer(&buffer, false).unwrap().key);
+    }
+
+    /// What VTCompressionSession does with a buffer twice its size (macOS 27: takes it, and
+    /// the IDR differs from the cropped picture's): informational, the encoder scales itself.
+    /// `cargo test --release session_given_other_sizes -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn session_given_other_sizes() {
+        let idr = |pb: &CVPixelBuffer| H264::new(320, 180, 2_000_000).unwrap().encode_ready(pb, true).map(|u| u.data);
+        let halves = |w: usize| move |x: usize, _| if x < w / 2 { 0xff_0000 } else { 0x00_00ff };
+        let big = idr(&surface(640, 360, halves(640)));
+        let cropped = idr(&surface(320, 180, |_, _| 0xff_0000)).unwrap();
+        let scaled = idr(&surface(320, 180, halves(320))).unwrap();
+        let again = idr(&surface(320, 180, halves(320))).unwrap();
+        println!("big {:?} cropped {} scaled {} again-equal {}", big.as_ref().map(|b| (b.len(), b == &cropped, b == &scaled)), cropped.len(), scaled.len(), again == scaled);
     }
 
     /// Encode time of a scrolling screen-sized picture (ms, p50/p95) and how many frames the

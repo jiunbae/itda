@@ -237,6 +237,9 @@ impl VideoEncode for Hw {
     fn size(&self) -> (usize, usize) {
         (self.0.width, self.0.height)
     }
+    fn source(&self) -> (usize, usize) {
+        self.0.src
+    }
     fn bitrate(&self) -> u32 {
         self.1
     }
@@ -253,9 +256,11 @@ impl VideoEncode for Hw {
     }
 }
 
-pub(crate) fn video(w: usize, h: usize) -> Option<Video> {
+/// An encoder for a w×h screen that encodes it at vw×vh (scaled down, or the same), starting
+/// at the screen's bitrate (the picture's size doesn't change what the link carries).
+pub(crate) fn video(w: usize, h: usize, vw: usize, vh: usize) -> Option<Video> {
     let bitrate = crate::server::video_bitrate(w, h) as i64;
-    match H264::new(w, h, bitrate) {
+    match H264::scaled(w, h, vw, vh, bitrate) {
         Ok(e) => Some(Box::new(Hw(e, bitrate as u32))),
         Err(e) => {
             crate::log!("hp: no H.264 encoder: {e}");

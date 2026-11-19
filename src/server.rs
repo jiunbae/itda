@@ -7,7 +7,8 @@
 //! Updates are ZRLE (tiles diffed against the viewer's last frame), or H.264 (RFB encoding 50)
 //! for viewers that ask for it when the platform has an encoder: the whole screen as one video
 //! rectangle while it changes, then a lossless ZRLE repaint of what changed once it stands
-//! still (4:2:0 video blurs text and colour edges).
+//! still (4:2:0 video blurs text and colour edges). Viewers that can scale video up
+//! (ENC_ITDA_SCALED_VIDEO) get it at a size the bitrate can fill (vscale.rs).
 //!
 //! Viewers that ask for a cursor pseudo-encoding (VMware's alpha cursor, or RFB Cursor) draw
 //! the pointer themselves: they get its shape when it changes, and the picture without it
@@ -19,7 +20,7 @@
 //! sound output (audio.rs): raw PCM between updates, never waiting for them or holding them up.
 
 use crate::demand::{self, Demand};
-use crate::enc::{ext_desktop_size, screens_in, Encoder, PixelFormat, Screen, Update, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, ENC_H264, ENC_ITDA_BACKGROUND, ENC_VMWARE_CURSOR, ENC_ZRLE, BACKGROUND_FRAME};
+use crate::enc::{ext_desktop_size, screens_in, Encoder, PixelFormat, Screen, Update, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, ENC_H264, ENC_ITDA_BACKGROUND, ENC_ITDA_SCALED_VIDEO, ENC_VMWARE_CURSOR, ENC_ZRLE, BACKGROUND_FRAME};
 use crate::outbox::Outbox;
 use crate::rfb::{vnc_response, ENC_EXT_CLIPBOARD, PIXEL_FORMAT};
 use std::io::{self, BufReader, Read, Write};
@@ -594,8 +595,10 @@ pub(crate) fn video_bitrate(w: usize, h: usize) -> u32 {
 
 /// A platform's hardware video encoder for one viewer (one H.264 stream).
 pub(crate) trait VideoEncode: Send {
-    /// The encoded picture size (the screen's, rounded down to even).
+    /// The encoded picture size (the screen's rounded down to even, or smaller when scaling).
     fn size(&self) -> (usize, usize);
+    /// The size of the frames it takes (the screen's).
+    fn source(&self) -> (usize, usize);
     /// Encode a frame (rows of `stride` pixels); `key` asks for an IDR with parameter sets.
     fn encode(&mut self, px: &[u32], stride: usize, key: bool) -> io::Result<Vec<u8>>;
     /// The bitrate it was made with: the most the rate control (rate.rs) asks for.
@@ -708,6 +711,8 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
     let mut video_ok = true;
     // Its bitrate, adapted to what the link carries (rate.rs).
     let mut rate: Option<crate::rate::Rate> = None;
+    // Its picture size, for viewers that scale it up (vscale.rs).
+    let mut scaler = crate::vscale::Scaler::new(Instant::now());
     let mut reset = true;
     let mut exact: Vec<u32> = Vec::new();
     let mut last_change = Instant::now();
@@ -954,8 +959,17 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         let full = !incremental || prev.len() != frame.len();
         let zrle = encs.contains(&ENC_ZRLE);
         let want_video = video_ok && encs.contains(&ENC_H264) && w <= VIDEO_MAX && h <= VIDEO_MAX;
-        if want_video && video.as_ref().map(|v| v.size()) != Some((w & !1, h & !1)) {
-            video = platform::video(w, h);
+        // The picture size: the screen's, or for a viewer that scales video what the bitrate
+        // can fill. (The rate control's ceiling is the screen's: it stays the same for any size.)
+        let ceiling = video_bitrate(w, h);
+        let coded = if encs.contains(&ENC_ITDA_SCALED_VIDEO) {
+            scaler.size(w, h, rate.as_ref().map_or(ceiling, |r| r.bitrate()), ceiling, Instant::now())
+        } else {
+            (w & !1, h & !1)
+        };
+        if want_video && video.as_ref().map(|v| (v.source(), v.size())) != Some(((w, h), coded)) {
+            let was = video.as_ref().filter(|v| v.source() == (w, h)).map_or((w & !1, h & !1), |v| v.size());
+            video = platform::video(w, h, coded.0, coded.1);
             video_ok = video.is_some();
             if let Some(v) = video.as_mut() {
                 // A new size: keep what the link has shown it can carry.
@@ -964,13 +978,16 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                 if r.bitrate() < v.bitrate() {
                     v.set_bitrate(r.bitrate());
                 }
+                if v.size() != was {
+                    crate::log!("video: {}x{} -> {}x{} at {:.1} Mbit/s", was.0, was.1, v.size().0, v.size().1, r.bitrate() as f64 / 1e6);
+                }
             }
             reset = true;
         }
         let mut lossless = true;
         match video.as_mut().filter(|_| want_video) {
             Some(v) if full || prev[..] != frame[..] => {
-                let (vw, vh) = v.size();
+                let (vw, vh) = (w & !1, h & !1);
                 let key = reset || !incremental;
                 let encode = Instant::now();
                 #[cfg(target_os = "macos")]
@@ -998,6 +1015,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                     }
                     Ok(data) => {
                         drops.clear();
+                        // The rectangle is the whole (even) screen; a scaled picture fills it.
                         u.h264(0, 0, vw as u16, vh as u16, if reset { crate::enc::H264_RESET } else { 0 }, &data);
                         reset = false;
                         lossless = false;
@@ -1177,6 +1195,45 @@ mod tests {
         assert!(delay >= REFINE.saturating_sub(Duration::from_millis(20)) && delay < REFINE+Duration::from_secs(2), "{delay:?}");
         tx.send(Msg::Gone).unwrap(); worker.join().unwrap();
         println!("refine {w}x{h}: received after {:.2} ms; {bytes} compressed bytes; {area} exact pixels", delay.as_secs_f64()*1000.);
+    }
+
+    /// Real VideoToolbox through the pump: a viewer that scales video gets a 1080p screen as
+    /// a 720p picture (its 4.1 Mbit/s budget) in a full-screen rectangle that resets the
+    /// decoder; one that doesn't gets the screen's size.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn scaled_video_for_viewers_that_scale() {
+        use super::*;
+        let (w, h) = (1920, 1080);
+        let frame: Vec<u32> = (0..w * h).map(|i| if (i % w / 64 + i / w / 64) % 2 == 0 { 0xffffff } else { 0x202020 }).collect();
+        for (encs, picture) in [(vec![ENC_H264, ENC_ITDA_SCALED_VIDEO, ENC_ZRLE], (1280, 720)), (vec![ENC_H264, ENC_ZRLE], (1920, 1080))] {
+            let cap = Mutex::new(platform::fixed_capture(w, h, frame.clone()));
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut c = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let (socket, _) = listener.accept().unwrap();
+            let (tx, rx) = channel();
+            let worker = std::thread::spawn(move || {
+                let out = Outbox::new(socket).unwrap();
+                pump(&out, &rx, &AtomicBool::new(false), &cap, (w, h), &AtomicBool::new(false), true, &Default::default(), sound_waker(channel().0)).unwrap();
+            });
+            tx.send(Msg::Encodings(encs)).unwrap();
+            tx.send(Msg::Request { incremental: false }).unwrap();
+            let mut header = [0; 4];
+            c.read_exact(&mut header).unwrap();
+            assert_eq!((header[0], u16::from_be_bytes([header[2], header[3]])), (0, 1));
+            let mut r = [0; 20];
+            c.read_exact(&mut r).unwrap();
+            let at = |i: usize| u16::from_be_bytes([r[i], r[i + 1]]) as usize;
+            assert_eq!((at(0), at(2), at(4), at(6)), (0, 0, w, h), "the rectangle is the whole screen");
+            assert_eq!(i32::from_be_bytes(r[8..12].try_into().unwrap()), ENC_H264);
+            assert_eq!(u32::from_be_bytes(r[16..20].try_into().unwrap()), crate::enc::H264_RESET);
+            let mut data = vec![0; u32::from_be_bytes(r[12..16].try_into().unwrap()) as usize];
+            c.read_exact(&mut data).unwrap();
+            assert_eq!(crate::h264_mac::tests::sps_size(&data), Some(picture));
+            tx.send(Msg::Gone).unwrap();
+            worker.join().unwrap();
+        }
     }
 
     #[test]
