@@ -286,7 +286,7 @@ mod tests {
     #[ignore]
     fn encode_time() {
         let (w, h) = (1512, 982);
-        let bitrate = ((w * h * 6) as i64).clamp(4_000_000, 40_000_000); // as host_mac::video
+        let bitrate = crate::server::video_bitrate(w, h) as i64; // as host_mac::video
         let text = |x: usize, y: usize| {
             let glyph = ((x / 7) as u32 ^ (y / 16) as u32 * 31).wrapping_mul(2654435761) >> 29;
             if y % 16 < 11 && x % 7 < 5 && glyph > 1 && (x as u32 ^ y as u32 * 3) % 5 != 0 { 0x20_2020u32 } else { 0xff_ffff }

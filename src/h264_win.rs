@@ -228,7 +228,7 @@ impl VideoEncode for H264 {
 
 /// An encoder for a w×h screen, or None (no Media Foundation H.264 encoder here).
 pub fn video(w: usize, h: usize) -> Option<Video> {
-    let bitrate = ((w * h * 6) as u32).clamp(4_000_000, 30_000_000);
+    let bitrate = crate::server::video_bitrate(w, h);
     match H264::new(w, h, bitrate) {
         Ok(e) => Some(Box::new(e)),
         Err(e) => {
