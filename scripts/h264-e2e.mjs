@@ -1,4 +1,5 @@
-// Drives src/h264_e2e.rs: the bundled noVNC in headless Chromium (zrle, then h264).
+// Drives src/h264_e2e.rs: the bundled noVNC in headless Chromium (zrle, h264, then scaled:
+// smaller H.264 pictures that must fill their rectangle).
 //   cargo test --release h264_e2e -- --ignored --nocapture &   then   node scripts/cu-e2e.mjs
 // Needs Playwright (PLAYWRIGHT=/path/to/node_modules/playwright; CHROMIUM=browser binary).
 const pw = await import(process.env.PLAYWRIGHT ?? 'playwright');
@@ -7,7 +8,10 @@ const engines = pw.chromium ? pw : pw.default;
 // offer H.264 to noVNC). WEBKIT/CHROMIUM: browser binary.
 const engine = process.env.ENGINE || 'chromium';
 const exe = engine === 'chromium' ? process.env.CHROMIUM : process.env.WEBKIT;
-const browser = await engines[engine].launch(exe ? { executablePath: exe } : {});
+// BROWSER_ARGS: extra flags, e.g. --disable-accelerated-video-decode where headless Chrome's
+// hardware decoder fails noVNC's H.264 check (then it never asks for H.264).
+const args = (process.env.BROWSER_ARGS || '').split(' ').filter(Boolean);
+const browser = await engines[engine].launch({ ...(exe ? { executablePath: exe } : {}), args });
 // Wait for the test server (it may still be compiling).
 for (let i = 0; ; i++) {
   try {
@@ -19,7 +23,7 @@ for (let i = 0; ; i++) {
   }
 }
 try {
-  for (const mode of ["zrle", "h264"]) {
+  for (const mode of ["zrle", "h264", "scaled"]) {
     const page = await browser.newPage({locale:'ko-KR'});
     page.on('console', (m) => m.type() === 'error' && console.log(`[${mode}] ${m.text()}`));
     await page.goto(`http://127.0.0.1:18791/?mode=${mode}`);

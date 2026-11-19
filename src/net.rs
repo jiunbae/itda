@@ -332,6 +332,7 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
     let mut zin = Vec::new();
     let mut zout = Vec::new();
     let mut raw = Vec::new();
+    let mut video = Video::default();
     let mut updates = 0u64;
     loop {
         wait_msg(&mut r, s)?;
@@ -402,6 +403,18 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                                 fb.mark(x, y, w, h);
                             }
                         }
+                        ENC_H264 => {
+                            // Like ZRLE, the length is bounded before anything is allocated; a
+                            // server past that is broken, not merely hard to decode.
+                            let len = rd_u32(&mut r)? as usize;
+                            let flags = rd_u32(&mut r)?;
+                            if len > crate::yuv::h264_most(w, h) {
+                                return Err(io::Error::new(io::ErrorKind::InvalidData, "H.264 rectangle too large"));
+                            }
+                            raw.resize(len, 0);
+                            r.read_exact(&mut raw)?;
+                            video.rect(s, &raw, flags, x, y, w, h);
+                        }
                         ENC_CURSOR => {
                             let pix = rd_vec(&mut r, w * h * 4)?;
                             let mask = rd_vec(&mut r, (w + 7) / 8 * h)?;
@@ -471,6 +484,111 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
             }
             t => return err(tr!("net.message", kind = t)),
         }
+    }
+}
+
+/// The H.264 decoder of one connection. A decoding failure doesn't end the session: on the GPU,
+/// the decoder is replaced by a software one (once; later decoders of this process stay in
+/// software); in software, the decoder is dropped and the server asked for ZRLE again (which
+/// it answers by repainting the whole screen losslessly); rectangles still in flight until
+/// then are skipped.
+#[derive(Default)]
+struct Video {
+    dec: Option<crate::h264dec_win::Decoder>,
+    failed: bool,
+    /// The GPU decoder failed in this connection: software from now on.
+    soft: bool,
+    /// Rectangles skipped since a new decoder took over mid-stream, waiting for a key frame
+    /// (0: not waiting).
+    waiting: u32,
+    /// Smaller pictures scaled up to their rectangle (ENC_ITDA_SCALED_VIDEO).
+    scaler: crate::yuv::Scaler,
+    /// The last picture size drawn into which rectangle size (logged when it changes).
+    drawn: ((usize, usize), (usize, usize)),
+}
+
+/// Key frames a new decoder waits for, asked again every so many rectangles, before it gives up.
+const IDR_ASK_EVERY: u32 = 60;
+const IDR_GIVE_UP: u32 = 600;
+
+impl Video {
+    fn rect(&mut self, s: &Shared, data: &[u8], flags: u32, x: usize, y: usize, w: usize, h: usize) {
+        if self.failed {
+            return;
+        }
+        let key = crate::yuv::has_nal(data, 5);
+        if self.waiting > 0 {
+            if !key {
+                self.waiting += 1;
+                if self.waiting % IDR_ASK_EVERY == 0 {
+                    s.request(false);
+                }
+                if self.waiting < IDR_GIVE_UP {
+                    return;
+                }
+                return self.give_up(s, &format!("no key frame in {IDR_GIVE_UP} rectangles"), data, flags, [x, y, w, h]);
+            }
+            crate::log!("h264: key frame after {} skipped rectangles", self.waiting - 1);
+            self.waiting = 0;
+        }
+        let reset = flags & crate::enc::H264_RESET != 0;
+        if reset && self.dec.as_ref().is_some_and(|d| d.made != (w, h)) {
+            self.dec = None; // another rectangle: a fresh decoder rather than a flushed one
+        }
+        let gpu = !self.soft && crate::h264dec_win::gpu_wanted();
+        let (scaler, drawn) = (&mut self.scaler, &mut self.drawn);
+        let r = match &mut self.dec {
+            Some(d) => Ok(d),
+            None => crate::h264dec_win::Decoder::new(w, h, gpu).map(|d| {
+                crate::log!("h264: decoding {w}x{h} at {x},{y}{}", if d.gpu() { " on the GPU" } else { "" });
+                self.dec.insert(d)
+            }),
+        }
+        .and_then(|d| {
+            d.decode(data, reset, |pic, yuv| {
+                if *drawn != ((pic.w, pic.h), (w, h)) {
+                    *drawn = ((pic.w, pic.h), (w, h));
+                    if pic.w < w || pic.h < h {
+                        crate::log!("h264: picture {}x{} scaled to {w}x{h}", pic.w, pic.h);
+                    } else {
+                        crate::log!("h264: picture {}x{} in {w}x{h}", pic.w, pic.h);
+                    }
+                }
+                let mut fb = s.fb.lock().unwrap();
+                match fb.video([x, y, w, h], pic, yuv, scaler) {
+                    Some((dw, dh)) if dw > 0 && dh > 0 => fb.mark(x, y, dw, dh),
+                    Some(_) => {}
+                    None => crate::log!("h264: picture {}x{} stride {} doesn't fit its planes", pic.w, pic.h, pic.stride),
+                }
+            })
+        });
+        let Err(e) = r else { return };
+        if self.dec.as_ref().is_some_and(|d| d.gpu()) {
+            crate::log!("h264: GPU decoding failed, using the software decoder: {e} (rect {x},{y} {w}x{h}, {} bytes, flags {flags})", data.len());
+            crate::h264dec_win::gpu_failed();
+            self.soft = true;
+            self.dec = None;
+            if key {
+                // This rectangle starts a picture of its own: the software decoder starts there.
+                return self.rect(s, data, flags | crate::enc::H264_RESET, x, y, w, h);
+            }
+            // Mid-stream: the next pictures need the ones before; ask for a key frame.
+            self.waiting = 1;
+            s.request(false);
+            return;
+        }
+        self.give_up(s, &e, data, flags, [x, y, w, h]);
+    }
+
+    /// Back to ZRLE for this connection, and no more H.264 in this process.
+    fn give_up(&mut self, s: &Shared, e: &str, data: &[u8], flags: u32, [x, y, w, h]: [usize; 4]) {
+        crate::log!("h264: DECODING FAILED, back to ZRLE: {e} (rect {x},{y} {w}x{h}, {} bytes, flags {flags})", data.len());
+        self.dec = None;
+        self.failed = true;
+        self.waiting = 0;
+        crate::h264dec_win::disable();
+        s.send(&set_encodings(false));
+        s.request(false);
     }
 }
 

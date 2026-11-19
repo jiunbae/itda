@@ -557,7 +557,8 @@ function helpSettings() {
       ${hset(T('settings.toolbar'), T('help.set.toolbar'), T('help.set.toolbar.when'), T('help.set.toolbar.rec'))}
       ${hset(T('settings.hotkey'), T('help.set.hotkey'), T('help.set.hotkey.when'), T('help.set.hotkey.rec'))}
       ${hset(T('settings.macScroll.pc'), T('help.set.macScroll'), T('help.set.macScroll.when'), T('help.set.macScroll.rec'))}
-      ${hset(T('settings.scrollAccel'), T('help.set.accel'), T('help.set.accel.when'), T('help.set.accel.rec'))}`)}
+      ${hset(T('settings.scrollAccel'), T('help.set.accel'), T('help.set.accel.when'), T('help.set.accel.rec'))}
+      ${hset(T('settings.gpuDecode'), T('help.set.gpuDecode'), T('help.set.gpuDecode.when'), T('help.set.gpuDecode.rec'))}`)}
     ${hgroup('defaults', 'E9A6', T('settings.group.defaults'), path(P('settings'), P('defaults')), `
       <p class="hwhere">${T('help.set.defaults.note')}</p>
       ${hset(T('settings.scale'), T('help.set.scale'), T('help.set.scale.when'), T('help.set.scale.rec'))}

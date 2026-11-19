@@ -576,6 +576,7 @@ pub fn spawn_session(host: &Host, login: &store::Login, pass: String, settings: 
         mac_scroll: settings.mac_scroll.clone(),
         scroll_accel: settings.scroll_accel,
         thumbnails: settings.thumbnails,
+        gpu_decode: settings.gpu_decode,
         ssh: host.ssh.clone(),
         hp,
     };

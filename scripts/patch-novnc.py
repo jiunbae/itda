@@ -131,3 +131,42 @@ s=s.replace(needle,'''            if (slice) {
                 break;
             }''',1)
 p.write_text(s)
+
+# Itda's scaled video (pseudo-encoding 'ITDS' = enc::ENC_ITDA_SCALED_VIDEO, listed with H.264):
+# the server may send a picture smaller than its rectangle (same aspect), to be drawn scaled up
+# to fill it; every size change comes with a context reset and a key frame, which gives the
+# rectangle a new decoder. noVNC cut every frame to the rectangle's size from its top left.
+p=Path(sys.argv[1])/'package/core/rfb.js'
+s=p.read_text()
+needle='''                encs.push(encodings.encodingH264);
+'''
+assert s.count(needle)==1
+s=s.replace(needle,needle+'''                encs.push(0x49544453);
+''',1)
+p.write_text(s)
+p=Path(sys.argv[1])/'package/core/display.js'
+s=p.read_text()
+a=s.index('''                        let frame = a.frame.frame;''')
+b=s.index('''                        frame.close();''',a)
+s=s[:a]+'''                        let frame = a.frame.frame;
+                        const v = frame.visibleRect || { x: 0, y: 0, width: frame.displayWidth, height: frame.displayHeight };
+                        if (v.width < a.width || v.height < a.height) {
+                            // Smaller than its rectangle: scaled to fill it, smoothly (copyImage
+                            // turns smoothing off for this canvas).
+                            const smooth = this._drawCtx.imageSmoothingEnabled;
+                            this._drawCtx.imageSmoothingEnabled = true;
+                            this._drawCtx.imageSmoothingQuality = 'low';
+                            this.drawImage(frame, v.x, v.y, v.width, v.height, a.x, a.y, a.width, a.height);
+                            this._drawCtx.imageSmoothingEnabled = smooth;
+                        } else {
+                            // The encoder may pad the picture past the rectangle: cut to it.
+                            this.drawImage(frame, 0, 0, a.width, a.height, a.x, a.y, a.width, a.height);
+                        }
+'''+s[b:]
+# What a 9-argument drawImage changed is its destination, which scaling makes larger.
+needle='''            const [,, sw, sh, dx, dy] = args;
+            this._damage(dx, dy, sw, sh);'''
+assert s.count(needle)==1
+s=s.replace(needle,'''            const [,,,, dx, dy, dw, dh] = args;
+            this._damage(dx, dy, dw, dh);''',1)
+p.write_text(s)

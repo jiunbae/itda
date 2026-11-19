@@ -1,10 +1,13 @@
 //! H.264 (RFB encoding 50) against the bundled noVNC in a real browser, next to ZRLE.
 //!
 //! `cargo test --release h264_e2e -- --ignored --nocapture` serves http://127.0.0.1:18791/;
-//! `scripts/h264-e2e.mjs` opens it twice in Chromium (zrle, then h264). Each session moves
-//! a square for MOVING, then stands still; the page samples the canvas at the end. The server
-//! answers each update request with the latest frame (classic request/answer, so the rate is
-//! what the viewer can take), and reports frames and bytes for both encodings.
+//! `scripts/h264-e2e.mjs` opens it three times in Chromium (zrle, h264, then scaled). Each
+//! session moves a square for MOVING, then stands still; the page samples the canvas at the
+//! end. The server answers each update request with the latest frame (classic request/answer,
+//! so the rate is what the viewer can take), and reports frames and bytes for both encodings.
+//! The scaled session sends a smooth picture at 960×540, then 1280×720 (each size from a reset
+//! and a key frame), in the 1920×1080 rectangle: Itda's scaled video (ENC_ITDA_SCALED_VIDEO),
+//! which the viewer must fill the rectangle with.
 use crate::cu_e2e::{read_client, In, WsRead, NOVNC};
 use crate::enc::{Encoder, PixelFormat, Update, ENC_ZRLE};
 use crate::h264_mac::H264;
@@ -16,6 +19,7 @@ use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 pub(crate) const ENC_H264: i32 = 50;
+use crate::enc::ENC_ITDA_SCALED_VIDEO;
 const W: usize = 1920;
 const H: usize = 1080;
 
@@ -36,6 +40,20 @@ fn frame(t: Duration, f: &mut [u32], _: bool) {
             } else {
                 0xffffff
             };
+        }
+    }
+}
+
+/// The scaled session's picture: smooth (it survives scaling and compression closely),
+/// sliding sideways until MOVING.
+fn smooth(t: Duration, f: &mut [u32], w: usize, h: usize) {
+    let off = t.as_millis() as usize / 2;
+    for y in 0..h {
+        for x in 0..w {
+            let sx = (x * W / w + off) % (2 * W);
+            let r = (sx.abs_diff(W) * 255 / W) as u32;
+            let g = (y * H / h * 255 / H) as u32;
+            f[y * w + x] = r << 16 | g << 8 | 0x60;
         }
     }
 }
@@ -93,9 +111,11 @@ struct Stats {
     encode_ms: f64,
     used_h264: bool,
     refines: usize,
+    /// Picture sizes sent into the screen-sized rectangle (scaled session).
+    sizes: Vec<(usize, usize)>,
 }
 
-fn session(s: TcpStream, want_h264: bool) -> io::Result<Stats> {
+fn session(s: TcpStream, want_h264: bool, scaled: bool) -> io::Result<Stats> {
     let tx = ws::Sender::new(s.try_clone()?);
     let mut r = WsRead { rx: ws::Receiver::new(s.try_clone()?, tx.clone()), buf: Vec::new(), pos: 0 };
     let send = |b: &[u8]| tx.binary(b);
@@ -119,6 +139,7 @@ fn session(s: TcpStream, want_h264: bool) -> io::Result<Stats> {
     let (mut enc, mut u, mut prev) = (Encoder::new(), Update::default(), Vec::<u32>::new());
     let mut f = vec![0u32; W * H];
     let mut h264: Option<H264> = None;
+    let mut small = Vec::<u32>::new();
     let start = Instant::now();
     let mut pending: Option<bool> = None;
     let (mut last_change, mut exact) = (Instant::now(), Vec::<u32>::new());
@@ -132,9 +153,21 @@ fn session(s: TcpStream, want_h264: bool) -> io::Result<Stats> {
             Err(RecvTimeoutError::Disconnected) => break,
         }
         let Some(incremental) = pending else { continue };
-        frame(start.elapsed().min(MOVING), &mut f, false);
         let moving = start.elapsed() < MOVING;
         let video = want_h264 && encs.contains(&ENC_H264);
+        let scale = scaled && video && encs.contains(&ENC_ITDA_SCALED_VIDEO);
+        // (Scaled: the first half at 960×540, then 1280×720.)
+        let (pw, ph) = if !scale { (W, H) } else if start.elapsed() < MOVING / 2 { (960, 540) } else { (1280, 720) };
+        if scale {
+            small.resize(pw * ph, 0);
+            smooth(start.elapsed().min(MOVING), &mut small, pw, ph);
+            smooth(start.elapsed().min(MOVING), &mut f, W, H);
+        } else {
+            frame(start.elapsed().min(MOVING), &mut f, false);
+        }
+        if scale && incremental && prev == f {
+            continue; // (no lossless repaint: the scaled picture is what is checked)
+        }
         if video && incremental && prev == f {
             // Still: once it has stayed still a moment, repaint what changed since the last
             // exact picture losslessly (H.264's 4:2:0 blurs text and colour edges).
@@ -159,9 +192,14 @@ fn session(s: TcpStream, want_h264: bool) -> io::Result<Stats> {
         u.start();
         let t = Instant::now();
         if want_h264 && encs.contains(&ENC_H264) {
-            let first = h264.is_none();
-            let e = h264.get_or_insert_with(|| H264::new(W, H, 20_000_000).expect("encoder"));
-            let unit = e.encode(&f, W, first || !incremental).map_err(io::Error::other)?;
+            // A new picture size is a new stream: a new encoder, and the rectangle's reset.
+            let first = st.sizes.last() != Some(&(pw, ph));
+            if first {
+                st.sizes.push((pw, ph));
+                h264 = None;
+            }
+            let e = h264.get_or_insert_with(|| H264::new(pw, ph, 20_000_000).expect("encoder"));
+            let unit = if scale { e.encode(&small, pw, first || !incremental) } else { e.encode(&f, W, first || !incremental) }.map_err(io::Error::other)?;
             if unit.key {
                 st.key_bytes += unit.data.len();
             }
@@ -229,11 +267,12 @@ fn h264_e2e() {
         };
         if path.starts_with("/ws") {
             c.set_read_timeout(None).unwrap();
-            let h264 = path.contains("mode=h264");
+            let scaled = path.contains("mode=scaled");
+            let h264 = scaled || path.contains("mode=h264");
             write!(c, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n", ws::accept_key(&key)).unwrap();
             c.set_nodelay(true).unwrap();
-            let st = session(c, h264).unwrap();
-            println!("session {}: {st:?}", if h264 { "h264" } else { "zrle" });
+            let st = session(c, h264, scaled).unwrap();
+            println!("session {}: {st:?}", if scaled { "scaled" } else if h264 { "h264" } else { "zrle" });
             stats.push((h264, st));
         } else if path == "/report" {
             let mut body = vec![0u8; len];
@@ -243,7 +282,11 @@ fn h264_e2e() {
             // Build the expected still image once, rather than regenerating two
             // million pixels for every one of the hundreds of sampled points.
             let mut expected = vec![0; W * H];
-            frame(MOVING, &mut expected, false);
+            if v["mode"] == "scaled" {
+                smooth(MOVING, &mut expected, W, H);
+            } else {
+                frame(MOVING, &mut expected, false);
+            }
             let off = |a: u32, b: u32| (0..3).map(|i| ((a >> (8 * i)) & 255).abs_diff((b >> (8 * i)) & 255)).max().unwrap();
             let worst = samples.iter().map(|s| off(s[2].as_u64().unwrap() as u32, expected[s[1].as_u64().unwrap() as usize * W + s[0].as_u64().unwrap() as usize])).max().unwrap();
             println!("report {}: webcodecs={} canvas {}x{}, {} samples, worst channel error {worst}", v["mode"], v["h264"], v["w"], v["h"], samples.len());
@@ -258,7 +301,7 @@ fn h264_e2e() {
             }
             reply(&mut c, "text/plain", b"ok");
             reports += 1;
-            if reports == 2 {
+            if reports == 3 {
                 break;
             }
         } else if path.starts_with("/trace.js") {
@@ -281,4 +324,5 @@ fn h264_e2e() {
         );
     }
     assert!(stats.iter().any(|(h, s)| *h && s.used_h264), "the viewer never asked for H.264");
+    assert!(stats.iter().any(|(_, s)| s.sizes == [(960, 540), (1280, 720)]), "the viewer never asked for scaled video: {:?}", stats.iter().map(|(_, s)| &s.sizes).collect::<Vec<_>>());
 }

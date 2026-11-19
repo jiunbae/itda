@@ -33,6 +33,8 @@ pub struct Launch {
     pub mac_scroll: String,
     pub scroll_accel: bool,
     pub thumbnails: bool,
+    /// Decode H.264 on the GPU (DXVA) instead of in software (Windows; store::Settings).
+    pub gpu_decode: bool,
     /// Itda's high-performance sharing on this Mac, tried first (else Screen Sharing).
     pub hp: Option<HpRoute>,
 }
@@ -115,6 +117,8 @@ fn open_hp(l: &Launch, hp: &HpRoute) -> io::Result<(rfb::Session, Arc<Tunnel>, C
 
 /// Connect and, on success, open the viewer window (blocks until it closes).
 pub fn run(l: Launch) {
+    #[cfg(windows)]
+    crate::h264dec_win::want_gpu(l.gpu_decode);
     let mut creds = Creds { user: l.user.clone(), pass: l.pass.clone() };
     let mut tunnel_ref: Option<Arc<Tunnel>> = None;
     let r = (|| -> io::Result<_> {
