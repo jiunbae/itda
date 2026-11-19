@@ -19,6 +19,10 @@ pub const ENC_DESKTOP_SIZE: i32 = -223;
 pub const ENC_EXT_DESKTOP_SIZE: i32 = -308;
 /// Extended Clipboard pseudo-encoding (handled in clip.rs).
 pub const ENC_EXT_CLIPBOARD: i32 = 0xc0a1_e5ce_u32 as i32;
+/// 'ITDS': this viewer scales an H.264 picture smaller than its rectangle (same aspect, even
+/// size) up to fill it, so the server may encode fewer pixels than it shows. Every size change
+/// comes as H264_RESET with an IDR.
+pub const ENC_ITDA_SCALED_VIDEO: i32 = 0x4954_4453; // = enc::ENC_ITDA_SCALED_VIDEO
 
 /// Total bytes received from the server (for the stats display).
 pub static RX_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -329,10 +333,11 @@ fn h264_ok() -> bool {
 
 /// SetEncodings for what this viewer decodes. H.264 goes first when it can be decoded: Itda's
 /// own sharing server then streams motion as video, a fraction of ZRLE's size; other servers
-/// don't know it and pick ZRLE as before.
+/// don't know it and pick ZRLE as before. With it, scaled video (the viewer scales smaller
+/// pictures up).
 pub fn set_encodings(h264: bool) -> Vec<u8> {
     let encs = [ENC_ZRLE, ENC_COPYRECT, ENC_RAW, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, ENC_DESKTOP_SIZE, ENC_EXT_CLIPBOARD];
-    let encs: Vec<i32> = h264.then_some(ENC_H264).into_iter().chain(encs).collect();
+    let encs: Vec<i32> = h264.then_some(ENC_H264).into_iter().chain(encs).chain(h264.then_some(ENC_ITDA_SCALED_VIDEO)).collect();
     let mut m = vec![2, 0];
     m.extend_from_slice(&(encs.len() as u16).to_be_bytes());
     for e in encs {
@@ -434,10 +439,12 @@ mod tests {
         };
         let plain = ids(super::set_encodings(false));
         assert_eq!(plain[0], super::ENC_ZRLE);
-        assert!(!plain.contains(&super::ENC_H264));
+        assert!(!plain.contains(&super::ENC_H264) && !plain.contains(&super::ENC_ITDA_SCALED_VIDEO));
         let video = ids(super::set_encodings(true));
         assert_eq!(video[0], super::ENC_H264);
-        assert_eq!(video[1..], plain[..]);
+        assert_eq!(video[1..video.len() - 1], plain[..]);
+        assert_eq!(video.last(), Some(&super::ENC_ITDA_SCALED_VIDEO), "scaled video only with H.264");
+        assert_eq!(super::ENC_ITDA_SCALED_VIDEO.to_be_bytes(), *b"ITDS");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! The portable half of the Windows viewer's H.264 decoding (h264dec_win): splitting Annex B
 //! into access units, how much data a rectangle may claim, and decoded NV12 pictures to the
-//! framebuffer's 0x00RRGGBB pixels. Kept out of the Windows-only module so it is tested on
+//! framebuffer's 0x00RRGGBB pixels, scaled up to their rectangle when the server sent a smaller
+//! picture (`Scaler`). Kept out of the Windows-only module so it is tested on
 //! every platform.
 
 /// The most bytes an H.264 rectangle of w×h may claim, read before anything is decoded. A
@@ -115,34 +116,156 @@ impl Yuv {
         r << 16 | g << 8 | b
     }
 
+    /// Whether `pic`'s planes hold the size it claims (checked before any row is read).
+    fn planes_fit(pic: &Nv12) -> bool {
+        let (w, h, stride) = (pic.w, pic.h, pic.stride);
+        let cw = w.div_ceil(2) * 2; // chroma bytes a row reads
+        w == 0 || h == 0 || (stride >= cw && pic.y.len() >= stride * (h - 1) + w && pic.uv.len() >= stride * (h.div_ceil(2) - 1) + cw)
+    }
+
+    /// One row of `pic` (whose planes fit) into `out` (`pic.w` pixels).
+    #[inline]
+    fn row(&self, pic: &Nv12, row: usize, out: &mut [u32]) {
+        let (w, stride) = (pic.w, pic.stride);
+        let cw = w.div_ceil(2) * 2;
+        let luma = &pic.y[row * stride..][..w];
+        let chroma = &pic.uv[row / 2 * stride..][..cw];
+        for ((o, l), c) in out[..w].chunks_mut(2).zip(luma.chunks(2)).zip(chroma.chunks_exact(2)) {
+            let (u, v) = (c[0] as i32 - 128, c[1] as i32 - 128);
+            for (o, &l) in o.iter_mut().zip(l) {
+                *o = self.rgb(l, u, v);
+            }
+        }
+    }
+
     /// Convert `pic` into `dst` (rows `dst_stride` pixels apart, the first at dst[0]). False,
     /// with nothing written, if a plane or `dst` is too short for the size it claims.
     pub fn convert(&self, pic: &Nv12, dst: &mut [u32], dst_stride: usize) -> bool {
-        let (w, h, stride) = (pic.w, pic.h, pic.stride);
+        let (w, h) = (pic.w, pic.h);
         if w == 0 || h == 0 {
             return true;
         }
-        let cw = w.div_ceil(2) * 2; // chroma bytes a row reads
-        if stride < cw
-            || dst_stride < w
-            || pic.y.len() < stride * (h - 1) + w
-            || pic.uv.len() < stride * (h.div_ceil(2) - 1) + cw
-            || dst.len() < dst_stride * (h - 1) + w
-        {
+        if !Self::planes_fit(pic) || dst_stride < w || dst.len() < dst_stride * (h - 1) + w {
             return false;
         }
         for row in 0..h {
-            let luma = &pic.y[row * stride..][..w];
-            let chroma = &pic.uv[row / 2 * stride..][..cw];
-            let out = &mut dst[row * dst_stride..][..w];
-            for ((o, l), c) in out.chunks_mut(2).zip(luma.chunks(2)).zip(chroma.chunks_exact(2)) {
-                let (u, v) = (c[0] as i32 - 128, c[1] as i32 - 128);
-                for (o, &l) in o.iter_mut().zip(l) {
-                    *o = self.rgb(l, u, v);
-                }
+            self.row(pic, row, &mut dst[row * dst_stride..]);
+        }
+        true
+    }
+}
+
+/// Where each destination pixel of a row (or column) of `to` reads from a row of `from`: the
+/// two source pixels and the second one's weight in 1/256 (pixel centres line up, so the edges
+/// repeat the source's edge pixels and the same size maps 1:1 with no blending).
+fn taps(from: usize, to: usize, out: &mut Vec<(u32, u32, u32)>) {
+    out.clear();
+    let last = from as i64 - 1;
+    out.extend((0..to as i64).map(|d| {
+        let pos = (((2 * d + 1) * from as i64) << 16) / (2 * to as i64) - (1 << 15);
+        let pos = pos.max(0);
+        let (i, f) = (pos >> 16, (pos >> 8) & 255);
+        if i >= last { (last as u32, last as u32, 0) } else { (i as u32, i as u32 + 1, f as u32) }
+    }));
+}
+
+/// a·(1−f) + b·f per 8-bit channel of 0x00RRGGBB, f in 1/256 (0..=255): red and blue in one
+/// multiply, green in another.
+#[inline(always)]
+fn mix(a: u32, b: u32, f: u32) -> u32 {
+    let g = 256 - f;
+    let rb = ((a & 0xff00ff) * g + (b & 0xff00ff) * f + 0x0080_0080) >> 8;
+    let gg = ((a & 0xff00) * g + (b & 0xff00) * f + 0x8000) >> 8;
+    (rb & 0xff00ff) | (gg & 0xff00)
+}
+
+/// `out` = a·(1−f) + b·f, byte by byte (f in 1/256, 0..=255). In 16-bit lanes, which
+/// vectorize on any x86-64 (32-bit multiplies don't before SSE4.1).
+fn blend(a: &[u32], b: &[u32], out: &mut [u32], f: u32) {
+    let bytes = |p: &[u32]| unsafe { std::slice::from_raw_parts(p.as_ptr() as *const u8, p.len() * 4) };
+    let (a, b) = (bytes(a), bytes(b));
+    // SAFETY: u8 has no alignment or validity requirements beyond u32's.
+    let out = unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut u8, out.len() * 4) };
+    let (f, g) = (f as u16, 256 - f as u16);
+    for ((o, &p), &q) in out.iter_mut().zip(a).zip(b) {
+        *o = ((p as u16 * g + q as u16 * f + 128) >> 8) as u8;
+    }
+}
+
+/// Draws a decoded picture into its rectangle: as it is when it covers the rectangle (the
+/// encoder's macroblock padding is cut off), else scaled to fill it, bilinear. Itda's server
+/// sends a smaller picture than the screen area (same aspect) to viewers that asked for it
+/// (ENC_ITDA_SCALED_VIDEO), to save bandwidth and both sides' CPU.
+///
+/// Each picture row is converted once and stretched to the rectangle's width into one of two
+/// row buffers; each output row blends the two it falls between. Tables and rows are kept
+/// between pictures: nothing is allocated per picture once the sizes settle.
+#[derive(Default)]
+pub struct Scaler {
+    sizes: ((usize, usize), (usize, usize)),
+    xs: Vec<(u32, u32, u32)>,
+    ys: Vec<(u32, u32, u32)>,
+    /// One picture row, converted.
+    line: Vec<u32>,
+    /// Picture rows stretched to the output width, and which row each holds.
+    rows: [Vec<u32>; 2],
+    held: [usize; 2],
+}
+
+impl Scaler {
+    /// Draw `pic` into the w×h rectangle at dst[0] (rows `dst_stride` apart). False, with
+    /// nothing written, if a plane or `dst` is too short.
+    pub fn draw(&mut self, yuv: &Yuv, pic: &Nv12, dst: &mut [u32], dst_stride: usize, w: usize, h: usize) -> bool {
+        if w == 0 || h == 0 {
+            return true;
+        }
+        if pic.w >= w && pic.h >= h {
+            return yuv.convert(&Nv12 { w, h, ..*pic }, dst, dst_stride);
+        }
+        if pic.w == 0 || pic.h == 0 || !Yuv::planes_fit(pic) || dst_stride < w || dst.len() < dst_stride * (h - 1) + w {
+            return false;
+        }
+        let (sw, sh) = (pic.w, pic.h);
+        if self.sizes != ((sw, sh), (w, h)) {
+            self.sizes = ((sw, sh), (w, h));
+            taps(sw, w, &mut self.xs);
+            taps(sh, h, &mut self.ys);
+            self.line.resize(sw, 0);
+            for r in &mut self.rows {
+                r.resize(w, 0);
+            }
+        }
+        self.held = [usize::MAX; 2]; // a new picture
+        for j in 0..h {
+            let (y0, y1, fy) = self.ys[j];
+            let a = self.load(yuv, pic, y0 as usize, y1 as usize);
+            let b = self.load(yuv, pic, y1 as usize, y0 as usize);
+            let out = &mut dst[j * dst_stride..][..w];
+            if fy == 0 || a == b {
+                out.copy_from_slice(&self.rows[a]);
+            } else {
+                blend(&self.rows[a], &self.rows[b], out, fy);
             }
         }
         true
+    }
+
+    /// The row buffer holding picture row `r` stretched, converting it into the one not
+    /// holding `keep` if neither has it yet.
+    fn load(&mut self, yuv: &Yuv, pic: &Nv12, r: usize, keep: usize) -> usize {
+        if let Some(i) = self.held.iter().position(|&h| h == r) {
+            return i;
+        }
+        let i = if self.held[0] == keep { 1 } else { 0 };
+        yuv.row(pic, r, &mut self.line);
+        let line = &self.line[..pic.w];
+        for (o, &(x0, x1, fx)) in self.rows[i].iter_mut().zip(&self.xs) {
+            // SAFETY: `taps` made every index for a row of `pic.w` (< pic.w), and `line` is it.
+            let (p, q) = unsafe { (*line.get_unchecked(x0 as usize), *line.get_unchecked(x1 as usize)) };
+            *o = mix(p, q, fx);
+        }
+        self.held[i] = r;
+        i
     }
 }
 
@@ -241,6 +364,109 @@ mod tests {
         // Nothing recognisable is passed on whole; nothing at all yields nothing.
         assert_eq!(access_units(&[1, 2, 3]), [&[1u8, 2, 3][..]]);
         assert!(access_units(&[]).is_empty());
+    }
+
+    /// RGB "NV12": neutral chroma, so each pixel is its luma as grey (full range: Y = value).
+    fn grey(w: usize, h: usize, stride: usize, f: impl Fn(usize, usize) -> u8) -> (Vec<u8>, Vec<u8>) {
+        let mut luma = vec![0u8; stride * h];
+        for y in 0..h {
+            for x in 0..w {
+                luma[y * stride + x] = f(x, y);
+            }
+        }
+        (luma, vec![128u8; stride * h.div_ceil(2)])
+    }
+
+    #[test]
+    fn scaler_same_size_is_the_plain_conversion() {
+        let (w, h, stride) = (7, 5, 8);
+        let (luma, chroma) = grey(w, h, stride, |x, y| (x * 30 + y * 7) as u8);
+        let pic = Nv12 { y: &luma, uv: &chroma, stride, w, h };
+        let yuv = Yuv::new(true, true);
+        let mut plain = vec![1u32; 9 * h];
+        assert!(yuv.convert(&pic, &mut plain, 9));
+        let mut scaled = vec![1u32; 9 * h];
+        assert!(Scaler::default().draw(&yuv, &pic, &mut scaled, 9, w, h));
+        assert_eq!(plain, scaled);
+        // A bigger picture (macroblock padding) is cut to the rectangle, not shrunk.
+        let mut cut = vec![1u32; 9 * 3];
+        assert!(Scaler::default().draw(&yuv, &pic, &mut cut, 9, 4, 3));
+        for y in 0..3 {
+            assert_eq!(cut[y * 9..y * 9 + 4], plain[y * 9..y * 9 + 4]);
+            assert_eq!(cut[y * 9 + 4], 1, "nothing past the rectangle");
+        }
+    }
+
+    #[test]
+    fn scaler_fills_the_rectangle_bilinear() {
+        // 2×2 → 4×4: pixel centres line up, so the edges repeat the corner pixels and the
+        // middle blends a quarter / three quarters.
+        let (luma, chroma) = grey(2, 2, 2, |x, y| [[0u8, 200], [100, 40]][y][x]);
+        let pic = Nv12 { y: &luma, uv: &chroma, stride: 2, w: 2, h: 2 };
+        let yuv = Yuv::new(true, true);
+        let mut dst = vec![0xdead_beefu32; 6 * 5];
+        let mut sc = Scaler::default();
+        assert!(sc.draw(&yuv, &pic, &mut dst, 6, 4, 4));
+        let at = |x: usize, y: usize| dst[y * 6 + x] & 255;
+        assert_eq!([at(0, 0), at(3, 0), at(0, 3), at(3, 3)], [0, 200, 100, 40], "corners");
+        assert_eq!([at(1, 0), at(2, 0)], [50, 150], "top row: 1/4 and 3/4 of the way");
+        assert_eq!([at(0, 1), at(0, 2)], [25, 75], "left column");
+        // (0,0)…(200,40) both ways at a quarter: 0.75·(0.75·0 + 0.25·200) + 0.25·(0.75·100 + 0.25·40)
+        assert!((at(1, 1) as i32 - 59).abs() <= 1, "{}", at(1, 1));
+        assert!(dst.chunks(6).take(4).all(|r| r[4..] == [0xdead_beef; 2]), "rows end at the rectangle");
+        assert_eq!(dst[24..], [0xdead_beef; 6], "nothing below it");
+        // The same scaler again, then for another size: same result, new tables.
+        let first = dst.clone();
+        assert!(sc.draw(&yuv, &pic, &mut dst, 6, 4, 4));
+        assert_eq!(dst, first);
+        // One row: halfway between the picture's rows (50, 120), stretched ×3 across.
+        let mut wide = [0u32; 6];
+        assert!(sc.draw(&yuv, &pic, &mut wide, 6, 6, 1));
+        assert_eq!(wide.map(|p| p & 255), [50, 50, 73, 97, 120, 120]);
+    }
+
+    #[test]
+    fn scaler_exact_sizes_and_short_buffers() {
+        // 2560×1440 → 3840×2160 (×1.5), and an odd ratio; every output pixel written, none past.
+        for (sw, sh, w, h) in [(64, 36, 96, 54), (10, 6, 33, 19), (1, 1, 5, 3)] {
+            let (luma, chroma) = grey(sw, sh, sw + 2, |x, y| ((x + y) * 3) as u8);
+            let pic = Nv12 { y: &luma, uv: &chroma, stride: sw + 2, w: sw, h: sh };
+            let stride = w + 1;
+            let mut dst = vec![0xdead_beefu32; stride * h + 1];
+            assert!(Scaler::default().draw(&Yuv::new(true, false), &pic, &mut dst, stride, w, h));
+            for y in 0..h {
+                assert!(dst[y * stride..][..w].iter().all(|&p| p >> 24 == 0), "{sw}x{sh}→{w}x{h} row {y}");
+                assert_eq!(dst[y * stride + w], 0xdead_beef);
+            }
+            assert_eq!(dst[stride * h], 0xdead_beef);
+            let mut short = vec![0u32; stride * (h - 1) + w - 1];
+            assert!(!Scaler::default().draw(&Yuv::new(true, false), &pic, &mut short, stride, w, h));
+            assert!(short.iter().all(|&p| p == 0));
+        }
+        let (luma, chroma) = grey(4, 4, 4, |_, _| 9);
+        let pic = Nv12 { y: &luma[..10], uv: &chroma, stride: 4, w: 4, h: 4 };
+        assert!(!Scaler::default().draw(&Yuv::new(true, false), &pic, &mut vec![0; 64], 8, 8, 8));
+    }
+
+    /// How long a 2560×1440 picture takes to fill 3840×2160 (`cargo test --release -- --ignored
+    /// --nocapture scaler_speed`).
+    #[test]
+    #[ignore]
+    fn scaler_speed() {
+        let (sw, sh, w, h) = (2560, 1440, 3840, 2160);
+        let (luma, chroma) = grey(sw, sh, sw, |x, y| (x ^ y) as u8);
+        let pic = Nv12 { y: &luma, uv: &chroma, stride: sw, w: sw, h: sh };
+        let yuv = Yuv::new(true, false);
+        let mut dst = vec![0u32; w * h];
+        let mut sc = Scaler::default();
+        let mut plain = vec![0u32; sw * sh];
+        for (name, scaled) in [("convert 2560x1440", false), ("scale to 3840x2160", true)] {
+            let t = std::time::Instant::now();
+            for _ in 0..20 {
+                if scaled { assert!(sc.draw(&yuv, &pic, &mut dst, w, w, h)) } else { assert!(yuv.convert(&pic, &mut plain, sw)) }
+            }
+            eprintln!("{name}: {:.1} ms", t.elapsed().as_secs_f64() * 1000.0 / 20.0);
+        }
     }
 
     #[test]

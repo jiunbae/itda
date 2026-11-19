@@ -1,13 +1,23 @@
 //! H.264 ("Open H.264", RFB encoding 50) for the Windows viewer through Media Foundation's
-//! H.264 decoder MFT, in software: Annex B in, one access unit per sample, NV12 out, converted
-//! into the framebuffer (yuv.rs). Itda's own sharing server sends moving screens this way at a
-//! fraction of ZRLE's size. Any failure is returned as an error, and the viewer goes back to
-//! ZRLE (net.rs) instead of ending the session.
+//! H.264 decoder MFT: Annex B in, one access unit per sample, NV12 out, converted (and scaled,
+//! when the server sent a smaller picture) into the framebuffer (yuv.rs). Itda's own sharing
+//! server sends moving screens this way at a fraction of ZRLE's size.
+//!
+//! In software by default. With the "decode video on the GPU" setting, the same MFT is given a
+//! D3D11 device (DXVA): it decodes into textures, and each picture is copied to a staging
+//! texture and read from there. Anything going wrong while setting that up falls back to the
+//! software decoder at once; failures while decoding are returned as errors, and net.rs falls
+//! back from the GPU to software once, and from software to ZRLE, instead of ending the session.
 use crate::yuv::{self, Nv12, Yuv};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use windows::core::Interface;
+use windows::Win32::Foundation::HMODULE;
+use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1};
+use windows::Win32::Graphics::Direct3D11::*;
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 
@@ -30,7 +40,7 @@ pub fn available() -> bool {
                 crate::log!("h264: ITDA_NO_H264=1, asking for ZRLE only");
                 return false;
             }
-            let ok = std::thread::spawn(|| match Decoder::new(1920, 1080) {
+            let ok = std::thread::spawn(|| match Decoder::new(1920, 1080, false) {
                 Ok(_) => true,
                 Err(e) => {
                     crate::log!("h264: no decoder here ({e}); asking for ZRLE only");
@@ -51,8 +61,132 @@ pub fn disable() {
     OFF.store(true, Relaxed);
 }
 
+/// The "decode video on the GPU" setting (session::Launch), and whether the GPU path failed in
+/// this process (then every later decoder is a software one).
+static GPU: AtomicBool = AtomicBool::new(false);
+static GPU_OFF: AtomicBool = AtomicBool::new(false);
+
+/// Set from the session's settings. ITDA_GPU_DECODE=1 or 0 overrides it (for testing).
+pub fn want_gpu(on: bool) {
+    let on = match std::env::var("ITDA_GPU_DECODE").as_deref() {
+        Ok("1") => true,
+        Ok("0") => false,
+        _ => on,
+    };
+    if on {
+        crate::log!("h264: GPU decoding asked for");
+    }
+    GPU.store(on, Relaxed);
+}
+
+/// Whether a new decoder should try the GPU.
+pub fn gpu_wanted() -> bool {
+    GPU.load(Relaxed) && !GPU_OFF.load(Relaxed)
+}
+
+/// The GPU path failed: software decoders from now on, in this process.
+pub fn gpu_failed() {
+    GPU_OFF.store(true, Relaxed);
+}
+
+/// A hardware D3D11 device with video support, and the device manager the decoder MFT takes.
+/// Pictures come out in the decoder's textures and are read back through `staging`.
+struct Gpu {
+    ctx: ID3D11DeviceContext,
+    dev: ID3D11Device,
+    mgr: IMFDXGIDeviceManager,
+    /// CPU-readable copy of one picture (NV12, the decoder textures' size), made when the
+    /// first picture comes and again only if their size changes.
+    staging: Option<(ID3D11Texture2D, u32, u32)>,
+}
+
+impl Gpu {
+    fn new() -> Result<Gpu, String> {
+        let at = |what: &'static str| move |e: windows::core::Error| format!("{what}: {e}");
+        unsafe {
+            let (mut dev, mut ctx) = (None, None);
+            let levels: [D3D_FEATURE_LEVEL; 4] = [D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0];
+            D3D11CreateDevice(None, D3D_DRIVER_TYPE_HARDWARE, HMODULE::default(), D3D11_CREATE_DEVICE_VIDEO_SUPPORT, Some(&levels), D3D11_SDK_VERSION, Some(&mut dev), None, Some(&mut ctx)).map_err(at("no hardware D3D11 device with video support"))?;
+            let (Some(dev), Some(ctx)) = (dev, ctx) else { return Err("no D3D11 device".into()) };
+            // Which graphics card; Windows' own software adapter (no driver, e.g. a VM) decodes
+            // no faster than the software decoder.
+            if let Ok(desc) = dev.cast::<IDXGIDevice>().and_then(|d| d.GetAdapter()).and_then(|a| a.GetDesc()) {
+                let name = String::from_utf16_lossy(&desc.Description).trim_end_matches('\0').to_string();
+                crate::log!("h264: GPU {name} (vendor {:04x} device {:04x}, {} MB)", desc.VendorId, desc.DeviceId, desc.DedicatedVideoMemory >> 20);
+                if desc.VendorId == 0x1414 {
+                    return Err(format!("{name} is not a graphics card"));
+                }
+            }
+            // The decoder uses the device from its own threads too.
+            match ctx.cast::<ID3D11Multithread>() {
+                Ok(m) => {
+                    let _ = m.SetMultithreadProtected(true);
+                }
+                Err(e) => return Err(format!("no multithread protection: {e}")),
+            }
+            let (mut token, mut mgr) = (0u32, None);
+            MFCreateDXGIDeviceManager(&mut token, &mut mgr).map_err(at("device manager"))?;
+            let mgr = mgr.ok_or("no device manager")?;
+            mgr.ResetDevice(&dev, token).map_err(at("device manager reset"))?;
+            Ok(Gpu { ctx, dev, mgr, staging: None })
+        }
+    }
+
+    /// Copy the picture in a decoder output buffer (a texture, or one slice of a texture array)
+    /// to the staging texture and show it to `f` as NV12: its bytes, row pitch and the luma
+    /// plane's rows (the chroma plane follows).
+    fn read(&mut self, dx: &IMFDXGIBuffer, min_w: usize, f: impl FnOnce(&[u8], usize, usize)) -> windows::core::Result<()> {
+        unsafe {
+            let mut raw = std::ptr::null_mut();
+            dx.GetResource(&ID3D11Texture2D::IID, &mut raw)?;
+            let tex = ID3D11Texture2D::from_raw(raw);
+            let sub = dx.GetSubresourceIndex()?;
+            let mut desc = D3D11_TEXTURE2D_DESC::default();
+            tex.GetDesc(&mut desc);
+            if desc.Format != DXGI_FORMAT_NV12 {
+                return Err(windows::core::Error::new(MF_E_INVALIDMEDIATYPE, format!("decoder texture format {} is not NV12", desc.Format.0)));
+            }
+            if self.staging.as_ref().is_none_or(|&(_, w, h)| (w, h) != (desc.Width, desc.Height)) {
+                self.staging = None;
+                let sd = D3D11_TEXTURE2D_DESC {
+                    Width: desc.Width,
+                    Height: desc.Height,
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    Format: DXGI_FORMAT_NV12,
+                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    Usage: D3D11_USAGE_STAGING,
+                    BindFlags: 0,
+                    CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                    MiscFlags: 0,
+                };
+                let mut t = None;
+                self.dev.CreateTexture2D(&sd, None, Some(&mut t))?;
+                let t = t.ok_or_else(|| windows::core::Error::new(MF_E_UNEXPECTED, "no staging texture"))?;
+                crate::log!("h264: GPU pictures {}x{} (texture array of {}), read back through a staging texture", desc.Width, desc.Height, desc.ArraySize);
+                self.staging = Some((t, desc.Width, desc.Height));
+            }
+            let Some((staging, _, rows)) = &self.staging else { unreachable!() };
+            self.ctx.CopySubresourceRegion(staging, 0, 0, 0, 0, &tex, sub, None);
+            let mut map = D3D11_MAPPED_SUBRESOURCE::default();
+            self.ctx.Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut map))?;
+            let (pitch, rows) = (map.RowPitch as usize, *rows as usize);
+            if map.pData.is_null() || pitch < min_w {
+                self.ctx.Unmap(staging, 0);
+                return Err(windows::core::Error::new(MF_E_UNEXPECTED, format!("staging pitch {pitch} for {min_w} pixels")));
+            }
+            // NV12 maps as one block: the luma rows, then the chroma rows (half as many).
+            f(std::slice::from_raw_parts(map.pData as *const u8, pitch * rows + pitch * rows.div_ceil(2)), pitch, rows);
+            self.ctx.Unmap(staging, 0);
+        }
+        Ok(())
+    }
+}
+
 pub struct Decoder {
     t: IMFTransform,
+    /// Decoding on the GPU (dropped after the MFT, which holds its device manager).
+    gpu: Option<Gpu>,
     /// The rectangle size it was made for: a reset to another size makes a new decoder.
     pub made: (usize, usize),
     /// Output pictures: NV12 of `coded` (its height padded to whole macroblocks), of which
@@ -78,17 +212,27 @@ pub struct Decoder {
     busy: Duration,
 }
 
-fn open(w: usize, h: usize) -> windows::core::Result<IMFTransform> {
+fn open(w: usize, h: usize, gpu: Option<&Gpu>) -> windows::core::Result<IMFTransform> {
     unsafe {
         let t: IMFTransform = CoCreateInstance(&CLSID_MSH264DecoderMFT, None, CLSCTX_INPROC_SERVER)?;
         // Without it the decoder keeps pictures back for reordering the server never does.
-        match t.GetAttributes() {
+        let attrs = t.GetAttributes();
+        match &attrs {
             Ok(a) => {
                 if let Err(e) = a.SetUINT32(&MF_LOW_LATENCY, 1) {
                     crate::log!("h264: decoder refused low latency mode: {e}");
                 }
             }
             Err(e) => crate::log!("h264: decoder has no attributes for low latency: {e}"),
+        }
+        // On the GPU: the device manager goes in before the media types, which the decoder
+        // then checks against what the hardware can do.
+        if let Some(g) = gpu {
+            let aware = attrs.as_ref().ok().and_then(|a| a.GetUINT32(&MF_SA_D3D11_AWARE).ok()).unwrap_or(0);
+            if aware == 0 {
+                return Err(windows::core::Error::new(MF_E_UNSUPPORTED_D3D_TYPE, "decoder is not D3D11-aware"));
+            }
+            t.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, g.mgr.as_raw() as usize)?;
         }
         let inp = MFCreateMediaType()?;
         inp.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
@@ -101,13 +245,34 @@ fn open(w: usize, h: usize) -> windows::core::Result<IMFTransform> {
 }
 
 impl Decoder {
-    pub fn new(w: usize, h: usize) -> Result<Decoder, String> {
+    /// A decoder for a w×h rectangle; on the GPU if `gpu` and it can be set up there, else (and
+    /// saying why) in software.
+    pub fn new(w: usize, h: usize, gpu: bool) -> Result<Decoder, String> {
         if !crate::h264_win::mf_ready() {
             return Err("Media Foundation unavailable".into());
         }
-        let t = open(w.max(16), h.max(16)).map_err(|e| format!("H.264 decoder: {e}"))?;
+        if gpu {
+            match Gpu::new().and_then(|g| Decoder::make(w, h, Some(g))) {
+                Ok(d) => return Ok(d),
+                Err(e) => {
+                    crate::log!("h264: GPU decoding unavailable, using the software decoder: {e}");
+                    gpu_failed();
+                }
+            }
+        }
+        Decoder::make(w, h, None)
+    }
+
+    pub fn gpu(&self) -> bool {
+        self.gpu.is_some()
+    }
+
+    fn make(w: usize, h: usize, gpu: Option<Gpu>) -> Result<Decoder, String> {
+        let on = if gpu.is_some() { " on the GPU" } else { "" };
+        let t = open(w.max(16), h.max(16), gpu.as_ref()).map_err(|e| format!("H.264 decoder{on}: {e}"))?;
         let mut d = Decoder {
             t,
+            gpu,
             made: (w, h),
             coded: (0, 0),
             shown: (0, 0),
@@ -124,10 +289,10 @@ impl Decoder {
             frames: 0,
             busy: Duration::ZERO,
         };
-        d.configure().map_err(|e| format!("H.264 decoder output: {e}"))?;
+        d.configure().map_err(|e| format!("H.264 decoder{on} output: {e}"))?;
         unsafe {
-            d.t.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0).map_err(|e| format!("H.264 decoder start: {e}"))?;
-            d.t.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0).map_err(|e| format!("H.264 decoder start: {e}"))?;
+            d.t.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0).map_err(|e| format!("H.264 decoder{on} start: {e}"))?;
+            d.t.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0).map_err(|e| format!("H.264 decoder{on} start: {e}"))?;
         }
         Ok(d)
     }
@@ -183,7 +348,7 @@ impl Decoder {
                 coded.0, coded.1, shown.0, shown.1, self.stride,
                 if bt709 { "BT.709" } else { "BT.601" },
                 if full { "full" } else { "limited" },
-                if self.provides { ", decoder's samples" } else { "" },
+                if self.gpu.is_some() { ", GPU textures" } else if self.provides { ", decoder's samples" } else { "" },
             );
         }
         Ok(())
@@ -295,10 +460,14 @@ impl Decoder {
         }
         self.idle = 0;
         self.picture(draw).map_err(|e| format!("output buffer: {e}"))?;
+        if self.gpu.is_some() {
+            self.out = None; // (its texture back to the decoder's pool)
+        }
         self.frames += 1;
         self.busy += start.elapsed();
         if self.frames == 1 || self.frames % 600 == 0 {
-            crate::log!("h264: {} pictures, {:.1} ms each on average", self.frames, self.busy.as_secs_f64() * 1000.0 / self.frames as f64);
+            let on = if self.gpu.is_some() { " (GPU)" } else { "" };
+            crate::log!("h264: {} pictures{on}, {:.1} ms each on average", self.frames, self.busy.as_secs_f64() * 1000.0 / self.frames as f64);
         }
         Ok(())
     }
@@ -307,8 +476,12 @@ impl Decoder {
     fn picture(&mut self, draw: impl FnOnce(&Nv12, &Yuv)) -> windows::core::Result<()> {
         let Some(sample) = self.out.clone() else { return Ok(()) };
         let (cw, ch) = self.coded;
+        let (shown, yuv) = (self.shown, self.yuv);
         unsafe {
             let buf = sample.GetBufferByIndex(0)?;
+            if let (Some(g), Ok(dx)) = (&mut self.gpu, buf.cast::<IMFDXGIBuffer>()) {
+                return g.read(&dx, shown.0, |all, stride, rows| show(all, stride, rows, shown, &yuv, draw));
+            }
             // A 2D buffer knows its pitch; locked as a plain buffer it would be copied to the
             // minimum one first.
             if let Ok(b2) = buf.cast::<IMF2DBuffer>() {
@@ -317,7 +490,7 @@ impl Decoder {
                 let stride = pitch as usize;
                 if pitch > 0 && stride >= cw && !p.is_null() {
                     let all = std::slice::from_raw_parts(p, stride * ch * 3 / 2);
-                    self.show(all, stride, draw);
+                    show(all, stride, ch, shown, &yuv, draw);
                 } else {
                     crate::log!("h264: unusable pitch {pitch} for {cw}x{ch}");
                 }
@@ -329,18 +502,20 @@ impl Decoder {
             if (len as usize) < self.stride * ch * 3 / 2 || p.is_null() {
                 crate::log!("h264: picture buffer of {len} bytes for {cw}x{ch} stride {}", self.stride);
             } else {
-                self.show(std::slice::from_raw_parts(p, len as usize), self.stride, draw);
+                show(std::slice::from_raw_parts(p, len as usize), self.stride, ch, shown, &yuv, draw);
             }
             buf.Unlock()?;
         }
         Ok(())
     }
 
-    fn show(&self, all: &[u8], stride: usize, draw: impl FnOnce(&Nv12, &Yuv)) {
-        let ch = self.coded.1;
-        let (y, uv) = all.split_at(stride * ch);
-        draw(&Nv12 { y, uv, stride, w: self.shown.0, h: self.shown.1 }, &self.yuv);
-    }
+}
+
+/// Show NV12 bytes (`rows` luma rows `stride` apart, then the chroma plane) to `draw`: the
+/// `shown` part from the top left.
+fn show(all: &[u8], stride: usize, rows: usize, shown: (usize, usize), yuv: &Yuv, draw: impl FnOnce(&Nv12, &Yuv)) {
+    let (y, uv) = all.split_at((stride * rows).min(all.len()));
+    draw(&Nv12 { y, uv, stride, w: shown.0, h: shown.1.min(rows) }, yuv);
 }
 
 impl Drop for Decoder {
@@ -348,6 +523,9 @@ impl Drop for Decoder {
         unsafe {
             let _ = self.t.ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0);
             let _ = self.t.ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
+            if self.gpu.is_some() {
+                let _ = self.t.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, 0);
+            }
         }
     }
 }
@@ -366,7 +544,7 @@ mod tests {
             Ok(e) => e,
             Err(why) => return eprintln!("skipped: no Media Foundation H.264 encoder here ({why})"),
         };
-        let mut d = match Decoder::new(w, h) {
+        let mut d = match Decoder::new(w, h, false) {
             Ok(d) => d,
             Err(why) => return eprintln!("skipped: no Media Foundation H.264 decoder here ({why})"),
         };

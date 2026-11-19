@@ -207,6 +207,7 @@ fn main() {
             toolbar: st.toolbar,
             mac_scroll: st.mac_scroll,
             scroll_accel: st.scroll_accel,
+            gpu_decode: st.gpu_decode,
             ..Default::default()
         });
     }

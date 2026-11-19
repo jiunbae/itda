@@ -4,7 +4,7 @@
 const S = {
   hosts: [],
   accounts: [],
-  settings: { theme: 'system', view: 'grid', toolbar: 'auto', hotkey: 'ctrl_alt', mac_scroll: 'fast', scroll_accel: true, tray: true, notify: true, thumbnails: true, defaults: {} },
+  settings: { theme: 'system', view: 'grid', toolbar: 'auto', hotkey: 'ctrl_alt', mac_scroll: 'fast', scroll_accel: true, gpu_decode: false, tray: true, notify: true, thumbnails: true, defaults: {} },
   sessions: {},
   fileWindows: [],
   online: {},
@@ -833,6 +833,7 @@ function renderSettings() {
     ${setting('E765', T('settings.hotkey'), T('settings.hotkey.desc'), seg('hotkey', st.hotkey, [['ctrl_alt', 'Ctrl+Alt'], ['ctrl_shift', 'Ctrl+Shift']]))}
     ${setting('E962', T('settings.macScroll.pc'), T('settings.macScroll.pc.desc'), seg('mac_scroll', st.mac_scroll || 'fast', scrollSpeeds))}
     ${setting('E945', T('settings.scrollAccel'), T('settings.scrollAccel.desc'), toggle('scroll_accel', st.scroll_accel !== false))}
+    ${setting('E950', T('settings.gpuDecode'), T('settings.gpuDecode.desc'), toggle('gpu_decode', st.gpu_decode === true))}
     <div class="setting last" style="align-items:flex-start">${I('E8AB')}<div class="txt"><b>${T('settings.shortcuts')}</b><table class="shortcuts">${keys.map(([a, k]) => `<tr><td>${a}</td><td><kbd>${p}+${k}</kbd></td></tr>`).join('')}</table></div></div>`}
 
     <div class="group-title">${T('settings.group.defaults')}${more('defaults')}</div>

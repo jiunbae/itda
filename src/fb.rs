@@ -112,6 +112,22 @@ impl Fb {
         yuv.convert(&crate::yuv::Nv12 { w, h, ..*pic }, &mut px[y * stride + x..], stride).then_some((w, h))
     }
 
+    /// Draw a decoded picture into the rectangle [x, y, w, h]: cut to it when the picture
+    /// covers it, scaled to fill it when it's smaller (Itda's scaled video; then the rectangle
+    /// must lie inside the framebuffer). The size drawn, or None if the picture's planes are
+    /// shorter than it claims.
+    pub fn video(&mut self, [x, y, w, h]: [usize; 4], pic: &crate::yuv::Nv12, yuv: &crate::yuv::Yuv, sc: &mut crate::yuv::Scaler) -> Option<(usize, usize)> {
+        if pic.w >= w && pic.h >= h {
+            return self.nv12(x, y, &crate::yuv::Nv12 { w, h, ..*pic }, yuv);
+        }
+        if !self.fits(x, y, w, h) {
+            return Some((0, 0));
+        }
+        let stride = self.w;
+        let px = self.px();
+        sc.draw(yuv, pic, &mut px[y * stride + x..], stride, w, h).then_some((w, h))
+    }
+
     pub fn copy(&mut self, sx: usize, sy: usize, dx: usize, dy: usize, w: usize, h: usize) {
         let stride = self.w;
         let px = self.px();

@@ -378,6 +378,9 @@ pub struct Settings {
     pub mac_scroll: String,
     /// Rolling the wheel quickly scrolls a Mac further, like a Mac's own mouse.
     pub scroll_accel: bool,
+    /// Windows viewer: decode H.264 video on the graphics card (DXVA) instead of the CPU.
+    /// Experimental, off by default; falls back to software whenever the GPU can't.
+    pub gpu_decode: bool,
     /// Home layout: "grid" | "list"
     pub view: String,
     /// Shown the "still running in the tray" notice once.
@@ -447,6 +450,7 @@ impl Default for Settings {
             toolbar: "auto".into(),
             mac_scroll: "fast".into(),
             scroll_accel: true,
+            gpu_decode: false,
             view: "grid".into(),
             tray_hint_shown: false,
             zoom: 100,
