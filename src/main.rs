@@ -78,6 +78,8 @@ mod session;
 #[cfg(any(windows, target_os = "macos"))]
 mod rate;
 #[cfg(any(windows, target_os = "macos"))]
+mod vscale;
+#[cfg(any(windows, target_os = "macos"))]
 mod audio;
 #[cfg(target_os = "macos")]
 mod audio_mac;

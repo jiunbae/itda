@@ -38,9 +38,10 @@ pub(crate) fn clipboard_seq() -> u64 {
     unsafe { GetClipboardSequenceNumber() as u64 }
 }
 
-/// Media Foundation's H.264 encoder, when this PC has it (else ZRLE).
-pub(crate) fn video(w: usize, h: usize) -> Option<crate::server::Video> {
-    crate::h264_win::video(w, h)
+/// Media Foundation's H.264 encoder, when this PC has it (else ZRLE), for a w×h screen
+/// encoded at vw×vh.
+pub(crate) fn video(w: usize, h: usize, vw: usize, vh: usize) -> Option<crate::server::Video> {
+    crate::h264_win::video(w, h, vw, vh)
 }
 
 pub(crate) fn ask_user(peer: &SocketAddr) -> bool {

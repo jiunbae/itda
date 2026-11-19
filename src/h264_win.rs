@@ -2,6 +2,9 @@
 //! one per viewer: BGRA frames converted to NV12, low-latency mode, Annex B out. A forced
 //! key frame (join, reset, full request) starts a fresh encoder, whose first frame is an IDR
 //! with SPS/PPS. Any failure returns None/Err and the server keeps using ZRLE.
+//!
+//! The encoded picture may be smaller than the screen (dynamic video resolution, vscale.rs):
+//! frames are then area-averaged down to it before the NV12 conversion.
 use crate::server::{Video, VideoEncode};
 use std::io;
 use std::sync::OnceLock;
@@ -21,6 +24,9 @@ pub struct H264 {
     mft: Mft,
     w: usize,
     h: usize,
+    /// The frames' size (larger than w×h when scaling), and the scaled frame.
+    src: (usize, usize),
+    small: Vec<u32>,
     bitrate: u32,
     /// The bitrate it was made with (the rate control's ceiling).
     start_bitrate: u32,
@@ -110,13 +116,19 @@ fn open(w: usize, h: usize, bitrate: u32) -> windows::core::Result<Mft> {
 }
 
 impl H264 {
+    #[cfg(test)]
     pub fn new(w: usize, h: usize, bitrate: u32) -> Result<H264, String> {
-        let (w, h) = (w & !1, h & !1);
+        H264::scaled(w, h, w, h, bitrate)
+    }
+
+    /// Frames of src_w×src_h encoded at w×h (rounded down to even, at most the frames' size).
+    pub fn scaled(src_w: usize, src_h: usize, w: usize, h: usize, bitrate: u32) -> Result<H264, String> {
+        let (w, h) = (w.min(src_w) & !1, h.min(src_h) & !1);
         if w < 16 || h < 16 || !startup() {
             return Err("Media Foundation unavailable".into());
         }
         let mft = open(w, h, bitrate).map_err(|e| format!("H.264 encoder: {e}"))?;
-        Ok(H264 { mft, w, h, bitrate, start_bitrate: bitrate, dynamic_failed: false, frame: 0, produced: false, nv12: vec![0; w * h * 3 / 2] })
+        Ok(H264 { mft, w, h, src: (src_w, src_h), small: Vec::new(), bitrate, start_bitrate: bitrate, dynamic_failed: false, frame: 0, produced: false, nv12: vec![0; w * h * 3 / 2] })
     }
 
     /// BGRA (0x00RRGGBB) to NV12, BT.601 limited range.
@@ -152,7 +164,16 @@ impl H264 {
             self.mft = open(self.w, self.h, self.bitrate)?;
             (self.frame, self.produced) = (0, false);
         }
-        self.convert(px, stride);
+        let (sw, sh) = self.src;
+        if (sw & !1, sh & !1) != (self.w, self.h) {
+            let mut small = std::mem::take(&mut self.small);
+            small.resize(self.w * self.h, 0);
+            crate::vscale::downscale(px, stride, sw, sh, &mut small, self.w, self.w, self.h);
+            self.convert(&small, self.w);
+            self.small = small;
+        } else {
+            self.convert(px, stride);
+        }
         unsafe {
             let buf = MFCreateMemoryBuffer(self.nv12.len() as u32)?;
             let mut p = std::ptr::null_mut();
@@ -216,6 +237,9 @@ impl VideoEncode for H264 {
     fn size(&self) -> (usize, usize) {
         (self.w, self.h)
     }
+    fn source(&self) -> (usize, usize) {
+        self.src
+    }
     fn bitrate(&self) -> u32 {
         self.start_bitrate
     }
@@ -233,10 +257,11 @@ impl VideoEncode for H264 {
     }
 }
 
-/// An encoder for a w×h screen, or None (no Media Foundation H.264 encoder here).
-pub fn video(w: usize, h: usize) -> Option<Video> {
+/// An encoder for a w×h screen encoded at vw×vh, starting at the screen's bitrate, or None
+/// (no Media Foundation H.264 encoder here).
+pub fn video(w: usize, h: usize, vw: usize, vh: usize) -> Option<Video> {
     let bitrate = crate::server::video_bitrate(w, h);
-    match H264::new(w, h, bitrate) {
+    match H264::scaled(w, h, vw, vh, bitrate) {
         Ok(e) => Some(Box::new(e)),
         Err(e) => {
             crate::log!("share: no H.264 encoder ({e}); viewers get ZRLE");
@@ -269,5 +294,9 @@ mod tests {
         assert!(!e.dynamic_failed, "CODECAPI_AVEncCommonMeanBitRate refused");
         px[2000] ^= 0xffffff;
         e.encode(&px, 640, false).unwrap();
+        // Scaled: 640x360 frames as a 426x240 picture.
+        let mut s = H264::scaled(640, 360, 426, 240, 1_000_000).unwrap();
+        assert_eq!(s.size(), (426, 240));
+        assert!(!s.encode(&px, 640, true).unwrap().is_empty() || !s.encode(&px, 640, false).unwrap().is_empty());
     }
 }
