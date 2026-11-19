@@ -16,8 +16,9 @@ use std::time::{Duration, Instant};
 
 /// Scale steps (numerator, denominator), largest first.
 pub const STEPS: [(usize, usize); 5] = [(1, 1), (3, 4), (2, 3), (1, 2), (1, 3)];
-/// Bits a second per pixel of the budget.
-const BITS_PER_PIXEL: u32 = 4;
+/// Bits a second per pixel of the budget, as a fraction (3.5): a 4K screen at its 16 Mbit/s
+/// goes out at 2/3 (2560x1440), 1080p at its 4.1 Mbit/s at 3/4 (1440x810).
+const BITS_PER_PIXEL: (u64, u64) = (7, 2);
 /// The budget never drops below this many pixels.
 const MIN_BUDGET: u64 = 1280 * 720;
 /// How long a new choice must hold before it's taken.
@@ -29,7 +30,7 @@ const UP_MARGIN: f64 = 1.2;
 
 /// Pixels a picture of bitrate `bps` can use.
 pub fn budget(bps: u32) -> u64 {
-    ((bps / BITS_PER_PIXEL) as u64).max(MIN_BUDGET)
+    (bps as u64 * BITS_PER_PIXEL.1 / BITS_PER_PIXEL.0).max(MIN_BUDGET)
 }
 
 /// The w×h screen at step `i`: rounded, even, at least 16×16.
@@ -192,8 +193,8 @@ mod tests {
         assert_eq!(pick(3840, 2160, 3_000_000), (1280, 720), "4K pushed to 3 Mbit/s: 1/3");
         assert_eq!(pick(3840, 2160, 1_000_000), (1280, 720), "never under the smallest step");
         assert_eq!(pick(3840, 2160, 40_000_000), (3840, 2160));
-        // 1080p at its 4.1 Mbit/s: a budget of 1.04 Mpx, which 3/4 (1.17 Mpx) exceeds.
-        assert_eq!(pick(1920, 1080, bitrate(1920, 1080)), (1280, 720));
+        // 1080p at its 4.1 Mbit/s: a budget of 1.18 Mpx, which 3/4 (1.17 Mpx) fits.
+        assert_eq!(pick(1920, 1080, bitrate(1920, 1080)), (1440, 810));
         assert_eq!(pick(1920, 1080, 4_700_000), (1440, 810));
         // A screen within the 720p floor is never scaled.
         assert_eq!(pick(1280, 720, 600_000), (1280, 720));
@@ -217,18 +218,18 @@ mod tests {
         assert_eq!(sc.size(3840, 2160, 3_000_000, MAX, t1 + s(1.0)), (1280, 720));
         assert_eq!(sc.size(3840, 2160, MAX, MAX, t1 + s(2.5)), (1280, 720), "the 2 s start again");
         assert_eq!(sc.size(3840, 2160, MAX, MAX, t1 + s(4.6)), (2560, 1440));
-        // Below the ceiling, up needs 20 % headroom: 4K at 3/4 is 4.67 Mpx; 19.6 Mbit/s (a
-        // 4.9 Mpx budget) isn't enough, 23 Mbit/s (5.75 Mpx) is.
+        // Below the ceiling, up needs 20 % headroom: 4K at 3/4 is 4.67 Mpx; 19 Mbit/s (a
+        // 5.43 Mpx budget) isn't enough, 23 Mbit/s (6.57 Mpx) is.
         let t2 = t1 + s(20.0);
-        assert_eq!(sc.size(3840, 2160, 19_600_000, 40_000_000, t2), (2560, 1440));
-        assert_eq!(sc.size(3840, 2160, 19_600_000, 40_000_000, t2 + s(3.0)), (2560, 1440));
+        assert_eq!(sc.size(3840, 2160, 19_000_000, 40_000_000, t2), (2560, 1440));
+        assert_eq!(sc.size(3840, 2160, 19_000_000, 40_000_000, t2 + s(3.0)), (2560, 1440));
         assert_eq!(sc.size(3840, 2160, 23_000_000, 40_000_000, t2 + s(5.0)), (2560, 1440));
         assert_eq!(sc.size(3840, 2160, 23_000_000, 40_000_000, t2 + s(7.0)), (2880, 1620));
-        // Below the ceiling and without the headroom: 16 of 20 Mbit/s from 1/3 goes to 1/2 only.
+        // Below the ceiling and without the headroom: 15 of 20 Mbit/s from 1/3 goes to 1/2 only.
         let mut low = Scaler::new(t0);
         low.size(3840, 2160, 3_000_000, 20_000_000, t0);
-        low.size(3840, 2160, 16_000_000, 20_000_000, t0 + s(6.0));
-        assert_eq!(low.size(3840, 2160, 16_000_000, 20_000_000, t0 + s(8.0)), (1920, 1080));
+        low.size(3840, 2160, 15_000_000, 20_000_000, t0 + s(6.0));
+        assert_eq!(low.size(3840, 2160, 15_000_000, 20_000_000, t0 + s(8.0)), (1920, 1080));
         // Falling through several steps is one change of direction: it keeps its 2 s.
         let t3 = t2 + s(20.0);
         assert_eq!(sc.size(3840, 2160, 12_000_000, MAX, t3), (2880, 1620));

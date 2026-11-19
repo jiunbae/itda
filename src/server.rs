@@ -1198,7 +1198,7 @@ mod tests {
     }
 
     /// Real VideoToolbox through the pump: a viewer that scales video gets a 1080p screen as
-    /// a 720p picture (its 4.1 Mbit/s budget) in a full-screen rectangle that resets the
+    /// a 1440x810 picture (its 4.1 Mbit/s budget) in a full-screen rectangle that resets the
     /// decoder; one that doesn't gets the screen's size.
     #[cfg(target_os = "macos")]
     #[test]
@@ -1206,7 +1206,7 @@ mod tests {
         use super::*;
         let (w, h) = (1920, 1080);
         let frame: Vec<u32> = (0..w * h).map(|i| if (i % w / 64 + i / w / 64) % 2 == 0 { 0xffffff } else { 0x202020 }).collect();
-        for (encs, picture) in [(vec![ENC_H264, ENC_ITDA_SCALED_VIDEO, ENC_ZRLE], (1280, 720)), (vec![ENC_H264, ENC_ZRLE], (1920, 1080))] {
+        for (encs, picture) in [(vec![ENC_H264, ENC_ITDA_SCALED_VIDEO, ENC_ZRLE], (1440, 810)), (vec![ENC_H264, ENC_ZRLE], (1920, 1080))] {
             let cap = Mutex::new(platform::fixed_capture(w, h, frame.clone()));
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let mut c = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
