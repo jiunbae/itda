@@ -128,6 +128,12 @@ impl H264 {
             // Key frames only when asked (join, reset, resize): screens are mostly still.
             set(&session, kVTCompressionPropertyKey_MaxKeyFrameInterval, &CFNumber::new_i32(i32::MAX));
             set(&session, kVTCompressionPropertyKey_ExpectedFrameRate, &CFNumber::new_i32(60));
+            // One reference picture: a live screen never looks further back, and the stream
+            // then tells decoders so (max_dec_frame_buffering). Left alone it says 12, and a
+            // Windows viewer's decoder kept that many pictures: 113 MB at 2560x1440.
+            // (kVTCompressionPropertyKey_ReferenceBufferCount, by name: macOS 13 and later;
+            // older ones ignore it.)
+            set(&session, &CFString::from_static_str("ReferenceBufferCount"), &CFNumber::new_i32(1));
             session.prepare_to_encode_frames();
         }
         let mut pb: *mut CVPixelBuffer = null_mut();
