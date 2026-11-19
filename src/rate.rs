@@ -61,8 +61,12 @@ impl Rate {
     }
 
     /// A new encoder whose own starting bitrate is `max` (the screen size changed): keep how
-    /// much the link has shown it can take.
+    /// much the link has shown it can take. (A new encoder for the same screen, e.g. at another
+    /// picture size (vscale.rs), starts at the same `max`: nothing changes.)
     pub fn rebase(&mut self, max: u32) {
+        if max == self.max {
+            return;
+        }
         let share = self.cur as f64 / self.max as f64;
         self.max = max;
         self.min = (max / FLOOR_SHARE).max(FLOOR).min(max);
@@ -189,6 +193,9 @@ mod tests {
         let mut r = Rate::new(20_000_000, t);
         run(&mut r, &mut t, 2, 30 * MS, true);
         let share = r.bitrate() as f64 / 20_000_000.0;
+        let before = r.bitrate();
+        r.rebase(20_000_000);
+        assert_eq!(r.bitrate(), before, "the same screen at another picture size: unchanged");
         r.rebase(10_000_000);
         assert!(((r.bitrate() as f64 / 10_000_000.0) - share).abs() < 0.01);
     }

@@ -34,7 +34,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # High-performance mode: hardware H.264 (VideoToolbox) for RFB encoding 50.
-objc2-video-toolbox = { version = "0.3.2", default-features = false, features = ["std", "VTCompressionSession", "VTSession", "VTCompressionProperties", "VTVideoEncoderList", "VTErrors", "objc2-core-media", "objc2-core-video", "block2"] }
+objc2-video-toolbox = { version = "0.3.2", default-features = false, features = ["std", "VTCompressionSession", "VTSession", "VTCompressionProperties", "VTPixelTransferSession", "VTPixelTransferProperties", "VTVideoEncoderList", "VTErrors", "objc2-core-media", "objc2-core-video", "block2"] }
 objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMSampleBuffer", "objc2-core-video", "CMBlockBuffer", "CMFormatDescription", "CMTime", "CMBase", "CMSync", "objc2-core-video", "objc2-core-audio-types"] }
 objc2-core-audio-types = { version = "0.3.2", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
 objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBase", "CVPixelBuffer", "CVImageBuffer", "CVBuffer", "CVReturn", "CVPixelBufferPool", "objc2-io-surface"] }

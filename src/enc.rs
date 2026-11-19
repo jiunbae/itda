@@ -249,6 +249,12 @@ pub const ENC_H264: i32 = 50;
 pub const ENC_ITDA_BACKGROUND: i32 = 0x4954_4442;
 /// Shortest time between updates for such a viewer.
 pub const BACKGROUND_FRAME: std::time::Duration = std::time::Duration::from_millis(200);
+/// Itda's own pseudo-encoding ('ITDS'): the viewer can show an H.264 picture smaller than its
+/// rectangle: it scales the decoded (cropped) picture to fill the rectangle. The rectangle is
+/// still the whole framebuffer; the coded picture inside may be any even size up to it with
+/// the same aspect (within rounding). Each change of that size starts a fresh stream (an IDR
+/// in a rectangle with H264_RESET).
+pub const ENC_ITDA_SCALED_VIDEO: i32 = 0x4954_4453;
 /// Reset the decoder context of this rectangle before decoding (flags of an H.264 rectangle).
 pub const H264_RESET: u32 = 1;
 
