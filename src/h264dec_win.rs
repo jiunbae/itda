@@ -65,7 +65,12 @@ pub struct Decoder {
     /// The MFT allocates output samples itself (else `out` is ours, reused for every picture).
     provides: bool,
     out_size: u32,
+    /// What the decoder said of its output stream (for the buffer we give it, and errors).
+    align: u32,
+    info_flags: u32,
     out: Option<IMFSample>,
+    /// Our other output sample, for the next picture.
+    spare: Option<IMFSample>,
     time: i64,
     /// Inputs since the last picture.
     idle: u32,
@@ -110,7 +115,10 @@ impl Decoder {
             yuv: Yuv::new(true, false),
             provides: false,
             out_size: 0,
+            align: 0,
+            info_flags: 0,
             out: None,
+            spare: None,
             time: 0,
             idle: 0,
             frames: 0,
@@ -161,8 +169,14 @@ impl Decoder {
             let full = mt.GetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE).is_ok_and(|r| r == MFNominalRange_0_255.0 as u32);
             let info = self.t.GetOutputStreamInfo(0)?;
             self.provides = info.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32 | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES.0 as u32) != 0;
-            self.out_size = info.cbSize.max((coded.0.max(stride) * coded.1 * 3 / 2) as u32);
+            // Pictures are whole macroblocks: a 360-line stream decodes into 368 lines, which
+            // the first (pre-SPS) type doesn't know yet. Room for that, whatever it says.
+            let (aw, ah) = ((coded.0.max(stride) + 15) & !15, (coded.1 + 15) & !15);
+            self.out_size = info.cbSize.max((aw * ah * 3 / 2) as u32);
+            self.align = info.cbAlignment;
+            self.info_flags = info.dwFlags;
             self.out = None;
+            self.spare = None;
             (self.coded, self.shown, self.stride, self.yuv) = (coded, shown, stride.max(coded.0), Yuv::new(bt709, full));
             crate::log!(
                 "h264: output NV12 {}x{} shown {}x{} stride {} {} {} range{}",
@@ -175,15 +189,18 @@ impl Decoder {
         Ok(())
     }
 
-    /// Our output sample, made when the size needs one.
+    /// An output sample for the decoder to fill: the spare one (emptied), or a new one. Never
+    /// the one holding the last picture: the decoder refuses a sample it filled before
+    /// (CopyDecodedFrame fails with E_FAIL), so two take turns.
     fn out_sample(&mut self) -> windows::core::Result<IMFSample> {
-        if let Some(s) = &self.out {
-            return Ok(s.clone());
+        if let Some(s) = self.spare.take() {
+            unsafe { s.GetBufferByIndex(0)?.SetCurrentLength(0)? };
+            return Ok(s);
         }
         unsafe {
             let s = MFCreateSample()?;
-            s.AddBuffer(&MFCreateMemoryBuffer(self.out_size)?)?;
-            self.out = Some(s.clone());
+            let buf = if self.align > 1 { MFCreateAlignedMemoryBuffer(self.out_size, self.align - 1)? } else { MFCreateMemoryBuffer(self.out_size)? };
+            s.AddBuffer(&buf)?;
             Ok(s)
         }
     }
@@ -194,18 +211,31 @@ impl Decoder {
         // (Bounded: a decoder that keeps reporting stream changes is broken.)
         for _ in 0..64 {
             let given = if self.provides { None } else { Some(self.out_sample()?) };
+            let ours = given.clone();
             let mut db = [MFT_OUTPUT_DATA_BUFFER { dwStreamID: 0, pSample: std::mem::ManuallyDrop::new(given), dwStatus: 0, pEvents: std::mem::ManuallyDrop::new(None) }];
             let mut status = 0u32;
             let r = unsafe { self.t.ProcessOutput(0, &mut db, &mut status) };
             let sample = unsafe { std::mem::ManuallyDrop::take(&mut db[0].pSample) };
             drop(unsafe { std::mem::ManuallyDrop::take(&mut db[0].pEvents) });
             match r {
-                Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => return Ok(got),
+                Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {
+                    self.spare = ours;
+                    return Ok(got);
+                }
+                // (A new layout: new samples of its size.)
                 Err(e) if e.code() == MF_E_TRANSFORM_STREAM_CHANGE => self.configure()?,
-                Err(e) => return Err(e),
+                Err(e) => {
+                    let why = format!("{} (coded {}x{} stride {}, buffer {} bytes, stream flags {:#x} alignment {}{})", e.message(), self.coded.0, self.coded.1, self.stride, self.out_size, self.info_flags, self.align, if self.provides { ", decoder's samples" } else { "" });
+                    return Err(windows::core::Error::new(e.code(), why));
+                }
                 Ok(()) => {
-                    if self.provides {
-                        self.out = sample;
+                    // The new picture's sample is shown; the one before becomes the spare.
+                    let filled = if self.provides { sample } else { ours };
+                    if filled.is_some() {
+                        let before = std::mem::replace(&mut self.out, filled);
+                        if !self.provides {
+                            self.spare = before;
+                        }
                     }
                     got |= self.out.is_some();
                 }
