@@ -1332,7 +1332,11 @@ fn connect(id: &str, typed: Option<String>, save: bool) {
         }
     };
     let settings = home(|m| m.settings.clone());
-    let proc = match plat::spawn_session(&host, &login, pass, &settings) {
+    let hp = home(|m| host.hp_route(&m.hosts).map(|h| (h.clone(), store::resolve(h, &m.accounts))));
+    if let Some((h, _)) = hp.as_ref().filter(|(h, _)| h.id != host.id) {
+        crate::log!("{}: high-performance sharing through the connection saved as {}", host.label(), h.label());
+    }
+    let proc = match plat::spawn_session(&host, &login, pass, &settings, hp.as_ref().map(|(h, l)| (h, l.clone()))) {
         Ok(p) => p,
         Err(e) => {
             send(json!({"type": "error", "id": id, "kind": "other", "msg": tr!("app.session.startFailed", error = e)}));

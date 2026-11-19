@@ -554,8 +554,14 @@ pub fn pick_file(field: String) {
 
 // ---------------------------------------------------------------- sessions
 
-pub fn spawn_session(host: &Host, login: &store::Login, pass: String, settings: &Settings) -> Result<Proc, String> {
+pub fn spawn_session(host: &Host, login: &store::Login, pass: String, settings: &Settings, hp: Option<(&Host, store::Login)>) -> Result<Proc, String> {
     let id = host.id.clone();
+    // High-performance sharing, from this connection or another saved for the same Mac.
+    let hp = hp.and_then(|(h, hl)| {
+        let pass = store::get_password(&crate::hp_upgrade::password_key(&h.id))?;
+        let c = crate::hp_upgrade::ssh_cfg_with(h, &hl, hl.pass.clone().unwrap_or_default());
+        Some(crate::session::HpRoute { ssh_host: c.host, ssh_port: c.port, ssh_user: c.user, ssh_pass: c.pass, key_alias: c.key_alias, key: c.key, key_pass: c.key_pass, port: c.vnc_port, pass })
+    });
     let launch = Launch {
         id: id.clone(),
         title: host.label().to_string(),
@@ -571,6 +577,7 @@ pub fn spawn_session(host: &Host, login: &store::Login, pass: String, settings: 
         scroll_accel: settings.scroll_accel,
         thumbnails: settings.thumbnails,
         ssh: host.ssh.clone(),
+        hp,
     };
     let exe = std::env::current_exe().unwrap_or_else(|_| "itda.exe".into());
     let mut child = Command::new(exe)

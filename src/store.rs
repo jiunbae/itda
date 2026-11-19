@@ -192,6 +192,32 @@ impl Host {
         self.kind == "rdp"
     }
 
+    /// Where this device answers, without ports: its address and its LAN one (lowercase).
+    fn places(&self) -> Vec<String> {
+        let (h, _) = crate::tunnel::split_host(self.host.trim(), 5900);
+        [h, self.lan.trim().to_string()].into_iter().filter(|p| !p.is_empty()).map(|p| p.to_lowercase()).collect()
+    }
+
+    /// The saved connection whose high-performance sharing reaches this Mac: this one when it's
+    /// on here, else another saved for the same Mac (same address or LAN address) that has it.
+    /// A Mac saved twice, by its Tailscale name with it on and by its LAN address without,
+    /// otherwise gets Screen Sharing's heavier stream from the second.
+    pub fn hp_route<'a>(&'a self, hosts: &'a [Host]) -> Option<&'a Host> {
+        let mac = |h: &Host| !h.is_rdp() && (h.os.is_empty() || h.os == "mac");
+        if !mac(self) {
+            return None;
+        }
+        if self.hp.on {
+            return Some(self);
+        }
+        // Only the Mac's own Screen Sharing (5900): another port there is some other server.
+        if crate::tunnel::split_host(self.host.trim(), 5900).1 != 5900 {
+            return None;
+        }
+        let here = self.places();
+        hosts.iter().find(|h| h.id != self.id && h.hp.on && mac(h) && h.places().iter().any(|p| here.contains(p)))
+    }
+
     /// Where a connection to `address` (this host's, or its LAN one) is first answered: Remote
     /// Desktop, SSH when the screen goes through it, else the VNC port.
     pub fn probe_addr(&self, address: &str) -> String {
@@ -792,6 +818,25 @@ pub fn set_password_checked(id: &str, pass: Option<&str>) -> std::io::Result<()>
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn a_mac_saved_twice_uses_the_high_performance_one() {
+        let mk = |id: &str, host: &str, lan: &str, hp: bool| Host { id: id.into(), host: host.into(), lan: lan.into(), hp: Hp { on: hp, port: 5910, ..Default::default() }, ..Default::default() };
+        let tail = mk("a", "jiun-mini.example.ts.net", "192.168.32.55", true);
+        let lan = mk("b", "192.168.32.55", "192.168.32.55", false);
+        let other = mk("c", "192.168.32.77", "", false);
+        let alt_port = mk("d", "192.168.32.55:5901", "", false);
+        let mut pc = mk("e", "192.168.32.55", "", false);
+        pc.os = "windows".into();
+        let hosts = vec![tail.clone(), lan.clone(), other.clone(), alt_port.clone(), pc.clone()];
+        assert_eq!(tail.hp_route(&hosts).map(|h| &h.id[..]), Some("a"), "its own");
+        assert_eq!(lan.hp_route(&hosts).map(|h| &h.id[..]), Some("a"), "the same Mac by its LAN address");
+        assert!(other.hp_route(&hosts).is_none(), "another Mac");
+        assert!(alt_port.hp_route(&hosts).is_none(), "another server on that address");
+        assert!(pc.hp_route(&hosts).is_none(), "not a Mac");
+    }
+
     #[test]
     fn nearby_trust_is_off_for_new_installs_and_kept_for_old_ones() {
         assert!(!super::Settings::default().share.trust_near);

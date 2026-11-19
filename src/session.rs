@@ -33,6 +33,26 @@ pub struct Launch {
     pub mac_scroll: String,
     pub scroll_accel: bool,
     pub thumbnails: bool,
+    /// Itda's high-performance sharing on this Mac, tried first (else Screen Sharing).
+    pub hp: Option<HpRoute>,
+}
+
+/// How to reach a Mac's high-performance sharing: SSH to it, then its loopback port.
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct HpRoute {
+    pub ssh_host: String,
+    pub ssh_port: u16,
+    pub ssh_user: String,
+    /// The Mac account's password for SSH (empty: this connection's).
+    pub ssh_pass: String,
+    pub key_alias: String,
+    /// SSH private key and passphrase of the account it signs in with (empty: this one's).
+    pub key: String,
+    pub key_pass: String,
+    /// Its port on the Mac, and the sharing password.
+    pub port: u16,
+    pub pass: String,
 }
 
 static MANAGED: AtomicBool = AtomicBool::new(false);
@@ -69,11 +89,51 @@ fn progress(stage: &str) {
     }
 }
 
+/// Itda's high-performance sharing on a Mac, through SSH. Nothing answering there (Itda quit,
+/// or the Mac restarted): start it in the background and try once more.
+fn open_hp(l: &Launch, hp: &HpRoute) -> io::Result<(rfb::Session, Arc<Tunnel>, Creds)> {
+    progress("ssh");
+    let cfg = SshCfg {
+        host: hp.ssh_host.clone(),
+        port: if hp.ssh_port == 0 { 22 } else { hp.ssh_port },
+        user: if hp.ssh_user.is_empty() { l.user.clone() } else { hp.ssh_user.clone() },
+        pass: if hp.ssh_pass.is_empty() { l.pass.clone() } else { hp.ssh_pass.clone() },
+        vnc_port: if hp.port == 0 { crate::host_mac_port() } else { hp.port },
+        key: if hp.key.is_empty() { l.ssh_key.clone() } else { hp.key.clone() },
+        key_pass: if hp.key.is_empty() { l.key_pass.clone() } else { hp.key_pass.clone() },
+        key_alias: hp.key_alias.clone(),
+    };
+    let t = Tunnel::open(cfg.clone())?;
+    let creds = Creds { user: String::new(), pass: hp.pass.clone() };
+    let quiet = |e: &io::Error| matches!(e.kind(), io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted);
+    let mut sess = rfb::connect(&t.addr()?, &creds);
+    if sess.as_ref().is_err_and(quiet) && crate::hp_upgrade::start_sharing(&cfg).is_ok() {
+        sess = rfb::connect(&t.addr()?, &creds);
+    }
+    Ok((sess?, t, creds))
+}
+
 /// Connect and, on success, open the viewer window (blocks until it closes).
 pub fn run(l: Launch) {
-    let creds = Creds { user: l.user.clone(), pass: l.pass.clone() };
+    let mut creds = Creds { user: l.user.clone(), pass: l.pass.clone() };
     let mut tunnel_ref: Option<Arc<Tunnel>> = None;
     let r = (|| -> io::Result<_> {
+        // High-performance sharing first: a fraction of Screen Sharing's traffic for a moving
+        // screen. Anything in the way (SSH, Itda not running there, a locked screen) falls
+        // back to Screen Sharing.
+        if let Some(hp) = &l.hp {
+            match open_hp(&l, hp) {
+                Ok((sess, t, hp_creds)) => {
+                    crate::log!("high-performance sharing on {}", hp.ssh_host);
+                    tunnel_ref = Some(t.clone());
+                    creds = hp_creds;
+                    let shown = format!("{} (Itda)", hp.ssh_host);
+                    let dial: crate::net::Dial = Arc::new(move || t.addr());
+                    return Ok((sess, dial, shown, true));
+                }
+                Err(e) => crate::log!("high-performance sharing on {} unavailable, using Screen Sharing: {e}", hp.ssh_host),
+            }
+        }
         if !l.ssh.on {
             let addr = rfb::addr(&l.host);
             let sess = rfb::connect(&addr, &creds)?;
