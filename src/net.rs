@@ -332,6 +332,7 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
     let mut zin = Vec::new();
     let mut zout = Vec::new();
     let mut raw = Vec::new();
+    let mut video = Video::default();
     let mut updates = 0u64;
     loop {
         wait_msg(&mut r, s)?;
@@ -402,6 +403,18 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                                 fb.mark(x, y, w, h);
                             }
                         }
+                        ENC_H264 => {
+                            // Like ZRLE, the length is bounded before anything is allocated; a
+                            // server past that is broken, not merely hard to decode.
+                            let len = rd_u32(&mut r)? as usize;
+                            let flags = rd_u32(&mut r)?;
+                            if len > crate::yuv::h264_most(w, h) {
+                                return Err(io::Error::new(io::ErrorKind::InvalidData, "H.264 rectangle too large"));
+                            }
+                            raw.resize(len, 0);
+                            r.read_exact(&mut raw)?;
+                            video.rect(s, &raw, flags, x, y, w, h);
+                        }
                         ENC_CURSOR => {
                             let pix = rd_vec(&mut r, w * h * 4)?;
                             let mask = rd_vec(&mut r, (w + 7) / 8 * h)?;
@@ -470,6 +483,53 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                 }
             }
             t => return err(tr!("net.message", kind = t)),
+        }
+    }
+}
+
+/// The H.264 decoder of one connection. A decoding failure doesn't end the session: the
+/// decoder is dropped and the server asked for ZRLE again (which it answers by repainting the
+/// whole screen losslessly); rectangles still in flight until then are skipped.
+#[derive(Default)]
+struct Video {
+    dec: Option<crate::h264dec_win::Decoder>,
+    failed: bool,
+}
+
+impl Video {
+    fn rect(&mut self, s: &Shared, data: &[u8], flags: u32, x: usize, y: usize, w: usize, h: usize) {
+        if self.failed {
+            return;
+        }
+        let reset = flags & crate::enc::H264_RESET != 0;
+        if reset && self.dec.as_ref().is_some_and(|d| d.made != (w, h)) {
+            self.dec = None; // another size: a fresh decoder rather than a flushed one
+        }
+        let r = match &mut self.dec {
+            Some(d) => Ok(d),
+            None => crate::h264dec_win::Decoder::new(w, h).map(|d| {
+                crate::log!("h264: decoding {w}x{h} at {x},{y}");
+                self.dec.insert(d)
+            }),
+        }
+        .and_then(|d| {
+            d.decode(data, reset, |pic, yuv| {
+                let pic = crate::yuv::Nv12 { w: pic.w.min(w), h: pic.h.min(h), ..*pic };
+                let mut fb = s.fb.lock().unwrap();
+                match fb.nv12(x, y, &pic, yuv) {
+                    Some((dw, dh)) if dw > 0 && dh > 0 => fb.mark(x, y, dw, dh),
+                    Some(_) => {}
+                    None => crate::log!("h264: picture {}x{} stride {} doesn't fit its planes", pic.w, pic.h, pic.stride),
+                }
+            })
+        });
+        if let Err(e) = r {
+            crate::log!("h264: DECODING FAILED, back to ZRLE: {e} (rect {x},{y} {w}x{h}, {} bytes, flags {flags})", data.len());
+            self.dec = None;
+            self.failed = true;
+            crate::h264dec_win::disable();
+            s.send(&set_encodings(false));
+            s.request(false);
         }
     }
 }

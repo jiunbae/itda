@@ -54,6 +54,7 @@ mod tailscale;
 mod trace;
 mod tunnel;
 mod ws;
+mod yuv;
 
 // Windows app: home window, native session windows, "Share this PC".
 #[cfg(windows)]
@@ -64,6 +65,8 @@ mod dxgi;
 mod fb;
 #[cfg(windows)]
 mod h264_win;
+#[cfg(windows)]
+mod h264dec_win;
 #[cfg(windows)]
 mod files_win;
 #[cfg(windows)]

@@ -13,6 +13,7 @@ pub const PIXEL_FORMAT: [u8; 16] = [32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8,
 pub const ENC_RAW: i32 = 0;
 pub const ENC_COPYRECT: i32 = 1;
 pub const ENC_ZRLE: i32 = 16;
+pub const ENC_H264: i32 = crate::enc::ENC_H264;
 pub const ENC_CURSOR: i32 = -239;
 pub const ENC_DESKTOP_SIZE: i32 = -223;
 pub const ENC_EXT_DESKTOP_SIZE: i32 = -308;
@@ -311,16 +312,33 @@ fn handshake(addr: &str, creds: &Creds) -> io::Result<Session> {
     // SetPixelFormat + SetEncodings + first full update request, in one packet.
     let mut m = vec![0u8, 0, 0, 0];
     m.extend_from_slice(&PIXEL_FORMAT);
-    let encs = [ENC_ZRLE, ENC_COPYRECT, ENC_RAW, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, ENC_DESKTOP_SIZE, ENC_EXT_CLIPBOARD];
-    m.extend_from_slice(&[2, 0]);
-    m.extend_from_slice(&(encs.len() as u16).to_be_bytes());
-    for e in encs {
-        m.extend_from_slice(&e.to_be_bytes());
-    }
+    m.extend_from_slice(&set_encodings(h264_ok()));
     m.extend_from_slice(&update_request(false, 0, 0, width, height));
     w.write_all(&m)?;
 
     Ok(Session { reader: r, writer: w, width, height, name })
+}
+
+/// Whether this viewer can decode H.264 (Windows, with a working Media Foundation decoder).
+fn h264_ok() -> bool {
+    #[cfg(windows)]
+    return crate::h264dec_win::available();
+    #[cfg(not(windows))]
+    false
+}
+
+/// SetEncodings for what this viewer decodes. H.264 goes first when it can be decoded: Itda's
+/// own sharing server then streams motion as video, a fraction of ZRLE's size; other servers
+/// don't know it and pick ZRLE as before.
+pub fn set_encodings(h264: bool) -> Vec<u8> {
+    let encs = [ENC_ZRLE, ENC_COPYRECT, ENC_RAW, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, ENC_DESKTOP_SIZE, ENC_EXT_CLIPBOARD];
+    let encs: Vec<i32> = h264.then_some(ENC_H264).into_iter().chain(encs).collect();
+    let mut m = vec![2, 0];
+    m.extend_from_slice(&(encs.len() as u16).to_be_bytes());
+    for e in encs {
+        m.extend_from_slice(&e.to_be_bytes());
+    }
+    m
 }
 
 pub fn update_request(incremental: bool, x: u16, y: u16, w: u16, h: u16) -> [u8; 10] {
@@ -407,6 +425,21 @@ fn put_cstr(dst: &mut [u8], s: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn h264_goes_first_only_when_asked() {
+        let ids = |m: Vec<u8>| -> Vec<i32> {
+            assert_eq!(m[..2], [2, 0]);
+            assert_eq!(u16::from_be_bytes([m[2], m[3]]) as usize * 4, m.len() - 4);
+            m[4..].chunks_exact(4).map(|c| i32::from_be_bytes([c[0], c[1], c[2], c[3]])).collect()
+        };
+        let plain = ids(super::set_encodings(false));
+        assert_eq!(plain[0], super::ENC_ZRLE);
+        assert!(!plain.contains(&super::ENC_H264));
+        let video = ids(super::set_encodings(true));
+        assert_eq!(video[0], super::ENC_H264);
+        assert_eq!(video[1..], plain[..]);
+    }
+
     #[test]
     fn server_screen_sizes_are_bounded() {
         assert!(super::check_size(5120, 2880).is_ok());

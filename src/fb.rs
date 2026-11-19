@@ -100,6 +100,18 @@ impl Fb {
         }
     }
 
+    /// Draw a decoded picture with its top left at (x, y), clipped to the framebuffer. The
+    /// size drawn, or None if the picture's planes are shorter than it claims.
+    pub fn nv12(&mut self, x: usize, y: usize, pic: &crate::yuv::Nv12, yuv: &crate::yuv::Yuv) -> Option<(usize, usize)> {
+        if x >= self.w || y >= self.h {
+            return Some((0, 0));
+        }
+        let (w, h) = (pic.w.min(self.w - x), pic.h.min(self.h - y));
+        let stride = self.w;
+        let px = self.px();
+        yuv.convert(&crate::yuv::Nv12 { w, h, ..*pic }, &mut px[y * stride + x..], stride).then_some((w, h))
+    }
+
     pub fn copy(&mut self, sx: usize, sy: usize, dx: usize, dy: usize, w: usize, h: usize) {
         let stride = self.w;
         let px = self.px();

@@ -53,6 +53,13 @@ impl Drop for Com {
 }
 thread_local!(static COM: Com = Com(unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok()));
 
+/// COM on this thread and Media Foundation started: false if Media Foundation is missing
+/// (Windows N without the Media Feature Pack). The viewer's H.264 decoder shares this.
+pub fn mf_ready() -> bool {
+    COM.with(|_| {});
+    startup()
+}
+
 /// Set the running encoder's mean bitrate (CODECAPI_AVEncCommonMeanBitRate).
 fn mean_bitrate(t: &IMFTransform, bps: u32) -> bool {
     use windows::core::Interface;
