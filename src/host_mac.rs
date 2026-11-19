@@ -254,8 +254,7 @@ impl VideoEncode for Hw {
 }
 
 pub(crate) fn video(w: usize, h: usize) -> Option<Video> {
-    // ~0.1 bit per pixel at 60 fps, within 4–40 Mbit/s.
-    let bitrate = ((w * h * 6) as i64).clamp(4_000_000, 40_000_000);
+    let bitrate = crate::server::video_bitrate(w, h) as i64;
     match H264::new(w, h, bitrate) {
         Ok(e) => Some(Box::new(Hw(e, bitrate as u32))),
         Err(e) => {

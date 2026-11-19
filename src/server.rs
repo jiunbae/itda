@@ -583,6 +583,15 @@ const REFINE: Duration = Duration::from_millis(if cfg!(target_os = "macos") { 50
 /// Largest picture sent as video (hardware encoders and the viewers' decoders handle this).
 const VIDEO_MAX: usize = 4096;
 
+/// The bitrate a viewer's video starts at, and the most its rate control (rate.rs) asks for:
+/// about 2 bits a pixel a second, within 3–16 Mbit/s (a 4K screen: 16, 1080p: 4). It was
+/// three times that, up to 40 Mbit/s: a 4K screen in motion took 5 MB/s on any link fast
+/// enough to carry it. Screen content holds up well at this rate, and once the picture
+/// stands still the lossless repaint sharpens it anyway.
+pub(crate) fn video_bitrate(w: usize, h: usize) -> u32 {
+    ((w * h * 2) as u32).clamp(3_000_000, 16_000_000)
+}
+
 /// A platform's hardware video encoder for one viewer (one H.264 stream).
 pub(crate) trait VideoEncode: Send {
     /// The encoded picture size (the screen's, rounded down to even).
@@ -1168,6 +1177,14 @@ mod tests {
         assert!(delay >= REFINE.saturating_sub(Duration::from_millis(20)) && delay < REFINE+Duration::from_secs(2), "{delay:?}");
         tx.send(Msg::Gone).unwrap(); worker.join().unwrap();
         println!("refine {w}x{h}: received after {:.2} ms; {bytes} compressed bytes; {area} exact pixels", delay.as_secs_f64()*1000.);
+    }
+
+    #[test]
+    fn video_bitrate_by_screen_size() {
+        use super::video_bitrate;
+        assert_eq!(video_bitrate(3840, 2160), 16_000_000);
+        assert_eq!(video_bitrate(1920, 1080), 4_147_200);
+        assert_eq!(video_bitrate(1280, 720), 3_000_000);
     }
 
     /// The Mac's real sound through the production pump: confirmation in an update, then
