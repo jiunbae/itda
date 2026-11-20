@@ -854,6 +854,7 @@ I18N.add('en', {
   'viewer.hp.modeUnknown': 'Couldn’t check the connection mode. Press the high-performance button to check again. The screen stays connected.',
   'viewer.hp.screenBack': 'That Mac’s screen is back — switching to high-performance mode',
   'viewer.hp.unlocked': 'Unlocked — switching to high-performance mode',
+  'viewer.hp.otherUserNamed': 'That Mac’s screen shows another account ({user}), so connected with built-in Screen Sharing — switches to high-performance mode when this account’s screen is back',
   'viewer.hp.otherUser': 'Another user is using that Mac’s screen, so connected with built-in Screen Sharing — switches to high-performance mode when the screen is back',
   'viewer.hp.locked': 'That Mac’s screen is locked, so connected with built-in Screen Sharing — switches to high-performance mode once it’s unlocked',
   'viewer.hp.label.enabled': 'High-performance mode enabled — press to turn it off and reconnect with built-in Screen Sharing',

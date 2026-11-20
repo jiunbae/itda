@@ -1,6 +1,7 @@
 // The same Mac saved twice, by its LAN address without high-performance sharing and by its
 // Tailscale name with it (hosts_json's hp_via): opening the first connects through the second,
 // under the first's name, and the viewer treats it as high-performance (mode check, keys).
+// A Mac whose screen shows another account (fast user switching) is named in the message.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,13 +11,15 @@ const pw=await import(process.env.PLAYWRIGHT?pathToFileURL(process.env.PLAYWRIGH
 const hosts=[
  {id:'lan',label:'Studio (LAN)',host:'192.168.1.20',os:'mac',kind:'vnc',has_pw:true,hp:{on:false,native:false},hp_via:'tail'},
  {id:'tail',label:'Studio',host:'studio.tail',os:'mac',kind:'vnc',has_pw:true,hp:{on:true,native:false},hp_via:null},
+ {id:'shared',label:'Shared',host:'shared.local',os:'mac',kind:'vnc',has_pw:true,hp:{on:true,native:false},hp_via:null},
 ];
 const modes=[];
 const server=http.createServer((req,res)=>{
  const url=new URL(req.url,'http://localhost');
  if(url.pathname.startsWith('/api/')){
   res.setHeader('Content-Type','application/json');
-  if(url.pathname.startsWith('/api/mode/')){modes.push(url.pathname.slice(10));return res.end(JSON.stringify({hp:true}));}
+  if(url.pathname.startsWith('/api/mode/')){const id=url.pathname.slice(10);modes.push(id);return res.end(JSON.stringify(id==='shared'?{hp:false,locked:true,other_user:true,other_user_name:'june',reason:'x'}:{hp:true}));}
+  if(url.pathname.startsWith('/api/hp-ready/'))return res.end(JSON.stringify({ready:false}));
   return res.end(JSON.stringify(url.pathname==='/api/hosts'?hosts:url.pathname==='/api/accounts'?[]:{local:true,ok:true}));
  }
  if(url.pathname==='/novnc.min.js'){
@@ -46,6 +49,10 @@ try{
  assert(await p.title()==='Studio (LAN)','not under the opened connection\'s name: '+await p.title());
  await p.waitForFunction(()=>document.querySelector('[data-t=hp]')?.classList.contains('on'));
  assert(modes.length>0&&modes.every(m=>m==='tail'),'mode asked of the wrong connection: '+modes);
+ const named=await browser.newPage({locale:'ko-KR'});named.on('pageerror',e=>errors.push(e.message));
+ await named.addInitScript(()=>{window.ipc={postMessage:()=>{}};window.WebSocket=class extends EventTarget {constructor(url){super();this.url=url;}close(){}send(){}};});
+ await named.goto(`http://127.0.0.1:${server.address().port}/?open=shared`);
+ await named.waitForFunction(()=>[...document.querySelectorAll('.toast')].some(t=>t.textContent.includes('june')),null,{timeout:10000});
  assert(errors.length===0,errors.join('\n'));
- console.log('PASS: a Mac saved twice opens through its high-performance connection, under the name opened, in high-performance mode');
+ console.log('PASS: a Mac saved twice opens through its high-performance connection, under the name opened, in high-performance mode; another account at the screen is named');
 }finally{await browser.close();await new Promise(r=>server.close(r));}
