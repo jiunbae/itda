@@ -83,6 +83,7 @@ pub(super) const MESSAGES: &[(&str, &str)] = &[
     ("update.copyFailed", "Couldn’t copy the new version, so the previous version was kept"),
     ("hp.remoteFailed", "The remote command failed: {error}"),
     ("hp.notConsole", "This isn’t the account signed in on this Mac’s screen"),
+    ("hp.loginWindow", "That Mac is at its login window: sign in there first"),
     ("hp.sharingOff", "High-performance sharing is off on this Mac"),
     ("hp.notInstalled", "Itda isn’t installed"),
     ("hp.notResponding", "Itda is running but not responding"),
