@@ -70,6 +70,8 @@ const mode = new URLSearchParams(location.search).get('mode');
 // The h264 session also runs the app viewer's ITDA_HP_TRACE hooks (web/viewer/viewer.js).
 if (mode === 'h264') await import('./trace.js');
 const rfb = new window.RFB(document.getElementById('screen'), `ws://${location.host}/ws?mode=${mode}`);
+// Scaled: shown at half size (the patched noVNC lists it once H.264 has arrived).
+if (mode === 'scaled') rfb.itdaViewScale = 500;
 rfb.scaleViewport = false;
 // Counted independently of the hooks: decoded frames drawn to noVNC's back buffer, and
 // copies of that buffer to the visible canvas.
@@ -113,6 +115,8 @@ struct Stats {
     refines: usize,
     /// Picture sizes sent into the screen-sized rectangle (scaled session).
     sizes: Vec<(usize, usize)>,
+    /// The view scale the viewer listed, once H.264 had arrived (thousandths; 1000: none).
+    view_after_h264: u32,
 }
 
 fn session(s: TcpStream, want_h264: bool, scaled: bool) -> io::Result<Stats> {
@@ -146,7 +150,14 @@ fn session(s: TcpStream, want_h264: bool, scaled: bool) -> io::Result<Stats> {
     while start.elapsed() < SESSION {
         match irx.recv_timeout(Duration::from_millis(5)) {
             Ok(In::Format(p)) => pf = p,
-            Ok(In::Encodings(e)) => encs = e,
+            Ok(In::Encodings(e)) => {
+                if st.used_h264 {
+                    st.view_after_h264 = crate::enc::view_scale_of(&e);
+                } else {
+                    assert_eq!(crate::enc::view_scale_of(&e), 1000, "a view scale listed before any H.264 (other servers would see it)");
+                }
+                encs = e;
+            }
             Ok(In::Request(inc)) => pending = Some(pending.map_or(inc, |p| p && inc)),
             Ok(In::Ext(_)) => {}
             Err(RecvTimeoutError::Timeout) => {}
@@ -324,5 +335,6 @@ fn h264_e2e() {
         );
     }
     assert!(stats.iter().any(|(h, s)| *h && s.used_h264), "the viewer never asked for H.264");
+    assert!(stats.iter().any(|(_, s)| s.sizes == [(960, 540), (1280, 720)] && s.view_after_h264 == 500), "the scaled viewer never said it shows the screen at half size");
     assert!(stats.iter().any(|(_, s)| s.sizes == [(960, 540), (1280, 720)]), "the viewer never asked for scaled video: {:?}", stats.iter().map(|(_, s)| &s.sizes).collect::<Vec<_>>());
 }

@@ -316,7 +316,7 @@ fn handshake(addr: &str, creds: &Creds) -> io::Result<Session> {
     // SetPixelFormat + SetEncodings + first full update request, in one packet.
     let mut m = vec![0u8, 0, 0, 0];
     m.extend_from_slice(&PIXEL_FORMAT);
-    m.extend_from_slice(&set_encodings(h264_ok()));
+    m.extend_from_slice(&set_encodings(h264_ok(), 1000));
     m.extend_from_slice(&update_request(false, 0, 0, width, height));
     w.write_all(&m)?;
 
@@ -334,10 +334,12 @@ fn h264_ok() -> bool {
 /// SetEncodings for what this viewer decodes. H.264 goes first when it can be decoded: Itda's
 /// own sharing server then streams motion as video, a fraction of ZRLE's size; other servers
 /// don't know it and pick ZRLE as before. With it, scaled video (the viewer scales smaller
-/// pictures up).
-pub fn set_encodings(h264: bool) -> Vec<u8> {
+/// pictures up) and, below full size, how large it shows the screen (`view_scale`, thousandths).
+pub fn set_encodings(h264: bool, view_scale: u32) -> Vec<u8> {
     let encs = [ENC_ZRLE, ENC_COPYRECT, ENC_RAW, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, ENC_DESKTOP_SIZE, ENC_EXT_CLIPBOARD];
-    let encs: Vec<i32> = h264.then_some(ENC_H264).into_iter().chain(encs).chain(h264.then_some(ENC_ITDA_SCALED_VIDEO)).collect();
+    // How large it shows the screen (thousandths), with H.264 only, and below full size only.
+    let view = (h264 && (1..1000).contains(&view_scale)).then(|| crate::enc::ENC_ITDA_VIEW_SCALE + view_scale as i32);
+    let encs: Vec<i32> = h264.then_some(ENC_H264).into_iter().chain(encs).chain(h264.then_some(ENC_ITDA_SCALED_VIDEO)).chain(view).collect();
     let mut m = vec![2, 0];
     m.extend_from_slice(&(encs.len() as u16).to_be_bytes());
     for e in encs {
@@ -437,14 +439,18 @@ mod tests {
             assert_eq!(u16::from_be_bytes([m[2], m[3]]) as usize * 4, m.len() - 4);
             m[4..].chunks_exact(4).map(|c| i32::from_be_bytes([c[0], c[1], c[2], c[3]])).collect()
         };
-        let plain = ids(super::set_encodings(false));
+        let plain = ids(super::set_encodings(false, 500));
         assert_eq!(plain[0], super::ENC_ZRLE);
         assert!(!plain.contains(&super::ENC_H264) && !plain.contains(&super::ENC_ITDA_SCALED_VIDEO));
-        let video = ids(super::set_encodings(true));
+        let video = ids(super::set_encodings(true, 1000));
         assert_eq!(video[0], super::ENC_H264);
         assert_eq!(video[1..video.len() - 1], plain[..]);
         assert_eq!(video.last(), Some(&super::ENC_ITDA_SCALED_VIDEO), "scaled video only with H.264");
         assert_eq!(super::ENC_ITDA_SCALED_VIDEO.to_be_bytes(), *b"ITDS");
+        // A view scale goes last, with H.264 only.
+        let small = ids(super::set_encodings(true, 334));
+        assert_eq!(small[..video.len()], video[..]);
+        assert_eq!(small[video.len()..], [crate::enc::ENC_ITDA_VIEW_SCALE + 334]);
     }
 
     #[test]

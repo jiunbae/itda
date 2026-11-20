@@ -255,6 +255,30 @@ pub const BACKGROUND_FRAME: std::time::Duration = std::time::Duration::from_mill
 /// the same aspect (within rounding). Each change of that size starts a fresh stream (an IDR
 /// in a rectangle with H264_RESET).
 pub const ENC_ITDA_SCALED_VIDEO: i32 = 0x4954_4453;
+/// Itda's own pseudo-encodings 'IV' + n (n = 1..=1000): the viewer shows the screen at n/1000
+/// of its size at most (the largest of its windows, in device pixels), so an H.264 picture
+/// larger than that is wasted (ENC_ITDA_SCALED_VIDEO viewers only). Listed again whenever that
+/// changes; absent, the viewer may show it at full size.
+pub const ENC_ITDA_VIEW_SCALE: i32 = 0x4956_0000;
+
+/// The ENC_ITDA_VIEW_SCALE entry for a view of `scale` (fraction of the screen's size): None at
+/// full size or more.
+pub fn view_scale_encoding(scale: f64) -> Option<i32> {
+    let n = (scale * 1000.0).ceil();
+    (n.is_finite() && n < 1000.0).then(|| ENC_ITDA_VIEW_SCALE + n.max(1.0) as i32)
+}
+
+/// The view scale (thousandths) a SetEncodings list names: 1000 when it names none.
+pub fn view_scale_of(encs: &[i32]) -> u32 {
+    encs.iter().filter_map(|&e| (e - ENC_ITDA_VIEW_SCALE).try_into().ok().filter(|n| (1..=1000).contains(n))).min().unwrap_or(1000)
+}
+
+/// Itda's hints a viewer lists again as its views change (ENC_ITDA_BACKGROUND, the view
+/// scale): a list that differs from the last one only in these is no new start.
+pub fn is_view_hint(e: i32) -> bool {
+    e == ENC_ITDA_BACKGROUND || (ENC_ITDA_VIEW_SCALE + 1..=ENC_ITDA_VIEW_SCALE + 1000).contains(&e)
+}
+
 /// Reset the decoder context of this rectangle before decoding (flags of an H.264 rectangle).
 pub const H264_RESET: u32 = 1;
 
@@ -533,6 +557,20 @@ mod tests {
         assert_eq!(c.px[2], 0xffff_ffff);
         assert_eq!(c.px[3], 0xff00_0000);
         assert_eq!((c.hx, c.hy), (3, 0), "hotspot kept inside the shape");
+    }
+
+    #[test]
+    fn view_scale_round_trip() {
+        assert_eq!(view_scale_encoding(1280.0 / 3840.0), Some(ENC_ITDA_VIEW_SCALE + 334));
+        assert_eq!(view_scale_encoding(1.0), None);
+        assert_eq!(view_scale_encoding(1.7), None);
+        assert_eq!(view_scale_encoding(0.0), Some(ENC_ITDA_VIEW_SCALE + 1));
+        assert_eq!(view_scale_encoding(f64::NAN), None);
+        assert_eq!(view_scale_of(&[ENC_ZRLE, ENC_ITDA_VIEW_SCALE + 334]), 334);
+        assert_eq!(view_scale_of(&[ENC_ZRLE, ENC_ITDA_VIEW_SCALE]), 1000, "0 isn't a scale");
+        assert_eq!(view_scale_of(&[ENC_ZRLE]), 1000);
+        assert!(is_view_hint(ENC_ITDA_VIEW_SCALE + 500) && is_view_hint(ENC_ITDA_BACKGROUND));
+        assert!(!is_view_hint(ENC_ITDA_SCALED_VIDEO) && !is_view_hint(ENC_ITDA_VIEW_SCALE));
     }
 
     #[test]

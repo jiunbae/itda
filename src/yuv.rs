@@ -269,6 +269,169 @@ impl Scaler {
     }
 }
 
+/// What an H.264 SPS says about the stream (tests: what the encoders announce).
+#[cfg(test)]
+pub(crate) mod sps {
+    #[allow(dead_code)] // (size: the Mac encoder's tests)
+    pub struct Sps {
+        pub size: (usize, usize),
+        /// max_num_ref_frames.
+        pub refs: u32,
+        /// VUI matrix_coefficients (1 BT.709, 5/6 BT.601), when the stream says.
+        pub matrix: Option<u32>,
+        pub full_range: bool,
+        pub max_dec_frame_buffering: Option<u32>,
+    }
+
+    /// Exp-Golomb reader over an RBSP.
+    struct Bits<'a>(&'a [u8], usize);
+    impl Bits<'_> {
+        fn bit(&mut self) -> u32 {
+            // (Past the end: zeros, so a short or odd SPS reads as one without the rest.)
+            let b = self.0.get(self.1 / 8).map_or(0, |x| (x >> (7 - self.1 % 8)) & 1);
+            self.1 += 1;
+            b as u32
+        }
+        fn bits(&mut self, n: u32) -> u32 {
+            (0..n).fold(0, |v, _| v << 1 | self.bit())
+        }
+        fn ue(&mut self) -> u32 {
+            let mut zeros = 0;
+            while self.bit() == 0 && zeros < 31 {
+                zeros += 1;
+            }
+            (1 << zeros) - 1 + self.bits(zeros)
+        }
+        fn se(&mut self) -> i32 {
+            let v = self.ue() as i32;
+            if v % 2 == 1 { (v + 1) / 2 } else { -v / 2 }
+        }
+    }
+
+    /// The first SPS of an Annex B stream.
+    pub fn parse(b: &[u8]) -> Option<Sps> {
+        let at = (0..b.len().saturating_sub(4)).find(|&i| b[i..i + 4] == [0, 0, 0, 1] && b[i + 4] & 0x1f == 7)? + 5;
+        let end = (at..b.len().saturating_sub(3)).find(|&i| b[i..i + 4] == [0, 0, 0, 1]).unwrap_or(b.len());
+        // Emulation prevention bytes out.
+        let mut rbsp = Vec::new();
+        for &x in &b[at..end] {
+            if x == 3 && rbsp.ends_with(&[0, 0]) {
+                continue;
+            }
+            rbsp.push(x);
+        }
+        let mut r = Bits(&rbsp, 0);
+        let profile = r.bits(8);
+        r.bits(16); // constraint flags, level
+        r.ue(); // sps id
+        let mut chroma = 1;
+        if [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135].contains(&profile) {
+            chroma = r.ue();
+            if chroma == 3 {
+                r.bit();
+            }
+            r.ue();
+            r.ue();
+            r.bit();
+            if r.bit() == 1 {
+                for i in 0..if chroma == 3 { 12 } else { 8 } {
+                    if r.bit() == 1 {
+                        let (mut last, mut next) = (8i32, 8i32);
+                        for _ in 0..if i < 6 { 16 } else { 64 } {
+                            if next != 0 {
+                                next = (last + r.se() + 256) % 256;
+                            }
+                            last = if next == 0 { last } else { next };
+                        }
+                    }
+                }
+            }
+        }
+        r.ue(); // log2_max_frame_num
+        match r.ue() {
+            0 => { r.ue(); }
+            1 => {
+                r.bit();
+                r.se();
+                r.se();
+                for _ in 0..r.ue() {
+                    r.se();
+                }
+            }
+            _ => {}
+        }
+        let refs = r.ue();
+        r.bit();
+        let w = (r.ue() + 1) * 16;
+        let map_units = r.ue() + 1;
+        let frame_mbs_only = r.bit();
+        let h = map_units * 16 * (2 - frame_mbs_only);
+        if frame_mbs_only == 0 {
+            r.bit();
+        }
+        r.bit();
+        let (mut cw, mut ch) = (0, 0);
+        if r.bit() == 1 {
+            let (sx, sy) = if chroma == 0 { (1, 2 - frame_mbs_only) } else { (2, 2 * (2 - frame_mbs_only)) };
+            cw = (r.ue() + r.ue()) * sx;
+            ch = (r.ue() + r.ue()) * sy;
+        }
+        let mut sps = Sps { size: ((w - cw) as usize, (h - ch) as usize), refs, matrix: None, full_range: false, max_dec_frame_buffering: None };
+        if r.bit() == 1 {
+            // VUI
+            if r.bit() == 1 && r.bits(8) == 255 {
+                r.bits(32); // sample aspect ratio
+            }
+            if r.bit() == 1 {
+                r.bit(); // overscan
+            }
+            if r.bit() == 1 {
+                r.bits(3);
+                sps.full_range = r.bit() == 1;
+                if r.bit() == 1 {
+                    r.bits(16); // primaries, transfer
+                    sps.matrix = Some(r.bits(8));
+                }
+            }
+            if r.bit() == 1 {
+                r.ue();
+                r.ue();
+            }
+            if r.bit() == 1 {
+                r.bits(32);
+                r.bits(32);
+                r.bit();
+            }
+            let mut hrd = false;
+            for _ in 0..2 {
+                if r.bit() == 1 {
+                    hrd = true;
+                    let n = r.ue() + 1;
+                    r.bits(8);
+                    for _ in 0..n {
+                        r.ue();
+                        r.ue();
+                        r.bit();
+                    }
+                    r.bits(20);
+                }
+            }
+            if hrd {
+                r.bit();
+            }
+            r.bit(); // pic_struct
+            if r.bit() == 1 {
+                r.bit();
+                for _ in 0..5 {
+                    r.ue();
+                }
+                sps.max_dec_frame_buffering = Some(r.ue());
+            }
+        }
+        Some(sps)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

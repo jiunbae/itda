@@ -1095,7 +1095,26 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
         crate::log!("high-performance sharing on {}: the viewer couldn't decode its video, using Screen Sharing", host.host);
         // (Why it used Screen Sharing: the viewer said it couldn't show the video.)
         record_mode(&host.id, json!({"hp": false, "setup": false, "locked": false, "reason": tr!("gw.hpUndecodable"), "code": "srv.hpUndecodable"}));
-    } else if host.hp.on {
+    } else if !host.hp.on && !NO_HP.with(|n| n.get()) {
+        // The same Mac saved again with high-performance sharing on (by another address): its
+        // stream through that one. If it can't be had, this one's Screen Sharing, quietly.
+        let hosts = store::load_hosts();
+        if let Some(hp) = host.hp_route(&hosts).filter(|h| h.id != host.id) {
+            let hp_login = store::resolve(hp, &store::load_accounts());
+            if let Some(hp_pass) = hp_login.pass.clone() {
+                match open_hp(&hp.reachable(), &hp_login, &hp_pass) {
+                    Ok((t, raw)) => {
+                        crate::log!("{}: high-performance sharing through the connection saved as {}", host.label(), hp.label());
+                        *tunnel = Some(t);
+                        HP_LIVE.with(|l| l.set(true));
+                        record_mode(&host.id, json!({"hp": true}));
+                        return Ok(raw);
+                    }
+                    Err(e) => crate::log!("{}: high-performance sharing through {} unavailable, using Screen Sharing: {e}", host.label(), hp.label()),
+                }
+            }
+        }
+    } else {
         match open_hp(host, login, &pass) {
             Ok((t, raw)) => {
                 *tunnel = Some(t);

@@ -11,6 +11,9 @@
 //! new encoder and an IDR, so a change must hold for HOLD, comes at most once every GAP, and
 //! a step up needs UP_MARGIN of headroom (unless the bitrate is at its ceiling, where it can
 //! only stay or fall: without that, a 4K screen that once dipped would never get its 2/3 back).
+//!
+//! A viewer may also say how large it shows the screen (ENC_ITDA_VIEW_SCALE): a 4K screen in a
+//! 1280-pixel-wide window needs no more than 1/3 of it, whatever the bitrate allows.
 
 use std::time::{Duration, Instant};
 
@@ -55,10 +58,18 @@ pub fn choose(w: usize, h: usize, bps: u32) -> usize {
     fit(w, h, budget(bps), 1.0)
 }
 
+/// The smallest step a viewer showing the screen at `view` (thousandths of its size) still
+/// gets every shown pixel from (3 % short of it is close enough: the viewer rounds up).
+pub fn view_step(view: u32) -> usize {
+    (0..STEPS.len()).rev().find(|&i| STEPS[i].0 as u64 * 1030 >= view as u64 * STEPS[i].1 as u64).unwrap_or(0)
+}
+
 /// Picks the video size for one viewer over time.
 pub struct Scaler {
     src: (usize, usize),
     step: usize,
+    /// The smallest step the viewer's view allows (0: any, the screen's size).
+    view: usize,
     /// A change waiting to hold: towards a smaller picture (true) or a larger one, and since.
     pending: Option<(bool, Instant)>,
     changed: Instant,
@@ -66,22 +77,28 @@ pub struct Scaler {
 
 impl Scaler {
     pub fn new(now: Instant) -> Scaler {
-        Scaler { src: (0, 0), step: 0, pending: None, changed: now }
+        Scaler { src: (0, 0), step: 0, view: 0, pending: None, changed: now }
+    }
+
+    /// How large the viewer shows the screen, in thousandths (1000 or more: full size). Taken
+    /// at the next `size`, with the same hysteresis as a bitrate change.
+    pub fn set_view(&mut self, view: u32) {
+        self.view = if view >= 1000 { 0 } else { view_step(view) };
     }
 
     /// The size to encode a w×h screen at, the bitrate being `bps` now (of at most `max`). A
     /// new screen size is chosen for at once; otherwise a change waits for the hysteresis.
     pub fn size(&mut self, w: usize, h: usize, bps: u32, max: u32, now: Instant) -> (usize, usize) {
         if self.src != (w, h) {
-            *self = Scaler { src: (w, h), step: choose(w, h, bps), pending: None, changed: now };
+            *self = Scaler { src: (w, h), step: choose(w, h, bps).max(self.view), view: self.view, pending: None, changed: now };
             return scaled(w, h, self.step);
         }
         let b = budget(bps);
-        let down = fit(w, h, b, 1.0);
+        let down = fit(w, h, b, 1.0).max(self.view);
         let target = if down > self.step {
             down
         } else if down < self.step {
-            fit(w, h, b, if bps >= max { 1.0 } else { UP_MARGIN }).min(self.step)
+            fit(w, h, b, if bps >= max { 1.0 } else { UP_MARGIN }).max(self.view).min(self.step)
         } else {
             self.step
         };
@@ -237,6 +254,32 @@ mod tests {
         assert_eq!(sc.size(3840, 2160, 3_000_000, MAX, t3 + s(2.0)), (1280, 720));
         // Another screen size starts over at once.
         assert_eq!(sc.size(1920, 1080, MAX, MAX, t3 + s(2.5)), (1920, 1080));
+    }
+
+    #[test]
+    fn the_view_caps_the_size() {
+        let s = |secs: f64| Duration::from_secs_f64(secs);
+        const MAX: u32 = 16_000_000;
+        // A 4K screen in a 1280-wide window (the viewer rounds 1/3 up to 334): 1/3; in a
+        // 1920-wide one 1/2; shown at 0.7 still 3/4; at full size or larger, what the bitrate allows.
+        assert_eq!(view_step(334), 4);
+        assert_eq!(view_step(500), 3);
+        assert_eq!(view_step(700), 1);
+        assert_eq!(view_step(1000), 0);
+        let t0 = Instant::now();
+        let mut sc = Scaler::new(t0);
+        sc.set_view(334);
+        assert_eq!(sc.size(3840, 2160, MAX, MAX, t0), (1280, 720), "a new screen: at once");
+        // The window grows: up after the hold, never past what the bitrate allows.
+        sc.set_view(1000);
+        assert_eq!(sc.size(3840, 2160, MAX, MAX, t0 + s(4.0)), (1280, 720));
+        assert_eq!(sc.size(3840, 2160, MAX, MAX, t0 + s(6.5)), (2560, 1440));
+        // It shrinks again, and the bitrate falls too: the smaller of the two wins.
+        sc.set_view(500);
+        assert_eq!(sc.size(3840, 2160, MAX, MAX, t0 + s(12.0)), (2560, 1440));
+        assert_eq!(sc.size(3840, 2160, MAX, MAX, t0 + s(14.0)), (1920, 1080));
+        assert_eq!(sc.size(3840, 2160, 3_000_000, MAX, t0 + s(20.0)), (1920, 1080));
+        assert_eq!(sc.size(3840, 2160, 3_000_000, MAX, t0 + s(22.0)), (1280, 720));
     }
 
     #[test]

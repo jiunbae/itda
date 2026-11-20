@@ -29,6 +29,15 @@ pub const VIEW_LIVE: u8 = 0;
 pub const VIEW_BACKGROUND: u8 = 1;
 pub const VIEW_PAUSED: u8 = 2;
 const BACKGROUND_EVERY: Duration = Duration::from_millis(500);
+/// A PC slower than the video (decoding and drawing a picture took longer than this): the next
+/// picture is asked for BUSY_WAIT (as a fraction) of that time later, so this viewer keeps no
+/// more than about two thirds of the time busy with it rather than all of it. (A 4-core PC
+/// decoding 2560x1440 took 1.6 cores for 19 pictures a second.) Faster PCs are never held back.
+const BUSY: Duration = Duration::from_millis(12);
+const BUSY_WAIT: (u32, u32) = (3, 2);
+/// How long a new view scale must hold before the server hears of it (a window being dragged
+/// larger passes through many).
+const VIEW_SCALE_HOLD: Duration = Duration::from_millis(400);
 
 /// Silence longer than this at a message boundary triggers a liveness probe.
 const IDLE_PROBE: Duration = Duration::from_secs(4);
@@ -89,6 +98,16 @@ pub struct Shared {
     /// An update arrived and the next one wasn't requested yet (not live).
     owed: AtomicBool,
     last_request: Mutex<Instant>,
+    /// The owed request waits until then (BUSY).
+    not_before: Mutex<Option<Instant>>,
+    /// How long the last video picture took to decode and draw.
+    busy: Mutex<Duration>,
+    /// The largest scale a window shows the screen at, in thousandths (1000: full size or
+    /// more), since when, and what the server was last told (ENC_ITDA_VIEW_SCALE).
+    view_scale: Mutex<(u32, Instant)>,
+    scale_told: AtomicU32,
+    /// This connection's server has sent H.264 (only Itda's do): it may hear the view scale.
+    video_seen: AtomicBool,
 }
 
 static SHARED: OnceLock<Shared> = OnceLock::new();
@@ -121,6 +140,11 @@ pub fn init(out: TcpStream, w: u16, h: u16) -> io::Result<()> {
         view: AtomicU8::new(VIEW_LIVE),
         owed: AtomicBool::new(false),
         last_request: Mutex::new(Instant::now()),
+        not_before: Mutex::new(None),
+        busy: Mutex::new(Duration::ZERO),
+        view_scale: Mutex::new((1000, Instant::now())),
+        scale_told: AtomicU32::new(1000),
+        video_seen: AtomicBool::new(false),
     };
     let _ = SHARED.set(s);
     Ok(())
@@ -154,11 +178,42 @@ impl Shared {
 
     /// An update arrived: ask for the next one now, later, or when someone looks again.
     fn request_next(&self) {
-        if self.view.load(SeqCst) == VIEW_LIVE {
+        let busy = *self.busy.lock().unwrap();
+        if self.view.load(SeqCst) == VIEW_LIVE && busy < BUSY {
             self.request(true);
         } else {
+            if busy >= BUSY {
+                *self.not_before.lock().unwrap() = Some(Instant::now() + busy * BUSY_WAIT.0 / BUSY_WAIT.1);
+            }
             self.owed.store(true, SeqCst);
         }
+    }
+
+    /// How long the last video picture took to decode and draw (BUSY).
+    fn video_took(&self, t: Duration) {
+        *self.busy.lock().unwrap() = t;
+    }
+
+    /// UI side: the largest scale (device pixels per remote pixel) any shown window draws the
+    /// screen at. Itda's server then sends no larger a video picture.
+    pub fn set_view_scale(&self, scale: f64) {
+        let n = crate::enc::view_scale_encoding(scale).map_or(1000, |e| (e - crate::enc::ENC_ITDA_VIEW_SCALE) as u32);
+        let mut v = self.view_scale.lock().unwrap();
+        if v.0 != n {
+            *v = (n, Instant::now());
+        }
+    }
+
+    /// Tell the server a view scale that has held for VIEW_SCALE_HOLD, once it has sent H.264
+    /// (SetEncodings again: other servers never see the list change).
+    fn tell_view_scale(&self) {
+        let (n, since) = *self.view_scale.lock().unwrap();
+        if n == self.scale_told.load(SeqCst) || since.elapsed() < VIEW_SCALE_HOLD || !self.video_seen.load(SeqCst) || !crate::h264dec_win::available() {
+            return;
+        }
+        self.scale_told.store(n, SeqCst);
+        crate::log!("view scale: {n}/1000");
+        self.send(&set_encodings(true, n));
     }
 
     /// UI side: whether any window shows the remote screen (see VIEW_LIVE).
@@ -183,11 +238,12 @@ impl Shared {
     /// Send an owed request if the view allows it now.
     fn pace(&self) {
         let due = match self.view.load(SeqCst) {
-            VIEW_LIVE => true,
+            VIEW_LIVE => self.not_before.lock().unwrap().is_none_or(|t| Instant::now() >= t),
             VIEW_BACKGROUND => self.last_request.lock().unwrap().elapsed() >= BACKGROUND_EVERY,
             _ => false,
         };
         if due && self.owed.swap(false, SeqCst) {
+            *self.not_before.lock().unwrap() = None;
             self.request(true);
         }
     }
@@ -248,8 +304,11 @@ pub type Dial = std::sync::Arc<dyn Fn() -> io::Result<String> + Send + Sync>;
 pub fn spawn(mut reader: BufReader<Rx>, dial: Dial, creds: Creds) {
     // Requests held back while nobody is looking go out from here.
     std::thread::spawn(|| loop {
-        std::thread::sleep(Duration::from_millis(50));
+        // (Finer while a request waits out BUSY.)
+        let wait = sh().not_before.lock().unwrap().map_or(Duration::from_millis(50), |t| t.saturating_duration_since(Instant::now()).clamp(Duration::from_millis(1), Duration::from_millis(50)));
+        std::thread::sleep(wait);
         sh().pace();
+        sh().tell_view_scale();
     });
     std::thread::spawn(move || loop {
         let _ = reader.get_ref().0.set_read_timeout(Some(IDLE_PROBE));
@@ -273,6 +332,8 @@ pub fn spawn(mut reader: BufReader<Rx>, dial: Dial, creds: Creds) {
                 Ok(sess) => {
                     s.sock.store(sess.writer.as_raw_socket(), Relaxed);
                     s.ext_clip.store(false, Relaxed);
+                    s.video_seen.store(false, SeqCst);
+                    s.scale_told.store(1000, SeqCst);
                     s.screens.lock().unwrap().clear();
                     *s.out.lock().unwrap() = sess.writer;
                     let (w, h) = (sess.width as u32, sess.height as u32);
@@ -413,7 +474,10 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                             }
                             raw.resize(len, 0);
                             r.read_exact(&mut raw)?;
+                            s.video_seen.store(true, SeqCst);
+                            let t = Instant::now();
                             video.rect(s, &raw, flags, x, y, w, h);
+                            s.video_took(t.elapsed());
                         }
                         ENC_CURSOR => {
                             let pix = rd_vec(&mut r, w * h * 4)?;
@@ -587,7 +651,8 @@ impl Video {
         self.failed = true;
         self.waiting = 0;
         crate::h264dec_win::disable();
-        s.send(&set_encodings(false));
+        s.video_took(Duration::ZERO);
+        s.send(&set_encodings(false, 1000));
         s.request(false);
     }
 }
@@ -698,5 +763,40 @@ mod tests {
         assert!(!s.probe_due(), "the probe counts as asking");
         s.set_view(VIEW_LIVE);
         assert!(s.probe_due());
+
+        // A slow PC: the next picture is asked for half again as long after the last one took.
+        s.video_took(Duration::from_millis(40));
+        s.request_next();
+        s.pace();
+        assert_eq!(requests(&mut peer), 0, "held back");
+        std::thread::sleep(Duration::from_millis(60));
+        s.pace();
+        assert_eq!(requests(&mut peer), 1);
+        s.video_took(Duration::from_millis(3));
+        s.request_next();
+        assert_eq!(requests(&mut peer), 1, "a fast one asks at once");
+
+        // The view scale goes out once it has held, and only after the server sent H.264.
+        if !crate::h264dec_win::available() {
+            return eprintln!("skipped the view scale: no H.264 decoder here");
+        }
+        s.set_view_scale(1280.0 / 3840.0);
+        std::thread::sleep(VIEW_SCALE_HOLD);
+        s.tell_view_scale();
+        peer.set_read_timeout(Some(Duration::from_millis(150))).unwrap();
+        assert!(peer.read(&mut [0u8; 1]).is_err(), "nothing before H.264");
+        s.video_seen.store(true, SeqCst);
+        s.set_view_scale(0.5);
+        s.tell_view_scale();
+        assert!(peer.read(&mut [0u8; 1]).is_err(), "not before it held");
+        std::thread::sleep(VIEW_SCALE_HOLD);
+        s.tell_view_scale();
+        let want = set_encodings(true, 500);
+        let mut got = vec![0u8; want.len()];
+        peer.read_exact(&mut got).unwrap();
+        assert_eq!(got, want);
+        assert_eq!(crate::enc::view_scale_of(&got[4..].chunks(4).map(|c| i32::from_be_bytes(c.try_into().unwrap())).collect::<Vec<_>>()), 500);
+        s.tell_view_scale();
+        assert!(peer.read(&mut [0u8; 1]).is_err(), "told once");
     }
 }

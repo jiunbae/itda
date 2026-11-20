@@ -1,6 +1,6 @@
 //! H.264 for Share this PC (RFB encoding 50) through Media Foundation's H.264 encoder MFT,
-//! one per viewer: BGRA frames converted to NV12, low-latency mode, Annex B out. A forced
-//! key frame (join, reset, full request) starts a fresh encoder, whose first frame is an IDR
+//! one per viewer: BGRA frames converted to NV12 (BT.709, limited range, and the stream says
+//! so), one reference picture, low-latency mode, Annex B out. A forced key frame (join, reset, full request) starts a fresh encoder, whose first frame is an IDR
 //! with SPS/PPS. Any failure returns None/Err and the server keeps using ZRLE.
 //!
 //! The encoded picture may be smaller than the screen (dynamic video resolution, vscale.rs):
@@ -66,17 +66,30 @@ pub fn mf_ready() -> bool {
     startup()
 }
 
-/// Set the running encoder's mean bitrate (CODECAPI_AVEncCommonMeanBitRate).
-fn mean_bitrate(t: &IMFTransform, bps: u32) -> bool {
+/// Set one of the encoder's ICodecAPI properties (a VT_UI4).
+fn codec_u32(t: &IMFTransform, what: &windows::core::GUID, n: u32) -> bool {
     use windows::core::Interface;
     use windows::Win32::System::Variant::{VARIANT, VT_UI4};
     let Ok(api) = t.cast::<ICodecAPI>() else { return false };
     unsafe {
         let mut v: VARIANT = std::mem::zeroed();
         (*v.Anonymous.Anonymous).vt = VT_UI4;
-        (*v.Anonymous.Anonymous).Anonymous.ulVal = bps;
-        api.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &v).is_ok()
+        (*v.Anonymous.Anonymous).Anonymous.ulVal = n;
+        api.SetValue(what, &v).is_ok()
     }
+}
+
+/// Set the running encoder's mean bitrate (CODECAPI_AVEncCommonMeanBitRate).
+fn mean_bitrate(t: &IMFTransform, bps: u32) -> bool {
+    codec_u32(t, &CODECAPI_AVEncCommonMeanBitRate, bps)
+}
+
+/// The colours a media type of this encoder carries: what `convert` makes.
+unsafe fn colours(t: &IMFMediaType) -> windows::core::Result<()> {
+    t.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
+    t.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)?;
+    t.SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32)?;
+    t.SetUINT32(&MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709.0 as u32)
 }
 
 fn open(w: usize, h: usize, bitrate: u32) -> windows::core::Result<Mft> {
@@ -85,6 +98,12 @@ fn open(w: usize, h: usize, bitrate: u32) -> windows::core::Result<Mft> {
         let t: IMFTransform = CoCreateInstance(&CLSID_MSH264EncoderMFT, None, CLSCTX_INPROC_SERVER)?;
         if let Ok(a) = t.GetAttributes() {
             let _ = a.SetUINT32(&MF_LOW_LATENCY, 1);
+        }
+        // One reference picture: a live screen never looks further back, and the stream then
+        // tells decoders so (max_num_ref_frames), who otherwise keep a picture buffer for
+        // several (a Mac's stream said 12: 113 MB in a Windows viewer at 2560x1440).
+        if !codec_u32(&t, &CODECAPI_AVEncVideoMaxNumRefFrame, 1) {
+            crate::log!("share: H.264 encoder keeps its own number of reference pictures");
         }
         let size = ((w as u64) << 32) | h as u64;
         let rate = (FPS << 32) | 1;
@@ -96,6 +115,7 @@ fn open(w: usize, h: usize, bitrate: u32) -> windows::core::Result<Mft> {
         out.SetUINT64(&MF_MT_FRAME_RATE, rate)?;
         out.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
         out.SetUINT32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Main.0 as u32)?;
+        colours(&out)?;
         t.SetOutputType(0, &out, 0)?;
         let inp = MFCreateMediaType()?;
         inp.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
@@ -103,6 +123,7 @@ fn open(w: usize, h: usize, bitrate: u32) -> windows::core::Result<Mft> {
         inp.SetUINT64(&MF_MT_FRAME_SIZE, size)?;
         inp.SetUINT64(&MF_MT_FRAME_RATE, rate)?;
         inp.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+        colours(&inp)?;
         t.SetInputType(0, &inp, 0)?;
         let info = t.GetOutputStreamInfo(0)?;
         t.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
@@ -131,7 +152,8 @@ impl H264 {
         Ok(H264 { mft, w, h, src: (src_w, src_h), small: Vec::new(), bitrate, start_bitrate: bitrate, dynamic_failed: false, frame: 0, produced: false, nv12: vec![0; w * h * 3 / 2] })
     }
 
-    /// BGRA (0x00RRGGBB) to NV12, BT.601 limited range.
+    /// BGRA (0x00RRGGBB) to NV12, BT.709 limited range: what decoders assume of an HD stream
+    /// that doesn't say (it was BT.601, and colours shifted where no tag reached them).
     fn convert(&mut self, px: &[u32], stride: usize) {
         let (w, h) = (self.w, self.h);
         let (y_plane, uv) = self.nv12.split_at_mut(w * h);
@@ -139,7 +161,7 @@ impl H264 {
             let row = &px[y * stride..y * stride + w];
             for (d, p) in y_plane[y * w..y * w + w].iter_mut().zip(row) {
                 let (r, g, b) = (((p >> 16) & 255) as i32, ((p >> 8) & 255) as i32, (p & 255) as i32);
-                *d = (((66 * r + 129 * g + 25 * b + 128) >> 8) + 16) as u8;
+                *d = (((47 * r + 157 * g + 16 * b + 128) >> 8) + 16) as u8;
             }
         }
         for y in (0..h).step_by(2) {
@@ -153,8 +175,8 @@ impl H264 {
                 }
                 let (r, g, b) = (s[0] / 4, s[1] / 4, s[2] / 4);
                 let o = (y / 2) * w + x;
-                uv[o] = (((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128) as u8;
-                uv[o + 1] = (((112 * r - 94 * g - 18 * b + 128) >> 8) + 128) as u8;
+                uv[o] = (((-26 * r - 86 * g + 112 * b + 128) >> 8) + 128) as u8;
+                uv[o + 1] = (((112 * r - 102 * g - 10 * b + 128) >> 8) + 128) as u8;
             }
         }
     }
@@ -286,6 +308,11 @@ mod tests {
         let first = e.encode(&px, 640, true).unwrap();
         let types: Vec<u8> = first.windows(4).enumerate().filter(|(_, w)| *w == [0, 0, 0, 1]).map(|(i, _)| first[i + 4] & 31).collect();
         assert!(types.contains(&7) && types.contains(&8) && types.contains(&5), "{types:?}");
+        // One reference picture; BT.709 when the stream says (any decoder assumes it otherwise).
+        let sps = crate::yuv::sps::parse(&first).unwrap();
+        eprintln!("SPS: refs {} max_dec_frame_buffering {:?} matrix {:?} full {}", sps.refs, sps.max_dec_frame_buffering, sps.matrix, sps.full_range);
+        assert_eq!(sps.refs, 1);
+        assert!(sps.matrix.is_none_or(|m| m == 1) && !sps.full_range);
         px[1000] ^= 0xffffff;
         let next = e.encode(&px, 640, false).unwrap();
         assert!(next.len() < first.len(), "{} vs {}", next.len(), first.len());

@@ -20,7 +20,7 @@
 //! sound output (audio.rs): raw PCM between updates, never waiting for them or holding them up.
 
 use crate::demand::{self, Demand};
-use crate::enc::{ext_desktop_size, screens_in, Encoder, PixelFormat, Screen, Update, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, ENC_H264, ENC_ITDA_BACKGROUND, ENC_ITDA_SCALED_VIDEO, ENC_VMWARE_CURSOR, ENC_ZRLE, BACKGROUND_FRAME};
+use crate::enc::{ext_desktop_size, is_view_hint, screens_in, view_scale_of, Encoder, PixelFormat, Screen, Update, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, ENC_H264, ENC_ITDA_BACKGROUND, ENC_ITDA_SCALED_VIDEO, ENC_VMWARE_CURSOR, ENC_ZRLE, BACKGROUND_FRAME};
 use crate::outbox::Outbox;
 use crate::rfb::{vnc_response, ENC_EXT_CLIPBOARD, PIXEL_FORMAT};
 use std::io::{self, BufReader, Read, Write};
@@ -774,8 +774,16 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                     pf = p;
                     prev.clear();
                 }
+                // Only Itda's view hints changed (a window resized, hidden or shown): no new
+                // start (key frame, cursor, displays) for that.
+                Msg::Encodings(e) if e.iter().filter(|&&x| !is_view_hint(x)).eq(encs.iter().filter(|&&x| !is_view_hint(x))) => {
+                    demand.encodings(&e, &mut reply);
+                    scaler.set_view(view_scale_of(&e));
+                    encs = e;
+                }
                 Msg::Encodings(e) => {
                     demand.encodings(&e, &mut reply);
+                    scaler.set_view(view_scale_of(&e));
                     if !e.contains(&ENC_H264) && video.take().is_some() {
                         rate = None;
                         // Back to ZRLE while the viewer shows a lossy picture: repaint it all.
@@ -1206,7 +1214,13 @@ mod tests {
         use super::*;
         let (w, h) = (1920, 1080);
         let frame: Vec<u32> = (0..w * h).map(|i| if (i % w / 64 + i / w / 64) % 2 == 0 { 0xffffff } else { 0x202020 }).collect();
-        for (encs, picture) in [(vec![ENC_H264, ENC_ITDA_SCALED_VIDEO, ENC_ZRLE], (1440, 810)), (vec![ENC_H264, ENC_ZRLE], (1920, 1080))] {
+        let half = crate::enc::ENC_ITDA_VIEW_SCALE + 500;
+        for (encs, picture) in [
+            (vec![ENC_H264, ENC_ITDA_SCALED_VIDEO, ENC_ZRLE], (1440, 810)),
+            (vec![ENC_H264, ENC_ZRLE], (1920, 1080)),
+            // Shown at half size: no larger than that.
+            (vec![ENC_H264, ENC_ITDA_SCALED_VIDEO, ENC_ZRLE, half], (960, 540)),
+        ] {
             let cap = Mutex::new(platform::fixed_capture(w, h, frame.clone()));
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let mut c = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -1394,10 +1408,16 @@ mod tests {
                 got2.fetch_add(n, Relaxed);
             }
         });
-        // ITDA_SOAK_ENCODINGS=zrle: what Itda's own Mac and Windows viewers ask for (no H.264).
+        // ITDA_SOAK_ENCODINGS: scaled (the default), what Itda's browser and Windows viewers ask
+        // for: H.264 at the size the bitrate fills (a 4K screen goes out at 2/3, scaled by the
+        // encoder); h264, a viewer that can't scale (the screen's size); zrle, one without
+        // H.264 (Windows viewers where Media Foundation is missing).
+        let scaled = vec![ENC_H264, ENC_ITDA_SCALED_VIDEO, ENC_ZRLE, ENC_VMWARE_CURSOR, ENC_CURSOR, ENC_POINTER_MOTION];
         let encs: Vec<i32> = match std::env::var("ITDA_SOAK_ENCODINGS").as_deref() {
             Ok("zrle") => vec![ENC_ZRLE, 1, 0, ENC_CURSOR, ENC_EXT_DESKTOP_SIZE, -223, crate::rfb::ENC_EXT_CLIPBOARD],
-            _ => vec![ENC_H264, ENC_ZRLE, ENC_VMWARE_CURSOR, ENC_CURSOR, ENC_POINTER_MOTION],
+            Ok("h264") => scaled.into_iter().filter(|&e| e != ENC_ITDA_SCALED_VIDEO).collect(),
+            Ok("scaled") | Err(_) => scaled,
+            Ok(other) => panic!("ITDA_SOAK_ENCODINGS={other}: scaled, h264 or zrle"),
         };
         let mut m = vec![2u8, 0, 0, encs.len() as u8];
         for e in encs {
