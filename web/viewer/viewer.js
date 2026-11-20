@@ -325,7 +325,14 @@ async function openFromApp() {
   document.title = h.label;
   S.fit = !(h.opts && h.opts.actual);
   S.viewOnly = !!(h.opts && h.opts.view_only);
-  open(h);
+  open(hpVia(h, r.data || []));
+}
+
+// The same Mac saved again with high-performance sharing on (hosts_json's hp_via): open that
+// connection, under this one's name, so the viewer knows what it gets (keys, fallback, mode).
+function hpVia(h, hosts) {
+  const via = h?.hp_via && hosts.find((x) => x.id === h.hp_via);
+  return via ? { ...via, label: h.label } : h;
 }
 
 function renderHosts() {
@@ -663,6 +670,7 @@ function hpUndecodable(owner, e) {
 
 function open(h) {
   if (!h) return;
+  h = hpVia(h, S.hosts || []);
   close();
   const gen = ++S.gen;
   S.host = h;

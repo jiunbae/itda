@@ -270,7 +270,7 @@ pub fn view_scale_encoding(scale: f64) -> Option<i32> {
 
 /// The view scale (thousandths) a SetEncodings list names: 1000 when it names none.
 pub fn view_scale_of(encs: &[i32]) -> u32 {
-    encs.iter().filter_map(|&e| (e - ENC_ITDA_VIEW_SCALE).try_into().ok().filter(|n| (1..=1000).contains(n))).min().unwrap_or(1000)
+    encs.iter().filter_map(|&e| u32::try_from(e.wrapping_sub(ENC_ITDA_VIEW_SCALE)).ok().filter(|n| (1..=1000).contains(n))).min().unwrap_or(1000)
 }
 
 /// Itda's hints a viewer lists again as its views change (ENC_ITDA_BACKGROUND, the view
@@ -569,6 +569,7 @@ mod tests {
         assert_eq!(view_scale_of(&[ENC_ZRLE, ENC_ITDA_VIEW_SCALE + 334]), 334);
         assert_eq!(view_scale_of(&[ENC_ZRLE, ENC_ITDA_VIEW_SCALE]), 1000, "0 isn't a scale");
         assert_eq!(view_scale_of(&[ENC_ZRLE]), 1000);
+        assert_eq!(view_scale_of(&[i32::MIN, i32::MAX, -1]), 1000, "anything a client sends");
         assert!(is_view_hint(ENC_ITDA_VIEW_SCALE + 500) && is_view_hint(ENC_ITDA_BACKGROUND));
         assert!(!is_view_hint(ENC_ITDA_SCALED_VIDEO) && !is_view_hint(ENC_ITDA_VIEW_SCALE));
     }

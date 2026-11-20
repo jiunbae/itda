@@ -156,6 +156,8 @@ jobs:
         run: node scripts/viewer-hidden-pacing-e2e.mjs
       - name: Viewer mode diagnostics and drop/reconnect ownership
         run: node scripts/viewer-mode-e2e.mjs
+      - name: A Mac saved twice opens through its high-performance connection
+        run: node scripts/viewer-hp-via-e2e.mjs
       - name: Undecodable high-performance video falls back at once
         run: node scripts/hp-undecodable-e2e.mjs
       - name: Browser viewer switches to high-performance after unlocking

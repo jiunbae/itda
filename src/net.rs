@@ -208,10 +208,14 @@ impl Shared {
     /// (SetEncodings again: other servers never see the list change).
     fn tell_view_scale(&self) {
         let (n, since) = *self.view_scale.lock().unwrap();
-        if n == self.scale_told.load(SeqCst) || since.elapsed() < VIEW_SCALE_HOLD || !self.video_seen.load(SeqCst) || !crate::h264dec_win::available() {
+        let told = self.scale_told.load(SeqCst);
+        if n == told || since.elapsed() < VIEW_SCALE_HOLD || !self.video_seen.load(SeqCst) || !crate::h264dec_win::available() {
             return;
         }
-        self.scale_told.store(n, SeqCst);
+        // (A reconnect in between resets what was told: then the new connection hears it.)
+        if self.scale_told.compare_exchange(told, n, SeqCst, SeqCst).is_err() {
+            return;
+        }
         crate::log!("view scale: {n}/1000");
         self.send(&set_encodings(true, n));
     }
@@ -334,6 +338,8 @@ pub fn spawn(mut reader: BufReader<Rx>, dial: Dial, creds: Creds) {
                     s.ext_clip.store(false, Relaxed);
                     s.video_seen.store(false, SeqCst);
                     s.scale_told.store(1000, SeqCst);
+                    s.video_took(Duration::ZERO);
+                    *s.not_before.lock().unwrap() = None;
                     s.screens.lock().unwrap().clear();
                     *s.out.lock().unwrap() = sess.writer;
                     let (w, h) = (sess.width as u32, sess.height as u32);
@@ -408,6 +414,7 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                 // (unless nobody is looking: request_next).
                 s.request_next();
                 let mut resized = false;
+                let mut had_video = false;
                 for _ in 0..n {
                     let x = rd_u16(&mut r)? as usize;
                     let y = rd_u16(&mut r)? as usize;
@@ -477,7 +484,11 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                             s.video_seen.store(true, SeqCst);
                             let t = Instant::now();
                             video.rect(s, &raw, flags, x, y, w, h);
-                            s.video_took(t.elapsed());
+                            // (A reset makes a new decoder: not what each picture costs.)
+                            had_video |= flags & crate::enc::H264_RESET == 0;
+                            if flags & crate::enc::H264_RESET == 0 {
+                                s.video_took(t.elapsed());
+                            }
                         }
                         ENC_CURSOR => {
                             let pix = rd_vec(&mut r, w * h * 4)?;
@@ -521,6 +532,11 @@ fn recv_loop(mut r: BufReader<Rx>) -> io::Result<()> {
                 }
                 if resized {
                     s.request(false);
+                }
+                // Only pictures decoded hold the next request back (BUSY): a still repaint,
+                // a cursor or a new decoder doesn't.
+                if !had_video {
+                    s.video_took(Duration::ZERO);
                 }
                 if updates == 100 || updates % 1000 == 0 {
                     crate::log!("{updates} updates received");
