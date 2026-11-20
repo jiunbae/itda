@@ -75,6 +75,7 @@ pub fn start_sharing(cfg: &SshCfg) -> io::Result<()> {
     let port = if cfg.vnc_port == 0 { crate::host_mac_port() } else { cfg.vnc_port };
     run(cfg, &format!(r#"
 set -e
+[ "$(stat -f%Su /dev/console)" = root ] && {{ echo 'error=login-window'; exit 3; }}
 [ "$(id -un)" = "$(stat -f%Su /dev/console)" ] || {{ echo 'error=not-console'; exit 3; }}
 [ -f "$HOME/Library/Application Support/Itda/hp-sharing" ] || {{ echo 'error=sharing-off'; exit 3; }}
 app=""
@@ -118,6 +119,7 @@ fn script_error(line: &str) -> String {
     let (code, value) = line.split_once(' ').unwrap_or((line, ""));
     match code {
         "not-console" => tr!("hp.notConsole").into(),
+        "login-window" => tr!("hp.loginWindow").into(),
         "sharing-off" => tr!("hp.sharingOff").into(),
         "not-installed" => tr!("hp.notInstalled").into(),
         "not-responding" => tr!("hp.notResponding").into(),
@@ -199,6 +201,7 @@ pub fn show_permissions(cfg: &SshCfg, permission: Option<&str>) -> io::Result<()
     let suffix=match permission {None=>"",Some("screen")=>"/screen",Some("access")=>"/access",_=>return Err(io::Error::other(tr!("hp.badPermission")))};
     run(cfg,&format!(r#"
 set -e
+[ "$(stat -f%Su /dev/console)" = root ] && {{ echo 'error=login-window'; exit 3; }}
 [ "$(id -un)" = "$(stat -f%Su /dev/console)" ] || {{ echo 'error=connect-console'; exit 3; }}
 app=""
 for a in /Applications/Itda.app "$HOME/Applications/Itda.app"; do [ -d "$a" ] && {{ app=$a; break; }}; done
@@ -214,6 +217,7 @@ pub fn upgrade(cfg: &SshCfg, source: &Source, progress: &dyn Fn(&str)) -> io::Re
     let probe = run(cfg, &format!(r#"
 set -e
 [ "$(uname -s)" = Darwin ] || {{ echo "error=not-mac"; exit 3; }}
+[ "$(stat -f%Su /dev/console)" = root ] && {{ echo 'error=login-window'; exit 3; }}
 me=$(id -un); console=$(stat -f%Su /dev/console)
 [ "$me" = "$console" ] || {{ echo "error=console-user $console"; exit 3; }}
 app=""

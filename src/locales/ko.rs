@@ -83,6 +83,7 @@ pub(super) const MESSAGES: &[(&str, &str)] = &[
     ("update.copyFailed", "새 버전을 복사하지 못해 이전 버전을 유지했습니다"),
     ("hp.remoteFailed", "원격 명령이 실패했습니다: {error}"),
     ("hp.notConsole", "이 Mac 화면에 로그인한 계정이 아닙니다"),
+    ("hp.loginWindow", "그 Mac이 로그인 화면에 있습니다. 먼저 그 Mac에 로그인해 주세요"),
     ("hp.sharingOff", "이 Mac에서 고성능 공유가 꺼져 있습니다"),
     ("hp.notInstalled", "Itda가 설치되어 있지 않습니다"),
     ("hp.notResponding", "Itda가 실행 중이지만 응답하지 않습니다"),

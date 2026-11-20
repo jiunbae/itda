@@ -175,9 +175,26 @@ pub(crate) fn ready() -> Result<(), String> {
 /// Why this Mac's screen can't be shown to a viewer now, if it can't: locked, or another user's
 /// session on the display (fast user switching).
 fn screen_unavailable() -> Option<&'static str> {
-    match session_state() {
+    use std::os::unix::fs::MetadataExt;
+    unsafe extern "C" {
+        fn getuid() -> u32;
+    }
+    let console = std::fs::metadata("/dev/console").ok().map(|m| m.uid());
+    unavailable_reason(session_state(), console, unsafe { getuid() })
+}
+
+/// `screen_unavailable` from the session's (locked, on console) and who owns the console now.
+/// Off the console with the console owned by root is the login window (another session was
+/// switched to, then left; or the Mac shows its login window after sleep): nobody else is
+/// using it, and Screen Sharing can sign in there, so it counts as locked. Only another account
+/// owning the console (`me` is this one's uid) is another user.
+fn unavailable_reason(session: Option<(bool, bool)>, console_uid: Option<u32>, me: u32) -> Option<&'static str> {
+    match session {
         Some((true, _)) => Some(crate::hp_upgrade::SCREEN_LOCKED),
-        Some((_, false)) => Some(crate::hp_upgrade::OTHER_USER),
+        Some((_, false)) => match console_uid {
+            Some(u) if u != 0 && u != me => Some(crate::hp_upgrade::OTHER_USER),
+            _ => Some(crate::hp_upgrade::SCREEN_LOCKED),
+        },
         _ => None,
     }
 }
@@ -1330,6 +1347,21 @@ mod lock_watch_tests {
         LOCKED.store(false, Ordering::SeqCst);
         assert!(watch.check(at + LOCK_POLL * 2).is_ok());
         assert_eq!(ASKED.load(Ordering::SeqCst), 3);
+    }
+
+    /// Off the console: another user only when another account owns it; the login window
+    /// (root) is a locked screen.
+    #[test]
+    fn the_login_window_is_not_another_user() {
+        use crate::hp_upgrade::{OTHER_USER, SCREEN_LOCKED};
+        let r = super::unavailable_reason;
+        assert_eq!(r(Some((false, true)), Some(501), 501), None);
+        assert_eq!(r(Some((true, true)), Some(501), 501), Some(SCREEN_LOCKED));
+        assert_eq!(r(Some((false, false)), Some(0), 501), Some(SCREEN_LOCKED), "login window");
+        assert_eq!(r(Some((false, false)), Some(502), 501), Some(OTHER_USER));
+        assert_eq!(r(Some((false, false)), Some(501), 501), Some(SCREEN_LOCKED), "off the console, nobody else on it");
+        assert_eq!(r(Some((false, false)), None, 501), Some(SCREEN_LOCKED));
+        assert_eq!(r(None, Some(0), 501), None);
     }
 
     /// Another user's session taking the display ends it too, with `ready`'s reason.

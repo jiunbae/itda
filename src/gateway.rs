@@ -1178,6 +1178,12 @@ pub(crate) fn open_hp(host: &store::Host, login: &store::Login, ssh_pass: &str) 
                 crate::log!("high-performance sharing on {}: started Itda there", host.host);
                 raw = rfb::open(&t.addr()?, &Creds { user: String::new(), pass });
             }
+            // At the login window (nobody signed in at the screen): as locked, so the viewer
+            // gets Screen Sharing, where one can sign in, and switches back after.
+            Err(e) if e.to_string() == tr!("hp.loginWindow") => {
+                crate::log!("high-performance sharing on {}: the Mac is at its login window", host.host);
+                return Err(rfb::denied(crate::hp_upgrade::SCREEN_LOCKED));
+            }
             Err(e) => crate::log!("high-performance sharing on {}: couldn't start Itda there: {e}", host.host),
         }
     }
