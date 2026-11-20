@@ -1114,7 +1114,7 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
                 }
             }
         }
-    } else {
+    } else if host.hp.on {
         match open_hp(host, login, &pass) {
             Ok((t, raw)) => {
                 *tunnel = Some(t);
