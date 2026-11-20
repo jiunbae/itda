@@ -142,7 +142,42 @@ needle='''                encs.push(encodings.encodingH264);
 '''
 assert s.count(needle)==1
 s=s.replace(needle,needle+'''                encs.push(0x49544453);
+                if (this._itdaViewScale > 0 && this._itdaViewScale < 1000 && this._itdaVideoSeen) {
+                    encs.push(0x49560000 + this._itdaViewScale);
+                }
 ''',1)
+# How large this window shows the screen (thousandths; 0 = full size), as Itda's 'IV'+n
+# pseudo-encoding (enc::ENC_ITDA_VIEW_SCALE): its server then sends no larger a picture. Listed
+# only once the server has sent H.264 (only Itda's do), so other servers never see the list
+# change; the viewer sets it as its window and scale change.
+needle='''    get qualityLevel() {'''
+assert s.count(needle)==1
+s=s.replace(needle,'''    get itdaViewScale() {
+        return this._itdaViewScale || 0;
+    }
+    set itdaViewScale(n) {
+        n = n > 0 && n < 1000 ? Math.ceil(n) : 0;
+        if ((this._itdaViewScale || 0) === n) {
+            return;
+        }
+        this._itdaViewScale = n;
+        if (this._itdaVideoSeen && this._rfbConnectionState === 'connected') {
+            this._sendEncodings();
+        }
+    }
+
+'''+needle,1)
+needle='''    _handleDataRect() {
+        let decoder = this._decoders[this._FBU.encoding];'''
+assert s.count(needle)==1
+s=s.replace(needle,'''    _handleDataRect() {
+        if (this._FBU.encoding === encodings.encodingH264 && !this._itdaVideoSeen) {
+            this._itdaVideoSeen = true;
+            if (this._itdaViewScale) {
+                this._sendEncodings();
+            }
+        }
+        let decoder = this._decoders[this._FBU.encoding];''',1)
 p.write_text(s)
 p=Path(sys.argv[1])/'package/core/display.js'
 s=p.read_text()

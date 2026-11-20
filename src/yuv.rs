@@ -200,9 +200,14 @@ fn blend(a: &[u32], b: &[u32], out: &mut [u32], f: u32) {
 /// Each picture row is converted once and stretched to the rectangle's width into one of two
 /// row buffers; each output row blends the two it falls between. Tables and rows are kept
 /// between pictures: nothing is allocated per picture once the sizes settle.
+///
+/// Not smooth (`set_smooth`): nearest pixel instead, about three times faster. For a picture
+/// the window shows no larger than it came (the server made it that small for the window), the
+/// window's own scaling down undoes the scaling up anyway.
 #[derive(Default)]
 pub struct Scaler {
     sizes: ((usize, usize), (usize, usize)),
+    nearest: bool,
     xs: Vec<(u32, u32, u32)>,
     ys: Vec<(u32, u32, u32)>,
     /// One picture row, converted.
@@ -215,6 +220,14 @@ pub struct Scaler {
 impl Scaler {
     /// Draw `pic` into the w×h rectangle at dst[0] (rows `dst_stride` apart). False, with
     /// nothing written, if a plane or `dst` is too short.
+    /// Bilinear (the default) or nearest pixel.
+    pub fn set_smooth(&mut self, smooth: bool) {
+        if self.nearest == smooth {
+            self.nearest = !smooth;
+            self.sizes = Default::default(); // new tables
+        }
+    }
+
     pub fn draw(&mut self, yuv: &Yuv, pic: &Nv12, dst: &mut [u32], dst_stride: usize, w: usize, h: usize) -> bool {
         if w == 0 || h == 0 {
             return true;
@@ -230,6 +243,13 @@ impl Scaler {
             self.sizes = ((sw, sh), (w, h));
             taps(sw, w, &mut self.xs);
             taps(sh, h, &mut self.ys);
+            if self.nearest {
+                // The nearer of the two taps, unweighted.
+                for t in self.xs.iter_mut().chain(self.ys.iter_mut()) {
+                    let n = if t.2 >= 128 { t.1 } else { t.0 };
+                    *t = (n, n, 0);
+                }
+            }
             self.line.resize(sw, 0);
             for r in &mut self.rows {
                 r.resize(w, 0);
@@ -259,6 +279,14 @@ impl Scaler {
         let i = if self.held[0] == keep { 1 } else { 0 };
         yuv.row(pic, r, &mut self.line);
         let line = &self.line[..pic.w];
+        if self.nearest {
+            for (o, &(x0, _, _)) in self.rows[i].iter_mut().zip(&self.xs) {
+                // SAFETY: as below.
+                *o = unsafe { *line.get_unchecked(x0 as usize) };
+            }
+            self.held[i] = r;
+            return i;
+        }
         for (o, &(x0, x1, fx)) in self.rows[i].iter_mut().zip(&self.xs) {
             // SAFETY: `taps` made every index for a row of `pic.w` (< pic.w), and `line` is it.
             let (p, q) = unsafe { (*line.get_unchecked(x0 as usize), *line.get_unchecked(x1 as usize)) };
@@ -266,6 +294,169 @@ impl Scaler {
         }
         self.held[i] = r;
         i
+    }
+}
+
+/// What an H.264 SPS says about the stream (tests: what the encoders announce).
+#[cfg(test)]
+pub(crate) mod sps {
+    #[allow(dead_code)] // (size: the Mac encoder's tests)
+    pub struct Sps {
+        pub size: (usize, usize),
+        /// max_num_ref_frames.
+        pub refs: u32,
+        /// VUI matrix_coefficients (1 BT.709, 5/6 BT.601), when the stream says.
+        pub matrix: Option<u32>,
+        pub full_range: bool,
+        pub max_dec_frame_buffering: Option<u32>,
+    }
+
+    /// Exp-Golomb reader over an RBSP.
+    struct Bits<'a>(&'a [u8], usize);
+    impl Bits<'_> {
+        fn bit(&mut self) -> u32 {
+            // (Past the end: zeros, so a short or odd SPS reads as one without the rest.)
+            let b = self.0.get(self.1 / 8).map_or(0, |x| (x >> (7 - self.1 % 8)) & 1);
+            self.1 += 1;
+            b as u32
+        }
+        fn bits(&mut self, n: u32) -> u32 {
+            (0..n).fold(0, |v, _| v << 1 | self.bit())
+        }
+        fn ue(&mut self) -> u32 {
+            let mut zeros = 0;
+            while self.bit() == 0 && zeros < 31 {
+                zeros += 1;
+            }
+            (1 << zeros) - 1 + self.bits(zeros)
+        }
+        fn se(&mut self) -> i32 {
+            let v = self.ue() as i32;
+            if v % 2 == 1 { (v + 1) / 2 } else { -v / 2 }
+        }
+    }
+
+    /// The first SPS of an Annex B stream.
+    pub fn parse(b: &[u8]) -> Option<Sps> {
+        let at = (0..b.len().saturating_sub(4)).find(|&i| b[i..i + 4] == [0, 0, 0, 1] && b[i + 4] & 0x1f == 7)? + 5;
+        let end = (at..b.len().saturating_sub(3)).find(|&i| b[i..i + 4] == [0, 0, 0, 1]).unwrap_or(b.len());
+        // Emulation prevention bytes out.
+        let mut rbsp = Vec::new();
+        for &x in &b[at..end] {
+            if x == 3 && rbsp.ends_with(&[0, 0]) {
+                continue;
+            }
+            rbsp.push(x);
+        }
+        let mut r = Bits(&rbsp, 0);
+        let profile = r.bits(8);
+        r.bits(16); // constraint flags, level
+        r.ue(); // sps id
+        let mut chroma = 1;
+        if [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135].contains(&profile) {
+            chroma = r.ue();
+            if chroma == 3 {
+                r.bit();
+            }
+            r.ue();
+            r.ue();
+            r.bit();
+            if r.bit() == 1 {
+                for i in 0..if chroma == 3 { 12 } else { 8 } {
+                    if r.bit() == 1 {
+                        let (mut last, mut next) = (8i32, 8i32);
+                        for _ in 0..if i < 6 { 16 } else { 64 } {
+                            if next != 0 {
+                                next = (last + r.se() + 256) % 256;
+                            }
+                            last = if next == 0 { last } else { next };
+                        }
+                    }
+                }
+            }
+        }
+        r.ue(); // log2_max_frame_num
+        match r.ue() {
+            0 => { r.ue(); }
+            1 => {
+                r.bit();
+                r.se();
+                r.se();
+                for _ in 0..r.ue() {
+                    r.se();
+                }
+            }
+            _ => {}
+        }
+        let refs = r.ue();
+        r.bit();
+        let w = (r.ue() + 1) * 16;
+        let map_units = r.ue() + 1;
+        let frame_mbs_only = r.bit();
+        let h = map_units * 16 * (2 - frame_mbs_only);
+        if frame_mbs_only == 0 {
+            r.bit();
+        }
+        r.bit();
+        let (mut cw, mut ch) = (0, 0);
+        if r.bit() == 1 {
+            let (sx, sy) = if chroma == 0 { (1, 2 - frame_mbs_only) } else { (2, 2 * (2 - frame_mbs_only)) };
+            cw = (r.ue() + r.ue()) * sx;
+            ch = (r.ue() + r.ue()) * sy;
+        }
+        let mut sps = Sps { size: ((w - cw) as usize, (h - ch) as usize), refs, matrix: None, full_range: false, max_dec_frame_buffering: None };
+        if r.bit() == 1 {
+            // VUI
+            if r.bit() == 1 && r.bits(8) == 255 {
+                r.bits(32); // sample aspect ratio
+            }
+            if r.bit() == 1 {
+                r.bit(); // overscan
+            }
+            if r.bit() == 1 {
+                r.bits(3);
+                sps.full_range = r.bit() == 1;
+                if r.bit() == 1 {
+                    r.bits(16); // primaries, transfer
+                    sps.matrix = Some(r.bits(8));
+                }
+            }
+            if r.bit() == 1 {
+                r.ue();
+                r.ue();
+            }
+            if r.bit() == 1 {
+                r.bits(32);
+                r.bits(32);
+                r.bit();
+            }
+            let mut hrd = false;
+            for _ in 0..2 {
+                if r.bit() == 1 {
+                    hrd = true;
+                    let n = r.ue() + 1;
+                    r.bits(8);
+                    for _ in 0..n {
+                        r.ue();
+                        r.ue();
+                        r.bit();
+                    }
+                    r.bits(20);
+                }
+            }
+            if hrd {
+                r.bit();
+            }
+            r.bit(); // pic_struct
+            if r.bit() == 1 {
+                r.bit();
+                for _ in 0..5 {
+                    r.ue();
+                }
+                sps.max_dec_frame_buffering = Some(r.ue());
+            }
+        }
+        Some(sps)
     }
 }
 
@@ -423,6 +614,15 @@ mod tests {
         let mut wide = [0u32; 6];
         assert!(sc.draw(&yuv, &pic, &mut wide, 6, 6, 1));
         assert_eq!(wide.map(|p| p & 255), [50, 50, 73, 97, 120, 120]);
+        // Nearest pixel: each 2×2 quarter is its picture pixel, nothing blended.
+        sc.set_smooth(false);
+        let mut near = vec![0u32; 4 * 4];
+        assert!(sc.draw(&yuv, &pic, &mut near, 4, 4, 4));
+        let want = [[0, 0, 200, 200], [0, 0, 200, 200], [100, 100, 40, 40], [100, 100, 40, 40]];
+        assert_eq!(near.chunks(4).map(|r| [r[0] & 255, r[1] & 255, r[2] & 255, r[3] & 255]).collect::<Vec<_>>(), want);
+        sc.set_smooth(true);
+        assert!(sc.draw(&yuv, &pic, &mut dst, 6, 4, 4));
+        assert_eq!(dst, first, "smooth again");
     }
 
     #[test]
@@ -460,7 +660,8 @@ mod tests {
         let mut dst = vec![0u32; w * h];
         let mut sc = Scaler::default();
         let mut plain = vec![0u32; sw * sh];
-        for (name, scaled) in [("convert 2560x1440", false), ("scale to 3840x2160", true)] {
+        for (name, scaled, smooth) in [("convert 2560x1440", false, true), ("scale to 3840x2160", true, true), ("nearest to 3840x2160", true, false)] {
+            sc.set_smooth(smooth);
             let t = std::time::Instant::now();
             for _ in 0..20 {
                 if scaled { assert!(sc.draw(&yuv, &pic, &mut dst, w, w, h)) } else { assert!(yuv.convert(&pic, &mut plain, sw)) }

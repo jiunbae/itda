@@ -978,6 +978,11 @@ unsafe fn update_view() {
         net::VIEW_BACKGROUND
     };
     sh().set_view(v);
+    // The largest any shown window draws the screen at (a crop shows its part larger).
+    let scale = shown.iter().map(|&w| cur_layout(w).s).fold(0.0, f64::max);
+    if scale > 0.0 {
+        sh().set_view_scale(scale);
+    }
 }
 
 unsafe fn tick(h: HWND) {

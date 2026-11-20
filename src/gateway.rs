@@ -547,6 +547,9 @@ fn hosts_json() -> serde_json::Value {
                 "remote_name": h.remote_name,
                 "opts": h.opts,
                 "hp": h.hp,
+                // The same Mac saved again with high-performance sharing on (and its password
+                // saved): the viewer opens that one instead, under this one's name.
+                "hp_via": h.hp_route(&hosts).filter(|v| v.id != h.id && store::resolve(v, &accounts).pass.is_some()).map(|v| v.id.clone()),
                 "last_used": h.last_used,
                 // The preview's version (its time), 0 = none: part of its URL, so it's cached
                 // until it changes.

@@ -345,99 +345,9 @@ pub(crate) mod tests {
         assert!(again.key && types(&again.data)[..2] == [7, 8]);
     }
 
-    /// Exp-Golomb reader over an RBSP.
-    struct Bits<'a>(&'a [u8], usize);
-    impl Bits<'_> {
-        fn bit(&mut self) -> u32 {
-            let b = (self.0[self.1 / 8] >> (7 - self.1 % 8)) & 1;
-            self.1 += 1;
-            b as u32
-        }
-        fn bits(&mut self, n: u32) -> u32 {
-            (0..n).fold(0, |v, _| v << 1 | self.bit())
-        }
-        fn ue(&mut self) -> u32 {
-            let mut zeros = 0;
-            while self.bit() == 0 {
-                zeros += 1;
-            }
-            (1 << zeros) - 1 + self.bits(zeros)
-        }
-        fn se(&mut self) -> i32 {
-            let v = self.ue() as i32;
-            if v % 2 == 1 { (v + 1) / 2 } else { -v / 2 }
-        }
-    }
-
     /// The picture size an Annex B stream's SPS declares (after its cropping).
     pub(crate) fn sps_size(b: &[u8]) -> Option<(usize, usize)> {
-        let at = (0..b.len().saturating_sub(4)).find(|&i| b[i..i + 4] == START && b[i + 4] & 0x1f == 7)? + 5;
-        let end = (at..b.len().saturating_sub(3)).find(|&i| b[i..i + 4] == START).unwrap_or(b.len());
-        // Emulation prevention bytes out.
-        let mut rbsp = Vec::new();
-        for &x in &b[at..end] {
-            if x == 3 && rbsp.ends_with(&[0, 0]) {
-                continue;
-            }
-            rbsp.push(x);
-        }
-        let mut r = Bits(&rbsp, 0);
-        let profile = r.bits(8);
-        r.bits(16); // constraint flags, level
-        r.ue(); // sps id
-        let mut chroma = 1;
-        if [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135].contains(&profile) {
-            chroma = r.ue();
-            if chroma == 3 {
-                r.bit();
-            }
-            r.ue();
-            r.ue();
-            r.bit();
-            if r.bit() == 1 {
-                for i in 0..if chroma == 3 { 12 } else { 8 } {
-                    if r.bit() == 1 {
-                        let (mut last, mut next) = (8i32, 8i32);
-                        for _ in 0..if i < 6 { 16 } else { 64 } {
-                            if next != 0 {
-                                next = (last + r.se() + 256) % 256;
-                            }
-                            last = if next == 0 { last } else { next };
-                        }
-                    }
-                }
-            }
-        }
-        r.ue(); // log2_max_frame_num
-        match r.ue() {
-            0 => { r.ue(); }
-            1 => {
-                r.bit();
-                r.se();
-                r.se();
-                for _ in 0..r.ue() {
-                    r.se();
-                }
-            }
-            _ => {}
-        }
-        r.ue(); // max refs
-        r.bit();
-        let w = (r.ue() + 1) * 16;
-        let map_units = r.ue() + 1;
-        let frame_mbs_only = r.bit();
-        let h = map_units * 16 * (2 - frame_mbs_only);
-        if frame_mbs_only == 0 {
-            r.bit();
-        }
-        r.bit();
-        let (mut cw, mut ch) = (0, 0);
-        if r.bit() == 1 {
-            let (sx, sy) = if chroma == 0 { (1, 2 - frame_mbs_only) } else { (2, 2 * (2 - frame_mbs_only)) };
-            cw = (r.ue() + r.ue()) * sx;
-            ch = (r.ue() + r.ue()) * sy;
-        }
-        Some(((w - cw) as usize, (h - ch) as usize))
+        crate::yuv::sps::parse(b).map(|s| s.size)
     }
 
     /// A BGRA IOSurface buffer filled by `f(x, y)`.
@@ -480,7 +390,11 @@ pub(crate) mod tests {
         let (w, h) = (1512, 982);
         let mut e = H264::new(w, h, 4_000_000).unwrap();
         let px = vec![0x80_4020u32; w * h];
-        assert_eq!(sps_size(&e.encode(&px, w, true).unwrap().data), Some((w, h)));
+        let first = e.encode(&px, w, true).unwrap().data;
+        assert_eq!(sps_size(&first), Some((w, h)));
+        // One reference picture, and decoders told to keep no more (ReferenceBufferCount).
+        let sps = crate::yuv::sps::parse(&first).unwrap();
+        assert_eq!((sps.refs, sps.max_dec_frame_buffering), (1, Some(1)));
     }
 
     /// Dynamic resolution: 4K frames (in memory and as a captured buffer) encode as a 2/3

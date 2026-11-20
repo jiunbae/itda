@@ -325,7 +325,14 @@ async function openFromApp() {
   document.title = h.label;
   S.fit = !(h.opts && h.opts.actual);
   S.viewOnly = !!(h.opts && h.opts.view_only);
-  open(h);
+  open(hpVia(h, r.data || []));
+}
+
+// The same Mac saved again with high-performance sharing on (hosts_json's hp_via): open that
+// connection, under this one's name, so the viewer knows what it gets (keys, fallback, mode).
+function hpVia(h, hosts) {
+  const via = h?.hp_via && hosts.find((x) => x.id === h.hp_via);
+  return via ? { ...via, label: h.label } : h;
 }
 
 function renderHosts() {
@@ -663,6 +670,7 @@ function hpUndecodable(owner, e) {
 
 function open(h) {
   if (!h) return;
+  h = hpVia(h, S.hosts || []);
   close();
   const gen = ++S.gen;
   S.host = h;
@@ -696,6 +704,8 @@ function open(h) {
   rfb.focusOnClick = true;
   rfb.showDotCursor = true;
   rfb.qualityLevel = 7;
+  rfb.addEventListener('desktopresize', syncViewScale);
+  rfb.addEventListener('connect', syncViewScale);
   // Sound remembered on: asked for from the start (the browser may hold it until a click).
   if (S.audio) rfb.itdaAudio?.(true);
   // Every key (this window's, a monitor window's) leaves through sendKey: the Mac modifiers go
@@ -1167,6 +1177,7 @@ $('#tools').addEventListener('click', (e) => {
     case 'scale':
       S.fit = !S.fit;
       if (r) { r.scaleViewport = S.fit; r.clipViewport = !S.fit; r.dragViewport = !S.fit && !monitors.selected; monitors.apply(); }
+      syncViewScale();
       toast(T(S.fit ? 'viewer.tip.fit' : 'viewer.toast.actual'));
       return renderTools();
     case 'mouse-lock':
@@ -1353,8 +1364,23 @@ document.addEventListener('fullscreenchange', () => {
 function syncBackground() {
   if (MIRROR !== null || !S.rfb || !('itdaBackground' in S.rfb)) return;
   S.rfb.itdaBackground = document.hidden && !monitors.anyVisible();
+  syncViewScale();
 }
 document.addEventListener('visibilitychange', syncBackground);
+// How large this window shows the remote screen, in device pixels per remote pixel: Itda's
+// server sends video no larger than that (a 4K screen in a 1280-wide window: a third of it).
+// Monitor windows show parts of it at their own sizes: then full size.
+let viewScaleTimer = null;
+function syncViewScale() {
+  clearTimeout(viewScaleTimer);
+  viewScaleTimer = setTimeout(() => {
+    const r = S.rfb;
+    if (MIRROR !== null || !r || !('itdaViewScale' in r)) return;
+    const s = r.scaleViewport && !monitors.anyVisible() ? (r._display?.scale || 1) * (window.devicePixelRatio || 1) : 1;
+    r.itdaViewScale = s > 0 && s < 1 ? Math.ceil(s * 1000) : 0;
+  }, 400);
+}
+window.addEventListener('resize', syncViewScale);
 
 // Relative pointer (Itda's own servers, which announce it): a game on the other side hides the
 // pointer and reads only how far the mouse moves, pulling it back to the middle, so absolute

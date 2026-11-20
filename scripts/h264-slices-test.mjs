@@ -2,7 +2,8 @@
 // hardware encoder sends a frame in several slices, and a chunk per slice failed to decode.
 import fs from 'node:fs';
 const src = fs.readFileSync(new URL('../web/viewer/novnc.min.js', import.meta.url), 'utf8');
-const at = src.indexOf('class{constructor(i){this._data=i,this._index=0,this.profileIdc=null');
+// (The minifier's names change with the bundle around it.)
+const at = src.search(/class\{constructor\(([\w$]+)\)\{this\._data=\1,this\._index=0,this\.profileIdc=null/);
 if (at < 0) throw Error('H.264 parser not found in the bundle');
 let depth = 0, end = at + 'class'.length;
 for (; end < src.length; end++) { if (src[end] === '{') depth++; else if (src[end] === '}' && --depth === 0) break; }

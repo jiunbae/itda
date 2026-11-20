@@ -538,8 +538,14 @@ mod tests {
     /// decodes to the same picture, give or take compression.
     #[test]
     fn decodes_what_the_encoder_makes() {
+        // 810 lines: a 1080p screen's 3/4 step, not whole macroblocks (cropped in the SPS).
+        for (w, h) in [(640, 360), (1440, 810)] {
+            decode_round_trip(w, h);
+        }
+    }
+
+    fn decode_round_trip(w: usize, h: usize) {
         use crate::server::VideoEncode;
-        let (w, h) = (640, 360);
         let mut e = match crate::h264_win::H264::new(w, h, 8_000_000) {
             Ok(e) => e,
             Err(why) => return eprintln!("skipped: no Media Foundation H.264 encoder here ({why})"),
@@ -548,9 +554,10 @@ mod tests {
             Ok(d) => d,
             Err(why) => return eprintln!("skipped: no Media Foundation H.264 decoder here ({why})"),
         };
-        // Broad grey bands, which survive compression closely whichever matrix the encoder used
-        // (it converts with BT.601 and may not say so).
-        let px: Vec<u32> = (0..w * h).map(|i| [0x000000, 0x404040, 0xa0a0a0, 0xffffff][(i % w) * 4 / w]).collect();
+        // Broad bands: greys, then red, green and blue, which come back as they went only when
+        // the decoder converts with the matrix the encoder used.
+        const BANDS: [u32; 7] = [0x000000, 0x404040, 0xa0a0a0, 0xffffff, 0xd02020, 0x20b040, 0x3050e0];
+        let px: Vec<u32> = (0..w * h).map(|i| BANDS[(i % w) * BANDS.len() / w]).collect();
         let mut out = vec![0u32; w * h];
         let mut pictures = 0;
         for i in 0..3 {
@@ -562,11 +569,14 @@ mod tests {
             })
             .unwrap();
         }
-        assert!(pictures >= 2, "low latency: a picture per input ({pictures})");
-        for (x, want) in [(40, 0x000000u32), (200, 0x404040), (360, 0xa0a0a0), (600, 0xffffff)] {
-            let got = out[180 * w + x];
-            let close = (0..3).all(|i| (((got >> (i * 8)) & 255) as i32 - ((want >> (i * 8)) & 255) as i32).abs() <= 16);
-            assert!(close, "at {x}: {got:06x} vs {want:06x}");
+        assert!(pictures >= 2, "{w}x{h}: low latency: a picture per input ({pictures})");
+        for (i, want) in BANDS.iter().enumerate() {
+            let x = (2 * i + 1) * w / (2 * BANDS.len());
+            for y in [h / 2, h - 4] {
+                let got = out[y * w + x];
+                let close = (0..3).all(|c| (((got >> (c * 8)) & 255) as i32 - ((want >> (c * 8)) & 255) as i32).abs() <= 12);
+                assert!(close, "{w}x{h} at {x},{y}: {got:06x} vs {want:06x}");
+            }
         }
     }
 }
