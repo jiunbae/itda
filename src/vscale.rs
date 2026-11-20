@@ -70,6 +70,8 @@ pub struct Scaler {
     step: usize,
     /// The smallest step the viewer's view allows (0: any, the screen's size).
     view: usize,
+    /// The view, not the bitrate, made the picture this small (`view_limited`).
+    by_view: bool,
     /// A change waiting to hold: towards a smaller picture (true) or a larger one, and since.
     pending: Option<(bool, Instant)>,
     changed: Instant,
@@ -77,7 +79,7 @@ pub struct Scaler {
 
 impl Scaler {
     pub fn new(now: Instant) -> Scaler {
-        Scaler { src: (0, 0), step: 0, view: 0, pending: None, changed: now }
+        Scaler { src: (0, 0), step: 0, view: 0, by_view: false, pending: None, changed: now }
     }
 
     /// How large the viewer shows the screen, in thousandths (1000 or more: full size). Taken
@@ -90,10 +92,23 @@ impl Scaler {
     /// new screen size is chosen for at once; otherwise a change waits for the hysteresis.
     pub fn size(&mut self, w: usize, h: usize, bps: u32, max: u32, now: Instant) -> (usize, usize) {
         if self.src != (w, h) {
-            *self = Scaler { src: (w, h), step: choose(w, h, bps).max(self.view), view: self.view, pending: None, changed: now };
+            let fits = choose(w, h, bps);
+            *self = Scaler { src: (w, h), step: fits.max(self.view), view: self.view, by_view: self.view > fits, pending: None, changed: now };
             return scaled(w, h, self.step);
         }
         let b = budget(bps);
+        let result = self.step_for(w, h, b, bps, max, now);
+        self.by_view = self.view > 0 && self.step >= self.view && fit(w, h, b, 1.0) < self.step;
+        result
+    }
+
+    /// The picture is smaller than the bitrate allows because the viewer shows it that small:
+    /// a bitrate for the picture's own size is then enough.
+    pub fn view_limited(&self) -> bool {
+        self.by_view
+    }
+
+    fn step_for(&mut self, w: usize, h: usize, b: u64, bps: u32, max: u32, now: Instant) -> (usize, usize) {
         let down = fit(w, h, b, 1.0).max(self.view);
         let target = if down > self.step {
             down
@@ -270,16 +285,19 @@ mod tests {
         let mut sc = Scaler::new(t0);
         sc.set_view(334);
         assert_eq!(sc.size(3840, 2160, MAX, MAX, t0), (1280, 720), "a new screen: at once");
+        assert!(sc.view_limited());
         // The window grows: up after the hold, never past what the bitrate allows.
         sc.set_view(1000);
         assert_eq!(sc.size(3840, 2160, MAX, MAX, t0 + s(4.0)), (1280, 720));
         assert_eq!(sc.size(3840, 2160, MAX, MAX, t0 + s(6.5)), (2560, 1440));
+        assert!(!sc.view_limited(), "the bitrate's size");
         // It shrinks again, and the bitrate falls too: the smaller of the two wins.
         sc.set_view(500);
         assert_eq!(sc.size(3840, 2160, MAX, MAX, t0 + s(12.0)), (2560, 1440));
         assert_eq!(sc.size(3840, 2160, MAX, MAX, t0 + s(14.0)), (1920, 1080));
         assert_eq!(sc.size(3840, 2160, 3_000_000, MAX, t0 + s(20.0)), (1920, 1080));
         assert_eq!(sc.size(3840, 2160, 3_000_000, MAX, t0 + s(22.0)), (1280, 720));
+        assert!(!sc.view_limited(), "the bitrate would have it this small anyway");
     }
 
     #[test]

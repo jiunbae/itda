@@ -713,6 +713,9 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
     let mut rate: Option<crate::rate::Rate> = None;
     // Its picture size, for viewers that scale it up (vscale.rs).
     let mut scaler = crate::vscale::Scaler::new(Instant::now());
+    // The encoder's bitrate never above this: a picture the viewer's window made small needs
+    // only its own size's (a 4K screen in a small window: 720p's 3 Mbit/s, not 4K's 16).
+    let mut bitrate_cap = u32::MAX;
     let mut reset = true;
     let mut exact: Vec<u32> = Vec::new();
     let mut last_change = Instant::now();
@@ -831,7 +834,7 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                 r.held();
             }
             if let Some(bps) = r.tick(Instant::now()) {
-                v.set_bitrate(bps);
+                v.set_bitrate(bps.min(bitrate_cap));
                 crate::trace::add("kbps", bps as f32 / 1000.0);
             }
         }
@@ -975,6 +978,12 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
         } else {
             (w & !1, h & !1)
         };
+        let was_cap = std::mem::replace(&mut bitrate_cap, if encs.contains(&ENC_ITDA_SCALED_VIDEO) && scaler.view_limited() { video_bitrate(coded.0, coded.1) } else { u32::MAX });
+        if bitrate_cap != was_cap {
+            if let (Some(r), Some(v)) = (rate.as_ref(), video.as_mut().filter(|v| v.size() == coded)) {
+                v.set_bitrate(r.bitrate().min(bitrate_cap));
+            }
+        }
         if want_video && video.as_ref().map(|v| (v.source(), v.size())) != Some(((w, h), coded)) {
             let was = video.as_ref().filter(|v| v.source() == (w, h)).map_or((w & !1, h & !1), |v| v.size());
             video = platform::video(w, h, coded.0, coded.1);
@@ -983,11 +992,11 @@ fn pump(out: &Outbox, rx: &Receiver<Msg>, woken: &AtomicBool, cap: &Mutex<platfo
                 // A new size: keep what the link has shown it can carry.
                 let r = rate.get_or_insert_with(|| crate::rate::Rate::new(v.bitrate(), Instant::now()));
                 r.rebase(v.bitrate());
-                if r.bitrate() < v.bitrate() {
-                    v.set_bitrate(r.bitrate());
+                if r.bitrate().min(bitrate_cap) < v.bitrate() {
+                    v.set_bitrate(r.bitrate().min(bitrate_cap));
                 }
                 if v.size() != was {
-                    crate::log!("video: {}x{} -> {}x{} at {:.1} Mbit/s", was.0, was.1, v.size().0, v.size().1, r.bitrate() as f64 / 1e6);
+                    crate::log!("video: {}x{} -> {}x{} at {:.1} Mbit/s", was.0, was.1, v.size().0, v.size().1, r.bitrate().min(bitrate_cap) as f64 / 1e6);
                 }
             }
             reset = true;
