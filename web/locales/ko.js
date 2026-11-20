@@ -854,6 +854,7 @@ I18N.add('ko', {
   'viewer.hp.modeUnknown': '현재 연결 모드를 확인하지 못했습니다. 고성능 모드 버튼을 눌러 다시 확인하세요. 화면 연결은 유지됩니다.',
   'viewer.hp.screenBack': '그 Mac 화면이 돌아와 고성능 모드로 바꿉니다',
   'viewer.hp.unlocked': '잠금이 풀려 고성능 모드로 바꿉니다',
+  'viewer.hp.otherUserNamed': '그 Mac 화면에 다른 계정({user})이 나와 있어 기본 화면 공유로 연결했습니다 — 이 계정의 화면으로 돌아오면 고성능 모드로 바꿉니다',
   'viewer.hp.otherUser': '다른 사용자가 그 Mac 화면을 쓰고 있어 기본 화면 공유로 연결했습니다 — 화면이 돌아오면 고성능 모드로 바꿉니다',
   'viewer.hp.locked': '그 Mac의 화면이 잠겨 있어 기본 화면 공유로 연결했습니다 — 잠금을 풀면 고성능 모드로 바꿉니다',
   'viewer.hp.label.enabled': '고성능 모드 사용 설정됨 — 누르면 끄고 기본 화면 공유로 다시 연결',

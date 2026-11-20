@@ -1121,7 +1121,7 @@ fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mu
                 // be over and switches back.)
                 let why = unavailable(&e);
                 LOCKED_FALLBACK.with(|l| l.set(why.is_some()));
-                record_mode(&host.id, json!({"hp": false, "setup": setup.is_some(), "locked": why.is_some(), "other_user": why == Some(Unavailable::OtherUser), "reason": e.to_string(), "code": setup}));
+                record_mode(&host.id, json!({"hp": false, "setup": setup.is_some(), "locked": why.is_some(), "other_user": why == Some(Unavailable::OtherUser), "other_user_name": other_user_name(&e), "reason": e.to_string(), "code": setup}));
             }
         }
     }
@@ -1211,6 +1211,13 @@ fn unavailable(e: &io::Error) -> Option<Unavailable> {
     } else {
         None
     }
+}
+/// The account an OTHER_USER refusal names (Itda 1.0.33 and later: "… (june)").
+fn other_user_name(e: &io::Error) -> Option<String> {
+    let s = e.to_string();
+    let rest = &s[s.find(crate::hp_upgrade::OTHER_USER)? + crate::hp_upgrade::OTHER_USER.len()..];
+    let name = rest.strip_prefix(" (")?.split(')').next()?;
+    (!name.is_empty() && name.len() <= 64).then(|| name.to_string())
 }
 fn locked_refusal(e: &io::Error) -> bool {
     unavailable(e).is_some()
@@ -1396,6 +1403,10 @@ mod tests {
         assert!(!crate::rfb::auth_failed(&refused));
         let taken = crate::rfb::denied(crate::hp_upgrade::OTHER_USER);
         assert_eq!(super::unavailable(&taken), Some(super::Unavailable::OtherUser));
+        assert_eq!(super::other_user_name(&taken), None, "an older Mac names nobody");
+        let named = crate::rfb::denied(format!("{} (june)", crate::hp_upgrade::OTHER_USER));
+        assert_eq!(super::unavailable(&named), Some(super::Unavailable::OtherUser));
+        assert_eq!(super::other_user_name(&named).as_deref(), Some("june"));
         assert!(!crate::rfb::auth_failed(&taken));
         // A wrong password whose reason happened to quote one is still recognised as the lock.
         let wrapped = crate::rfb::kinded(std::io::ErrorKind::PermissionDenied, "auth", tr!("rfb.authFailed", reason = crate::hp_upgrade::SCREEN_LOCKED));

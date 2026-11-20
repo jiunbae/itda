@@ -730,7 +730,7 @@ function open(h) {
       if (S.rfb !== rfb || typeof m?.hp !== 'boolean') return;
       S.hpMode = m.hp ? 'active' : 'fallback';
       if (!m.hp && m.locked) {
-        const context = { h, rfb, attempt, otherUser: !!m.other_user };
+        const context = { h, rfb, attempt, otherUser: !!m.other_user, otherUserName: m.other_user_name || '' };
         S.hpModeContext = context;
         toast(unavailableText(context));
         watchUnlock(context);
@@ -924,6 +924,7 @@ function refreshHpMode(h, rfb, attempt) {
       requestHpQuality();
     } else if (m.locked) {
       context.otherUser = !!m.other_user;
+      context.otherUserName = m.other_user_name || '';
       toast(unavailableText(context));
       watchUnlock(context);
     } else {
@@ -960,6 +961,7 @@ function watchUnlock(context, tries = 0) {
   }, tries < 225 ? 4000 : 30000);
 }
 function unavailableText(context) {
+  if (context.otherUser && context.otherUserName) return T('viewer.hp.otherUserNamed', { user: context.otherUserName });
   return T(context.otherUser ? 'viewer.hp.otherUser' : 'viewer.hp.locked');
 }
 function requestHpQuality() {

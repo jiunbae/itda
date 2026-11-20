@@ -167,8 +167,36 @@ pub(crate) fn ready() -> Result<(), String> {
         return Err(tr!("mac.screenNotAllowed").into());
     }
     match screen_unavailable() {
+        // Which account has the screen, so the person knows (often their own other account,
+        // left signed in through fast user switching). Viewers match the words before it.
+        Some(why) if why == crate::hp_upgrade::OTHER_USER => Err(match console_user() {
+            Some(name) => format!("{why} ({name})"),
+            None => why.into(),
+        }),
         Some(why) => Err(why.into()),
         None => Ok(()),
+    }
+}
+
+/// The short name of the account that owns the console now.
+fn console_user() -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    #[repr(C)]
+    struct Passwd {
+        name: *const std::ffi::c_char,
+    }
+    unsafe extern "C" {
+        fn getpwuid(uid: u32) -> *const Passwd;
+    }
+    let uid = std::fs::metadata("/dev/console").ok()?.uid();
+    // SAFETY: getpwuid gives null or a record whose first field is pw_name, a C string; it's
+    // copied out at once (the record is static and may be overwritten by the next call).
+    unsafe {
+        let p = getpwuid(uid);
+        if p.is_null() || (*p).name.is_null() {
+            return None;
+        }
+        Some(std::ffi::CStr::from_ptr((*p).name).to_string_lossy().into_owned())
     }
 }
 
@@ -1362,6 +1390,14 @@ mod lock_watch_tests {
         assert_eq!(r(Some((false, false)), Some(501), 501), Some(SCREEN_LOCKED), "off the console, nobody else on it");
         assert_eq!(r(Some((false, false)), None, 501), Some(SCREEN_LOCKED));
         assert_eq!(r(None, Some(0), 501), None);
+    }
+
+    #[test]
+    fn the_console_user_has_a_name() {
+        // (Whoever owns this Mac's console while the tests run: a name, not a number.)
+        if let Some(name) = super::console_user() {
+            assert!(!name.is_empty() && name.parse::<u32>().is_err(), "{name}");
+        }
     }
 
     /// Another user's session taking the display ends it too, with `ready`'s reason.
