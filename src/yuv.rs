@@ -200,9 +200,14 @@ fn blend(a: &[u32], b: &[u32], out: &mut [u32], f: u32) {
 /// Each picture row is converted once and stretched to the rectangle's width into one of two
 /// row buffers; each output row blends the two it falls between. Tables and rows are kept
 /// between pictures: nothing is allocated per picture once the sizes settle.
+///
+/// Not smooth (`set_smooth`): nearest pixel instead, about three times faster. For a picture
+/// the window shows no larger than it came (the server made it that small for the window), the
+/// window's own scaling down undoes the scaling up anyway.
 #[derive(Default)]
 pub struct Scaler {
     sizes: ((usize, usize), (usize, usize)),
+    nearest: bool,
     xs: Vec<(u32, u32, u32)>,
     ys: Vec<(u32, u32, u32)>,
     /// One picture row, converted.
@@ -215,6 +220,14 @@ pub struct Scaler {
 impl Scaler {
     /// Draw `pic` into the w×h rectangle at dst[0] (rows `dst_stride` apart). False, with
     /// nothing written, if a plane or `dst` is too short.
+    /// Bilinear (the default) or nearest pixel.
+    pub fn set_smooth(&mut self, smooth: bool) {
+        if self.nearest == smooth {
+            self.nearest = !smooth;
+            self.sizes = Default::default(); // new tables
+        }
+    }
+
     pub fn draw(&mut self, yuv: &Yuv, pic: &Nv12, dst: &mut [u32], dst_stride: usize, w: usize, h: usize) -> bool {
         if w == 0 || h == 0 {
             return true;
@@ -230,6 +243,13 @@ impl Scaler {
             self.sizes = ((sw, sh), (w, h));
             taps(sw, w, &mut self.xs);
             taps(sh, h, &mut self.ys);
+            if self.nearest {
+                // The nearer of the two taps, unweighted.
+                for t in self.xs.iter_mut().chain(self.ys.iter_mut()) {
+                    let n = if t.2 >= 128 { t.1 } else { t.0 };
+                    *t = (n, n, 0);
+                }
+            }
             self.line.resize(sw, 0);
             for r in &mut self.rows {
                 r.resize(w, 0);
@@ -259,6 +279,14 @@ impl Scaler {
         let i = if self.held[0] == keep { 1 } else { 0 };
         yuv.row(pic, r, &mut self.line);
         let line = &self.line[..pic.w];
+        if self.nearest {
+            for (o, &(x0, _, _)) in self.rows[i].iter_mut().zip(&self.xs) {
+                // SAFETY: as below.
+                *o = unsafe { *line.get_unchecked(x0 as usize) };
+            }
+            self.held[i] = r;
+            return i;
+        }
         for (o, &(x0, x1, fx)) in self.rows[i].iter_mut().zip(&self.xs) {
             // SAFETY: `taps` made every index for a row of `pic.w` (< pic.w), and `line` is it.
             let (p, q) = unsafe { (*line.get_unchecked(x0 as usize), *line.get_unchecked(x1 as usize)) };
@@ -586,6 +614,15 @@ mod tests {
         let mut wide = [0u32; 6];
         assert!(sc.draw(&yuv, &pic, &mut wide, 6, 6, 1));
         assert_eq!(wide.map(|p| p & 255), [50, 50, 73, 97, 120, 120]);
+        // Nearest pixel: each 2×2 quarter is its picture pixel, nothing blended.
+        sc.set_smooth(false);
+        let mut near = vec![0u32; 4 * 4];
+        assert!(sc.draw(&yuv, &pic, &mut near, 4, 4, 4));
+        let want = [[0, 0, 200, 200], [0, 0, 200, 200], [100, 100, 40, 40], [100, 100, 40, 40]];
+        assert_eq!(near.chunks(4).map(|r| [r[0] & 255, r[1] & 255, r[2] & 255, r[3] & 255]).collect::<Vec<_>>(), want);
+        sc.set_smooth(true);
+        assert!(sc.draw(&yuv, &pic, &mut dst, 6, 4, 4));
+        assert_eq!(dst, first, "smooth again");
     }
 
     #[test]
@@ -623,7 +660,8 @@ mod tests {
         let mut dst = vec![0u32; w * h];
         let mut sc = Scaler::default();
         let mut plain = vec![0u32; sw * sh];
-        for (name, scaled) in [("convert 2560x1440", false), ("scale to 3840x2160", true)] {
+        for (name, scaled, smooth) in [("convert 2560x1440", false, true), ("scale to 3840x2160", true, true), ("nearest to 3840x2160", true, false)] {
+            sc.set_smooth(smooth);
             let t = std::time::Instant::now();
             for _ in 0..20 {
                 if scaled { assert!(sc.draw(&yuv, &pic, &mut dst, w, w, h)) } else { assert!(yuv.convert(&pic, &mut plain, sw)) }

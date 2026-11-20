@@ -33,7 +33,7 @@ const BACKGROUND_EVERY: Duration = Duration::from_millis(500);
 /// picture is asked for BUSY_WAIT (as a fraction) of that time later, so this viewer keeps no
 /// more than about two thirds of the time busy with it rather than all of it. (A 4-core PC
 /// decoding 2560x1440 took 1.6 cores for 19 pictures a second.) Faster PCs are never held back.
-const BUSY: Duration = Duration::from_millis(12);
+const BUSY: Duration = Duration::from_millis(20);
 const BUSY_WAIT: (u32, u32) = (3, 2);
 /// How long a new view scale must hold before the server hears of it (a window being dragged
 /// larger passes through many).
@@ -617,6 +617,7 @@ impl Video {
         }
         let gpu = !self.soft && crate::h264dec_win::gpu_wanted();
         let (scaler, drawn) = (&mut self.scaler, &mut self.drawn);
+        let view = s.view_scale.lock().unwrap().0 as usize;
         let r = match &mut self.dec {
             Some(d) => Ok(d),
             None => crate::h264dec_win::Decoder::new(w, h, gpu).map(|d| {
@@ -634,6 +635,8 @@ impl Video {
                         crate::log!("h264: picture {}x{} in {w}x{h}", pic.w, pic.h);
                     }
                 }
+                // Smooth only where the windows show more pixels than the picture has (Scaler).
+                scaler.set_smooth(pic.w * 1000 < w * view * 97 / 100);
                 let mut fb = s.fb.lock().unwrap();
                 match fb.video([x, y, w, h], pic, yuv, scaler) {
                     Some((dw, dh)) if dw > 0 && dh > 0 => fb.mark(x, y, dw, dh),
