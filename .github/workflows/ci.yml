@@ -17,8 +17,7 @@ jobs:
       - name: Install RustSec scanner
         run: cargo install cargo-audit --locked --version 0.22.2
       - name: Audit the checked-in lockfile
-        # Picky, SSPI and winscard require rsa =0.10.0-rc.18. See CONTRIBUTING.md.
-        run: cargo audit --file Cargo.lock --ignore RUSTSEC-2023-0071 --deny yanked
+        run: cargo audit --file Cargo.lock --deny yanked
 
   build:
     runs-on: windows-latest
@@ -70,6 +69,17 @@ jobs:
         run: node scripts/hp-mac-keys-test.mjs
       - name: H.264 frames in several slices (Intel Macs)
         run: node scripts/h264-slices-test.mjs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install WebKit test dependencies
+        run: |
+          npm install --no-save --package-lock=false playwright@1.65.0
+          npx playwright install webkit
+      - name: Phone web viewer layout and sign-in in WebKit
+        env:
+          WEBKIT: '1'
+        run: node scripts/viewer-phone-e2e.mjs
       - name: Test
         run: cargo test --locked --release
       - name: Signing keychain
