@@ -1,8 +1,13 @@
 # RSA 0.10.0 compatibility
 
 Itda keeps the current IronRDP protocol stack and patches three of its dependencies.
-Picky 7.0.0-rc.25 and SSPI 0.21.3 are from crates.io. winscard 0.3.3 already has
-a local zlib-rs patch documented in [winscard/ITDA.md](winscard/ITDA.md).
+Picky and SSPI are copied from the crates.io release archives below. winscard 0.3.3
+already has a local zlib-rs patch documented in [winscard/ITDA.md](winscard/ITDA.md).
+
+| Archive | SHA-256 |
+| --- | --- |
+| `picky-7.0.0-rc.25.crate` | `c1ae9cd78eb1d61be4790713d28368cf71c844218fcd91542768805423f02666` |
+| `sspi-0.21.3.crate` | `5c3bd2a45e7e24fd72eba100ced3fd847e05fe4657d7f067eb06d1a894f0d4e5` |
 
 - All three manifests select stable RSA 0.10.0. Picky and SSPI also select stable
   PKCS#1 0.8 to match the encoding dependency required by RSA 0.10.0.

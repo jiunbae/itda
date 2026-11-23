@@ -74,7 +74,7 @@ jobs:
           node-version: 22
       - name: Install WebKit test dependencies
         run: |
-          npm install --no-save --package-lock=false playwright@1.65.0
+          npm install --no-save --package-lock=false --ignore-scripts playwright@1.65.0
           npx playwright install webkit
       - name: Phone web viewer layout and sign-in in WebKit
         env:

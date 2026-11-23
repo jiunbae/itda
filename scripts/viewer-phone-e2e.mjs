@@ -52,8 +52,11 @@ const server = http.createServer(async (req, res) => {
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${server.address().port}/`;
 
-const browser = process.env.WEBKIT ? await pw.webkit.launch() : await pw.chromium.launch(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {});
+let browser;
 try {
+  browser = process.env.WEBKIT
+    ? await pw.webkit.launch()
+    : await pw.chromium.launch(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {});
   const ctx = await browser.newContext({locale:'ko-KR',
     viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
     userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
@@ -282,6 +285,11 @@ try {
   assert(!errors.length, `page errors: ${errors.join("; ")}`);
   console.log("PASS: phone viewer sign-in, lockout, expiry, login fix route, toolbar");
 } finally {
-  await browser.close();
-  server.close();
+  try {
+    await browser?.close();
+  } finally {
+    const closed = new Promise((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
+    server.closeAllConnections();
+    await closed;
+  }
 }
