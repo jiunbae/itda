@@ -52,7 +52,7 @@ const server = http.createServer(async (req, res) => {
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${server.address().port}/`;
 
-const browser = await pw.chromium.launch(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {});
+const browser = process.env.WEBKIT ? await pw.webkit.launch() : await pw.chromium.launch(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {});
 try {
   const ctx = await browser.newContext({locale:'ko-KR',
     viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
@@ -79,6 +79,15 @@ try {
 
   await page.goto(base);
   await page.waitForSelector("#login:not([hidden])");
+  const loginFits = () => page.evaluate(() => {
+    const card = document.querySelector(".login-card").getBoundingClientRect();
+    const pin = document.querySelector("#pin").getBoundingClientRect();
+    return card.left >= 0 && card.right <= innerWidth && pin.left >= 0 && pin.right <= innerWidth;
+  });
+  assert(await loginFits(), "Login card or PIN input overflows the initial viewport");
+  await page.setViewportSize({ width: 320, height: 568 });
+  assert(await loginFits(), "Login card or PIN input overflows a narrow viewport");
+  await page.setViewportSize({ width: 390, height: 844 });
   const viewport = await page.evaluate(() => document.querySelector("meta[name=viewport]").content);
   assert(!/user-scalable|maximum-scale/.test(viewport), `pinch zoom stays allowed: ${viewport}`);
   const login = await text("#login");
