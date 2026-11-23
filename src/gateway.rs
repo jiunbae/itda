@@ -36,6 +36,7 @@ const LOCKOUT: Duration = Duration::from_secs(60);
 
 struct Running {
     port: u16,
+    policy: Arc<store::Web>,
     stop: Arc<AtomicBool>,
     /// The accept loop; joined on stop so the port is free again right away.
     thread: std::thread::JoinHandle<()>,
@@ -43,8 +44,13 @@ struct Running {
 
 /// The web viewer for other devices (0.0.0.0, PIN).
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
-/// Signed-in browser sessions: (token, since, from the local listener).
-static TOKENS: Mutex<Vec<(String, Instant, bool)>> = Mutex::new(Vec::new());
+struct SessionToken {
+    value: String,
+    issued: Instant,
+    local: bool,
+    secure: bool,
+}
+static TOKENS: Mutex<Vec<SessionToken>> = Mutex::new(Vec::new());
 /// Wrong PINs per source (address): (count, locked until). One device guessing locks only
 /// itself out; ALL_FAILS bounds guessing from many addresses at once.
 static FAILS: Mutex<Option<Fails>> = Mutex::new(None);
@@ -61,9 +67,13 @@ struct Fails {
 static LIVE: Mutex<Vec<(u64, TcpStream)>> = Mutex::new(Vec::new());
 struct LiveConn(u64);
 impl LiveConn {
-    fn track(c: &TcpStream) -> io::Result<Self> {
+    fn track(c: &TcpStream, stop: &AtomicBool) -> io::Result<Self> {
+        let mut live = LIVE.lock().unwrap();
+        if stop.load(Relaxed) {
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
         let ticket = LOCAL_STREAM_ID.fetch_add(1, Relaxed);
-        LIVE.lock().unwrap().push((ticket, c.try_clone()?));
+        live.push((ticket, c.try_clone()?));
         Ok(Self(ticket))
     }
 }
@@ -107,17 +117,19 @@ pub fn running() -> Option<u16> {
 }
 
 /// Start (or restart on a new port). Errors are for the person: port busy etc.
-pub fn start(port: u16) -> io::Result<()> {
-    if running() == Some(port) {
+pub fn start(policy: &store::Web) -> io::Result<()> {
+    if RUNNING.lock().unwrap().as_ref().is_some_and(|running| running.policy.as_ref() == policy) {
         return Ok(());
     }
     stop();
+    let port = policy.port;
     let l = TcpListener::bind(("0.0.0.0", port)).map_err(|e| io::Error::new(e.kind(), tr!("pcshare.portBusy", port = port, error = e)))?;
     let port = l.local_addr()?.port(); // the real one, also when asked for 0
     let stop = Arc::new(AtomicBool::new(false));
-    let thread = serve(l, false, stop.clone())?;
+    let policy = Arc::new(policy.clone());
+    let thread = serve(l, Some(policy.clone()), stop.clone())?;
     crate::log!("web viewer on port {port}");
-    *RUNNING.lock().unwrap() = Some(Running { port, stop, thread });
+    *RUNNING.lock().unwrap() = Some(Running { port, policy, stop, thread });
     Ok(())
 }
 
@@ -129,7 +141,7 @@ pub fn local_url(id: &str) -> io::Result<String> {
     if g.is_none() {
         let l = TcpListener::bind(("127.0.0.1", 0))?;
         let port = l.local_addr()?.port();
-        serve(l, true, Arc::new(AtomicBool::new(false)))?;
+        serve(l, None, Arc::new(AtomicBool::new(false)))?;
         crate::log!("local viewer on port {port}");
         *g = Some((port, random_token()));
     }
@@ -168,7 +180,7 @@ const MAX_LINE: u64 = 8 << 10;
 const REQUEST_TIME: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 15 });
 
 /// Blocking accept, so a new connection is served at once; `stop()` wakes it with a connect.
-fn serve(l: TcpListener, local: bool, stop: Arc<AtomicBool>) -> io::Result<std::thread::JoinHandle<()>> {
+fn serve(l: TcpListener, policy: Option<Arc<store::Web>>, stop: Arc<AtomicBool>) -> io::Result<std::thread::JoinHandle<()>> {
     Ok(std::thread::spawn(move || {
         while !stop.load(Relaxed) {
             match l.accept() {
@@ -183,8 +195,10 @@ fn serve(l: TcpListener, local: bool, stop: Arc<AtomicBool>) -> io::Result<std::
                     }
                     // Small frames (cursor, one tile) must not wait for Nagle + delayed ACK.
                     let _ = c.set_nodelay(true);
+                    let policy = policy.clone();
+                    let stop = stop.clone();
                     std::thread::spawn(move || {
-                        if let Err(e) = handle(c, peer, local) {
+                        if let Err(e) = handle(c, peer, policy.as_deref(), &stop) {
                             crate::log!("web {peer}: {e}");
                         }
                         OPEN.fetch_sub(1, Relaxed);
@@ -215,7 +229,7 @@ pub fn stop() {
     for (_, s) in LIVE.lock().unwrap().drain(..) {
         let _ = s.shutdown(Shutdown::Both);
     }
-    TOKENS.lock().unwrap().retain(|t| t.2);
+    TOKENS.lock().unwrap().retain(|t| t.local);
     *FAILS.lock().unwrap() = None;
 }
 
@@ -418,11 +432,18 @@ fn token_of(req: &Req) -> Option<String> {
     req.headers.get("cookie")?.split(';').find_map(|kv| kv.trim().strip_prefix("itda=").map(str::to_string))
 }
 
-fn authed(req: &Req, local: bool) -> bool {
+fn authed(req: &Req, local: bool, secure: bool) -> bool {
     let Some(t) = token_of(req) else { return false };
-    let mut toks = TOKENS.lock().unwrap();
-    toks.retain(|(_, at, _)| at.elapsed() < SESSION_TTL);
-    toks.iter().any(|(k, _, l)| *l == local && eq_ct(k.as_bytes(), t.as_bytes()))
+    let mut tokens = TOKENS.lock().unwrap();
+    tokens.retain(|token| token.issued.elapsed() < SESSION_TTL);
+    tokens.iter().any(|token| {
+        token.local == local && token.secure == secure && eq_ct(token.value.as_bytes(), t.as_bytes())
+    })
+}
+
+// The external listener only trusts TLS metadata supplied by a loopback proxy.
+fn forwarded_https(req: &Req, peer: SocketAddr) -> bool {
+    peer.ip().is_loopback() && req.headers.get("x-forwarded-proto").is_some_and(|p| p == "https")
 }
 
 /// Constant-time comparison (PINs and tokens).
@@ -446,7 +467,7 @@ fn source(req: &Req, peer: SocketAddr) -> std::net::IpAddr {
     if peer.ip().is_loopback() { fwd().unwrap_or(peer.ip()) } else { peer.ip() }
 }
 
-fn login(c: &mut TcpStream, req: &Req, peer: SocketAddr) -> io::Result<()> {
+fn login(c: &mut TcpStream, req: &Req, peer: SocketAddr, secure: bool, stop: &AtomicBool) -> io::Result<()> {
     let from = source(req, peer);
     // (A lock that has run out starts the count afresh.)
     let locked = |f: &mut (u32, Option<Instant>)| match f.1 {
@@ -489,15 +510,20 @@ fn login(c: &mut TcpStream, req: &Req, peer: SocketAddr) -> io::Result<()> {
     if let Some(f) = FAILS.lock().unwrap().as_mut() {
         f.per.remove(&from);
     }
-    let cookie = new_session(false);
+    let cookie = new_session(false, secure, Some(stop))?;
     respond(c, "200 OK", "application/json; charset=utf-8", &cookie, b"{\"ok\":true}")
 }
 
 /// A fresh session; returns its Set-Cookie header line.
-fn new_session(local: bool) -> String {
+fn new_session(local: bool, secure: bool, stop: Option<&AtomicBool>) -> io::Result<String> {
     let tok = random_token();
-    TOKENS.lock().unwrap().push((tok.clone(), Instant::now(), local));
-    format!("Set-Cookie: itda={tok}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}\r\n", SESSION_TTL.as_secs())
+    let mut tokens = TOKENS.lock().unwrap();
+    if stop.is_some_and(|stop| stop.load(Relaxed)) {
+        return Err(io::Error::from(io::ErrorKind::Interrupted));
+    }
+    tokens.push(SessionToken { value: tok.clone(), issued: Instant::now(), local, secure });
+    let secure_attr = if secure { "; Secure" } else { "" };
+    Ok(format!("Set-Cookie: itda={tok}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}{secure_attr}\r\n", SESSION_TTL.as_secs()))
 }
 
 /// Local listener: an app window opens /auth?t=<token>&open=<id>, gets a session cookie
@@ -510,7 +536,7 @@ fn local_auth(c: &mut TcpStream, req: &Req) -> io::Result<()> {
     }
     let open: String = arg("open=").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
     let trace = if arg("trace=") == "1" { "&trace=1" } else { "" };
-    let cookie = new_session(true);
+    let cookie = new_session(true, false, None)?;
     respond(c, "302 Found", "text/plain", &format!("{cookie}Location: /?open={open}{trace}\r\n"), b"")
 }
 
@@ -547,9 +573,8 @@ fn hosts_json() -> serde_json::Value {
                 "remote_name": h.remote_name,
                 "opts": h.opts,
                 "hp": h.hp,
-                // The same Mac saved again with high-performance sharing on (and its password
-                // saved): the viewer opens that one instead, under this one's name.
-                "hp_via": h.hp_route(&hosts).filter(|v| v.id != h.id && store::resolve(v, &accounts).pass.is_some()).map(|v| v.id.clone()),
+                // An alternate high-performance transport, using this profile's login and options.
+                "hp_via": crate::hp_upgrade::alternate_route(h, &hosts, &login).is_some(),
                 "last_used": h.last_used,
                 // The preview's version (its time), 0 = none: part of its URL, so it's cached
                 // until it changes.
@@ -617,80 +642,6 @@ fn this_machine() -> String {
         .unwrap_or_default();
 }
 
-/// Without a home window (macOS), the gateway owns the address book: apply a change the
-/// way the Windows home does (`home.rs` page commands).
-fn apply_edit(cmd: &serde_json::Value) -> bool {
-    let s = |k: &str| cmd.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
-    match s("cmd").as_str() {
-        "save_host" => {
-            let Ok(host) = serde_json::from_value::<store::Host>(cmd["host"].clone()) else { return false };
-            if let Some(p) = cmd.get("password").and_then(|x| x.as_str()).filter(|p| !p.is_empty()) {
-                store::set_password(&host.id, Some(p));
-            }
-            let mut hosts = store::load_hosts();
-            match hosts.iter_mut().find(|x| x.id == host.id) {
-                Some(x) => *x = host,
-                None => hosts.push(host),
-            }
-            store::save_hosts(&hosts);
-        }
-        "delete_host" => {
-            let id = s("id");
-            let mut hosts = store::load_hosts();
-            hosts.retain(|x| x.id != id);
-            store::set_password(&id, None);
-            store::remove_thumbs(&id);
-            store::save_hosts(&hosts);
-        }
-        "save_account" => {
-            let Ok(a) = serde_json::from_value::<store::Account>(cmd["account"].clone()) else { return false };
-            if let Some(p) = cmd.get("password").and_then(|x| x.as_str()).filter(|p| !p.is_empty()) {
-                store::set_password(&store::acct_key(&a.id), Some(p));
-            }
-            let mut accounts = store::load_accounts();
-            match accounts.iter_mut().find(|x| x.id == a.id) {
-                Some(x) => *x = a,
-                None => accounts.push(a),
-            }
-            store::save_accounts(&accounts);
-        }
-        "delete_account" => {
-            let id = s("id");
-            let mut accounts = store::load_accounts();
-            let gone = accounts.iter().find(|x| x.id == id).cloned();
-            accounts.retain(|x| x.id != id);
-            // Connections keep the user name and ask for a password next time.
-            let mut hosts = store::load_hosts();
-            for h in hosts.iter_mut().filter(|h| h.account == id) {
-                h.account.clear();
-                if let Some(a) = &gone {
-                    h.user = a.user.clone();
-                }
-            }
-            store::set_password(&store::acct_key(&id), None);
-            store::set_password(&store::acct_keypass(&id), None);
-            store::save_accounts(&accounts);
-            store::save_hosts(&hosts);
-        }
-        _ => return false,
-    }
-    true
-}
-
-/// Remember a successful connection (macOS; on Windows the session process reports it).
-fn mark_used(id: &str, raw: &rfb::Raw) {
-    if ON_EDIT.get().is_some() {
-        return;
-    }
-    let mut hosts = store::load_hosts();
-    if let Some(h) = hosts.iter_mut().find(|h| h.id == id) {
-        h.last_used = store::now();
-        h.remote_name = raw.name.clone();
-        h.remote_size = format!("{}×{}", raw.width, raw.height);
-        store::save_hosts(&hosts);
-    }
-}
-
 fn accounts_json() -> serde_json::Value {
     let hosts = store::load_hosts();
     json!(store::load_accounts()
@@ -708,7 +659,7 @@ fn accounts_json() -> serde_json::Value {
 
 /// Applies an address-book change through the home window (so its list stays in step);
 /// set by the home. Returns once the change is saved.
-pub static ON_EDIT: std::sync::OnceLock<fn(serde_json::Value) -> bool> = std::sync::OnceLock::new();
+pub static ON_EDIT: std::sync::OnceLock<fn(serde_json::Value) -> io::Result<()>> = std::sync::OnceLock::new();
 /// Per connection attempt (device id + the viewer's attempt token): whether it got
 /// high-performance sharing ({"hp":bool,"reason"}). Kept 10 minutes.
 static MODES: Mutex<std::collections::BTreeMap<String, (Instant, serde_json::Value)>> = Mutex::new(std::collections::BTreeMap::new());
@@ -898,23 +849,46 @@ fn edit(c: &mut TcpStream, req: &Req) -> io::Result<()> {
         _ => return json_resp(c, "400 Bad Request", api_error("srv.unknownRequest", tr!("gw.unknownRequest"))),
     };
     let saved = ["/host/id", "/account/id", "/id"].iter().find_map(|p| cmd.pointer(p).cloned());
-    let done = match ON_EDIT.get() {
-        Some(f) => f(cmd),
-        None => apply_edit(&cmd),
+    let Some(save) = ON_EDIT.get() else {
+        return json_resp(c, "503 Service Unavailable", api_error("srv.pcNotResponding", tr!("gw.pcNotResponding")));
     };
-    if done {
-        json_resp(c, "200 OK", json!({"ok": true, "id": saved, "hosts": hosts_json(), "accounts": accounts_json()}))
-    } else {
-        json_resp(c, "503 Service Unavailable", api_error("srv.pcNotResponding", tr!("gw.pcNotResponding")))
+    match save(cmd) {
+        Ok(()) => json_resp(c, "200 OK", json!({"ok": true, "id": saved, "hosts": hosts_json(), "accounts": accounts_json()})),
+        Err(e) if e.kind() == io::ErrorKind::TimedOut => {
+            json_resp(c, "503 Service Unavailable", api_error("srv.pcNotResponding", tr!("gw.pcNotResponding")))
+        }
+        Err(e) => {
+            crate::log!("web address book: {e}");
+            json_resp(c, "500 Internal Server Error", api_error("srv.saveFailed", &tr!("store.saveFailed", error = e)))
+        }
     }
 }
 
-fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
+fn web_device_allowed(policy: Option<&store::Web>, id: &str) -> bool {
+    policy.is_none_or(|web| !web.restrict_devices || web.allowed_hosts.iter().any(|allowed| allowed == id))
+}
+
+fn web_device_path(path: &str) -> Option<&str> {
+    ["/ws/", "/api/mode/", "/api/hp-ready/"].into_iter().find_map(|prefix| path.strip_prefix(prefix))
+        .or_else(|| path.strip_prefix("/thumb/").map(|id| id.trim_end_matches(".png")))
+}
+
+fn handle(mut c: TcpStream, peer: SocketAddr, policy: Option<&store::Web>, stop: &AtomicBool) -> io::Result<()> {
+    let local = policy.is_none();
     c.set_read_timeout(Some(Duration::from_secs(15)))?;
     let mut r = BufReader::new(c.try_clone()?);
     let req = read_req(&mut r)?;
-    let ok = authed(&req, local);
+    if stop.load(Relaxed) {
+        return Ok(());
+    }
+    let secure = !local && forwarded_https(&req, peer);
+    let ok = authed(&req, local, secure);
+    let can_edit = policy.is_none_or(|web| web.allow_edits && !web.restrict_devices);
     let p = req.path.as_str();
+    let device = web_device_path(p);
+    if ok && device.is_some_and(|id| id.is_empty() || id.contains('/') || !web_device_allowed(policy, id)) {
+        return respond(&mut c, "403 Forbidden", "text/plain", "", b"forbidden");
+    }
     match (req.method.as_str(), p) {
         ("GET", "/" | "/index.html") => asset(&mut c, &req, "text/html; charset=utf-8", INDEX.as_bytes()),
         ("GET", "/hp-setup.css") => asset(&mut c, &req, "text/css; charset=utf-8", include_bytes!("../web/hp-setup.css")),
@@ -933,10 +907,10 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
         ("GET", "/icon-512.png") => asset(&mut c, &req, "image/png", ICON_PNG_512),
         ("GET", "/sw.js") => respond(&mut c, "200 OK", "text/javascript; charset=utf-8", "", SW.as_bytes()),
         ("GET", "/auth") if local => local_auth(&mut c, &req),
-        ("POST", "/api/login") if same_origin(&req) && !local => login(&mut c, &req, peer),
-        ("POST", "/api/logout") if same_origin(&req) => {
+        ("POST", "/api/login") if same_origin(&req) && !local => login(&mut c, &req, peer, secure, stop),
+        ("POST", "/api/logout") if ok && same_origin(&req) => {
             if let Some(t) = token_of(&req) {
-                TOKENS.lock().unwrap().retain(|(k, _, _)| *k != t);
+                TOKENS.lock().unwrap().retain(|token| token.value != t);
             }
             respond(&mut c, "200 OK", "application/json", "Set-Cookie: itda=; Path=/; Max-Age=0\r\n", b"{}")
         }
@@ -948,12 +922,18 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             });
             json_resp(&mut c, if ok { "200 OK" } else { "401 Unauthorized" }, json!({"ok": ok, "local": local, "scroll": scroll}))
         }
-        (_, "/api/hosts") if ok => json_resp(&mut c, "200 OK", hosts_json()),
-        ("GET", "/api/nearby") if ok => json_resp(&mut c, "200 OK", nearby_json()),
-        ("GET", "/api/accounts") if ok => json_resp(&mut c, "200 OK", accounts_json()),
+        (_, "/api/hosts") if ok => {
+            let mut hosts = hosts_json();
+            if let Some(list) = hosts.as_array_mut() {
+                list.retain(|host| host["id"].as_str().is_some_and(|id| web_device_allowed(policy, id)));
+            }
+            json_resp(&mut c, "200 OK", hosts)
+        }
+        ("GET", "/api/nearby") if ok && can_edit => json_resp(&mut c, "200 OK", nearby_json()),
+        ("GET", "/api/accounts") if ok && can_edit => json_resp(&mut c, "200 OK", accounts_json()),
         // How the last connection to a device with high-performance mode on was made.
         ("GET", _) if ok && p.starts_with("/api/mode/") => {
-            let id = p.trim_start_matches("/api/mode/");
+            let id = device.unwrap_or_default();
             let attempt = req.query.split('&').find_map(|kv| kv.strip_prefix("attempt=")).unwrap_or("");
             let mode = MODES.lock().unwrap().get(&format!("{id}\x1f{attempt}")).map(|(_, v)| v.clone());
             json_resp(&mut c, "200 OK", mode.unwrap_or(serde_json::Value::Null))
@@ -961,14 +941,20 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
         // Whether that Mac's high-performance sharing would take a connection now (a viewer on
         // Screen Sharing because the screen was locked asks until it's unlocked).
         ("GET", _) if ok && p.starts_with("/api/hp-ready/") => {
-            let id = p.trim_start_matches("/api/hp-ready/");
-            let ready = match store::load_hosts().into_iter().find(|h| h.id == id && h.hp.on) {
+            let id = device.unwrap_or_default();
+            let hosts = store::load_hosts();
+            let ready = match hosts.iter().find(|h| h.id == id) {
                 None => json!({"ready": false}),
                 Some(host) => {
-                    let login = store::resolve(&host, &store::load_accounts());
-                    match local.then(|| typed(id)).flatten().or_else(|| login.pass.clone()) {
+                    let login = store::resolve(host, &store::load_accounts());
+                    let pass = local.then(|| typed(id)).flatten().or_else(|| login.pass.clone());
+                    let ready = pass.and_then(|pass| {
+                        let route = if host.hp.on { Some(host.reachable()) } else { crate::hp_upgrade::alternate_route(host, &hosts, &login).map(known_hp_route) };
+                        route.zip(Some(pass))
+                    });
+                    match ready {
                         None => json!({"ready": false}),
-                        Some(pass) => match open_hp(&host.reachable(), &login, &pass) {
+                        Some((route, pass)) => match open_hp(&route, &login, &pass) {
                             Ok(_) => json!({"ready": true}),
                             Err(e) => json!({"ready": false, "locked": locked_refusal(&e)}),
                         },
@@ -977,9 +963,12 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             };
             json_resp(&mut c, "200 OK", ready)
         }
-        ("POST", "/api/edit") if ok && same_origin(&req) => edit(&mut c, &req),
+        ("POST", "/api/edit") if ok && same_origin(&req) && can_edit => edit(&mut c, &req),
+        ("GET", "/api/accounts" | "/api/nearby") | ("POST", "/api/edit") if ok && !can_edit => {
+            json_resp(&mut c, "403 Forbidden", api_error("srv.readOnlyBook", tr!("gw.readOnlyBook")))
+        }
         ("GET", _) if ok && p.starts_with("/thumb/") => {
-            let id = p.trim_start_matches("/thumb/").trim_end_matches(".png");
+            let id = device.unwrap_or_default();
             // (The id is checked before it becomes a path: on Windows a "\\\\host\\share" one
             // would otherwise reach out over SMB.)
             let id = Some(id).filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit()));
@@ -993,7 +982,7 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             if !ok || !same_origin(&req) {
                 return respond(&mut c, "403 Forbidden", "text/plain", "", b"forbidden");
             }
-            let id = p.trim_start_matches("/ws/").to_string();
+            let id = device.unwrap_or_default();
             let Some(key) = req.headers.get("sec-websocket-key").cloned() else {
                 return respond(&mut c, "400 Bad Request", "text/plain", "", b"websocket expected");
             };
@@ -1015,7 +1004,10 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
             LOCKED_FALLBACK.with(|l| l.set(false));
             HP_LIVE.with(|l| l.set(false));
             NO_HP.with(|n| n.set(req.query.split('&').any(|kv| kv == "nohp=1")));
-            proxy(c, &id, peer, local, size)
+            let approved_key = req.query.split('&').find_map(|kv| kv.strip_prefix("rdp_key="))
+                .filter(|key| key.len() == 64 && key.bytes().all(|byte| byte.is_ascii_hexdigit()));
+            let rdp_trust = if can_edit { RdpTrust::CanConfirm(approved_key) } else { RdpTrust::KnownOnly };
+            proxy(c, id, peer, local, size, rdp_trust, stop)
         }
         (_, _) if p.starts_with("/api/") || p.starts_with("/thumb/") => {
             json_resp(&mut c, "401 Unauthorized", api_error("srv.loginRequired", tr!("gw.loginRequired")))
@@ -1027,12 +1019,12 @@ fn handle(mut c: TcpStream, peer: SocketAddr, local: bool) -> io::Result<()> {
 // ---------------------------------------------------------------- RFB relay
 
 /// Log in to the device, then act as a no-auth RFB server for the browser and pipe bytes.
-fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u32, u32)>) -> io::Result<()> {
+fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u32, u32)>, rdp_trust: RdpTrust<'_>, stop: &AtomicBool) -> io::Result<()> {
     // (Holds a Screen Sharing session kept from unlocking this device until it's over.)
     let conn = Conn::begin(id);
     let tx = ws::Sender::new(c.try_clone()?);
     // (Removed from LIVE however this connection ends.)
-    let _live = if local { None } else { Some(LiveConn::track(&c)?) };
+    let _live = if local { None } else { Some(LiveConn::track(&c, stop)?) };
     let fail = |code: u16, why: String| {
         crate::log!("web viewer {id}: {why}");
         tx.close(code, &why);
@@ -1049,22 +1041,20 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u3
         let r = Err(io::Error::new(io::ErrorKind::ConnectionRefused, tr!("gw.noScreenSharing")));
         r
     } else {
-        let Some(host) = store::load_hosts().into_iter().find(|h| h.id == id) else {
+        let hosts = store::load_hosts();
+        let Some(host) = hosts.iter().find(|h| h.id == id) else {
             return fail(4004, tr!("gw.notFound").into());
         };
-        let login = store::resolve(&host, &store::load_accounts());
+        let login = store::resolve(host, &store::load_accounts());
         let Some(pass) = local.then(|| typed(id)).flatten().or_else(|| login.pass.clone()) else {
             return fail(4001, tr!("gw.noPassword").into());
         };
-        open_host(&host, &login, pass, &mut tunnel, size)
+        open_host(host, &hosts, &login, pass, &mut tunnel, size, rdp_trust)
     };
     let raw = match raw {
         Ok(r) => r,
         Err(e) => return fail(4000 + kind_code(rfb::classify(&e)), e.to_string()),
     };
-    if id != THIS_PC {
-        mark_used(id, &raw);
-    }
     // A high-performance session the Mac ends asks it why: one that ended because its screen
     // locked (the capture there shows only the lock screen's picture) or another user took it
     // closes with LOCKED_CLOSE, and the viewer reconnects at once, getting Screen Sharing
@@ -1076,30 +1066,57 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u3
     relay(c, raw, tx, id, tunnel, local, probe, conn.1)
 }
 
-fn open_host(host: &store::Host, login: &store::Login, pass: String, tunnel: &mut Option<Arc<Tunnel>>, size: Option<(u32, u32)>) -> io::Result<rfb::Raw> {
-    let host = &host.reachable();
+fn known_hp_route(route: &store::Host) -> store::Host {
+    let mut route = route.reachable();
+    crate::hp_upgrade::require_known_host(&mut route);
+    route
+}
+
+enum RdpTrust<'a> {
+    KnownOnly,
+    CanConfirm(Option<&'a str>),
+}
+
+fn verify_rdp_key(id: &str, observed: &str, approval: RdpTrust<'_>) -> io::Result<()> {
+    check_rdp_key(store::try_rdp_key(id)?.as_deref(), observed, approval, |key| store::set_rdp_key(id, key))
+}
+
+fn check_rdp_key(saved: Option<&str>, observed: &str, approval: RdpTrust<'_>, pin: impl FnOnce(&str) -> io::Result<()>) -> io::Result<()> {
+    if let Some(saved) = saved {
+        if saved == observed {
+            return Ok(());
+        }
+        return Err(rfb::kinded(io::ErrorKind::PermissionDenied, "rdp_changed_key", tr!("rdp.keyChanged")));
+    }
+    match approval {
+        RdpTrust::CanConfirm(Some(expected)) if expected == observed => pin(observed),
+        RdpTrust::CanConfirm(_) => Err(rfb::kinded(io::ErrorKind::PermissionDenied, "rdp_confirm_key", observed)),
+        RdpTrust::KnownOnly => Err(rfb::kinded(io::ErrorKind::PermissionDenied, "rdp_needs_owner", tr!("rdp.confirmInApp"))),
+    }
+}
+
+fn open_host(profile: &store::Host, hosts: &[store::Host], login: &store::Login, pass: String, tunnel: &mut Option<Arc<Tunnel>>, size: Option<(u32, u32)>, rdp_trust: RdpTrust<'_>) -> io::Result<rfb::Raw> {
+    let host = &profile.reachable();
     let at_lan = !host.key_alias.is_empty();
     if host.is_rdp() {
-        // The server must show the key it had the first time (checked before the login goes
-        // out); at the LAN address there must be one already.
-        let saved = store::rdp_key(&host.id);
-        if at_lan && saved.is_none() {
+        if at_lan && store::try_rdp_key(&host.id)?.is_none() {
             return Err(rfb::denied(tr!("gw.lanUnverified")));
         }
-        let (raw, key) = crate::rdp::open(&host.host, &login.user, &pass, size.filter(|_| host.opts.resize), saved.as_deref())?;
-        if saved.is_none() {
-            store::set_rdp_key(&host.id, &key);
-        }
-        return Ok(raw);
+        return crate::rdp::open(&host.host, &login.user, &pass, size.filter(|_| host.opts.resize), |key| {
+            verify_rdp_key(&host.id, key, if at_lan { RdpTrust::KnownOnly } else { rdp_trust })
+        });
     }
     // Itda's high-performance sharing on this Mac: through SSH to its loopback port. If it
     // can't be reached (Itda not running there, SSH refused), fall back to the usual way.
-    if host.hp.on && NO_HP.with(|n| n.get()) {
+    let alias = (!host.hp.on).then(|| crate::hp_upgrade::alternate_route(profile, hosts, login)).flatten();
+    let hp = host.hp.on || alias.is_some();
+    if hp && NO_HP.with(|n| n.get()) {
         crate::log!("high-performance sharing on {}: the viewer couldn't decode its video, using Screen Sharing", host.host);
         // (Why it used Screen Sharing: the viewer said it couldn't show the video.)
         record_mode(&host.id, json!({"hp": false, "setup": false, "locked": false, "reason": tr!("gw.hpUndecodable"), "code": "srv.hpUndecodable"}));
-    } else if host.hp.on {
-        match open_hp(host, login, &pass) {
+    } else if hp {
+        let route = alias.map(known_hp_route);
+        match open_hp(route.as_ref().unwrap_or(host), login, &pass) {
             Ok((t, raw)) => {
                 *tunnel = Some(t);
                 HP_LIVE.with(|l| l.set(true));
@@ -1360,12 +1377,101 @@ fn kind_code(kind: &str) -> u16 {
         "ssh_hostkey" => 21,
         "ssh_refused" => 22,
         "ssh_missing" => 23,
+        "rdp_confirm_key" => 35,
+        "rdp_needs_owner" => 36,
+        "rdp_changed_key" => 37,
         _ => 99,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn proxy_https_cookies_stay_on_the_https_listener_path() {
+        use super::*;
+        let mut request = Req {
+            method: "GET".into(),
+            path: "/api/me".into(),
+            query: String::new(),
+            headers: HashMap::from([("x-forwarded-proto".into(), "https".into())]),
+            body: Vec::new(),
+        };
+        assert!(forwarded_https(&request, "127.0.0.1:8080".parse().unwrap()));
+        assert!(!forwarded_https(&request, "192.0.2.1:8080".parse().unwrap()));
+        let cookie = new_session(false, true, None).unwrap();
+        assert!(cookie.contains("; Secure"));
+        assert!(new_session(false, true, Some(&AtomicBool::new(true))).is_err());
+        let value = cookie.strip_prefix("Set-Cookie: ").unwrap().split(';').next().unwrap();
+        request.headers.insert("cookie".into(), value.into());
+        assert!(authed(&request, false, true));
+        assert!(!authed(&request, false, false));
+        assert!(!authed(&request, true, true));
+    }
+
+    #[test]
+    fn web_device_limit_covers_connections_previews_and_diagnostics() {
+        use super::*;
+        let web = store::Web { restrict_devices: true, allowed_hosts: vec!["abc".into()], ..Default::default() };
+        for endpoint in ["/ws", "/api/mode", "/api/hp-ready", "/thumb"] {
+            let suffix = if endpoint == "/thumb" { ".png" } else { "" };
+            for (id, allowed) in [("abc", true), ("def", false), (THIS_PC, false)] {
+                let path = format!("{endpoint}/{id}{suffix}");
+                assert_eq!(web_device_path(&path), Some(id));
+                assert_eq!(web_device_allowed(Some(&web), id), allowed);
+                assert!(web_device_allowed(None, id));
+            }
+        }
+    }
+
+    #[test]
+    fn restricted_gateway_refuses_unlisted_devices_and_address_book_operations() {
+        use super::*;
+        let policy = store::Web { restrict_devices: true, ..Default::default() };
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let cookie = new_session(false, false, None).unwrap();
+        let cookie = cookie.strip_prefix("Set-Cookie: ").unwrap().split(';').next().unwrap();
+        for (method, path) in [
+            ("GET", "/ws/abc"),
+            ("GET", "/thumb/abc.png"),
+            ("GET", "/api/mode/abc"),
+            ("GET", "/api/hp-ready/abc"),
+            ("GET", "/api/accounts"),
+            ("GET", "/api/nearby"),
+            ("POST", "/api/edit"),
+        ] {
+            let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            write!(client, "{method} {path} HTTP/1.1\r\nHost: localhost\r\nCookie: {cookie}\r\n\r\n").unwrap();
+            let (server, peer) = listener.accept().unwrap();
+            handle(server, peer, Some(&policy), &AtomicBool::new(false)).unwrap();
+            let mut response = String::new();
+            client.read_to_string(&mut response).unwrap();
+            assert!(response.starts_with("HTTP/1.1 403"), "{method} {path}: {response}");
+        }
+    }
+
+    #[test]
+    fn rdp_authentication_requires_a_matching_existing_or_confirmed_key() {
+        use super::*;
+        fn unexpected_pin(_: &str) -> io::Result<()> { panic!("must not save this key") }
+        let confirmation = check_rdp_key(None, "observed", RdpTrust::CanConfirm(None), unexpected_pin).unwrap_err();
+        assert_eq!(crate::rfb::classify(&confirmation), "rdp_confirm_key");
+        assert_eq!(confirmation.to_string(), "observed");
+        assert!(check_rdp_key(None, "other", RdpTrust::CanConfirm(Some("approved")), unexpected_pin).is_err());
+        assert!(check_rdp_key(None, "approved", RdpTrust::KnownOnly, unexpected_pin).is_err());
+        assert!(check_rdp_key(Some("old"), "new", RdpTrust::CanConfirm(Some("new")), unexpected_pin).is_err());
+        assert!(check_rdp_key(Some("old"), "old", RdpTrust::KnownOnly, unexpected_pin).is_ok());
+        let mut pinned = false;
+        check_rdp_key(None, "approved", RdpTrust::CanConfirm(Some("approved")), |key| {
+            pinned = key == "approved";
+            Ok(())
+        }).unwrap();
+        assert!(pinned);
+        assert!(check_rdp_key(None, "approved", RdpTrust::CanConfirm(Some("approved")), |_| {
+            Err(io::Error::other("disk fixture unavailable"))
+        }).is_err());
+    }
+
     /// A remote viewer's socket leaves LIVE when its connection ends; stop still closes the
     /// ones open.
     #[test]
@@ -1375,7 +1481,7 @@ mod tests {
         let _a = TcpStream::connect(l.local_addr().unwrap()).unwrap();
         let (c, _) = l.accept().unwrap();
         let has = |t: u64| super::LIVE.lock().unwrap().iter().any(|(x, _)| *x == t);
-        let live = super::LiveConn::track(&c).unwrap();
+        let live = super::LiveConn::track(&c, &super::AtomicBool::new(false)).unwrap();
         let ticket = live.0;
         assert!(has(ticket));
         drop(live);

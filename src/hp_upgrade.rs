@@ -50,6 +50,44 @@ pub fn ssh_cfg_with(host: &crate::store::Host, login: &crate::store::Login, pass
     }
 }
 
+/// An alternate address may supply the high-performance endpoint for the selected profile
+/// when both profiles name the same login. The caller supplies the selected profile's credentials.
+pub fn alias_route(
+    selected: &crate::store::Host,
+    candidate: &crate::store::Host,
+    login: &crate::store::Login,
+) -> bool {
+    // A retained port with high-performance disabled is an explicit off choice.
+    if selected.hp.port != 0 || selected.id == candidate.id || selected.account != candidate.account || login.user.is_empty() {
+        return false;
+    }
+    if selected.account.is_empty() && (selected.user != login.user || candidate.user != login.user) {
+        return false;
+    }
+    candidate.files.host.is_empty()
+        && ssh_cfg_with(selected, login, String::new()).user == ssh_cfg_with(candidate, login, String::new()).user
+}
+
+pub fn alternate_route<'a>(
+    selected: &crate::store::Host,
+    hosts: &'a [crate::store::Host],
+    login: &crate::store::Login,
+) -> Option<&'a crate::store::Host> {
+    if selected.hp.on {
+        return None;
+    }
+    hosts.iter().find(|candidate| {
+        alias_route(selected, candidate, login) && selected.hp_route(std::slice::from_ref(candidate)).is_some()
+    })
+}
+
+/// A borrowed route must verify the SSH server key already recorded for that address.
+pub fn require_known_host(route: &mut crate::store::Host) {
+    if route.key_alias.is_empty() {
+        route.key_alias = crate::tunnel::split_host(&route.host, 5900).0;
+    }
+}
+
 /// Keychain id of a host's high-performance sharing password.
 pub fn password_key(id: &str) -> String {
     format!("hp-{id}")
@@ -313,6 +351,29 @@ echo "password=$(cat "$data/hp-password")"
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn alternate_high_performance_route_keeps_the_selected_login() {
+        use crate::store::{Host, Login};
+        let mut selected = Host { id: "lan".into(), user: "alex".into(), ..Default::default() };
+        let login = Login { user: "alex".into(), ..Default::default() };
+        let mut alternate = Host { id: "dns".into(), user: "alex".into(), ..Default::default() };
+        assert!(super::alias_route(&selected, &alternate, &login));
+        alternate.user = "pat".into();
+        assert!(!super::alias_route(&selected, &alternate, &login));
+        alternate.user = "alex".into();
+        alternate.account = "another".into();
+        assert!(!super::alias_route(&selected, &alternate, &login));
+        alternate.account.clear();
+        alternate.ssh.user = "pat".into();
+        assert!(!super::alias_route(&selected, &alternate, &login));
+        alternate.ssh.user.clear();
+        alternate.files.host = "unrelated.example".into();
+        assert!(!super::alias_route(&selected, &alternate, &login));
+        alternate.files.host.clear();
+        selected.hp.port = 5910;
+        assert!(!super::alias_route(&selected, &alternate, &login));
+    }
+
     use super::*;
 
     /// Read-only live status diagnostic; never installs, restarts, or requests permissions.

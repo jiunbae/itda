@@ -139,27 +139,27 @@ pub fn finish_copy(v: &mut Value) {
         v["error"] = json!(tr!("fx.mac.clipboard"));
     } else {
         v["data"]["stamp"] = json!(pb.changeCount());
+        // The board now references this export; older ones may go. Read the board here
+        // on the main thread, then remove off it so a large staged tree cannot stall UI.
+        let referenced = file_urls(&pb);
+        std::thread::spawn(move || files::export::sweep(&files::export::exports_dir(), &referenced));
     }
+}
+/// The file paths a board's items carry as file URLs.
+fn file_urls(pb: &NSPasteboard) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for item in pb.pasteboardItems().iter().flat_map(|items| items.iter()) {
+        let Some(s) = (unsafe { item.stringForType(NSPasteboardTypeFileURL) }) else { continue };
+        if let Some(path) = NSURL::URLWithString(&s).filter(|u| u.isFileURL()).and_then(|u| u.path()) {
+            paths.push(PathBuf::from(path.to_string()));
+        }
+    }
+    paths
 }
 pub fn paste(v: Value) {
     let pb = clipboard_board();
     let internal = v["stamp"].as_i64() == Some(pb.changeCount() as i64);
-    let mut paths = Vec::new();
-    if !internal {
-        if let Some(items) = pb.pasteboardItems() {
-            for item in items.iter() {
-                if let Some(s) = unsafe { item.stringForType(NSPasteboardTypeFileURL) } {
-                    if let Some(url) = NSURL::URLWithString(&s) {
-                        if url.isFileURL() {
-                            if let Some(path) = url.path() {
-                                paths.push(PathBuf::from(path.to_string()));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let paths = if internal { Vec::new() } else { file_urls(&pb) };
     emit(
         json!({"type":"files_native_paste","id":files::scoped_id(v["id"].as_str().unwrap_or(""), &v["window"]),"internal":internal,"paths":paths,"side":v["side"],"path":v["path"]}),
     );

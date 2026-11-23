@@ -56,18 +56,29 @@ const FRAME: Duration = Duration::from_millis(16);
 /// Log in to an RDP host ("name" or "name:port"), asking for a `size` desktop (else 1920×1080).
 /// On success the returned `Raw` behaves like a VNC connection right after ServerInit (32bpp,
 /// no auth left to do).
-/// Also gives the server's key (SHA-256 of its public key, hex). With `expect`, a server
-/// showing another key is refused before the login is sent.
-pub fn open(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>, expect: Option<&str>) -> io::Result<(Raw, String)> {
+/// `verify` must authorize the server's public-key fingerprint before CredSSP sends a login.
+pub fn open(
+    host: &str,
+    user: &str,
+    pass: &str,
+    size: Option<(u32, u32)>,
+    verify: impl FnOnce(&str) -> io::Result<()>,
+) -> io::Result<Raw> {
     crate::log!("rdp open {host} {size:?}");
-    let r = connect(host, user, pass, size, expect);
+    let r = connect(host, user, pass, size, verify);
     if let Err(e) = &r {
         crate::log!("rdp failed: {e} [{}]", rfb::classify(e));
     }
     r
 }
 
-fn connect(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>, expect: Option<&str>) -> io::Result<(Raw, String)> {
+fn connect(
+    host: &str,
+    user: &str,
+    pass: &str,
+    size: Option<(u32, u32)>,
+    verify: impl FnOnce(&str) -> io::Result<()>,
+) -> io::Result<Raw> {
     let (name, port) = split(host);
     if user.trim().is_empty() {
         return Err(rfb::kinded(io::ErrorKind::PermissionDenied, "need_user", tr!("rdp.needUser")));
@@ -145,10 +156,7 @@ fn connect(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>, expect:
     let mut connector = ClientConnector::new(config, local).with_static_channel(dvc);
     let upgrade = ironrdp_blocking::connect_begin(&mut framed, &mut connector).map_err(conn_err)?;
     let (tls, server_key) = tls_upgrade(framed.into_inner_no_leftover(), &name)?;
-    let key_id = key_id(&server_key);
-    if expect.is_some_and(|e| e != key_id) {
-        return Err(rfb::denied(tr!("rdp.keyChanged")));
-    }
+    verify(&key_id(&server_key))?;
     let upgraded = ironrdp_blocking::mark_as_upgraded(upgrade, &mut connector);
     let mut framed = Framed::new(tls);
     let result = ironrdp_blocking::connect_finalize(upgraded, connector, &mut framed, &mut NoKdc, name.clone().into(), server_key, None)
@@ -190,14 +198,14 @@ fn connect(host: &str, user: &str, pass: &str, size: Option<(u32, u32)>, expect:
         }
     });
 
-    Ok((Raw {
+    Ok(Raw {
         reader: BufReader::with_capacity(1 << 20, Rx(ours.try_clone()?)),
         writer: ours,
         width: w,
         height: h,
         name: title,
         server_init,
-    }, key_id))
+    })
 }
 
 /// SHA-256 of the server's public key, hex: what identifies an RDP server between connections.
@@ -254,12 +262,14 @@ impl sspi::network_client::NetworkClient for NoKdc {
 
 fn tls_upgrade(tcp: TcpStream, name: &str) -> io::Result<(Tls, Vec<u8>)> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = PinnedServer(provider.signature_verification_algorithms);
     let mut config = rustls::ClientConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
         .map_err(io::Error::other)?
         .dangerous()
-        // RDP hosts use self-signed certificates; NLA binds the session to this key instead.
-        .with_custom_certificate_verifier(Arc::new(AnyCert))
+        // RDP hosts can use self-signed certificates. Require proof of key possession here;
+        // the caller verifies the public-key fingerprint before authenticating with CredSSP.
+        .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth();
     config.resumption = rustls::client::Resumption::disabled(); // CredSSP forbids resumption
     let server_name = rustls::pki_types::ServerName::try_from(name.to_string())
@@ -278,9 +288,9 @@ fn tls_upgrade(tcp: TcpStream, name: &str) -> io::Result<(Tls, Vec<u8>)> {
 }
 
 #[derive(Debug)]
-struct AnyCert;
+struct PinnedServer(rustls::crypto::WebPkiSupportedAlgorithms);
 
-impl rustls::client::danger::ServerCertVerifier for AnyCert {
+impl rustls::client::danger::ServerCertVerifier for PinnedServer {
     fn verify_server_cert(
         &self,
         _: &rustls::pki_types::CertificateDer<'_>,
@@ -294,24 +304,24 @@ impl rustls::client::danger::ServerCertVerifier for AnyCert {
 
     fn verify_tls12_signature(
         &self,
-        _: &[u8],
-        _: &rustls::pki_types::CertificateDer<'_>,
-        _: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        signature: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls12_signature(message, cert, signature, &self.0)
     }
 
     fn verify_tls13_signature(
         &self,
-        _: &[u8],
-        _: &rustls::pki_types::CertificateDer<'_>,
-        _: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        signature: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls13_signature(message, cert, signature, &self.0)
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        rustls::crypto::ring::default_provider().signature_verification_algorithms.supported_schemes()
+        self.0.supported_schemes()
     }
 }
 
@@ -986,7 +996,7 @@ mod tests {
             let _ = c.read_to_end(&mut next);
             (offered, next)
         });
-        let e = open(&format!("127.0.0.1:{port}"), "me", "secret", None, None).err().expect("a TLS-only server must be refused");
+        let e = open(&format!("127.0.0.1:{port}"), "me", "secret", None, |_| panic!("TLS-only negotiation reached key verification")).err().expect("a TLS-only server must be refused");
         assert!(e.to_string().contains("NLA"), "{e}");
         let (offered, next) = server.join().unwrap();
         assert_eq!(offered & 1, 0, "plain TLS offered: {offered:#x}");
@@ -1058,16 +1068,24 @@ mod tests {
         let (host, user, pass) = (it.next().unwrap(), it.next().unwrap(), it.next().unwrap());
         crate::log::init("rdptest");
 
-        let e = open(host, user, "wrong-password", None, None).err().expect("bad password must fail");
+        let e = open(host, user, "wrong-password", None, |_| Ok(())).err().expect("bad password must fail");
         assert_eq!(rfb::classify(&e), "auth", "{e}");
         // Another server key than the one expected: refused before the login.
-        let e = open(host, user, pass, None, Some("00")).err().expect("a different server key must fail");
+        let e = open(host, user, pass, None, |_| Err(rfb::denied(tr!("rdp.keyChanged"))))
+            .err().expect("a different server key must fail");
         assert!(e.to_string().contains("서버 키"), "{e}");
 
-        let (raw, key) = open(host, user, pass, None, None).expect("open");
+        let mut key = String::new();
+        let raw = open(host, user, pass, None, |fingerprint| {
+            key = fingerprint.into();
+            Ok(())
+        }).expect("open");
         assert_eq!(key.len(), 64);
         drop(raw);
-        let (raw, _) = open(host, user, pass, None, Some(&key)).expect("open with its own key");
+        let raw = open(host, user, pass, None, |fingerprint| {
+            assert_eq!(fingerprint, key);
+            Ok(())
+        }).expect("open with its own key");
         assert_eq!((raw.width, raw.height), (800, 600));
         assert_eq!(&raw.server_init[..4], &[3, 32, 2, 88]);
         assert_eq!(&raw.server_init[4..20], &PIXEL_FORMAT);
@@ -1147,7 +1165,7 @@ mod tests {
         crate::log::init("rdptest");
 
         // (Windows starts at the size asked for here; the IronRDP test server keeps its own.)
-        let (raw, _) = open(host, user, pass, Some((1001, 701)), None).expect("open");
+        let raw = open(host, user, pass, Some((1001, 701)), |_| Ok(())).expect("open");
         let (w0, h0) = (raw.width as usize, raw.height as usize);
         let (mut r, mut w) = (raw.reader, raw.writer);
         let mut m = vec![2, 0, 0, 3];

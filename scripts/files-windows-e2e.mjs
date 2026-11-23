@@ -40,18 +40,26 @@ try{
    }};
   });
   const p=await c.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
+  const clockStart=new Date('2026-01-01T00:00:00Z');
+  await p.clock.install({time:clockStart});
   if(platform==='windows'&&process.platform!=='win32')await p.route('**/icons.js',route=>route.fulfill({contentType:'text/javascript',body:fs.readFileSync(path.join(root,'web/icons.js'),'utf8').replace('if (/Windows/.test(navigator.userAgent)) return;','')}));
   await p.goto(base+'/web/');
   await p.evaluate(()=>{S.hosts=[{id:'test',name:'Studio Mac',host:'studio.local',os:'mac',kind:'vnc',login_user:'alex',has_pw:true,files:{method:'sftp',user:'alex'}}];S.settings={...S.settings,onboarded:true,theme:'light'};render();ItdaFiles.launch(S.hosts[0]);});
   const layer=p.locator('.files-layer');await layer.locator('[data-index]').first().waitFor();
-  // Search waits for a pause in typing: a row still shown and clicked before the list
-  // narrows is the row that gets selected (not the one now at its index).
-  await layer.locator('[data-search]').fill('Zebra');
-  await layer.locator('[data-index]').filter({hasText:'Notes.txt'}).first().click();
-  await p.waitForTimeout(250);
-  assert((await layer.locator('[data-index]').allTextContents()).every(t=>t.includes('Zebra')),'Search did not filter after the pause');
-  await layer.locator('[data-search]').fill('');await p.waitForTimeout(250);
+  // Keep the debounce pending through the click, then advance time explicitly.
+  await p.clock.pauseAt(new Date(clockStart.getTime()+300_000));
+  const search=layer.locator('[data-search]'),rows=layer.locator('[data-index]');
+  await search.fill('Zebra');
+  const notes=rows.filter({hasText:'Notes.txt'});
+  assert(await notes.count()>0,'Search removed Notes.txt before the pause');
+  await notes.first().click();
+  await p.clock.runFor(250);
+  const filtered=await rows.allTextContents();
+  assert(filtered.length>0&&filtered.every(t=>t.includes('Zebra')),'Search did not filter after the pause');
+  await search.fill('');
+  await p.clock.runFor(250);
   assert(await layer.locator('[data-index][aria-selected="true"]').filter({hasText:'Notes.txt'}).count()===1&&await layer.locator('[data-index][aria-selected="true"]').count()===1,'Click during a pending search selected another row');
+  await p.clock.resume();
   if(platform==='windows'){
    const boxes=await p.evaluate(()=>['.files-tabs','.files-title','.files-tools','.files-panes'].map(s=>document.querySelector(s).getBoundingClientRect().top));
    assert(boxes.every((y,i)=>!i||y>boxes[i-1]),'Explorer row order is wrong');

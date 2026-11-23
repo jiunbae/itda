@@ -13,8 +13,8 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 On either platform:
 
 ```sh
-cargo build --release
-cargo test --release
+cargo build --locked --release
+cargo test --locked --release
 ```
 
 The executable is `target/release/itda.exe` on Windows or `target/release/itda` on Mac. Package with `scripts/windows-release.ps1` or `scripts/macos-bundle.sh universal`; these scripts also remove build-machine paths. The Mac script writes `dist/Itda.app` and `dist/Itda-macos-universal.zip`. Signing and notarization require the release credentials; a local development bundle is not an official signed release.
@@ -28,13 +28,26 @@ Interface text is translated (Korean and English). Web UI strings live in `web/l
 Run the checks that exercise the affected behavior. CI builds/tests Windows and universal macOS, and runs browser regressions on Windows. Browser fixtures use Playwright:
 
 ```sh
-npm install --no-save --package-lock=false playwright
+npm install --no-save --package-lock=false playwright@1.65.0
 npx playwright install chromium
 node scripts/secure-context-check.mjs
 node scripts/files-windows-e2e.mjs
 ```
 
 Other focused suites include `files-tabs-e2e.mjs`, `files-network-local-e2e.mjs`, `editor-e2e.mjs`, `permissions-e2e.mjs`, `remote-setup-e2e.mjs`, `update-e2e.mjs`, and `monitors-e2e.mjs`. See `.github/workflows/ci.yml` for current CI coverage. Browser IPC fixtures verify the frontend, not real SSH, native OS drag acceptance, macOS permission grants or physical monitor behavior. Record those runtime checks separately when relevant.
+
+CI also runs `scripts/site-check.mjs` against the local checkout. To run the same check locally, serve the repository root with `python3 -m http.server 4186 --bind 127.0.0.1` and run `node scripts/site-check.mjs` from another terminal.
+
+### Dependency audit
+
+```sh
+cargo install cargo-audit --locked --version 0.22.2
+cargo audit --file Cargo.lock --ignore RUSTSEC-2023-0071 --deny yanked
+```
+
+CI fails on vulnerabilities and yanked crates, with one exception for `RUSTSEC-2023-0071`. Picky, SSPI and the vendored `winscard` each require `rsa =0.10.0-rc.18`. Remove the exception when the IronRDP dependency stack can resolve `rsa` 0.10.0 or later. Run `cargo audit --file Cargo.lock` to see the outstanding advisory alongside the other findings. [RustSec advisory](https://rustsec.org/advisories/RUSTSEC-2023-0071.html)
+
+The lockfile audit reports packages across all targets. Unmaintained and unsound advisories remain visible as warnings while the upstream dependency chains are in use. These include `glib` and `proc-macro-error` in the GTK stack for targets outside Windows and macOS, `heapless` and `atomic-polyfill` via `iso7816` in `winscard`, and `pin-utils` via `async-dnssd` in SSPI.
 
 ### Before a release: memory and runtime
 

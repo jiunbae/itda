@@ -97,6 +97,20 @@ try {
   assert(s1.lan === "192.168.32.32", `LAN address not saved: ${s1.lan}`);
   assert(s1.hp.on === true && s1.hp.port === 5910, `save reverted hp: ${JSON.stringify(s1.hp)}`);
   assert(JSON.stringify(s1.groups) === JSON.stringify(["Home", "여행", "집"]) && s1.group === "Home, 여행, 집", `groups ${JSON.stringify(s1.groups)} ${s1.group}`);
+  const edit = page.locator('[data-key=edit]');
+  const first = (await saved()).at(-1);
+  assert(await edit.isVisible() && await edit.locator('[data-x=save]').isDisabled(), 'editor closed before save acknowledgment');
+  await page.evaluate(request => itda.recv({ type: 'save_failed', request, error: 'Fixture write failed' }), first.request);
+  assert(await edit.locator('[data-save-error]').innerText() === 'Fixture write failed', 'write failure was not shown');
+  assert(await edit.locator('#f-lan').inputValue() === ' 192.168.32.32 ', 'write failure erased the input');
+  await edit.locator('[data-x=save]').click();
+  const retry = (await saved()).at(-1);
+  assert(retry.request !== first.request, 'retry shares the previous save request');
+  await page.evaluate(request => itda.recv({ type: 'saved', request, id: 'mac' }), first.request);
+  assert(await edit.isVisible(), 'stale success closed the editor');
+  await page.evaluate(request => itda.recv({ type: 'saved', request, id: 'mac' }), retry.request);
+  assert(await edit.count() === 0, 'matching success did not close the editor');
+
   // Another connection's HP result leaves this editor alone.
   await page.evaluate((h) => openEdit(h), pc);
   await settled();

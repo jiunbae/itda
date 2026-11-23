@@ -7,7 +7,7 @@ Set-Location (Split-Path $PSScriptRoot)
 # These replace .cargo/config.toml's rustflags, so the static C runtime is asked for here too
 # (no VCRUNTIME140.dll needed: a fresh Windows has none).
 $env:CARGO_ENCODED_RUSTFLAGS = "-Ctarget-feature=+crt-static`u{1f}--remap-path-prefix=$env:USERPROFILE=~`u{1f}--remap-path-prefix=$PWD=itda"
-cargo build --release
+cargo build --locked --release
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 $exe = Get-Item target/release/itda.exe
 '{0} ({1:N2} MB)' -f $exe.FullName, ($exe.Length / 1MB)

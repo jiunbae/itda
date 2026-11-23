@@ -276,31 +276,48 @@ pub fn answers(addr: &str) -> bool {
 
 /// The Remote Desktop server key (SHA-256, hex) each saved host had when last reached at its
 /// own address: the LAN address must show the same one before a login goes there.
-fn rdp_keys() -> std::collections::HashMap<String, String> {
-    std::fs::read(dir().join("rdp-keys.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
-}
-
-pub fn rdp_key(id: &str) -> Option<String> {
-    rdp_keys().remove(id)
-}
-
-/// Forget a connection's Remote Desktop key (its next connection learns it again).
-pub fn forget_rdp_key(id: &str) {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _g = LOCK.lock().unwrap();
-    let mut keys = rdp_keys();
-    if keys.remove(id).is_some() {
-        write_atomic("rdp-keys.json", &serde_json::to_vec(&keys).unwrap_or_default());
+fn rdp_keys() -> std::io::Result<std::collections::HashMap<String, String>> {
+    match std::fs::read(dir().join("rdp-keys.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(std::io::Error::other),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+        Err(e) => Err(e),
     }
 }
 
-pub fn set_rdp_key(id: &str, key: &str) {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _g = LOCK.lock().unwrap();
-    let mut keys = rdp_keys();
-    if keys.get(id).map(String::as_str) != Some(key) {
-        keys.insert(id.to_string(), key.to_string());
-        write_atomic("rdp-keys.json", &serde_json::to_vec(&keys).unwrap_or_default());
+static RDP_KEYS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn rdp_key(id: &str) -> Option<String> {
+    try_rdp_key(id).ok().flatten()
+}
+
+pub fn try_rdp_key(id: &str) -> std::io::Result<Option<String>> {
+    Ok(rdp_keys()?.remove(id))
+}
+
+/// Forget the key so the owner can verify a replacement on the next connection.
+pub fn forget_rdp_key(id: &str) {
+    let _lock = RDP_KEYS.lock().unwrap();
+    if let Err(e) = (|| {
+        let mut keys = rdp_keys()?;
+        if keys.remove(id).is_some() {
+            write_json("rdp-keys.json", &keys)?;
+        }
+        Ok::<_, std::io::Error>(())
+    })() {
+        crate::log!("RDP key not removed: {e}");
+    }
+}
+
+pub fn set_rdp_key(id: &str, key: &str) -> std::io::Result<()> {
+    let _lock = RDP_KEYS.lock().unwrap();
+    let mut keys = rdp_keys()?;
+    match keys.get(id) {
+        Some(current) if current == key => Ok(()),
+        Some(_) => Err(crate::rfb::kinded(std::io::ErrorKind::PermissionDenied, "rdp_changed_key", tr!("rdp.keyChanged"))),
+        None => {
+            keys.insert(id.to_string(), key.to_string());
+            write_json("rdp-keys.json", &keys)
+        }
     }
 }
 
@@ -349,8 +366,9 @@ pub fn load_accounts() -> Vec<Account> {
     std::fs::read(dir().join("accounts.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }
 
-pub fn save_accounts(a: &[Account]) {
-    write_atomic("accounts.json", &serde_json::to_vec_pretty(a).unwrap_or_default());
+/// Save the accounts, reporting a failed write (the file then keeps its previous contents).
+pub fn try_save_accounts(a: &[Account]) -> std::io::Result<()> {
+    write_json("accounts.json", a)
 }
 
 impl Host {
@@ -430,11 +448,14 @@ impl Default for Share {
 pub struct Web {
     pub on: bool,
     pub port: u16,
+    pub allow_edits: bool,
+    pub restrict_devices: bool,
+    pub allowed_hosts: Vec<String>,
 }
 
 impl Default for Web {
     fn default() -> Self {
-        Web { on: false, port: 8780 }
+        Web { on: false, port: 8780, allow_edits: true, restrict_devices: false, allowed_hosts: Vec::new() }
     }
 }
 
@@ -475,12 +496,42 @@ pub fn new_id() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-fn write_atomic(name: &str, data: &[u8]) {
-    let d = dir();
-    let tmp = d.join(format!("{name}.tmp"));
-    if std::fs::write(&tmp, data).is_ok() {
-        let _ = std::fs::rename(&tmp, d.join(name));
+/// Replace `name` in the data folder with `data` in one step: either the new contents are
+/// on disk when this returns Ok, or the file keeps its previous contents.
+fn write_atomic(name: &str, data: &[u8]) -> std::io::Result<()> {
+    write_atomic_in(&dir(), name, data)
+}
+
+fn write_atomic_in(d: &std::path::Path, name: &str, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    std::fs::create_dir_all(d)?;
+    let mut random = [0; 16];
+    getrandom::getrandom(&mut random).map_err(std::io::Error::other)?;
+    let tmp = d.join(format!(".{name}.{:032x}.tmp", u128::from_le_bytes(random)));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
+    let mut f = options.open(&tmp)?;
+    let result = (|| {
+        f.write_all(data)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, d.join(name))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+/// Serialize then write atomically; a value that can't be serialized never empties the file.
+fn write_json<T: Serialize + ?Sized>(name: &str, value: &T) -> std::io::Result<()> {
+    let data = serde_json::to_vec_pretty(value).map_err(std::io::Error::other)?;
+    write_atomic(name, &data)
 }
 
 pub fn load_settings() -> Settings {
@@ -490,8 +541,16 @@ pub fn load_settings() -> Settings {
         .unwrap_or_else(migrate_settings)
 }
 
+/// Save the settings, reporting a failed write (the file then keeps its previous contents).
+pub fn try_save_settings(s: &Settings) -> std::io::Result<()> {
+    write_json("settings.json", s)
+}
+
+/// [`try_save_settings`] for callers with nobody to tell: a failure is logged.
 pub fn save_settings(s: &Settings) {
-    write_atomic("settings.json", &serde_json::to_vec_pretty(s).unwrap_or_default());
+    if let Err(e) = try_save_settings(s) {
+        crate::log!("settings.json not saved: {e}");
+    }
 }
 
 pub fn load_hosts() -> Vec<Host> {
@@ -516,8 +575,16 @@ pub fn load_hosts() -> Vec<Host> {
     }
 }
 
+/// Save the address book, reporting a failed write (the file then keeps its previous contents).
+pub fn try_save_hosts(hosts: &[Host]) -> std::io::Result<()> {
+    write_json("hosts.json", hosts)
+}
+
+/// [`try_save_hosts`] for callers with nobody to tell: a failure is logged.
 pub fn save_hosts(hosts: &[Host]) {
-    write_atomic("hosts.json", &serde_json::to_vec_pretty(hosts).unwrap_or_default());
+    if let Err(e) = try_save_hosts(hosts) {
+        crate::log!("hosts.json not saved: {e}");
+    }
 }
 
 // ---------------------------------------------------------------- migration from 0.1 files
@@ -623,8 +690,17 @@ fn cred_delete(target: &str) {
     unsafe { CredDeleteW(w(target).as_ptr(), CRED_TYPE_GENERIC, 0) };
 }
 
+
+
 #[cfg(windows)]
 fn cred_write(target: &str, pass: &str) {
+    if let Err(e) = cred_write_checked(target, pass) {
+        crate::log!("credential write {target}: {e}");
+    }
+}
+
+#[cfg(windows)]
+fn cred_write_checked(target: &str, pass: &str) -> std::io::Result<()> {
     let target = w(target);
     let mut blob: Vec<u16> = pass.encode_utf16().collect();
     let mut user = w(crate::APP);
@@ -636,8 +712,11 @@ fn cred_write(target: &str, pass: &str) {
         cred.CredentialBlob = blob.as_mut_ptr() as *mut u8;
         cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
         cred.UserName = user.as_mut_ptr();
-        CredWriteW(&cred, 0);
+        if CredWriteW(&cred, 0) == 0 {
+            return Err(std::io::Error::other(tr!("store.winSave")));
+        }
     }
+    Ok(())
 }
 
 // macOS: generic passwords in the login Keychain (service "Itda", account = target), through
@@ -689,26 +768,36 @@ fn security_arg(value:&str)->String {
 
 #[cfg(not(windows))]
 fn cred_write(target: &str, pass: &str) {
+    if let Err(e) = cred_write_checked(target, pass) {
+        crate::log!("keychain write {target}: {e}");
+    }
+}
+
+/// Hand the item to `security`; Err when it can't even be attempted. Whether the Keychain took
+/// it is only known by reading it back ([`set_password_checked`]).
+#[cfg(not(windows))]
+fn cred_write_checked(target: &str, pass: &str) -> std::io::Result<()> {
     use std::io::Write;
     // The secret goes through stdin (`security -i`), hex-encoded (-X), so it never shows up
     // in the process list. -U updates an existing item.
     let hex=zeroize::Zeroizing::new(pass.bytes().map(|b|format!("{b:02x}")).collect::<String>());
-    if target.chars().any(char::is_control) { return; }
-    let line=zeroize::Zeroizing::new(format!("add-generic-password -U -s {KEYCHAIN_SERVICE} -a {} -l {} -X \"{}\"\n",security_arg(target),security_arg(&format!("Itda ({target})")),&*hex));
+    if target.chars().any(char::is_control) { return Err(std::io::Error::other(tr!("store.controlChar"))); }
+    let line=zeroize::Zeroizing::new(format!("add-generic-password -U -s {KEYCHAIN_SERVICE} -a {} -l {} -X \"{}\"\n",security_arg(target),security_arg(&format!("Itda ({target})")),hex.as_str()));
     // Apple's interactive parser has a 4096-byte line buffer. Never let a
     // truncated line replace a valid stored password with partial bytes.
-    if line.len()>=4096 {return;}
+    if line.len()>=4096 {return Err(std::io::Error::other(tr!("store.tooLong")));}
     let child = std::process::Command::new("/usr/bin/security")
         .arg("-i")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
-    if let Ok(mut c) = child {
-        if let Some(mut i) = c.stdin.take() {
-            let _ = i.write_all(line.as_bytes());
-        }
-        let _ = c.wait();
+    let mut c = child.map_err(|_| std::io::Error::other(tr!("store.keychainOpen")))?;
+    let wrote = c.stdin.take().map(|mut i| i.write_all(line.as_bytes()));
+    let status = c.wait()?;
+    match wrote {
+        Some(Ok(())) if status.success() => Ok(()),
+        _ => Err(std::io::Error::other(tr!("store.keychainSave"))),
     }
 }
 
@@ -805,8 +894,14 @@ pub fn set_password_checked(id: &str, pass: Option<&str>) -> std::io::Result<()>
     if pass.is_some_and(|p|p.len().saturating_mul(2)+format!("add-generic-password -U -s {KEYCHAIN_SERVICE} -a {} -l {} -X \"\"\n",security_arg(&target(id)),security_arg(&format!("Itda ({})",target(id)))).len()>=4096) {
         return Err(std::io::Error::other(tr!("store.tooLong")));
     }
-    set_password(id,pass);
-    let mut got=cred_read_checked(&target(id))?;
+    match pass {
+        Some(p) => cred_write_checked(&target(id), p)?,
+        None => {
+            cred_delete(&target(id));
+            cred_delete(&format!("mvnc/{id}"));
+        }
+    }
+    let mut got = if pass.is_some() { cred_read_checked(&target(id))? } else { get_password_checked(id)? };
     let ok=got.as_deref()==pass;
     if let Some(value)=got.as_mut() {use zeroize::Zeroize;value.zeroize();}
     if ok {
@@ -905,8 +1000,6 @@ mod tests {
         assert_eq!((h.groups.clone(), h.group.as_str()), (vec!["A".to_string(), "B".to_string()], "A, B"));
     }
 
-    use super::*;
-
     // (Keychain access needs the user's GUI login session, so this only runs on Windows.)
     #[cfg(windows)]
     #[test]
@@ -940,6 +1033,24 @@ mod tests {
         assert_eq!(cred_read(&old), None, "old entry removed");
         assert_eq!(cred_read(&target(id)).as_deref(), Some("old pw"));
         set_password(id, None);
+    }
+
+    #[test]
+    fn a_failed_write_keeps_the_previous_file_and_says_so() {
+        let d = std::env::temp_dir().join(format!("itda-store-test-{}", new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        write_atomic_in(&d, "hosts.json", b"[1]").unwrap();
+        assert_eq!(std::fs::read(d.join("hosts.json")).unwrap(), b"[1]");
+        // A failed rename removes only its temporary file and leaves the prior data alone.
+        let blocked = d.join("blocked.json");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(blocked.join("original"), b"[1]").unwrap();
+        assert!(write_atomic_in(&d, "blocked.json", b"[2]").is_err());
+        assert_eq!(std::fs::read(blocked.join("original")).unwrap(), b"[1]");
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 2);
+        // So does a folder that can't be created.
+        assert!(write_atomic_in(&d.join("hosts.json").join("x"), "a.json", b"{}").is_err());
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

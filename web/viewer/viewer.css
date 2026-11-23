@@ -238,3 +238,5 @@ body.mirror #tools button { width:auto; padding:8px 12px; }
   body:not(.app) .tools .sep { display: none; }
 }
 #screen { touch-action: none; }
+
+.rdp-fingerprint { overflow-wrap: anywhere; user-select: text; }

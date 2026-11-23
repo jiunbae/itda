@@ -166,6 +166,7 @@ const viewerTrace = (() => {
 })();
 const monitors = new MonitorController({S,app:APP,post,api,render:renderTools,toast,close:leave,visibility:()=>syncBackground()});
 const opt = (k, dflt) => (S.host && S.host.opts && k in S.host.opts ? S.host.opts[k] : dflt);
+const hpExpected = (h) => !!(h?.hp?.on || h?.hp_via);
 // What to call the remote device in messages: the key for a Mac, a PC or another device.
 const byDev = (mac, pc, device, vars) => T(isWin(S.host) ? pc : S.host && kindOf(S.host) === 'linux' ? device : mac, vars);
 
@@ -312,6 +313,12 @@ async function loadHosts() {
   S.signedIn = true;
   S.hosts = ownHosts(r.data);
   S.accounts = a.ok ? a.data || [] : [];
+  S.canEdit = a.status !== 403;
+  const accountsTab = document.querySelector('.tabs [data-tab="accounts"]');
+  accountsTab.hidden = !S.canEdit;
+  if (!S.canEdit && accountsTab.getAttribute('aria-selected') === 'true') {
+    document.querySelector('.tabs [data-tab="hosts"]').click();
+  }
   renderHosts();
   renderAccounts();
   show('list');
@@ -323,23 +330,18 @@ async function openFromApp() {
   const h = (r.data || []).find((x) => x.id === OPEN);
   if (!h) return post({ ev: 'error', kind: 'other', msg: T('viewer.err.4004.title') });
   document.title = h.label;
-  S.fit = !(h.opts && h.opts.actual);
-  S.viewOnly = !!(h.opts && h.opts.view_only);
-  open(hpVia(h, r.data || []));
-}
-
-// The same Mac saved again with high-performance sharing on (hosts_json's hp_via): open that
-// connection, under this one's name, so the viewer knows what it gets (keys, fallback, mode).
-function hpVia(h, hosts) {
-  const via = h?.hp_via && hosts.find((x) => x.id === h.hp_via);
-  return via ? { ...via, label: h.label } : h;
+  open(h);
 }
 
 function renderHosts() {
   const el = $('#hosts');
-  const add = `<button class="host add" data-new="host">${icon('plus')}<b>${T('viewer.hosts.add')}</b><span>${T('viewer.hosts.addSub')}</span></button>`;
+  const add = S.canEdit === false ? '' : `<button class="host add" data-new="host">${icon('plus')}<b>${T('viewer.hosts.add')}</b><span>${T('viewer.hosts.addSub')}</span></button>`;
   // Previews already shown stay as they are (a new <img> would be decoded again and flash).
   const shown = new Map([...el.querySelectorAll('img')].map((i) => [i.getAttribute('src'), i]));
+  if (S.canEdit === false && !S.hosts.length) {
+    el.innerHTML = `<p class="lead">${T('viewer.hosts.noneAllowed')}</p>`;
+    return;
+  }
   el.innerHTML = S.hosts.map((h) => `
       <div class="host${h.has_pw ? '' : ' nopw'}" data-id="${esc(h.id)}">
         <button class="open" aria-label="${T('viewer.hosts.open', { name: esc(h.label) })}">
@@ -348,7 +350,7 @@ function renderHosts() {
             <span>${h.ssh ? icon('lock') : ''}${esc(h.this ? T('viewer.hosts.thisPc') : h.user ? `${h.user}@${h.host}` : h.host)}</span>
             ${h.has_pw ? `<span class="kind">${esc(KIND_TEXT(h))}</span>` : `<span class="warn">${T('viewer.hosts.needPw')}</span>`}</div>
         </button>
-        ${h.this ? '' : `<button class="more" data-edit="${esc(h.id)}" title="${T('viewer.hosts.edit')}" aria-label="${T('viewer.hosts.editName', { name: esc(h.label) })}">${icon('edit')}</button>`}
+        ${h.this || S.canEdit === false ? '' : `<button class="more" data-edit="${esc(h.id)}" title="${T('viewer.hosts.edit')}" aria-label="${T('viewer.hosts.editName', { name: esc(h.label) })}">${icon('edit')}</button>`}
       </div>`).join('') + add;
   el.querySelectorAll('img').forEach((img) => {
     const old = shown.get(img.getAttribute('src'));
@@ -384,7 +386,7 @@ $('#hosts').addEventListener('click', (e) => {
   const card = e.target.closest('.host');
   if (!card) return;
   const h = S.hosts.find((x) => x.id === card.dataset.id);
-  if (h && !h.has_pw) return editHost(h, T('viewer.hosts.enterPw'));
+  if (h && !h.has_pw) return S.canEdit === false ? toast(T('srv.readOnlyBook')) : editHost(h, T('viewer.hosts.enterPw'));
   open(h);
 });
 
@@ -591,6 +593,8 @@ installHint();
 
 // Close codes from the gateway → [title, advice]; functions see the host.
 const CLOSE_TEXT = {
+  4036: () => [T('viewer.rdp.verifyTitle'), T('viewer.rdp.confirmInApp')],
+  4037: () => [T('viewer.rdp.changedTitle'), T('viewer.rdp.changedText')],
   4004: () => [T('viewer.err.4004.title'), T('viewer.err.4004.text')],
   4001: () => [T('viewer.err.4001.title'), T('viewer.err.4001.text')],
   4010: (h) => [byDev('viewer.err.4010.title.mac', 'viewer.err.4010.title.pc', 'viewer.err.4010.title.device'), T(h.this || (h.os === 'windows' && h.kind !== 'rdp') ? 'viewer.err.4010.itda' : h.kind === 'rdp' ? 'viewer.err.4010.rdp' : kindOf(h) === 'linux' ? 'viewer.err.4010.linux' : 'viewer.err.4010.mac')],
@@ -614,15 +618,18 @@ function status(kind, title, text, code = 0) {
   st.hidden = false;
   if (typeof title === 'function') title = title();
   if (typeof text === 'function') text = text();
-  const fix = !APP && FIX_LOGIN.has(code) && S.host && !S.host.this;
+  const verifyKey = code === 4035 && S.rdpFingerprint;
+  const fix = !APP && S.canEdit !== false && FIX_LOGIN.has(code) && S.host && !S.host.this;
   const acct = fix && S.host.account && S.accounts.find((a) => a.id === S.host.account);
   st.innerHTML = kind === 'busy'
     ? `<div class="card" role="status"><div class="spin"></div><h2>${esc(title)}</h2><p>${esc(text || '')}</p></div>`
     : `<div class="card" role="alert"><h2>${esc(title)}</h2><p>${esc(text || '')}</p>
         ${fix && acct ? `<p class="small">${T('viewer.status.sharedAccount', { name: esc(acct.name || acct.user), count: acct.uses })}</p>` : ''}
+        ${verifyKey ? `<p><code class="rdp-fingerprint">${esc(S.rdpFingerprint)}</code></p>` : ''}
         <div class="row">${fix ? `<button class="go" data-a="fix">${T(acct ? 'viewer.status.fixAccount' : code === 4011 ? 'viewer.status.enterUser' : code === 4001 ? 'viewer.status.enterPw' : 'viewer.status.fixLogin')}</button>` : ''}
           <button data-a="list">${T(APP ? 'viewer.close' : 'viewer.status.list')}</button>
-          <button ${fix ? '' : 'class="go" '}data-a="retry">${T(fix && code !== 4001 ? 'viewer.status.retrySame' : 'viewer.status.reconnect')}</button></div></div>`;
+          ${verifyKey ? `<button class="go" data-a="confirm-rdp-key">${T('viewer.rdp.confirmButton')}</button>` :
+          code === 4036 || code === 4037 ? '' : `<button ${fix ? '' : 'class="go" '}data-a="retry">${T(fix && code !== 4001 ? 'viewer.status.retrySame' : 'viewer.status.reconnect')}</button>`}</div></div>`;
   st.querySelector('button.go')?.focus();
 }
 
@@ -631,6 +638,7 @@ $('#status').addEventListener('click', (e) => {
   if (!a) return;
   const h = S.host;
   if (a.dataset.a === 'retry') open(h);
+  else if (a.dataset.a === 'confirm-rdp-key' && S.rdpFingerprint) open(h, S.rdpFingerprint);
   else if (a.dataset.a === 'fix') {
     const acct = h.account && S.accounts.find((x) => x.id === h.account);
     if (acct) editAccount(acct, () => open(S.hosts.find((x) => x.id === h.id) || h));
@@ -661,19 +669,25 @@ if (window.VideoDecoder) {
 }
 function hpUndecodable(owner, e) {
   const h = S.host;
-  if (!S.rfb || owner !== S.rfb || !h?.hp?.on || S.hpMode === 'fallback' || S.hpNoDecode === h.id) return;
+  if (!S.rfb || owner !== S.rfb || !hpExpected(h) || S.hpMode === 'fallback' || S.hpNoDecode === h.id) return;
   console.warn('high-performance video could not be decoded:', e?.message || e);
   S.hpNoDecode = h.id;
   toast(T('viewer.toast.hpUndecodable'));
   open(h);
 }
 
-function open(h) {
+function open(h, rdpKey = '') {
   if (!h) return;
-  h = hpVia(h, S.hosts || []);
+  if (S.host?.id !== h.id) {
+    S.fit = !h.opts?.actual;
+    S.clip = '';
+    if (S.host) S.paste = null;
+  }
   close();
+  S.viewOnly = !!h.opts?.view_only;
   const gen = ++S.gen;
   S.host = h;
+  S.rdpFingerprint = '';
   S.audio = !!opt('audio', false);
   show('view');
   renderTools();
@@ -688,7 +702,8 @@ function open(h) {
   const attempt = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
   S.hpFallback = null; S.hpFallbackSetup = false; S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; S.hpMode = null; S.hpModeContext = null; S.hpCurtain = undefined; S.hpCurtainAsked = false; S.hpQualityFailed = false; S.hpQualityPending = false; renderTools();
   const nohp = S.hpNoDecode === h.id ? 'nohp=1&' : '';
-  const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}?${size}${nohp}attempt=${attempt}`, ['binary']);
+  const approved = rdpKey ? `rdp_key=${encodeURIComponent(rdpKey)}&` : '';
+  const ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(h.id)}?${size}${nohp}${approved}attempt=${attempt}`, ['binary']);
   let closeInfo = null;
   ws.addEventListener('close', (e) => { closeInfo = e; });
   S.ws = ws;
@@ -712,7 +727,7 @@ function open(h) {
   // as Itda's server reads them, unless this connection is known to have fallen back to Screen
   // Sharing (before the mode is known too: the first ⌘C mustn't go as ⌥C).
   const sendKey = rfb.sendKey?.bind(rfb);
-  if (sendKey) rfb.sendKey = hpKeys(sendKey, () => S.rfb === rfb && macHost(S.host) && (S.hpActual || (!!S.host.hp?.on && S.hpMode !== 'fallback')));
+  if (sendKey) rfb.sendKey = hpKeys(sendKey, () => S.rfb === rfb && macHost(S.host) && (S.hpActual || (hpExpected(S.host) && S.hpMode !== 'fallback')));
   let name = '';
   rfb.addEventListener('desktopname', (e) => { name = (e.detail && e.detail.name) || ''; });
   rfb.addEventListener('connect', () => {
@@ -722,11 +737,11 @@ function open(h) {
     syncBackground();
     dimToolsSoon();
     // High-performance mode is the saved choice; say so when this connection didn't get it.
-    if (APP && S.host?.hp?.on) refreshHpMode(h, rfb, attempt);
+    if (APP && hpExpected(S.host)) refreshHpMode(h, rfb, attempt);
     // A browser has no mode button, but its keys still depend on what this connection got.
     // Screen Sharing standing in for a locked Mac switches to high-performance once it's
     // unlocked, as in the app.
-    else if (S.host?.hp?.on && macHost(S.host)) fetch(`/api/mode/${encodeURIComponent(h.id)}?attempt=${attempt}`).then((r) => r.json()).then((m) => {
+    else if (hpExpected(S.host) && macHost(S.host)) fetch(`/api/mode/${encodeURIComponent(h.id)}?attempt=${attempt}`).then((r) => r.json()).then((m) => {
       if (S.rfb !== rfb || typeof m?.hp !== 'boolean') return;
       S.hpMode = m.hp ? 'active' : 'fallback';
       if (!m.hp && m.locked) {
@@ -755,9 +770,11 @@ function open(h) {
     S.hpActual = false; S.hpActions = false; S.hpQuality = null; S.hpStatusReq = null; S.hpModeContext = null; S.hpMode = null; S.hpCurtain = undefined; S.hpCurtainAsked = false; renderTools();
     // Only for the attempt still current: a replacement opened meanwhile (the HP toggle, a
     // quality change) owns the window now.
-    if (APP) return setTimeout(() => { if (S.gen === gen && !lockedDrop(h, closeInfo)) appDropped(h, closeInfo, gen); }, 50);
+    if (APP) return setTimeout(() => {
+      if (S.gen === gen && !showRdpTrust(closeInfo) && !lockedDrop(h, closeInfo)) appDropped(h, closeInfo, gen);
+    }, 50);
     setTimeout(async () => {
-      if (S.gen !== gen || lockedDrop(h, closeInfo)) return;
+      if (S.gen !== gen || showRdpTrust(closeInfo) || lockedDrop(h, closeInfo)) return;
       const code = closeInfo ? closeInfo.code : 0;
       const known = CLOSE_TEXT[code];
       const reason = closeInfo && closeInfo.reason;
@@ -771,10 +788,26 @@ function open(h) {
     }, 50);
   });
   rfb.addEventListener('clipboard', (e) => {
+    if (S.viewOnly || !opt('clipboard', true)) return;
     S.clip = e.detail.text || '';
-    if (APP) { if (opt('clipboard', true)) post({ ev: 'clip', text: S.clip }); return; }
+    if (APP) { post({ ev: 'clip', text: S.clip }); return; }
     toast(byDev('viewer.toast.clipReceived.mac', 'viewer.toast.clipReceived.pc', 'viewer.toast.clipReceived.device'));
   });
+}
+
+function showRdpTrust(info) {
+  if (S.host?.kind !== 'rdp') return false;
+  if (info?.code === 4035 && /^[0-9a-f]{64}$/.test(info.reason)) {
+    S.rdpFingerprint = info.reason;
+    status('error', () => T('viewer.rdp.verifyTitle'), () => T('viewer.rdp.verifyText'), info.code);
+    return true;
+  }
+  if (info?.code === 4036 || info?.code === 4037) {
+    const [title, detail] = CLOSE_TEXT[info.code]();
+    status('error', title, detail, info.code);
+    return true;
+  }
+  return false;
 }
 
 // That Mac's screen locked during high-performance sharing, which then shows only the lock
@@ -784,7 +817,7 @@ function open(h) {
 // ending sessions this way gets the usual drop handling instead of a loop.
 const LOCKED_CLOSE = 4030;
 function lockedDrop(h, info) {
-  if (info?.code !== LOCKED_CLOSE || !h?.hp?.on || (S.lockDropAt != null && Date.now() - S.lockDropAt < 15000)) return false;
+  if (info?.code !== LOCKED_CLOSE || !hpExpected(h) || (S.lockDropAt != null && Date.now() - S.lockDropAt < 15000)) return false;
   S.lockDropAt = Date.now();
   toast(srvText(info.reason) || T('viewer.toast.lockedDrop'));
   open(h);
@@ -897,7 +930,7 @@ function leave() {
 // Itda's own sharing on that Mac (hardware H.264): the app sets it up over SSH, the person
 // answers macOS's permission prompts on that Mac through this very connection, and then this
 // window reconnects to it. If it can't be reached, the app falls back to Screen Sharing.
-const hpCapable = () => APP && macHost(S.host) && S.host?.kind !== 'rdp';
+const hpCapable = () => APP && macHost(S.host) && S.host?.kind !== 'rdp' && !S.host?.hp_via;
 // A saved preference is not evidence of this connection's transport. Retrying this
 // diagnostic must keep the framebuffer, monitor windows and input session intact.
 function refreshHpMode(h, rfb, attempt) {
@@ -921,7 +954,7 @@ function refreshHpMode(h, rfb, attempt) {
     S.hpQuality = null;
     renderTools();
     if (m.hp) {
-      requestHpQuality();
+      if (hpCapable()) requestHpQuality();
     } else if (m.locked) {
       context.otherUser = !!m.other_user;
       context.otherUserName = m.other_user_name || '';
@@ -944,7 +977,7 @@ function refreshHpMode(h, rfb, attempt) {
 // Asks every 4 s for the first 15 minutes, then every 30 s for as long as this window stays on it
 // (each ask is an SSH login there).
 function watchUnlock(context, tries = 0) {
-  const live = () => S.hpModeContext === context && S.rfb === context.rfb && S.host?.id === context.h.id && S.host.hp?.on && S.hpMode === 'fallback';
+  const live = () => S.hpModeContext === context && S.rfb === context.rfb && S.host?.id === context.h.id && hpExpected(S.host) && S.hpMode === 'fallback';
   if (!live()) return;
   setTimeout(() => {
     if (!live()) return;
@@ -989,6 +1022,7 @@ function hpModeLabel() {
 function hpDisable() {
   if (!hpCapable() || S.hpBusy || !S.host.hp?.on) return;
   S.host.hp = { ...S.host.hp, on: false };
+  S.hpNoDecode = S.host.id; // Bypass until the native preference has been applied.
   post({ ev: 'hp-off' });
   toast(T('viewer.hp.turnedOff'));
   return open(S.host);
@@ -1122,7 +1156,7 @@ function renderTools() {
     ...(hpCapable() && S.hpActual ? [['hp-curtain', 'lock', hpCurtainLabel(), hpCurtainShown()]] : []),
     ...(hpCapable() ? [['hp', 'bolt', hpModeLabel(), !!S.hpActual]] : []),
     ...(hpCapable() && S.host.hp?.on && ['unknown', 'checking'].includes(S.hpMode) ? [['hp-disable', 'bolt', T('viewer.tip.hpDisable')]] : []),
-    ...(APP ? [] : [['clip', 'clip', T('viewer.tool.clip')]]),
+    ...(APP || S.viewOnly || !opt('clipboard', true) ? [] : [['clip', 'clip', T('viewer.tool.clip')]]),
     ['audio', S.audio ? 'sound' : 'mute', T(S.audio ? 'viewer.tip.soundOff' : 'viewer.tip.soundOn'), S.audio],
     'sep',
     ...(relAvailable() ? [['mouse-lock', 'mouse', T(relLocked() ? 'viewer.tip.mouseUnlock' : 'viewer.tip.mouseLock'), relLocked()]] : []),
@@ -1299,8 +1333,8 @@ $('#sheet').addEventListener('click', async (e) => {
   if (!a) return;
   if (a.dataset.a === 'send') {
     const t = $('#clipOut').value;
-    if (S.rfb && t) { S.rfb.clipboardPasteFrom(t); toast(T(isWin(S.host) ? 'viewer.toast.clipSent.pc' : 'viewer.toast.clipSent.mac')); }
-  } else if (a.dataset.a === 'copy') {
+    if (S.rfb && t && !S.viewOnly && opt('clipboard', true)) { S.rfb.clipboardPasteFrom(t); toast(T(isWin(S.host) ? 'viewer.toast.clipSent.pc' : 'viewer.toast.clipSent.mac')); }
+  } else if (a.dataset.a === 'copy' && !S.viewOnly && opt('clipboard', true)) {
     const box = $('#clipIn');
     try { await navigator.clipboard.writeText(box.value); toast(T('viewer.toast.copied')); }
     catch (_) { box.select(); toast(T('viewer.toast.copyByHand')); }

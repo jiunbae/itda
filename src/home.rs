@@ -73,7 +73,7 @@ enum Event {
     #[cfg_attr(not(windows), allow(dead_code))]
     Share,
     /// An address-book change from the web viewer (a page command); answered when saved.
-    WebEdit(Value, std::sync::mpsc::Sender<()>),
+    WebEdit(Value, std::sync::mpsc::Sender<std::io::Result<()>>),
     /// A message for the page, produced off the UI thread.
     #[cfg_attr(windows, allow(dead_code))]
     Page(Value),
@@ -166,7 +166,7 @@ fn init(quick: Option<String>) {
     let _ = crate::gateway::ON_EDIT.set(|v| {
         let (tx, rx) = std::sync::mpsc::channel();
         post(Event::WebEdit(v, tx));
-        rx.recv_timeout(Duration::from_secs(5)).is_ok()
+        rx.recv_timeout(Duration::from_secs(5)).unwrap_or_else(|_| Err(std::io::ErrorKind::TimedOut.into()))
     });
 }
 
@@ -340,14 +340,33 @@ fn set_language(pref: &str) {
     if !matches!(pref, "auto" | "ko" | "en") {
         return;
     }
-    let st = home(|m| {
-        m.settings.lang = pref.to_string();
-        m.settings.clone()
-    });
-    store::save_settings(&st);
+    let Some(st) = edit_settings(|st| st.lang = pref.to_string()) else { return };
     crate::i18n::set_pref(&st.lang);
     plat::language_changed();
     send(json!({"type": "settings", "settings": st}));
+}
+
+/// Change and save the settings; when they can't be saved nothing changes, the person is told
+/// and the page shows the settings still in effect.
+fn edit_settings(f: impl FnOnce(&mut Settings)) -> Option<Settings> {
+    let mut st = home(|m| m.settings.clone());
+    f(&mut st);
+    match store::try_save_settings(&st) {
+        Ok(()) => {
+            home(|m| m.settings = st.clone());
+            Some(st)
+        }
+        Err(e) => {
+            settings_failed(&e);
+            None
+        }
+    }
+}
+
+fn settings_failed(e: &std::io::Error) {
+    crate::log!("settings not saved: {e}");
+    send(json!({"type": "toast", "text": tr!("store.saveFailed", error = e), "err": true}));
+    send(json!({"type": "settings", "settings": home(|m| m.settings.clone())}));
 }
 
 /// The Language menu's items: (Settings → Language value, label, checked). "Automatic" names
@@ -419,10 +438,6 @@ fn accounts_json(m: &Home) -> Value {
         .collect::<Vec<_>>())
 }
 
-fn save_accounts() {
-    home(|m| store::save_accounts(&m.accounts));
-}
-
 fn send_hosts() {
     let v = home(|m| json!({"type": "hosts", "hosts": m.hosts.iter().map(|h| host_json(h, &m.accounts)).collect::<Vec<_>>(), "accounts": accounts_json(m), "file_windows": plat::file_windows()}));
     send(v);
@@ -465,8 +480,107 @@ fn send_session(id: &str) {
     send(v);
 }
 
+/// Save the address book after a change nobody is waiting on (a failure is logged).
 fn save_hosts() {
     home(|m| store::save_hosts(&m.hosts));
+}
+
+/// Which files an edit touches.
+#[derive(Clone, Copy)]
+struct Files {
+    hosts: bool,
+    accounts: bool,
+}
+const HOSTS: Files = Files { hosts: true, accounts: false };
+const ACCOUNTS: Files = Files { hosts: false, accounts: true };
+const BOTH: Files = Files { hosts: true, accounts: true };
+
+/// Apply an edit the person made and save it. When a file can't be written the edit is undone
+/// (in memory, and in a file this call had already replaced), so what the page shows next is
+/// what is on disk.
+fn commit<R>(files: Files, edit: impl FnOnce(&mut Home) -> R) -> std::io::Result<R> {
+    let (hosts, accounts) = home(|m| (m.hosts.clone(), m.accounts.clone()));
+    let r = home(edit);
+    let saved = home(|m| {
+        if files.accounts {
+            store::try_save_accounts(&m.accounts)?;
+        }
+        if files.hosts {
+            if let Err(e) = store::try_save_hosts(&m.hosts) {
+                if files.accounts {
+                    if let Err(e) = store::try_save_accounts(&accounts) {
+                        crate::log!("accounts.json not restored: {e}");
+                    }
+                }
+                return Err(e);
+            }
+        }
+        Ok(())
+    });
+    match saved {
+        Ok(()) => Ok(r),
+        Err(e) => {
+            home(|m| {
+                m.hosts = hosts;
+                m.accounts = accounts;
+            });
+            Err(e)
+        }
+    }
+}
+
+thread_local! {
+    /// Why the last edit wasn't saved, for the web viewer's request that carried it.
+    static SAVE_ERROR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Tell the page an edit wasn't saved, and show it what is saved instead.
+fn save_failed(e: &std::io::Error) {
+    crate::log!("not saved: {e}");
+    SAVE_ERROR.with(|s| *s.borrow_mut() = Some(e.to_string()));
+    send(json!({"type": "toast", "text": tr!("store.saveFailed", error = e), "err": true}));
+    send_hosts();
+}
+
+fn editor_save_failed(v: &Value, error: &std::io::Error) {
+    if v["request"].is_null() {
+        return save_failed(error);
+    }
+    crate::log!("not saved: {error}");
+    send(json!({"type":"save_failed","request":v["request"],"error":tr!("store.saveFailed", error = error)}));
+}
+
+/// Saved passwords changed as part of one edit, so they can be put back when the rest of the
+/// edit isn't saved.
+#[derive(Default)]
+struct Secrets(Vec<(String, Option<zeroize::Zeroizing<String>>)>);
+
+impl Secrets {
+    fn set(&mut self, key: &str, value: Option<&str>) -> std::io::Result<()> {
+        let before = store::get_password_checked(key)?.map(zeroize::Zeroizing::new);
+        if before.as_deref().map(String::as_str) == value {
+            return Ok(());
+        }
+        self.0.push((key.to_string(), before));
+        store::set_password_checked(key, value)
+    }
+
+    fn undo(self) {
+        for (key, before) in self.0.into_iter().rev() {
+            if let Err(e) = store::set_password_checked(&key, before.as_deref().map(String::as_str)) {
+                crate::log!("saved password {key} not restored: {e}");
+            }
+        }
+    }
+}
+
+/// Remove saved passwords whose owner is already gone; one left behind is only logged.
+fn forget_secrets<'a>(keys: impl IntoIterator<Item = &'a str>) {
+    for key in keys {
+        if let Err(e) = store::set_password_checked(key, None) {
+            crate::log!("saved password {key} not removed: {e}");
+        }
+    }
 }
 
 // ---------------------------------------------------------------- page commands
@@ -864,8 +978,12 @@ fn on_ipc(v: Value) {
                 };
                 {
                     host.files = options;
-                    home(|m| { if let Some(h) = m.hosts.iter_mut().find(|h| h.id == id) { h.files = host.files.clone(); } });
-                    save_hosts();
+                    let saved = commit(HOSTS, |m| { if let Some(h) = m.hosts.iter_mut().find(|h| h.id == id) { h.files = host.files.clone(); } });
+                    if let Err(e) = saved {
+                        save_failed(&e);
+                        send(json!({"type":"files_result","id":id,"window":v["window"],"op":"connect","ok":false,"error":tr!("store.saveFailed", error = e)}));
+                        return;
+                    }
                     send_hosts();
                 }
                 if host.files.method == "smb" || (host.files.method == "auto" && !host.files.share.is_empty()) {
@@ -901,33 +1019,69 @@ fn on_ipc(v: Value) {
             if host.id.is_empty() {
                 host.id = store::new_id();
             }
-            match v.get("password").and_then(Value::as_str) {
-                Some(p) if v["save_password"].as_bool() == Some(true) && !p.is_empty() => store::set_password(&host.id, Some(p)),
-                _ if v["save_password"].as_bool() == Some(false) => store::set_password(&host.id, None),
-                _ => {}
+            let mut secrets = Secrets::default();
+            let rebind = v["web_reset_binding"] == true;
+            let pw = (|| {
+                if rebind {
+                    if let Some(old) = home(|m| m.hosts.iter().find(|x| x.id == host.id).cloned()) {
+                        clear_destination_secrets(&old, &mut secrets)?;
+                    }
+                }
+                match v.get("password").and_then(Value::as_str) {
+                    Some(p) if v["save_password"] == true && !p.is_empty() => secrets.set(&host.id, Some(p)),
+                    _ if v["save_password"] == false => secrets.set(&host.id, None),
+                    _ => Ok(()),
+                }
+            })();
+            if let Err(e) = pw {
+                secrets.undo();
+                return editor_save_failed(&v, &e);
             }
             let id = host.id.clone();
-            home(|m| match m.hosts.iter_mut().find(|x| x.id == id) {
+            let typed = rebind.then(|| crate::gateway::typed(&id)).flatten();
+            if rebind {
+                crate::gateway::set_typed(&id, None);
+            }
+            let saved = commit(HOSTS, |m| match m.hosts.iter_mut().find(|x| x.id == id) {
                 Some(x) => {
                     // Another device now: the Remote Desktop key seen before isn't its.
-                    if x.host.trim().to_lowercase() != host.host.trim().to_lowercase() || x.kind != host.kind {
-                        store::forget_rdp_key(&id);
-                    }
+                    let moved = x.host.trim().to_lowercase() != host.host.trim().to_lowercase() || x.kind != host.kind;
                     // Keep fields the editor doesn't own.
                     host.files = x.files.clone();
+                    if rebind && host.files.host.trim().is_empty() {
+                        host.files.account.clear();
+                    }
                     host.last_used = x.last_used;
-                    host.remote_name = std::mem::take(&mut x.remote_name);
-                    host.remote_size = std::mem::take(&mut x.remote_size);
+                    host.remote_name = x.remote_name.clone();
+                    host.remote_size = x.remote_size.clone();
                     *x = host;
+                    moved
                 }
-                None => m.hosts.push(host),
+                None => {
+                    m.hosts.push(host);
+                    false
+                }
             });
-            save_hosts();
+            match saved {
+                Ok(true) => store::forget_rdp_key(&id),
+                Ok(false) => {}
+                Err(e) => {
+                    secrets.undo();
+                    if rebind {
+                        crate::gateway::set_typed(&id, typed);
+                    }
+                    return editor_save_failed(&v, &e);
+                }
+            }
             send_hosts();
-            send(json!({"type": "saved", "id": id, "then": v.get("then")}));
+            send(json!({"type": "saved", "id": id, "then": v.get("then"), "request": v["request"]}));
             probe_now();
         }
         "delete_host" => {
+            let Some(gone) = home(|m| m.hosts.iter().find(|h| h.id == id).cloned()) else { return send_hosts() };
+            if let Err(e) = commit(HOSTS, |m| m.hosts.retain(|x| x.id != id)) {
+                return save_failed(&e);
+            }
             stop_session(&id);
             crate::files::disconnect(&id);
             // A copy from this device can't be pasted any more: windows drop it.
@@ -935,13 +1089,10 @@ fn on_ipc(v: Value) {
             if let Some(cid) = cid {
                 send(json!({"type": "files_clipboard", "clip": {"clear": cid}}));
             }
-            if let Some(h) = home(|m| m.hosts.iter().find(|h| h.id == id).cloned()) { store::set_password(&crate::files::password_key(&h), None); }
-            store::set_password(&format!("files-{id}"), None);
-            home(|m| m.hosts.retain(|x| x.id != id));
-            store::set_password(&id, None);
+            forget_secrets([crate::files::password_key(&gone).as_str(), &format!("files-{id}"), &id]);
             store::remove_thumbs(&id);
-            save_hosts();
             send_hosts();
+            send(json!({"type":"host_deleted","name":gone.label()}));
         }
         "duplicate" => {
             let copy = home(|m| m.hosts.iter().find(|x| x.id == id).cloned());
@@ -950,15 +1101,17 @@ fn on_ipc(v: Value) {
                 c.name = tr!("app.host.copyName", name = c.label());
                 c.last_used = 0;
                 c.favorite = false;
-                home(|m| m.hosts.push(c));
-                save_hosts();
+                if let Err(e) = commit(HOSTS, |m| m.hosts.push(c)) {
+                    return save_failed(&e);
+                }
                 send_hosts();
             }
         }
         "favorite" => {
             let on = v["on"].as_bool().unwrap_or(false);
-            home(|m| m.hosts.iter_mut().filter(|x| x.id == id).for_each(|x| x.favorite = on));
-            save_hosts();
+            if let Err(e) = commit(HOSTS, |m| m.hosts.iter_mut().filter(|x| x.id == id).for_each(|x| x.favorite = on)) {
+                return save_failed(&e);
+            }
             send_hosts();
         }
         "trust_new_key" => {
@@ -977,31 +1130,45 @@ fn on_ipc(v: Value) {
             if a.id.is_empty() {
                 a.id = store::new_id();
             }
-            let secret = |field: &str, key: String| match v.get(field).and_then(Value::as_str) {
-                Some("") | None => {}
-                Some(p) => store::set_password(&key, Some(p)),
-            };
-            secret("password", store::acct_key(&a.id));
-            secret("key_pass", store::acct_keypass(&a.id));
-            if v["clear_key_pass"].as_bool() == Some(true) {
-                store::set_password(&store::acct_keypass(&a.id), None);
+            let mut secrets = Secrets::default();
+            let typed = |field: &str| v.get(field).and_then(Value::as_str).filter(|p| !p.is_empty());
+            let stored = (|| {
+                if let Some(p) = typed("password") {
+                    secrets.set(&store::acct_key(&a.id), Some(p))?;
+                }
+                if let Some(p) = typed("key_pass") {
+                    secrets.set(&store::acct_keypass(&a.id), Some(p))?;
+                }
+                if v["clear_key_pass"].as_bool() == Some(true) {
+                    secrets.set(&store::acct_keypass(&a.id), None)?;
+                }
+                Ok(())
+            })();
+            if let Err(e) = stored {
+                secrets.undo();
+                return editor_save_failed(&v, &e);
             }
             let id = a.id.clone();
-            home(|m| match m.accounts.iter_mut().find(|x| x.id == id) {
-                Some(x) => *x = a,
-                None => m.accounts.push(a),
-            });
             // Optionally attach the connection being edited.
-            if let Some(hid) = v.get("attach").and_then(Value::as_str) {
-                home(|m| m.hosts.iter_mut().filter(|h| h.id == hid).for_each(|h| h.account = id.clone()));
-                save_hosts();
+            let attach = v.get("attach").and_then(Value::as_str);
+            let saved = commit(if attach.is_some() { BOTH } else { ACCOUNTS }, |m| {
+                match m.accounts.iter_mut().find(|x| x.id == id) {
+                    Some(x) => *x = a,
+                    None => m.accounts.push(a),
+                }
+                if let Some(hid) = attach {
+                    m.hosts.iter_mut().filter(|h| h.id == hid).for_each(|h| h.account = id.clone());
+                }
+            });
+            if let Err(e) = saved {
+                secrets.undo();
+                return editor_save_failed(&v, &e);
             }
-            save_accounts();
             send_hosts();
-            send(json!({"type": "account_saved", "id": id}));
+            send(json!({"type": "account_saved", "id": id, "request": v["request"]}));
         }
         "delete_account" => {
-            let gone = home(|m| {
+            let gone = commit(BOTH, |m| {
                 let a = m.accounts.iter().find(|x| x.id == id).cloned();
                 m.accounts.retain(|x| x.id != id);
                 // Connections keep the user name and ask for a password next time.
@@ -1013,12 +1180,14 @@ fn on_ipc(v: Value) {
                 }
                 a
             });
-            if gone.is_some() {
-                store::set_password(&store::acct_key(&id), None);
-                store::set_password(&store::acct_keypass(&id), None);
-                save_accounts();
-                save_hosts();
-                send_hosts();
+            match gone {
+                Ok(Some(_)) => {
+                    forget_secrets([store::acct_key(&id).as_str(), &store::acct_keypass(&id)]);
+                    send_hosts();
+                    send(json!({"type":"account_deleted"}));
+                }
+                Ok(None) => {}
+                Err(e) => save_failed(&e),
             }
         }
         "group_accounts" => {
@@ -1029,19 +1198,23 @@ fn on_ipc(v: Value) {
                 return;
             }
             let a = store::Account { id: store::new_id(), name: user.clone(), user: user.clone(), ssh_key: String::new() };
-            if let Some(p) = members.iter().find_map(|hid| store::get_password(hid)) {
-                store::set_password(&store::acct_key(&a.id), Some(&p));
-            }
-            for hid in &members {
-                store::set_password(hid, None);
+            let mut secrets = Secrets::default();
+            if let Some(p) = members.iter().find_map(|hid| store::get_password(hid)).map(zeroize::Zeroizing::new) {
+                if let Err(e) = secrets.set(&store::acct_key(&a.id), Some(&p)) {
+                    return save_failed(&e);
+                }
             }
             let aid = a.id.clone();
-            home(|m| {
+            let saved = commit(BOTH, |m| {
                 m.accounts.push(a);
                 m.hosts.iter_mut().filter(|h| members.contains(&h.id)).for_each(|h| h.account = aid.clone());
             });
-            save_accounts();
-            save_hosts();
+            if let Err(e) = saved {
+                secrets.undo();
+                return save_failed(&e);
+            }
+            // The account holds the password now.
+            forget_secrets(members.iter().map(String::as_str));
             send_hosts();
             send(json!({"type": "account_saved", "id": aid, "grouped": members.len()}));
         }
@@ -1062,7 +1235,9 @@ fn on_ipc(v: Value) {
             send_thumb(&id);
         }
         "forget_password" => {
-            store::set_password(&id, None);
+            if let Err(e) = store::set_password_checked(&id, None) {
+                return save_failed(&e);
+            }
             send_hosts();
         }
         "settings" => {
@@ -1081,8 +1256,12 @@ fn on_ipc(v: Value) {
                     }
                     send(json!({"type": "login_item", "state": login.name()}));
                 }
+                if let Err(e) = store::try_save_settings(&st) {
+                    // Only the sign-in item already changed on the system: keep what it did.
+                    home(|m| m.settings.login_start = st.login_start);
+                    return settings_failed(&e);
+                }
                 let old = home(|m| std::mem::replace(&mut m.settings, st.clone()));
-                store::save_settings(&st);
                 crate::i18n::set_pref(&st.lang);
                 // Native menus, the tray and window titles built in the old language.
                 if old.lang != st.lang {
@@ -1269,7 +1448,7 @@ static SERVING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 /// Start/stop the gateway to match the settings, then tell the page.
 fn apply_web(w: &store::Web) {
     WEB_PORT.store(w.port, Relaxed);
-    let r = if w.on { crate::gateway::start(w.port) } else { crate::gateway::stop(); Ok(()) };
+    let r = if w.on { crate::gateway::start(w) } else { crate::gateway::stop(); Ok(()) };
     *WEB_ERR.lock().unwrap() = r.err().map(|e| e.to_string()).unwrap_or_default();
     send(web_info());
 }
@@ -1332,11 +1511,15 @@ fn connect(id: &str, typed: Option<String>, save: bool) {
         }
     };
     let settings = home(|m| m.settings.clone());
-    let hp = home(|m| host.hp_route(&m.hosts).map(|h| (h.clone(), store::resolve(h, &m.accounts))));
-    if let Some((h, _)) = hp.as_ref().filter(|(h, _)| h.id != host.id) {
-        crate::log!("{}: high-performance sharing through the connection saved as {}", host.label(), h.label());
+    let hp = if host.hp.on {
+        Some(host.clone())
+    } else {
+        home(|m| crate::hp_upgrade::alternate_route(&host, &m.hosts, &login).cloned())
+    };
+    if let Some(route) = hp.as_ref().filter(|route| route.id != host.id) {
+        crate::log!("{}: high-performance sharing through the connection saved as {}", host.label(), route.label());
     }
-    let proc = match plat::spawn_session(&host, &login, pass, &settings, hp.as_ref().map(|(h, l)| (h, l.clone()))) {
+    let proc = match plat::spawn_session(&host, &login, pass, &settings, hp.as_ref()) {
         Ok(p) => p,
         Err(e) => {
             send(json!({"type": "error", "id": id, "kind": "other", "msg": tr!("app.session.startFailed", error = e)}));
@@ -1554,17 +1737,14 @@ fn on_session(id: &str, v: Value) {
         }
         "opts" => {
             if let Ok(o) = serde_json::from_value(v["opts"].clone()) {
-                home(|m| m.hosts.iter_mut().filter(|x| x.id == id).for_each(|x| x.opts = o));
-                save_hosts();
+                if let Err(e) = commit(HOSTS, |m| m.hosts.iter_mut().filter(|x| x.id == id).for_each(|x| x.opts = o)) {
+                    return save_failed(&e);
+                }
                 send_hosts();
             }
         }
         "toolbar" => {
-            let st = home(|m| {
-                m.settings.toolbar = s(&v, "mode");
-                m.settings.clone()
-            });
-            store::save_settings(&st);
+            let Some(st) = edit_settings(|st| st.toolbar = s(&v, "mode")) else { return };
             send(json!({"type": "settings", "settings": st}));
         }
         "thumb" => {
@@ -1651,21 +1831,17 @@ fn drain() {
                 send(web_info());
             }
             Event::WebEdit(mut v, done) => {
-                // Provisioning can export credentials; it is native-app-only, not
-                // an address-book operation exposed by the web viewer.
-                if !v["cmd"].as_str().is_some_and(|cmd|cmd.starts_with("remote_setup_")) {
+                let result = if matches!(v["cmd"].as_str(), Some("save_host" | "save_account" | "delete_host" | "delete_account")) {
                     if v["cmd"] == "save_host" {
-                        let wipe = home(|m| web_save_guard(&mut v["host"], &m.hosts));
-                        if let Some(id) = wipe {
-                            forget_saved_logins(&id);
-                            // Files follow the new address unless they have their own: then their
-                            // account mustn't go along either. (save_host keeps `files` as stored.)
-                            home(|m| m.hosts.iter_mut().filter(|x| x.id == id && x.files.host.trim().is_empty()).for_each(|x| x.files.account.clear()));
-                        }
+                        v["web_reset_binding"] = json!(home(|m| web_save_guard(&mut v["host"], &m.hosts)).is_some());
                     }
+                    SAVE_ERROR.with(|error| error.borrow_mut().take());
                     on_ipc(v);
-                }
-                let _ = done.send(());
+                    SAVE_ERROR.with(|error| error.borrow_mut().take()).map_or(Ok(()), |error| Err(std::io::Error::other(error)))
+                } else {
+                    Err(std::io::ErrorKind::InvalidInput.into())
+                };
+                let _ = done.send(result);
             }
             Event::Page(v) => {
                 if v["type"] == "hp" {
@@ -1691,7 +1867,7 @@ fn drain() {
                 }
                 // A transfer whose file window closed: say how it ended, since no window shows it
                 // (the main window says it itself when it is in front).
-                if v["type"] == "files_job" && v["window"] == "app" && v["dismissed"] != true && !plat::home_focused()
+                if v["type"] == "files_job" && v["window"] == "app" && v["dismissed"] != true && v["quiet"] != true && !plat::home_focused()
                     && ["completed", "failed", "cancelled"].contains(&v["state"].as_str().unwrap_or("")) {
                     let moving = v["moving"] == true || v["request"]["move"] == true;
                     let device = Some(host_label(v["id"].as_str().unwrap_or(""))).filter(|d| !d.is_empty()).unwrap_or_else(|| tr!("app.files.thisComputer").into());
@@ -1798,14 +1974,16 @@ fn web_save_guard(h: &mut Value, hosts: &[store::Host]) -> Option<String> {
     Some(id)
 }
 
-/// Forget the passwords saved for a connection (screen, high-performance, files).
-fn forget_saved_logins(id: &str) {
-    store::set_password(id, None);
-    store::set_password(&crate::hp_upgrade::password_key(id), None);
-    store::set_password(&format!("files-{id}"), None);
-    if let Some(h) = home(|m| m.hosts.iter().find(|h| h.id == id).cloned()) {
-        store::set_password(&crate::files::password_key(&h), None);
+/// Clear the credentials tied to the previous destination before exposing the new one.
+fn clear_destination_secrets(old: &Host, secrets: &mut Secrets) -> std::io::Result<()> {
+    let id = old.id.as_str();
+    secrets.set(id, None)?;
+    secrets.set(&crate::hp_upgrade::password_key(id), None)?;
+    if old.files.host.trim().is_empty() {
+        secrets.set(&format!("files-{id}"), None)?;
+        secrets.set(&crate::files::password_key(old), None)?;
     }
+    Ok(())
 }
 
 /// Remember the LAN address of saved hosts that Tailscale reaches directly on this network, for

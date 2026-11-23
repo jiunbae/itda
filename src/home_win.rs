@@ -554,13 +554,17 @@ pub fn pick_file(field: String) {
 
 // ---------------------------------------------------------------- sessions
 
-pub fn spawn_session(host: &Host, login: &store::Login, pass: String, settings: &Settings, hp: Option<(&Host, store::Login)>) -> Result<Proc, String> {
+pub fn spawn_session(host: &Host, login: &store::Login, pass: String, settings: &Settings, hp: Option<&Host>) -> Result<Proc, String> {
     let id = host.id.clone();
     // High-performance sharing, from this connection or another saved for the same Mac.
-    let hp = hp.and_then(|(h, hl)| {
-        let pass = store::get_password(&crate::hp_upgrade::password_key(&h.id))?;
-        let c = crate::hp_upgrade::ssh_cfg_with(h, &hl, hl.pass.clone().unwrap_or_default());
-        Some(crate::session::HpRoute { ssh_host: c.host, ssh_port: c.port, ssh_user: c.user, ssh_pass: c.pass, key_alias: c.key_alias, key: c.key, key_pass: c.key_pass, port: c.vnc_port, pass })
+    let hp = hp.and_then(|route| {
+        let mut route = route.clone();
+        if host.id != route.id {
+            crate::hp_upgrade::require_known_host(&mut route);
+        }
+        let hp_pass = store::get_password(&crate::hp_upgrade::password_key(&route.id))?;
+        let config = crate::hp_upgrade::ssh_cfg_with(&route, login, pass.clone());
+        Some(crate::session::HpRoute { ssh_host: config.host, ssh_port: config.port, ssh_user: config.user, ssh_pass: config.pass, key_alias: config.key_alias, key: config.key, key_pass: config.key_pass, port: config.vnc_port, pass: hp_pass })
     });
     let launch = Launch {
         id: id.clone(),

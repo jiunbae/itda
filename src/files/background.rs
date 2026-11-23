@@ -1,15 +1,20 @@
 //! Transfers that outlive their file window. A copy or move keeps running when its window
 //! closes (as in Finder or Explorer); the job is then the app's, not that page's: its events
 //! go to every Itda page as `window: "app"`, the main window and any file window can show and
-//! cancel it, and what became of it stays here (in memory only, a few at a time) until it is
-//! dismissed. While its window is open a job stays that page's alone, as before.
+//! cancel it, and a bounded history of failed or cancelled transfers survives app restarts.
+//! While its window is open a job stays that page's alone, as before. If the window
+//! closes, its retained outcomes are also available in new windows' snapshots.
 use super::*;
+use std::io::{Read, Write};
 
-/// Background transfers that ended and were not dismissed yet, at most.
+/// Transfers that ended and were not dismissed yet, at most.
 const ENDED: usize = 30;
 /// Names a retry can be offered for (the page lists them again); a bigger batch is shown
 /// without the retry.
 const RETRY_NAMES: usize = 1000;
+const HISTORY_FILE: &str = "file-transfer-history-v1.json";
+const HISTORY_RECORD_BYTES: usize = 64 * 1024;
+const HISTORY_BYTES: usize = ENDED * (HISTORY_RECORD_BYTES + 1) + 1;
 
 struct Record {
     job: String,
@@ -25,7 +30,8 @@ struct Record {
     event: Value,
     /// What was asked: devices, folders, names and options. Never a token or a secret.
     request: Value,
-    emit: Emit,
+    /// Restored outcomes have no originating page or emitter.
+    emit: Option<Emit>,
 }
 
 static RECORDS: OnceLock<Mutex<Vec<Record>>> = OnceLock::new();
@@ -35,12 +41,140 @@ static ENDINGS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 static RELEASED: Mutex<std::collections::VecDeque<String>> = Mutex::new(std::collections::VecDeque::new());
 const RELEASED_KEPT: usize = 64;
 fn records() -> &'static Mutex<Vec<Record>> {
-    RECORDS.get_or_init(Default::default)
+    RECORDS.get_or_init(|| {
+        let all = history_dir().map_or_else(Vec::new, |dir| load_history(&dir));
+        ENDINGS.store(all.len() as u64, Ordering::Relaxed);
+        Mutex::new(all)
+    })
 }
 
 const TERMINAL: [&str; 3] = ["completed", "failed", "cancelled"];
 fn terminal(v: &Value) -> bool {
     TERMINAL.contains(&v["state"].as_str().unwrap_or(""))
+}
+
+fn retryable_outcome(v: &Value) -> bool {
+    matches!(v["state"].as_str(), Some("failed" | "cancelled"))
+}
+
+fn history_dir() -> Option<PathBuf> {
+    // Unit tests exercising the process-global records must never touch the user's data.
+    #[cfg(test)]
+    return None;
+    #[cfg(not(test))]
+    Some(crate::store::dir())
+}
+
+/// Rebuild the history entry from known fields. In particular, errors and progress details
+/// can include backend diagnostics, while req/window/clipboard/drag identify live requests.
+fn history_entry(event: &Value, request: &Value) -> Option<Value> {
+    if !retryable_outcome(event) { return None; }
+    let job = event["job"].as_str().filter(|s| !s.is_empty())?;
+    let id = event["id"].as_str()?;
+    let count = request["count"].as_u64().unwrap_or(0);
+    fn strings(a: &Value) -> Option<&Vec<Value>> {
+        a.as_array().filter(|items| items.len() <= RETRY_NAMES && items.iter().all(Value::is_string))
+    }
+    let names = strings(&request["names"]).filter(|items| items.len() as u64 == count && !items.is_empty());
+    let completed = strings(&event["completed_names"]);
+    let partial = event["partial"]["name"].as_str().zip(event["partial"]["dir"].as_bool());
+    // Keep the complete set of finished names whenever retry is offered. Losing even one
+    // could cause a confirmed retry to copy or move an item that already finished.
+    let can_retry = names.is_some() && completed.is_some()
+        && (event["partial"].is_null() || partial.is_some())
+        && ["local", "remote"].contains(&request["from"].as_str().unwrap_or(""))
+        && ["local", "remote"].contains(&request["to"].as_str().unwrap_or(""))
+        && request["source"].is_string() && request["destination"].is_string();
+    let mut entry = json!({
+        "type": "files_job", "job": job, "id": id, "state": event["state"],
+        "moving": request["move"] == true,
+        "engine": event["engine"].as_str().filter(|s| ["sftp", "rsync"].contains(s)),
+        "completed_names": completed.filter(|_| can_retry),
+        "partial": partial.filter(|_| can_retry).map(|(name, dir)| json!({"name": name, "dir": dir})),
+        "source_closed": event["source_closed"] == true,
+        "request": {
+            "id": id, "from": request["from"].as_str().filter(|s| ["local", "remote"].contains(s)),
+            "to": request["to"].as_str().filter(|s| ["local", "remote"].contains(s)),
+            "source": request["source"].as_str(), "destination": request["destination"].as_str(),
+            "names": names.filter(|_| can_retry), "count": count, "move": request["move"] == true,
+            "policy": request["policy"].as_str().filter(|s| ["skip", "keep", "replace"].contains(s)),
+            "engine": request["engine"].as_str().filter(|s| ["auto", "sftp", "rsync"].contains(s)),
+            "from_id": request["from_id"].as_str().filter(|s| !s.is_empty()),
+        },
+    });
+    if serde_json::to_vec(&entry).ok()?.len() <= HISTORY_RECORD_BYTES {
+        return Some(entry);
+    }
+    entry["request"]["names"] = Value::Null;
+    entry["completed_names"] = Value::Null;
+    entry["partial"] = Value::Null;
+    (serde_json::to_vec(&entry).ok()?.len() <= HISTORY_RECORD_BYTES).then_some(entry)
+}
+
+fn load_history(dir: &Path) -> Vec<Record> {
+    let read = || -> io::Result<Vec<Value>> {
+        let mut data = Vec::new();
+        std::fs::File::open(dir.join(HISTORY_FILE))?
+            .take((HISTORY_BYTES + 1) as u64)
+            .read_to_end(&mut data)?;
+        if data.len() > HISTORY_BYTES {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "transfer history is oversized"));
+        }
+        serde_json::from_slice(&data).map_err(io::Error::other)
+    };
+    let entries = match read() {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            crate::log!("file transfer history could not be read ({:?})", e.kind());
+            return Vec::new();
+        }
+    };
+    let mut all: Vec<Record> = Vec::new();
+    for entry in entries.iter().rev() {
+        let Some(mut event) = history_entry(entry, &entry["request"]) else { continue };
+        let job = get(&event, "job");
+        if all.iter().any(|r| r.job == job) { continue; }
+        let request = event.as_object_mut().unwrap().remove("request").unwrap();
+        all.push(Record { job, seq: 0, page: String::new(), orphan: true, ended: true, ended_at: 0, event, request, emit: None });
+        if all.len() == ENDED { break; }
+    }
+    all.reverse();
+    for (i, r) in all.iter_mut().enumerate() { r.ended_at = i as u64 + 1; }
+    all
+}
+
+fn save_history(dir: &Path, all: &[Record]) -> io::Result<()> {
+    let mut ended: Vec<_> = all.iter().filter(|r| r.ended).collect();
+    ended.sort_unstable_by_key(|r| r.ended_at);
+    let entries: Vec<_> = ended.into_iter().filter_map(|r| history_entry(&r.event, &r.request)).collect();
+    let data = serde_json::to_vec(&entries).map_err(io::Error::other)?;
+    // The home process is the sole writer and holds the records lock across replacement.
+    let tmp = dir.join(format!("{HISTORY_FILE}.tmp"));
+    let result = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp)?;
+        file.write_all(&data)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, dir.join(HISTORY_FILE))
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&tmp); }
+    result
+}
+
+fn persist(all: &[Record]) {
+    if let Some(dir) = history_dir() {
+        if let Err(e) = save_history(&dir, all) {
+            crate::log!("file transfer history could not be saved ({:?})", e.kind());
+        }
+    }
 }
 
 /// The non-secret summary of a transfer request (no from_window, clipboard or drag token).
@@ -78,7 +212,7 @@ pub(super) fn track(v: &Value, page: Value, emit: Emit) -> Emit {
             let mut all = records().lock().unwrap();
             if !all.iter().any(|r| r.job == job) {
                 let orphan = RELEASED.lock().unwrap().contains(&page_id);
-                all.push(Record { job: job.clone(), seq: 0, page: page_id.clone(), orphan, ended: false, ended_at: 0, event: json!({}), request: request.clone(), emit: raw.clone() });
+                all.push(Record { job: job.clone(), seq: 0, page: page_id.clone(), orphan, ended: false, ended_at: 0, event: json!({}), request: request.clone(), emit: Some(raw.clone()) });
             }
             let i = all.iter().position(|r| r.job == job).unwrap();
             let r = &mut all[i];
@@ -89,13 +223,22 @@ pub(super) fn track(v: &Value, page: Value, emit: Emit) -> Emit {
             }
             if terminal(&m) && !r.ended { r.ended_at = ENDINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1; }
             r.ended = terminal(&m);
+            let mut history_changed = retryable_outcome(&m);
             if r.orphan {
                 out = Some(shown(r));
+            } else if history_changed {
+                m["persistent"] = json!(true);
             } else if r.ended {
-                // Its page has it: nothing to keep here.
+                // Successful transfers owned by an open page are visible on that page.
                 all.remove(i);
             }
-            if out.is_some() { pruned = prune(&mut all); }
+            if out.is_some() || history_changed {
+                for r in prune(&mut all) {
+                    history_changed |= retryable_outcome(&r.event);
+                    pruned.push((r.emit.clone().unwrap_or_else(|| raw.clone()), dismissed(&r)));
+                }
+            }
+            if history_changed { persist(&all); }
         }
         for (emit, e) in pruned { emit(e); }
         match out {
@@ -107,12 +250,11 @@ pub(super) fn track(v: &Value, page: Value, emit: Emit) -> Emit {
 
 /// Keeps at most ENDED ended records (the oldest go first); live ones always stay. Pages are
 /// told what was dropped, so their lists match what a page opening now would get.
-fn prune(all: &mut Vec<Record>) -> Vec<(Emit, Value)> {
+fn prune(all: &mut Vec<Record>) -> Vec<Record> {
     let mut gone = Vec::new();
     while all.iter().filter(|r| r.ended).count() > ENDED {
         let i = all.iter().enumerate().filter(|(_, r)| r.ended).min_by_key(|(_, r)| r.ended_at).map(|(i, _)| i).unwrap();
-        let r = all.remove(i);
-        gone.push((r.emit.clone(), dismissed(&r)));
+        gone.push(all.remove(i));
     }
     gone
 }
@@ -131,12 +273,19 @@ pub(super) fn adopt(page: &str) -> usize {
     let mut n = 0;
     let mut notice: Option<Emit> = None;
     let mut events = Vec::new();
-    for r in all.iter_mut().filter(|r| r.page == page && !r.orphan && !r.ended) {
+    for r in all.iter_mut().filter(|r| r.page == page && !r.orphan) {
         r.orphan = true;
-        let e = shown(r);
-        n += 1;
-        notice.get_or_insert_with(|| r.emit.clone());
-        events.push((r.emit.clone(), e));
+        let mut e = shown(r);
+        if let Some(emit) = &r.emit {
+            if r.ended {
+                // The original page already announced this outcome.
+                e["quiet"] = json!(true);
+            } else {
+                n += 1;
+                notice.get_or_insert_with(|| emit.clone());
+            }
+            events.push((emit.clone(), e));
+        }
     }
     drop(all);
     for (emit, e) in events { emit(e); }
@@ -158,13 +307,14 @@ pub(super) fn is_orphan(job: &str) -> bool {
     records().lock().unwrap().iter().any(|r| r.job == job && r.orphan)
 }
 
-/// Forget an ended background transfer (the person dismissed it).
-pub(super) fn dismiss(job: &str) {
+/// Forget an ended transfer from its owning page, or from any page once adopted.
+pub(super) fn dismiss(job: &str, page: &str, emit: Emit) {
     let mut all = records().lock().unwrap();
-    if let Some(i) = all.iter().position(|r| r.job == job && r.orphan && r.ended) {
+    if let Some(i) = all.iter().position(|r| r.job == job && r.ended && (r.orphan || r.page == page)) {
         let r = all.remove(i);
+        if retryable_outcome(&r.event) { persist(&all); }
         drop(all);
-        (r.emit)(dismissed(&r));
+        (r.emit.as_ref().unwrap_or(&emit))(dismissed(&r));
     }
 }
 
@@ -266,6 +416,41 @@ mod tests {
         let all = records().lock().unwrap();
         assert!(all.iter().any(|r| r.job == live && r.ended), "the latest outcome was dropped for an older one");
         assert!(!all.iter().any(|r| r.job == ids[5]), "an older outcome was kept over the latest");
+        drop(all);
+
+        // Failures in an open page stay private while it is open, but it can dismiss them.
+        let page = crate::store::new_id();
+        let (emit, seen) = collector();
+        let open = track(&request, json!(page), emit.clone());
+        let failure = crate::store::new_id();
+        open(json!({"type":"files_job","id":host.id,"job":failure,"state":"failed","completed_names":[]}));
+        assert!(mine(&failure).is_none());
+        {
+            let events = seen.lock().unwrap();
+            let ended = events.last().unwrap();
+            assert_eq!(ended["window"], json!(page));
+            assert_eq!(ended["persistent"], true);
+        }
+        dismiss(&failure, &other, emit.clone());
+        assert!(records().lock().unwrap().iter().any(|r| r.job == failure));
+        dismiss(&failure, &page, emit.clone());
+        assert!(!records().lock().unwrap().iter().any(|r| r.job == failure));
+        assert_eq!(seen.lock().unwrap().last().unwrap()["dismissed"], true);
+
+        // Closing the page publishes the retained outcome without announcing it a second time.
+        let cancelled = crate::store::new_id();
+        open(json!({"type":"files_job","id":host.id,"job":cancelled,"state":"cancelled","completed_names":[]}));
+        let events = seen.lock().unwrap().len();
+        assert_eq!(adopt(&page), 0);
+        {
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen.len(), events + 1);
+            assert_eq!(seen.last().unwrap()["window"], "app");
+            assert_eq!(seen.last().unwrap()["quiet"], true);
+        }
+        assert_eq!(mine(&cancelled).unwrap()["state"], "cancelled");
+        dismiss(&cancelled, &other, emit);
+        assert!(mine(&cancelled).is_none());
     }
 
     /// A window that closes before its transfer's first event still hands it over; the page
@@ -293,5 +478,62 @@ mod tests {
         let names: Vec<String> = (0..RETRY_NAMES + 1).map(|i| i.to_string()).collect();
         let s = summary(&json!({"names": names}));
         assert!(s["names"].is_null() && s["count"] == RETRY_NAMES + 1);
+    }
+
+    #[test]
+    fn history_restores_only_safe_terminal_outcomes() -> io::Result<()> {
+        let dir = std::env::temp_dir().join(format!("itda-transfer-history-{}", crate::store::new_id()));
+        std::fs::create_dir(&dir)?;
+        let result = (|| {
+            let request = summary(&json!({
+                "from":"remote","to":"local","source":"/in","destination":"/out",
+                "from_id":"source-device","move":true,"policy":"keep","engine":"sftp",
+                "names":["done","partial"],"from_window":"private-window","from_clip":"private-clip","from_drag":"private-drag",
+            }));
+            let record = |job: &str, state: &str, ended_at: u64, request: Value| Record {
+                job: job.into(), seq: 12, page: "private-window".into(), orphan: true,
+                ended: state != "running", ended_at, emit: None, request,
+                event: json!({"job":job,"id":"device","state":state,"completed_names":["done"],
+                    "partial":{"name":"partial","dir":true,"unknown":"private-partial"},
+                    "req":"private-req","error":"private-error","detail":"private-detail","source_closed":true}),
+            };
+            let mut all = vec![
+                record("newest", "cancelled", 4, request.clone()),
+                record("older", "failed", 2, request.clone()),
+                record("active", "running", 0, request.clone()),
+                record("success", "completed", 3, request.clone()),
+            ];
+            let mut wide_request = request.clone();
+            wide_request["names"][1] = json!("x".repeat(HISTORY_RECORD_BYTES));
+            all.push(record("wide", "failed", 5, wide_request));
+            save_history(&dir, &all)?;
+            let data = std::fs::read_to_string(dir.join(HISTORY_FILE))?;
+            assert!(!data.contains("private-") && !data.contains("\"active\"") && !data.contains("\"success\""));
+            let mut restored = load_history(&dir);
+            assert_eq!(restored.iter().map(|r| r.job.as_str()).collect::<Vec<_>>(), ["older", "newest", "wide"]);
+            assert!(restored.iter().all(|r| r.ended && r.orphan && r.emit.is_none()));
+            let event = shown(&mut restored[1]);
+            assert_eq!(event["window"], "app");
+            assert_eq!(event["completed_names"], json!(["done"]));
+            assert_eq!(event["partial"], json!({"name":"partial","dir":true}));
+            assert_eq!(event["request"]["names"], json!(["done","partial"]));
+            assert_eq!(event["request"]["from_id"], "source-device");
+            assert_eq!(event["moving"], true);
+            assert_eq!(event["source_closed"], true);
+            assert!(restored[2].request["names"].is_null());
+            assert_eq!(restored[2].request["count"], 2);
+
+            // The same replacement is used after dismissing one or all restored entries.
+            restored.remove(1);
+            save_history(&dir, &restored)?;
+            assert_eq!(load_history(&dir).len(), 2);
+            save_history(&dir, &[])?;
+            assert!(load_history(&dir).is_empty());
+            std::fs::write(dir.join(HISTORY_FILE), b"interrupted fixture")?;
+            assert!(load_history(&dir).is_empty());
+            Ok(())
+        })();
+        let cleanup = std::fs::remove_dir_all(&dir);
+        result.and(cleanup)
     }
 }
