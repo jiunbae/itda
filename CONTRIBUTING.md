@@ -19,6 +19,12 @@ cargo test --locked --release
 
 The executable is `target/release/itda.exe` on Windows or `target/release/itda` on Mac. Package with `scripts/windows-release.ps1` or `scripts/macos-bundle.sh universal`; these scripts also remove build-machine paths. The Mac script writes `dist/Itda.app` and `dist/Itda-macos-universal.zip`. Signing and notarization require the release credentials; a local development bundle is not an official signed release.
 
+For a Windows release with Authenticode, sign the final `itda.exe` with the release publisher's code-signing identity and a trusted timestamp. Verify it before computing the release checksums:
+
+```powershell
+pwsh scripts/windows-signature-check.ps1 -Publisher 'Your release publisher name'
+```
+
 The interface is embedded from `web/`. Set `ITDA_WEB_DIR` to an absolute `web/` directory for local iteration without embedding each edit. Restart when changing native Rust code. Static public documentation is in `docs/`, published by GitHub Pages.
 
 Interface text is translated (Korean and English). Web UI strings live in `web/locales/ko.js` and `en.js`, keyed by stable message IDs and read with `T('area.thing', { name })` (see `web/i18n.js`); Korean is the source language. Text Rust shows itself (menus, dialogs, the Windows viewer, errors) uses `tr!("area.thing", name = value)` with `src/locales/ko.rs` and `en.rs`; `cargo test` checks those catalogs and runs in Korean. Add every new string to both catalogs with the same `{placeholders}`; `node scripts/i18n-check.mjs` fails on a missing key, a placeholder mismatch or Korean left in UI code (web or Rust). To see the UI in one language, add `?lang=en` (or `ko`) to the page URL, give Playwright `locale: 'en-US'`, or run the app with `ITDA_LANG=en`.
@@ -42,10 +48,10 @@ CI also runs `scripts/site-check.mjs` against the local checkout. To run the sam
 
 ```sh
 cargo install cargo-audit --locked --version 0.22.2
-cargo audit --file Cargo.lock --ignore RUSTSEC-2023-0071 --deny yanked
+cargo audit --file Cargo.lock --deny yanked
 ```
 
-CI fails on vulnerabilities and yanked crates, with one exception for `RUSTSEC-2023-0071`. Picky, SSPI and the vendored `winscard` each require `rsa =0.10.0-rc.18`. Remove the exception when the IronRDP dependency stack can resolve `rsa` 0.10.0 or later. Run `cargo audit --file Cargo.lock` to see the outstanding advisory alongside the other findings. [RustSec advisory](https://rustsec.org/advisories/RUSTSEC-2023-0071.html)
+CI fails on vulnerabilities and yanked crates. The vendored Picky, SSPI and winscard use RSA 0.10.0 while the IronRDP dependency chain still pins pre-release versions. See [the RSA compatibility notes](vendor/RSA.md) when upgrading these crates.
 
 The lockfile audit reports packages across all targets. Unmaintained and unsound advisories remain visible as warnings while the upstream dependency chains are in use. These include `glib` and `proc-macro-error` in the GTK stack for targets outside Windows and macOS, `heapless` and `atomic-polyfill` via `iso7816` in `winscard`, and `pin-utils` via `async-dnssd` in SSPI.
 

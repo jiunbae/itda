@@ -80,7 +80,7 @@ optional = true
 version = "0.15"
 
 [dependencies.rsa]
-version = "=0.10.0-rc.18"
+version = "0.10.0"
 features = ["hazmat"]
 default-features = false
 
