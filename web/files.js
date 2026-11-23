@@ -1687,7 +1687,7 @@
     const done = new Set(j.completed_names || []);
     const left = r.names.filter(n => !done.has(n));
     if (!left.length) {
-      jobs.delete(key); announcedJobs.delete(key); renderJobs();
+      dismissTransfer(key);
       return toast(r.move ? T("files.retry.allDone.move") : T("files.retry.allDone.copy"), "E8B7");
     }
     const reopen = async (id, source) => {
@@ -1715,7 +1715,7 @@
   }
   function dismissTransfer(key) {
     const j = jobs.get(key);
-    if (j?.orphan) { send("files", { id: j.id, window: pageToken, op: "dismiss_background", job: key }); dropJob(key); }
+    if (j?.orphan || j?.persistent) { send("files", { id: j.id, window: pageToken, op: "dismiss_background", job: key }); dropJob(key); }
     jobs.delete(key); announcedJobs.delete(key);
     renderJobs(); transfersChanged();
   }
@@ -2221,7 +2221,7 @@
     // same private in-app clipboard; opening a device must not discard it.
     if (m.type === "state" && m.files_clipboard) message({ type: "files_clipboard", clip: m.files_clipboard });
     if (m.type === "state" && Array.isArray(m.files_jobs)) for (const j of m.files_jobs) backgroundJob(j, false);
-    if (m.type === "files_job" && m.window === "app") { backgroundJob(m, true); return true; }
+    if (m.type === "files_job" && m.window === "app") { backgroundJob(m, m.quiet !== true); return true; }
     if (m.type === "files_background") {
       if (!window.ITDA_FILE_HOST && m.count) toast(T("files.background", { count: m.count }), "E8B7");
       return true;
@@ -2279,6 +2279,7 @@
       return true;
     }
     if (m.type === "files_job") {
+      if (droppedJobs.has(m.job)) return true;
       const previous = jobs.get(m.job) || {};
       const request = previous.request || (m.req && transferRequests.get(m.req)) || null;
       if (m.req) transferRequests.delete(m.req);

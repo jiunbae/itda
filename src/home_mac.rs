@@ -305,7 +305,7 @@ pub fn pick_file(field: String) {
 // ---------------------------------------------------------------- connection windows
 
 /// (High-performance sharing: the gateway reaches it for the connection that has it on.)
-pub fn spawn_session(host: &Host, _login: &store::Login, pass: String, _settings: &Settings, _hp: Option<(&Host, store::Login)>) -> Result<Proc, String> {
+pub fn spawn_session(host: &Host, _login: &store::Login, pass: String, _settings: &Settings, _hp: Option<&Host>) -> Result<Proc, String> {
     crate::gateway::set_typed(&host.id, Some(pass));
     let url = crate::gateway::local_url(&host.id).map_err(|e| e.to_string())?;
     TO_OPEN.with(|o| o.borrow_mut().push((host.id.clone(), url, host.label().to_string(), host.opts.fullscreen)));

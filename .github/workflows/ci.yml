@@ -9,6 +9,17 @@ permissions:
   contents: read
 
 jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install RustSec scanner
+        run: cargo install cargo-audit --locked --version 0.22.2
+      - name: Audit the checked-in lockfile
+        # Picky, SSPI and winscard require rsa =0.10.0-rc.18. See CONTRIBUTING.md.
+        run: cargo audit --file Cargo.lock --ignore RUSTSEC-2023-0071 --deny yanked
+
   build:
     runs-on: windows-latest
     steps:
@@ -18,10 +29,12 @@ jobs:
       - name: Raw decoder regression
         run: node scripts/raw-decoder-test.mjs
       - name: Test
-        run: cargo test --release
+        run: cargo test --locked --release
       - name: Build
         shell: pwsh
         run: ./scripts/windows-release.ps1
+      - name: Check the build kept Cargo.lock
+        run: git diff --exit-code HEAD -- Cargo.lock
       - name: Version and resources
         shell: pwsh
         run: ./scripts/windows-version-check.ps1
@@ -58,7 +71,7 @@ jobs:
       - name: H.264 frames in several slices (Intel Macs)
         run: node scripts/h264-slices-test.mjs
       - name: Test
-        run: cargo test --release
+        run: cargo test --locked --release
       - name: Signing keychain
         id: sign
         env:
@@ -93,6 +106,8 @@ jobs:
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
         run: scripts/macos-bundle.sh universal
+      - name: Check the bundle kept Cargo.lock
+        run: git diff --exit-code HEAD -- Cargo.lock
       - name: macOS launch compatibility (both architectures)
         run: python3 scripts/check-macos-compat.py dist/Itda.app/Contents/MacOS/itda --universal
       - name: Release preview child protocol
@@ -115,7 +130,7 @@ jobs:
         with:
           node-version: 22
       - name: Install browser test dependencies
-        run: npm install --no-save --package-lock=false playwright
+        run: npm install --no-save --package-lock=false playwright@1.65.0
       - name: Install Chromium
         run: npx playwright install chromium
       - name: No secure-context-only APIs (web viewer runs on plain HTTP)
@@ -168,6 +183,18 @@ jobs:
         run: node scripts/viewer-phone-e2e.mjs
       - name: English interface (home, files, help, permissions, phone viewer)
         run: node scripts/i18n-en-e2e.mjs
+      - name: Static landing page and quick-start guide
+        shell: pwsh
+        run: |
+          $server = Start-Process python -ArgumentList '-m', 'http.server', '4186', '--bind', '127.0.0.1' -PassThru
+          try {
+            curl.exe --fail --silent --show-error --output NUL --retry 5 --retry-connrefused http://127.0.0.1:4186/docs/
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            node scripts/site-check.mjs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

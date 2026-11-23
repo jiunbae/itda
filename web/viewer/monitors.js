@@ -80,7 +80,7 @@ export class MonitorController {
         const h=this.e.S.host; if (!h) return;
         h.opts={...h.opts,...values};
         if(this.e.app) this.e.post({ev:'opts',opts:h.opts});
-        else this.e.api('/api/edit',{cmd:'viewer_opts',id:h.id,opts:h.opts});
+        else if(this.e.S.canEdit!==false) this.e.api('/api/edit',{cmd:'viewer_opts',id:h.id,opts:h.opts});
     }
     refresh() {
         const r=this.e.S.rfb; if(!r || r!==this.connection) return;

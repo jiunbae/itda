@@ -76,6 +76,10 @@ The viewer’s **선명하게 (Retina)** control chooses native pixels for clear
 
 > Itda's interface is in Korean. The [website](https://jiun.dev/itda/) has an English version of the guide, and there is a [Korean README](README.ko.md).
 
+In **Share**, choose which devices the browser can open or turn off browser address-book editing. If Tailscale HTTPS is configured, its address is selected first for the QR code.
+
+When the Mac app or web viewer first connects over RDP, compare the displayed server public-key fingerprint with the value from the PC administrator before confirming.
+
 ### Install on another device over SSH
 
 First connect to the destination through Itda SSH file browsing or an SSH screen connection, then open **설정 → 원격 기기에 설치·설정 공유**, or the same action in a saved device's menu. Select a saved SSH account or enter an address, then choose the connection profiles and portable app preferences to send. A confirmation shows the destination and selected scope before installation. The destination needs macOS Remote Login or Windows OpenSSH Server; installation uses the SSH user's permissions and does not enable remote access services.
@@ -98,11 +102,11 @@ On macOS, **Finder connection folder** creates `.inetloc` shortcuts in `…/Itda
 
 File browsing is independent of screen sharing. Closing a window leaves its ongoing transfers active. Unused browse connections are released when switching devices or closing a window; a running transfer keeps its connection until completion.
 
-When records remain after closing a file window, **전송 (Transfers)** appears in the main window's sidebar to show progress and outcomes or cancel ongoing work. For a failed or cancelled transfer, **파일 창에서 다시 시도** opens that device's file window; choose **다시 시도…** in its transfer list, then review the remaining items and destination before sending them again. Retry lists are not retained when more than 1,000 items were selected at once; select the files again in that case. These transfer records do not survive an app restart.
+When records remain after closing a file window, **전송 (Transfers)** appears in the main window's sidebar to show progress and outcomes or cancel ongoing work. For a failed or cancelled transfer, **파일 창에서 다시 시도** opens that device's file window; choose **다시 시도…** in its transfer list, then review the remaining items and destination before sending them again. Up to 30 failed or cancelled transfer records can be retained locally across restarts. You confirm each retry. Large selections can be retained without the retry list, in which case you can select the files again.
 
 Quitting or updating Itda during a file-browser copy or move offers three choices: **전송이 끝나면 종료/업데이트** (wait until transfers finish), **중단하고 종료/업데이트** (stop and quit/update), or **취소** (cancel). Stop waits for transfer cleanup; if cleanup does not finish in time, Itda stays open and asks again. Completed moves are not rolled back. Cancelling a pending quit keeps Itda open but does not restart transfers already stopped.
 
-The macOS file window exports real file URLs for Finder's clipboard. Wait for **파일 복사 준비 완료** before pasting remote files; stale HTML is cleared while they are prepared. Staged copies stay under `…/Itda/file-exports` so the clipboard remains usable after quitting. In-window dragging keeps folder/tab transfers; dragging outside hands off to native file promises and downloads only after Finder accepts the drop. External drags copy without deleting remote originals. This applies to the file browser, independently of a Finder running inside a remote screen session.
+The macOS file window exports real file URLs for Finder's clipboard. Wait for **파일 복사 준비 완료** before pasting remote files; stale HTML is cleared while they are prepared. Staged copies stay under `…/Itda/file-exports` so the clipboard remains usable after quitting. A later completed copy removes older staged copies that the clipboard no longer references. In-window dragging keeps folder/tab transfers; dragging outside hands off to native file promises and downloads only after Finder accepts the drop. External drags copy without deleting remote originals. This applies to the file browser, independently of a Finder running inside a remote screen session.
 
 **macOS**
 

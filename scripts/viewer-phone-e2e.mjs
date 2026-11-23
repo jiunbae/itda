@@ -34,7 +34,7 @@ const server = http.createServer(async (req, res) => {
   if (p === "/api/logout") { st.authed = false; return json(res, 200, {}); }
   if (p.startsWith("/api/") && !st.authed) return json(res, 401, { error: "로그인이 필요합니다" });
   if (p === "/api/hosts") return json(res, 200, st.hosts);
-  if (p === "/api/accounts") return json(res, 200, st.accounts);
+  if (p === "/api/accounts") return st.restricted ? json(res, 403, { code: "srv.readOnlyBook" }) : json(res, 200, st.accounts);
   if (p === "/api/nearby") return json(res, 200, []);
   if (p === "/api/edit") {
     const b = await body(req);
@@ -66,7 +66,7 @@ try {
       constructor(u) {
         super(); window.wsUrls.push(u); this.url = u; this.readyState = 0; this.binaryType = "arraybuffer"; this.protocol = "binary";
         this.onopen = this.onclose = this.onerror = this.onmessage = null;
-        setTimeout(() => { this.readyState = 3; const e = new CloseEvent("close", { code: window.closeCode, reason: "" }); this.onclose?.(e); this.dispatchEvent(e); }, 150);
+        setTimeout(() => { this.readyState = 3; const e = new CloseEvent("close", { code: window.closeCode, reason: window.closeReason || "" }); this.onclose?.(e); this.dispatchEvent(e); }, 150);
       }
       send() {} close() {}
     };
@@ -236,6 +236,39 @@ try {
   await page.locator("#logout").tap();
   await page.waitForSelector("#login:not([hidden])");
   assert(await page.locator("#loginNote").isHidden(), "no expiry note after logging out");
+
+  const fingerprint = "ab".repeat(32);
+  st.hosts.push({ id: "rdp", label: "RDP fixture", host: "rdp.example", user: "alex", os: "windows", kind: "rdp", has_pw: true });
+  st.authed = true;
+  await page.reload();
+  await page.waitForSelector("#list:not([hidden])");
+  await page.evaluate((key) => { window.closeCode = 4035; window.closeReason = key; }, fingerprint);
+  await page.locator(".host[data-id=rdp] .open").tap();
+  await page.waitForSelector("[data-a=confirm-rdp-key]");
+  assert(await text(".rdp-fingerprint") === fingerprint, "shows the exact observed fingerprint");
+  assert(await page.evaluate(() => !wsUrls.at(-1).includes("rdp_key=")), "first connection should wait for a confirmation");
+  await page.evaluate(() => { window.closeCode = 4037; window.closeReason = ""; });
+  await page.locator("[data-a=confirm-rdp-key]").tap();
+  await page.waitForFunction((key) => new URL(wsUrls.at(-1)).searchParams.get("rdp_key") === key, fingerprint);
+  await page.waitForFunction(() => document.querySelector("#status h2")?.textContent.includes("키가 바뀌었습니다"));
+  assert(await page.locator("[data-a=confirm-rdp-key]").count() === 0, "a changed key could be overwritten");
+  await page.locator("#status [data-a=list]").tap();
+
+  st.restricted = true;
+  st.hosts = [st.hosts[0]];
+  await page.waitForSelector("#list:not([hidden])");
+  await page.locator("#logout").tap();
+  await page.waitForSelector("#login:not([hidden])");
+  await page.evaluate(() => (window.closeCode = 4010));
+  await page.fill("#pin", "123456");
+  await page.locator("#loginForm button").tap();
+  await page.waitForSelector("#list:not([hidden])");
+  assert(await page.locator("[data-tab=accounts]").isHidden(), "restricted address book showed accounts");
+  assert(await page.locator(".host[data-id]").count() === 1, "unexpected host list");
+  assert(await page.locator("#hosts [data-edit], #hosts [data-new]").count() === 0, "restricted address book showed editing controls");
+  await page.locator(".host[data-id=mom] .open").tap();
+  await page.waitForSelector("#status [data-a=retry]");
+  assert(await page.locator("#status [data-a=fix]").count() === 0, "restricted password recovery offered edits");
 
   assert(!errors.length, `page errors: ${errors.join("; ")}`);
   console.log("PASS: phone viewer sign-in, lockout, expiry, login fix route, toolbar");

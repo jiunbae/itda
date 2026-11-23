@@ -4,11 +4,9 @@
 //! Developer ID-signed Itda only accepts an update signed by the same team).
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-#[cfg(target_os = "macos")]
-use std::path::PathBuf;
 use std::{
-    io,
-    path::Path,
+    fs, io,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
@@ -99,25 +97,71 @@ fn sha256(path: &Path) -> io::Result<String> {
     Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// A scratch directory owned by this attempt until the helper takes over.
+struct UpdateDir {
+    path: PathBuf,
+    handed_off: bool,
+}
+
+impl UpdateDir {
+    fn create(parent: &Path) -> io::Result<Self> {
+        let mut random = [0; 16];
+        getrandom::getrandom(&mut random).map_err(io::Error::other)?;
+        let path = parent.join(format!(".itda-update-{:032x}", u128::from_le_bytes(random)));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            fs::DirBuilder::new().mode(0o700).create(&path)?;
+        }
+        #[cfg(not(unix))]
+        fs::create_dir(&path)?;
+        Ok(Self { path, handed_off: false })
+    }
+}
+
+impl Drop for UpdateDir {
+    fn drop(&mut self) {
+        if !self.handed_off {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 /// Download and verify, then hand the swap to a helper that waits for this process to exit.
 /// On success the caller quits Itda; the helper replaces it and starts the new version.
 pub fn install(r: &Release, progress: &dyn Fn(&str)) -> io::Result<()> {
-    let dir = std::env::temp_dir().join(format!("itda-update-{}", r.version));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir)?;
+    #[cfg(windows)]
+    let exe = std::env::current_exe()?;
+    // Keep the Windows candidate and backup on the install volume so the helper
+    // can use renames after shutdown without exposing a partially copied exe.
+    #[cfg(windows)]
+    let mut staging = UpdateDir::create(exe.parent().ok_or_else(|| io::Error::other(tr!("update.noAppPath")))?)
+        .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", tr!("update.notWritable", path = exe.display()))))?;
+    #[cfg(not(windows))]
+    let mut staging = UpdateDir::create(&std::env::temp_dir())?;
+    let dir = &staging.path;
     progress(tr!("update.downloading"));
     let sums = dir.join("SHA256SUMS.txt");
     let file = dir.join(ASSET);
     download(&r.sums, &sums)?;
     download(&r.asset, &file)?;
     progress(tr!("update.verifying"));
-    let want = expected(&std::fs::read_to_string(&sums)?, ASSET).ok_or_else(|| io::Error::other(tr!("update.noChecksum")))?;
+    let want = expected(&fs::read_to_string(&sums)?, ASSET).ok_or_else(|| io::Error::other(tr!("update.noChecksum")))?;
     if sha256(&file)? != want {
-        let _ = std::fs::remove_dir_all(&dir);
         return Err(io::Error::other(tr!("update.checksumMismatch")));
     }
     progress(tr!("update.installing"));
-    swap(&dir, &file)
+    #[cfg(windows)]
+    drop(windows_helper(std::process::id(), &exe, dir, &failure_note())?);
+    #[cfg(target_os = "macos")]
+    swap(dir, &file)?;
+    #[cfg(not(any(windows, target_os = "macos")))]
+    return Err(io::Error::from(io::ErrorKind::Unsupported));
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        staging.handed_off = true;
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -224,43 +268,133 @@ fn replace_after(pid: u32, app: &Path, new: &Path, dir: &Path, launch: bool) -> 
     Ok(())
 }
 
-/// Windows lets a running exe be renamed: move it aside, put the new one in place, and
-/// start it once this process has exited (Itda allows one instance).
-#[cfg(not(target_os = "macos"))]
-fn swap(dir: &Path, new: &Path) -> io::Result<()> {
-    let exe = std::env::current_exe()?;
-    let old = exe.with_extension("exe.old");
-    let _ = std::fs::remove_file(&old);
-    std::fs::rename(&exe, &old).map_err(|_| io::Error::other(tr!("update.notWritable", path = exe.display())))?;
-    if let Err(e) = std::fs::copy(new, &exe) {
-        let _ = std::fs::rename(&old, &exe);
-        return Err(e);
+/// The helper opens the original process before signaling readiness. Both executable
+/// moves happen after that process exits and Rust has authorized the handoff.
+#[cfg(windows)]
+const WINDOWS_HELPER: &str = r#"$ErrorActionPreference = 'Stop'
+$appPath = $env:ITDA_UPDATE_EXE
+$stagingDir = $env:ITDA_UPDATE_DIR
+$candidate = [IO.Path]::Combine($stagingDir, 'itda.exe')
+$backup = [IO.Path]::Combine($stagingDir, 'previous.exe')
+
+function Clear-Staging {
+    try { [IO.Directory]::Delete($stagingDir, $true) } catch {}
+}
+
+function Save-Failure([string]$message) {
+    try {
+        [IO.File]::WriteAllText($env:ITDA_UPDATE_NOTE, $message)
+        return $true
+    } catch {
+        try { [IO.File]::WriteAllText([IO.Path]::Combine($stagingDir, 'update-failed'), $message) } catch {}
+        return $false
     }
-    let _ = std::fs::remove_dir_all(dir);
-    // A script file: `-File` binds the arguments to its parameters (a `-Command` string would
-    // swallow them as more source text).
-    let helper = std::env::temp_dir().join("itda-update-restart.ps1");
-    std::fs::write(&helper, "param([int]$ProcessId, [string]$Exe)\r\nWait-Process -Id $ProcessId -ErrorAction SilentlyContinue\r\nStart-Process -FilePath $Exe\r\n")?;
+}
+
+function Start-App {
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $appPath
+    $start.WorkingDirectory = [IO.Path]::GetDirectoryName($appPath)
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    [void][Diagnostics.Process]::Start($start)
+}
+
+$installLock = [Threading.Mutex]::new($false, $env:ITDA_UPDATE_LOCK)
+if (!$installLock.WaitOne(0)) { exit 1 }
+$original = [Diagnostics.Process]::GetProcessById([int]$env:ITDA_UPDATE_PID)
+[void]$original.Handle
+[IO.File]::WriteAllText([IO.Path]::Combine($stagingDir, 'ready'), '')
+try {
+    $original.WaitForExit()
+} catch {
+    [void](Save-Failure ($_.Exception.GetBaseException().Message))
+    exit 1
+}
+if (![IO.File]::Exists([IO.Path]::Combine($stagingDir, 'commit'))) {
+    Clear-Staging
+    exit 1
+}
+
+$movedOld = $false
+$movedNew = $false
+try {
+    [IO.File]::Move($appPath, $backup)
+    $movedOld = $true
+    [IO.File]::Move($candidate, $appPath)
+    $movedNew = $true
+    Start-App
+} catch {
+    $message = $_.Exception.GetBaseException().Message
+    try {
+        if ($movedNew) { [IO.File]::Move($appPath, $candidate) }
+        if ($movedOld) { [IO.File]::Move($backup, $appPath) }
+    } catch {
+        [void](Save-Failure ($env:ITDA_UPDATE_RESTORE_FAILED + [Environment]::NewLine + $message + [Environment]::NewLine + $_.Exception.GetBaseException().Message))
+        exit 1
+    }
+    $saved = Save-Failure $message
+    try {
+        Start-App
+    } catch {
+        [void](Save-Failure ($message + [Environment]::NewLine + $_.Exception.GetBaseException().Message))
+        exit 1
+    }
+    if ($saved) { Clear-Staging }
+    exit 1
+}
+Clear-Staging
+exit 0
+"#;
+
+#[cfg(windows)]
+fn windows_helper(pid: u32, exe: &Path, dir: &Path, note: &Path) -> io::Result<std::process::Child> {
+    use std::os::windows::process::CommandExt;
+    use std::time::{Duration, Instant};
+
+    let backup = dir.join("previous.exe");
+    let install_path = fs::canonicalize(exe)?;
+    let lock_id = Sha256::digest(install_path.to_string_lossy().to_uppercase().as_bytes());
     let mut c = Command::new(system_tool("powershell.exe"));
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0800_0000);
-    }
-    c.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(&helper)
-        .arg("-ProcessId")
-        .arg(std::process::id().to_string())
-        .arg("-Exe")
-        .arg(&exe)
+    // The command is fixed. Pass all paths as data so PowerShell uses them literally.
+    let mut child = c.creation_flags(0x0800_0000)
+        .args(["-NoProfile", "-NonInteractive", "-Command", WINDOWS_HELPER])
+        .env("ITDA_UPDATE_PID", pid.to_string())
+        .env("ITDA_UPDATE_EXE", exe)
+        .env("ITDA_UPDATE_DIR", dir)
+        .env("ITDA_UPDATE_LOCK", format!("Global\\itda-update-{lock_id:x}"))
+        .env("ITDA_UPDATE_NOTE", std::path::absolute(note)?)
+        .env("ITDA_UPDATE_RESTORE_FAILED", tr!("update.restoreFailed", backup = backup.display(), app = exe.display()))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    Ok(())
+    let ready = dir.join("ready");
+    let end = Instant::now() + Duration::from_secs(15);
+    let handoff = (|| {
+        loop {
+            if let Some(status) = child.try_wait()? {
+                return Err(io::Error::other(format!("PowerShell update helper: {status}")));
+            }
+            if ready.try_exists()? {
+                fs::File::create(dir.join("commit"))?;
+                return Ok(());
+            }
+            if Instant::now() >= end {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "PowerShell update helper readiness timed out"));
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    })();
+    if let Err(e) = handoff {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(e);
+    }
+    Ok(child)
 }
 
-/// Where the macOS helper explains a failed swap; read (and removed) at the next launch.
+/// Where the helper explains a failed swap; read (and removed) at the next launch.
 pub fn failure_note() -> std::path::PathBuf {
     crate::store::dir().join("update-failed")
 }
@@ -271,9 +405,9 @@ pub fn take_failure() -> Option<String> {
     Some(text.trim().to_string()).filter(|t| !t.is_empty())
 }
 
-/// Leftovers of a finished update.
+/// Remove the fixed backup left by earlier Windows updaters.
 pub fn cleanup() {
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
     if let Ok(exe) = std::env::current_exe() {
         let _ = std::fs::remove_file(exe.with_extension("exe.old"));
     }
@@ -324,6 +458,95 @@ mod tests {
         assert_eq!(expected(&sums, "Itda-macos-universal.zip").as_deref(), Some(h.as_str()));
         assert_eq!(expected(&sums, "itda.exe").unwrap(), "b".repeat(64));
         assert!(expected(&sums, "other.zip").is_none());
+    }
+
+    #[test]
+    fn staging_isolates_attempts_and_cleans_up_before_handoff() {
+        let root = UpdateDir::create(&std::env::temp_dir()).unwrap();
+        let first = UpdateDir::create(&root.path).unwrap();
+        let mut second = UpdateDir::create(&root.path).unwrap();
+        let first_path = first.path.clone();
+        let second_path = second.path.clone();
+        assert_ne!(first_path, second_path);
+        fs::write(first_path.join(ASSET), b"partial download").unwrap();
+        fs::write(second_path.join(ASSET), b"verified download").unwrap();
+
+        drop(first);
+        second.handed_off = true;
+        drop(second);
+        assert!(!first_path.exists());
+        assert_eq!(fs::read(second_path.join(ASSET)).unwrap(), b"verified download");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_helper_rejection_leaves_the_installation_unchanged() {
+        let root = UpdateDir::create(&std::env::temp_dir()).unwrap();
+        let exe = root.path.join("Itda.exe");
+        let note = root.path.join("failure");
+        fs::write(&exe, b"current").unwrap();
+        let stage = UpdateDir::create(&root.path).unwrap();
+        fs::write(stage.path.join(ASSET), b"replacement").unwrap();
+
+        assert!(windows_helper(u32::MAX, &exe, &stage.path, &note).is_err());
+        assert_eq!(fs::read(exe).unwrap(), b"current");
+        assert!(!stage.path.join("commit").exists());
+        assert!(!note.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_helper_waits_then_swaps_or_restores_the_executable() {
+        use std::os::windows::process::CommandExt;
+
+        let root = UpdateDir::create(&std::env::temp_dir()).unwrap();
+        let app_dir = root.path.join("Test [Itda] 앱");
+        fs::create_dir(&app_dir).unwrap();
+        let current = fs::read(system_tool("whoami.exe")).unwrap();
+        let replacement = fs::read(system_tool("hostname.exe")).unwrap();
+        for (case, candidate) in [None, Some(&b"invalid executable"[..]), Some(&replacement[..])].into_iter().enumerate() {
+            let exe = app_dir.join(format!("Itda portable {case}.exe"));
+            let note = app_dir.join(format!("failure-{case}"));
+            fs::write(&exe, &current).unwrap();
+            let stage = UpdateDir::create(&app_dir).unwrap();
+            if let Some(candidate) = candidate {
+                fs::write(stage.path.join(ASSET), candidate).unwrap();
+            }
+            let mut parent = Command::new(system_tool("cmd.exe"))
+                .creation_flags(0x0800_0000)
+                .args(["/D", "/C", "pause"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let helper = windows_helper(parent.id(), &exe, &stage.path, &note);
+            let competing = if candidate == Some(&replacement[..]) && helper.is_ok() {
+                let other_stage = UpdateDir::create(&app_dir).unwrap();
+                windows_helper(parent.id(), &exe, &other_stage.path, &note).err()
+            } else {
+                None
+            };
+            let unchanged = fs::read(&exe).unwrap() == current;
+            let backup_exists = stage.path.join("previous.exe").exists();
+            parent.kill().unwrap();
+            parent.wait().unwrap();
+            let status = helper.unwrap().wait().unwrap();
+
+            assert!(unchanged && !backup_exists, "swapped before the process exited");
+            assert!(!stage.path.exists(), "left staging after successful restart");
+            if candidate == Some(&replacement[..]) {
+                assert!(competing.is_some(), "another helper accepted the same executable");
+                assert!(status.success());
+                assert_eq!(fs::read(&exe).unwrap(), replacement);
+                assert!(!note.exists());
+            } else {
+                assert!(!status.success());
+                assert_eq!(fs::read(&exe).unwrap(), current);
+                assert!(!fs::read_to_string(&note).unwrap().trim().is_empty());
+                fs::remove_file(&note).unwrap();
+            }
+        }
     }
 
     /// Real release, scratch bundle: download, verify, stage and swap once a stand-in

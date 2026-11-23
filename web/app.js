@@ -190,7 +190,14 @@ function onMessage(m) {
       S.online = m.online;
       render();
       break;
+    case 'host_deleted':
+      toast(T('toast.host.deleted', { name: m.name }), 'E74D');
+      break;
+    case 'account_deleted':
+      toast(T('toast.account.deleted'), 'E74D');
+      break;
     case 'account_saved': {
+      if (m.request != null && !acceptEditorSave('account', m)) break;
       if (m.grouped) toast(T('toast.accountsGrouped', { count: m.grouped }), 'E73E');
       const em = S.pickAccountFor;
       S.pickAccountFor = null;
@@ -264,7 +271,17 @@ function onMessage(m) {
       render();
       break;
     case 'saved':
+      if (m.request != null && !acceptEditorSave('edit', m)) break;
       if (m.then === 'connect') connect(m.id);
+      break;
+    case 'save_failed':
+      for (const modal of $$('#modals .scrim')) {
+        if (modal.saveRequest?.id !== m.request) continue;
+        modal.saveRequest = null;
+        setEditorSaving(modal, false);
+        modal.querySelector('[data-save-error]').textContent = m.error || '';
+        break;
+      }
       break;
     case 'quick':
       closeModal();
@@ -725,7 +742,12 @@ function webPanel(w) {
   if (!info.running) return `<div class="setting last"><span class="spin"></span><div class="txt"><b>${T('stage.start')}</b></div></div>`;
   const urls = (info.urls || []).filter((u) => !(info.tailscale && u.kind === 'tailscale')).map((u) => `<div class="url-row"><code class="url">${esc(u.url)}</code>${u.kind === 'tailscale' ? `<span class="pill mute">${T('share.pill.tsOutside')}</span>` : `<span class="pill mute">${T('common.sameWifi')}</span>`}</div>`).join('') || `<span>${MAC ? T('share.web.noAddress.mac') : T('share.web.noAddress.pc')}</span>`;
   const ts = info.tailscale;
-  const useTs = ts && S.qrMode === 'ts';
+  const allowed = w.allowed_hosts || [];
+  const choices = [...(MAC ? [] : [{ id: 'this-pc', name: T('files.thisComputer') }]), ...S.hosts];
+  const deviceList = w.restrict_devices ? `<fieldset class="setting web-devices"><legend>${T('share.web.allowedDevices')}</legend>
+    ${choices.map(h => `<label><input type="checkbox" data-web-host="${esc(h.id)}" ${allowed.includes(h.id) ? 'checked' : ''}> ${esc(label(h))}</label>`).join('') || `<span>${T('share.web.noDevices')}</span>`}
+    </fieldset>` : '';
+  const useTs = ts && (S.qrMode === 'ts' || (S.qrMode == null && ts.serving));
   const qrSwitch = ts ? `<div class="seg qr-seg"><button data-act="qr-lan" class="${useTs ? '' : 'on'}">${T('common.sameWifi')}</button><button data-act="qr-ts" class="${useTs ? 'on' : ''}">Tailscale</button></div>` : '';
   const tsBlock = !ts ? '' : `<div class="ts-box">
       <div class="url-row"><code class="url">${esc(ts.url)}</code><span class="pill mute">${T('share.pill.tsAnywhere')}</span></div>
@@ -747,6 +769,9 @@ function webPanel(w) {
           <button class="btn sm subtle" data-act="pin-reset">${I('E72C')}${T('share.web.newPin')}</button></div>
         <span>${MAC ? T('share.web.safety.mac') : T('share.web.safety.pc')}</span>
       </div></div>
+    ${setting('E8D7', T('share.web.restrictDevices'), T('share.web.restrictDevices.desc'), toggle('restrict_devices', w.restrict_devices, 'web'))}
+    ${deviceList}
+    ${w.restrict_devices ? '' : setting('E8D7', T('share.web.allowEdits'), T('share.web.allowEdits.desc'), toggle('allow_edits', w.allow_edits !== false, 'web'))}
     <div class="setting last">${I('E968')}<div class="txt"><b>${T('share.port')}</b><span>${T('share.web.port.desc')}</span></div>
       <input class="input port" id="web-port" value="${esc(w.port)}" inputmode="numeric" aria-label="${T('share.port')}"></div>`;
 }
@@ -1161,6 +1186,29 @@ function closeModal(key) {
   }
 }
 
+let saveRequestId = 0;
+
+function setEditorSaving(modal, saving) {
+  for (const button of modal.querySelectorAll('[data-x="save"], [data-x="connect"]')) button.disabled = saving;
+}
+
+function saveEditor(modal, cmd, fields, onSaved) {
+  if (modal.saveRequest) return;
+  const id = ++saveRequestId;
+  modal.saveRequest = { id, onSaved };
+  modal.querySelector('[data-save-error]').textContent = '';
+  setEditorSaving(modal, true);
+  send(cmd, { ...fields, request: id });
+}
+
+function acceptEditorSave(key, message) {
+  const modal = $$('#modals .scrim').find(m => m.dataset.key === key && m.saveRequest?.id === message.request);
+  if (!modal) return false;
+  modal.saveRequest.onSaved(message);
+  closeModal(key);
+  return true;
+}
+
 function topModal() {
   const all = $$('#modals .scrim');
   return all[all.length - 1];
@@ -1237,6 +1285,7 @@ function openAccount(init = {}) {
       <div class="field"><label>${T('account.sshKey')}</label>
         <div class="row" style="gap:8px"><input class="input" id="a-key" value="${esc(a.ssh_key)}" placeholder="${T('account.sshKey.ph')}"><button class="btn" data-x="browse" style="flex:none">${I('E8B7')}${T('account.browse')}</button></div></div>
       <div class="field" id="keypass-field" ${a.ssh_key ? '' : 'hidden'}><label>${T('account.keyPass')}</label><input class="input" id="a-keypass" type="password" placeholder="${ex && ex.has_keypass ? T('account.keyPass.saved') : T('account.keyPass.ph')}"></div>
+      <div role="alert" data-save-error></div>
     </div><div class="foot">${ex ? `<button class="btn subtle left" data-x="delete" style="color:var(--danger)">${I('E74D')}${T('common.delete')}</button>` : ''}
       <button class="btn" data-x="cancel">${T('common.cancel')}</button><button class="btn primary" data-x="save">${T('common.save')}</button></div></div>`);
   const pass = m.querySelector('#a-pass');
@@ -1252,9 +1301,8 @@ function openAccount(init = {}) {
     if (!user) { m.querySelector('#e-user').textContent = T('account.user.required'); m.querySelector('#a-user').focus(); return; }
     const acc = { ...a, name: m.querySelector('#a-name').value.trim(), user, ssh_key: m.querySelector('#a-key').value.trim() };
     delete acc.has_pw; delete acc.has_keypass; delete acc.uses;
-    send('save_account', { account: acc, password: pass.value, key_pass: m.querySelector('#a-keypass').value, clear_key_pass: !acc.ssh_key });
-    closeModal('account');
-    toast(ex ? T('toast.account.saved') : T('toast.account.created', { name: acc.name || user }), 'E73E');
+    saveEditor(m, 'save_account', { account: acc, password: pass.value, key_pass: m.querySelector('#a-keypass').value, clear_key_pass: !acc.ssh_key },
+      () => toast(ex ? T('toast.account.saved') : T('toast.account.created', { name: acc.name || user }), 'E73E'));
   };
   m.querySelector('[data-x="save"]').onclick = save;
   m.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); save(); } });
@@ -1265,7 +1313,6 @@ function askDeleteAccount(id) {
   if (!a) return;
   confirmDialog(T('account.delete.title', { name: esc(a.name || a.user) }), a.uses ? T('account.delete.uses', { count: a.uses }) : T('account.delete.text'), T('common.delete'), true, () => {
     send('delete_account', { id });
-    toast(T('toast.account.deleted'), 'E74D');
   });
 }
 
@@ -1375,7 +1422,9 @@ ${quick ? sshBox : ''}
        <button class="btn" data-x="cancel">${T('common.cancel')}</button><button class="btn" data-x="save">${T('common.save')}</button><button class="btn primary" data-x="connect">${I('E768')}${T('editor.saveConnect')}</button>`;
   const m = openModal('edit', `<div class="dialog wide"><div class="body"><h2>${title}</h2>
       <p class="lead">${quick ? T('editor.lead.quick') : T('editor.lead')}</p>
-      ${tabs}${general}${quick ? '' : display + input + conn}</div><div class="foot">${foot}</div></div>`);
+      ${tabs}${general}${quick ? '' : display + input + conn}
+      <div role="alert" data-save-error></div></div>
+    <div class="foot">${foot}</div></div>`);
 
   m.dataset.host = h.id || '';
   m.querySelector('#account-name-help').onclick = showAccountNameHelp;
@@ -1555,10 +1604,10 @@ ${quick ? sshBox : ''}
     if (!validate(host)) { (m.querySelector('#f-host.bad') || m.querySelector('#f-ssh-port') || pass).focus(); return; }
     const pw = pass.value;
     const save = host.account ? null : m.querySelector('#f-save').checked;
-    if (!save && pw) S.pendingPw[host.id || '__new'] = pw;
-    send('save_host', { host, password: pw || null, save_password: save, then });
-    closeModal('edit');
-    if (!then) toast(existing ? T('toast.host.saved') : T('toast.host.added', { name: label(host) }), 'E73E');
+    saveEditor(m, 'save_host', { host, password: pw || null, save_password: save, then }, ({ id }) => {
+      if (!save && pw) S.pendingPw[id] = pw;
+      if (!then) toast(existing ? T('toast.host.saved') : T('toast.host.added', { name: label(host) }), 'E73E');
+    });
   };
   m.querySelector('[data-x="cancel"]').onclick = () => closeModal('edit');
   const saveBtn = m.querySelector('[data-x="save"]');
@@ -1584,7 +1633,6 @@ function askDelete(id) {
   if (!h) return;
   confirmDialog(T('host.delete.title', { name: esc(label(h)) }), T('host.delete.text'), T('common.delete'), true, () => {
     send('delete_host', { id });
-    toast(T('toast.host.deleted', { name: label(h) }), 'E74D');
   });
 }
 
@@ -1595,9 +1643,8 @@ function connect(id) {
   if (s && s.state !== 'connecting') return send('focus', { id });
   showConnecting(id);
   if (s) return;
-  const pw = S.pendingPw[id] || S.pendingPw.__new;
+  const pw = S.pendingPw[id];
   delete S.pendingPw[id];
-  delete S.pendingPw.__new;
   send('connect', pw ? { id, password: pw, save: false } : { id });
 }
 
@@ -1957,6 +2004,13 @@ document.addEventListener('change', (e) => {
     saveSettings();
     // (Said once macOS took it: see 'login_item'.)
     if (MAC && t.dataset.set === 'login_start') S.loginAsked = t.checked;
+  } else if (t.dataset.webHost) {
+    const web = S.settings.web;
+    const allowed = new Set(web.allowed_hosts || []);
+    if (t.checked) allowed.add(t.dataset.webHost);
+    else allowed.delete(t.dataset.webHost);
+    web.allowed_hosts = [...allowed];
+    saveSettings();
   } else if (t.id === 'share-port') {
     const p = parseInt(t.value, 10);
     if (p >= 1024 && p < 65536) { S.settings.share = { ...S.settings.share, port: p }; S.share = {}; saveSettings(); }

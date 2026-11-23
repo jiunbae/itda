@@ -1,6 +1,6 @@
 // The same Mac saved twice, by its LAN address without high-performance sharing and by its
-// Tailscale name with it (hosts_json's hp_via): opening the first connects through the second,
-// under the first's name, and the viewer treats it as high-performance (mode check, keys).
+// Tailscale name with it: the gateway may use the alternate transport, while the viewer
+// addresses the selected profile for mode checks and keeps its settings and identity.
 // A Mac whose screen shows another account (fast user switching) is named in the message.
 import http from 'node:http';
 import fs from 'node:fs';
@@ -9,9 +9,9 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const pw=await import(process.env.PLAYWRIGHT?pathToFileURL(process.env.PLAYWRIGHT).href:'playwright');
 const hosts=[
- {id:'lan',label:'Studio (LAN)',host:'192.168.1.20',os:'mac',kind:'vnc',has_pw:true,hp:{on:false,native:false},hp_via:'tail'},
- {id:'tail',label:'Studio',host:'studio.tail',os:'mac',kind:'vnc',has_pw:true,hp:{on:true,native:false},hp_via:null},
- {id:'shared',label:'Shared',host:'shared.local',os:'mac',kind:'vnc',has_pw:true,hp:{on:true,native:false},hp_via:null},
+ {id:'lan',label:'Studio (LAN)',host:'192.168.1.20',os:'mac',kind:'vnc',has_pw:true,hp:{on:false,native:false},hp_via:true,opts:{audio:false,clipboard:false,view_only:true,actual:true}},
+ {id:'tail',label:'Studio',host:'studio.tail',os:'mac',kind:'vnc',has_pw:true,hp:{on:true,native:false},hp_via:false,opts:{audio:true,clipboard:true,view_only:false,actual:false}},
+ {id:'shared',label:'Shared',host:'shared.local',os:'mac',kind:'vnc',has_pw:true,hp:{on:true,native:false},hp_via:false},
 ];
 const modes=[];
 const server=http.createServer((req,res)=>{
@@ -26,7 +26,7 @@ const server=http.createServer((req,res)=>{
   res.setHeader('Content-Type','text/javascript');
   return res.end(`window.RFB=class extends EventTarget {
    constructor(){super();window.fixtureSessions=(window.fixtureSessions||0)+1;window.fixtureRfb=this;this._fbWidth=640;this._fbHeight=480;this._rfbConnectionState='connected';this._display={_backbuffer:document.createElement('canvas'),itdaFrame:1};if(!new URLSearchParams(location.search).has('hold'))setTimeout(()=>this.dispatchEvent(new Event('connect')),0);}
-   focus(){} itdaViewport(){} disconnect(){this._rfbConnectionState='disconnected';this.dispatchEvent(new Event('disconnect'));}
+   focus(){} itdaViewport(){} itdaAudio(on){window.fixtureAudio=on;} disconnect(){this._rfbConnectionState='disconnected';this.dispatchEvent(new Event('disconnect'));}
   };`);
  }
  const name=url.pathname==='/'?'index.html':url.pathname.slice(1),file=path.resolve(root,/^(i18n\.js|locales\/[\w.-]+\.js)$/.test(name)?'web':'web/viewer',name);
@@ -45,14 +45,17 @@ try{
  await p.goto(`http://127.0.0.1:${server.address().port}/?open=lan`);
  await p.waitForFunction(()=>window.fixtureWs);
  const ws=await p.evaluate(()=>fixtureWs.url);
- assert(ws.includes('/ws/tail?'),'did not connect through the high-performance connection: '+ws);
- assert(await p.title()==='Studio (LAN)','not under the opened connection\'s name: '+await p.title());
- await p.waitForFunction(()=>document.querySelector('[data-t=hp]')?.classList.contains('on'));
- assert(modes.length>0&&modes.every(m=>m==='tail'),'mode asked of the wrong connection: '+modes);
+ assert(ws.includes('/ws/lan?'),'viewer should request the selected profile: '+ws);
+ assert(await p.title()==='Studio (LAN)','wrong window title: '+await p.title());
+ assert(await p.evaluate(()=>fixtureRfb.viewOnly && !fixtureRfb.scaleViewport && !window.fixtureAudio),'alternate settings replaced the selected profile settings');
+ await p.evaluate(()=>fixtureRfb.dispatchEvent(Object.assign(new Event('clipboard'),{detail:{text:'fixture'}})));
+ assert(await p.evaluate(()=>ipcEvents.every(e=>e.ev!=='clip')),'disabled clipboard forwarded content');
+ await p.waitForFunction(()=>performance.getEntriesByType('resource').some(e=>e.name.includes('/api/mode/lan?')));
+ assert(modes.length>0&&modes.every(m=>m==='lan'),'mode asked of the wrong profile: '+modes);
  const named=await browser.newPage({locale:'ko-KR'});named.on('pageerror',e=>errors.push(e.message));
  await named.addInitScript(()=>{window.ipc={postMessage:()=>{}};window.WebSocket=class extends EventTarget {constructor(url){super();this.url=url;}close(){}send(){}};});
  await named.goto(`http://127.0.0.1:${server.address().port}/?open=shared`);
  await named.waitForFunction(()=>[...document.querySelectorAll('.toast')].some(t=>t.textContent.includes('june')),null,{timeout:10000});
  assert(errors.length===0,errors.join('\n'));
- console.log('PASS: a Mac saved twice opens through its high-performance connection, under the name opened, in high-performance mode; another account at the screen is named');
+ console.log('PASS: high-performance alias preserves profile identity, settings and diagnostic IDs; another account at the screen is named');
 }finally{await browser.close();await new Promise(r=>server.close(r));}

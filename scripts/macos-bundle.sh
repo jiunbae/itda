@@ -16,13 +16,13 @@ rm -rf "$APP" && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$HOME=~$(printf '\037')--remap-path-prefix=$PWD=itda"
 
 if [ "$MODE" = universal ]; then
-  cargo build --release --target aarch64-apple-darwin
-  cargo build --release --target x86_64-apple-darwin
+  cargo build --locked --release --target aarch64-apple-darwin
+  cargo build --locked --release --target x86_64-apple-darwin
   lipo -create -output "$APP/Contents/MacOS/itda" \
     target/aarch64-apple-darwin/release/itda target/x86_64-apple-darwin/release/itda
   ARCH=universal
 else
-  cargo build --release
+  cargo build --locked --release
   cp target/release/itda "$APP/Contents/MacOS/itda"
   ARCH=$(uname -m)
 fi

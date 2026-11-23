@@ -1,7 +1,8 @@
 // Transfers that keep running after their file window closed, on the real frontend with an
 // in-memory IPC fixture (no SSH, no user files): the main window lists them, follows their
 // progress and outcome, cancels and dismisses them as the app's; a file window that opens
-// later picks them up from the state snapshot and offers the retry for what is left.
+// later picks them up from the state snapshot and offers the retry for what is left,
+// including a terminal record restored from local history after an app restart.
 //   PLAYWRIGHT=/path/to/playwright/index.mjs CHROMIUM=/path/to/chrome node scripts/files-background-e2e.mjs
 import http from 'node:http';
 import fs from 'node:fs';
@@ -97,28 +98,47 @@ try{
   {const t=(await packets()).filter(x=>x.cmd==='files_window').at(-1);assert(t?.id==='studio','Retry did not open the device file window: '+JSON.stringify(t));}
   await main.keyboard.press('Escape');
 
-  // ---- a file window opened later: the state snapshot brings the app's transfer in.
+  // ---- a file window opened later: the state snapshot includes a restored failure.
   const win=await c.newPage();win.on('pageerror',e=>errors.push(e.message));
   await icons(win);await win.goto(base+'/web/?files=__network');
-  const failed=app({id:'__network',job:'bg-3',state:'failed',error:'디스크가 가득 찼습니다',completed_names:['Photos'],partial:null,moving:true});
+  // Restored records have a new sequence and omit raw diagnostics and live request tokens.
+  const failed=app({id:'__network',job:'bg-3',seq:1,state:'failed',completed_names:['Photos'],partial:null,moving:true});
   const running=app({id:'__network',job:'bg-4',state:'running',file:'big.iso',bytes:1,total:9});
   await win.evaluate(({h,jobs})=>{itda.recv({type:'state',hosts:h,accounts:[],settings:{onboarded:true,theme:'light'},sessions:{},files_jobs:jobs});},{h:hosts,jobs:[failed,running]});
   const layer=win.locator('.files-layer');
   await layer.locator('[data-id="file-job-bg-3"]').waitFor();
   assert(!await win.locator('#toasts .toast').count(),'A snapshot was announced');
+  const winPackets=()=>win.evaluate(()=>testPackets);
+  assert(!(await winPackets()).some(x=>x.op==='transfer'),'Loading history started a transfer');
   await layer.locator('[data-cancel-job="bg-4"]').click();
   {const t=(await win.evaluate(()=>testPackets)).filter(x=>x.op?.endsWith('_background')).at(-1);assert(t?.op==='cancel_background'&&t.job==='bg-4','File window cancel: '+JSON.stringify(t));}
-  // Retry what is left: a new confirmation, then the app's record is dismissed.
+  // Cancelling the confirmation keeps the restored record and sends no transfer.
   await layer.locator('[data-retry-job="bg-3"]').click();
   const confirm=win.getByRole('dialog',{name:'남은 파일 다시 이동',exact:true});
   assert((await confirm.textContent()).includes('남은 1개'),'Retry is not for what is left: '+await confirm.textContent());
+  assert(!(await winPackets()).some(x=>x.op==='transfer'),'Opening confirmation started a transfer');
+  await confirm.getByRole('button',{name:'취소',exact:true}).click();
+  await layer.locator('[data-retry-job="bg-3"]').waitFor();
+  assert(!(await winPackets()).some(x=>x.op==='transfer'||(x.op==='dismiss_background'&&x.job==='bg-3')),'Cancelling confirmation changed the transfer history');
+  // Explicitly confirming retries only the remaining item and dismisses the old record.
+  await layer.locator('[data-retry-job="bg-3"]').click();
   await confirm.getByRole('button',{name:'다시 이동',exact:true}).click();
-  {const all=await win.evaluate(()=>testPackets),t=all.filter(x=>x.op==='transfer').at(-1),d=all.filter(x=>x.op==='dismiss_background').at(-1);
-   assert(t&&JSON.stringify(t.names)==='["report.txt"]'&&t.move&&t.from==='local'&&t.to==='local'&&t.destination==='D:\\Backup'&&!t.from_window,'Retry request: '+JSON.stringify(t));
-   assert(d?.job==='bg-3','Retried transfer stays in the app list');}
+  const confirmed=await winPackets();
+  const retried=confirmed.filter(x=>x.op==='transfer').at(-1);
+  assert(retried&&JSON.stringify(retried.names)==='["report.txt"]'&&retried.move&&retried.from==='local'&&retried.to==='local'&&retried.destination==='D:\\Backup'&&!retried.from_window,'Retry request: '+JSON.stringify(retried));
+  assert(confirmed.filter(x=>x.op==='dismiss_background').at(-1)?.job==='bg-3','Retried transfer stays in the app list');
+  // An open-window failure retains its own delivery and can clear its persisted outcome.
+  const own={type:'files_job',id:'__network',job:'own-1',window:retried.window,req:retried.req,moving:true};
+  await recv(win,{...own,state:'queued'});
+  await recv(win,{...own,state:'failed',persistent:true,completed_names:[]});
+  await layer.locator('[data-retry-job="own-1"]').click();
+  await confirm.getByRole('button',{name:'취소',exact:true}).click();
+  assert((await winPackets()).filter(x=>x.op==='transfer').length===1,'Open-window failure retried without confirmation');
+  await layer.locator('[data-dismiss-job="own-1"]').click();
+  assert((await winPackets()).filter(x=>x.op==='dismiss_background').at(-1)?.job==='own-1','Dismissing a retained open-window failure did not clear its history');
   // Dismissed elsewhere: gone here too.
   await recv(win,{type:'files_job',window:'app',orphan:true,job:'bg-4',id:'__network',dismissed:true});
   await layer.locator('[data-id="file-job-bg-4"]').waitFor({state:'detached'});
   assert(!errors.length,errors.join('\n'));
-  console.log('PASS: background transfers — main-window list/progress/cancel/dismiss/outcome, file-window snapshot, cancel and retry');
+  console.log('PASS: background transfers — live delivery, restored history, cancellation and explicit retry');
 }finally{await browser.close();server.closeAllConnections();await new Promise(r=>server.close(r));}

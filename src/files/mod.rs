@@ -689,8 +689,8 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
         transfer::start(v.clone(), host, background::track(&v, window, emit));
         return;
     }
-    // A transfer whose window closed belongs to the app: any page may stop or dismiss it.
-    // A job whose page is open stays that page's own (below).
+    // Any page may stop or dismiss an adopted transfer. Its originating page can also
+    // dismiss its own retained outcome.
     if op == "cancel_background" {
         let job = get(&v, "job");
         if background::is_orphan(&job) {
@@ -698,7 +698,10 @@ pub fn dispatch(v: Value, host: Host, login: Login, emit: Emit) {
         }
         return;
     }
-    if op == "dismiss_background" { background::dismiss(&get(&v, "job")); return; }
+    if op == "dismiss_background" {
+        background::dismiss(&get(&v, "job"), window.as_str().unwrap_or(""), emit);
+        return;
+    }
     let emit: Emit = Arc::new(move |mut m| { m["window"] = window.clone(); emit(m); });
     if op == "release" { retire(key); return; }
     if op == "connect" { retired().lock().unwrap().remove(&key); }
