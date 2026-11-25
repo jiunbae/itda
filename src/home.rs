@@ -1089,7 +1089,7 @@ fn on_ipc(v: Value) {
             if let Some(cid) = cid {
                 send(json!({"type": "files_clipboard", "clip": {"clear": cid}}));
             }
-            forget_secrets([crate::files::password_key(&gone).as_str(), &format!("files-{id}"), &id]);
+            forget_secrets([crate::files::password_key(&gone).as_str(), &format!("files-{id}"), &id, &crate::hp_upgrade::password_key(&id)]);
             store::remove_thumbs(&id);
             send_hosts();
             send(json!({"type":"host_deleted","name":gone.label()}));
@@ -1490,6 +1490,10 @@ fn connect(id: &str, typed: Option<String>, save: bool) {
         return focus_session(id);
     }
     let Some(host) = home(|m| m.hosts.iter().find(|x| x.id == id).cloned()) else { return };
+    // No screen there: opening it opens its files.
+    if host.is_files() {
+        return send(json!({"type": "open_files", "id": id}));
+    }
     let login = home(|m| store::resolve(&host, &m.accounts));
     #[cfg(windows)]
     if host.is_rdp() {

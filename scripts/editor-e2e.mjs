@@ -184,8 +184,38 @@ try {
   assert(await page.locator('.card[data-id="pc"] .os-badge[title="Windows"]').count() === 1, "no OS badge on a card with a preview");
   assert(await page.locator('.card[data-id="mac"] .os-badge').count() === 0, "badge on a card without a preview");
   assert(await page.locator('.card[data-id="mac"] .ph .osm-mac').count() === 1, "big Mac mark missing");
+  // A files-only device (a headless server): its card opens files, never a screen session.
+  const nas = { id: "nas", name: "NAS", host: "nas.local:2222", user: "pi", kind: "files", os: "linux", group: "", groups: [], opts: {}, hp: { on: false, port: 0 }, ssh: { on: false, user: "", port: 0 } };
+  await page.evaluate(([a, b, c]) => { itda.recv({ type: "hosts", hosts: [a, b, c] }); window.launched = []; window.ItdaFiles.launch = (h) => window.launched.push(h.id); }, [mac, pc, nas]);
+  const nasCard = page.locator('.card[data-id="nas"]');
+  assert((await nasCard.locator('[data-act="connect"]').innerText()).includes("파일 열기"), "files-only card does not say it opens files");
+  const before = (await page.evaluate(() => sent.filter((x) => x.cmd === "connect").length));
+  await nasCard.locator('[data-act="connect"]').click();
+  await nasCard.dblclick();
+  assert(JSON.stringify(await page.evaluate(() => launched)) === '["nas","nas"]', `files-only open: ${await page.evaluate(() => JSON.stringify(launched))}`);
+  assert((await page.evaluate(() => sent.filter((x) => x.cmd === "connect").length)) === before, "files-only device asked for a screen session");
+  // The app saying so (after "save and open") opens the files too.
+  await page.evaluate(() => itda.recv({ type: "open_files", id: "nas" }));
+  assert((await page.evaluate(() => launched.length)) === 3, "open_files did not open the files");
+  // Its editor: SSH words, no display/keyboard settings, saving opens files.
+  await page.evaluate((h) => openEdit(h), nas);
+  await settled();
+  assert(await page.locator('.kind-seg [data-kind="files"]').getAttribute("class") === "on", "files kind not selected");
+  assert(await page.locator("[data-tab=display]").isHidden(), "display tab shown for a files-only device");
+  assert((await page.locator("#pass-label").innerText()) === "SSH 암호", "password is not the SSH one");
+  assert((await page.locator('[data-key=edit] [data-x="connect"]').innerText()).includes("파일 열기"), "save button does not open files");
+  await page.locator("[data-tab=conn]").click();
+  assert(await page.locator('[data-opt="clipboard"]').evaluate((e) => e.closest(".opt").hidden), "screen options shown for a files-only device");
+  await page.locator("[data-tab=general]").click();
+  await page.locator('.kind-seg [data-kind="linux"]').click();
+  assert(await page.locator("[data-tab=display]").isVisible() && (await page.locator("#pass-label").innerText()) !== "SSH 암호", "switching back kept the files-only layout");
+  await page.locator('.kind-seg [data-kind="files"]').click();
+  await page.locator("[data-x=save]").click();
+  const s3 = (await saved()).at(-1).host;
+  assert(s3.kind === "files" && s3.os === "linux" && s3.user === "pi" && s3.ssh.on === false, `files-only save: ${JSON.stringify({ kind: s3.kind, os: s3.os, user: s3.user, ssh: s3.ssh })}`);
+  await page.evaluate(() => closeModal());
   assert(!errors.length, `page errors: ${errors}`);
-  console.log("PASS: group chips, Enter/IME, HP state kept on save, HP events scoped, HP block follows kind, group suggestions, OS badges");
+  console.log("PASS: group chips, Enter/IME, HP state kept on save, HP events scoped, HP block follows kind, group suggestions, OS badges, files-only devices");
 } finally {
   await browser.close();
   server.close();
