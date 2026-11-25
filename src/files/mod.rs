@@ -536,7 +536,9 @@ fn cfg(h: &Host, login: &Login, password: Option<String>) -> io::Result<SshCfg> 
         host,
         user: user.clone(),
         pass,
-        port: if o.port == 0 {
+        port: if h.is_files() {
+            h.files_port()
+        } else if o.port == 0 {
             if h.ssh.port == 0 {
                 22
             } else {

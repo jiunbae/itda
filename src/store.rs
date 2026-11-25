@@ -192,6 +192,19 @@ impl Host {
         self.kind == "rdp"
     }
 
+    /// Reached only for its files (SFTP), with no screen: a headless server, say. Its own login
+    /// is the SSH one. Versions before this kind treat it as a VNC device and keep it as is.
+    pub fn is_files(&self) -> bool {
+        self.kind == "files"
+    }
+
+    /// The SSH port a files-only device answers on: the files setting, the port written with
+    /// its address, its SSH setting, else 22.
+    pub fn files_port(&self) -> u16 {
+        let given = crate::tunnel::split_host(self.host.trim(), 0).1;
+        [self.files.port, given, self.ssh.port].into_iter().find(|&p| p != 0).unwrap_or(22)
+    }
+
     /// Where this device answers, without ports: its address and its LAN one (lowercase).
     fn places(&self) -> Vec<String> {
         let (h, _) = crate::tunnel::split_host(self.host.trim(), 5900);
@@ -224,6 +237,10 @@ impl Host {
         let t = address.trim();
         if self.is_rdp() {
             if t.rsplit_once(':').is_some_and(|(_, p)| p.parse::<u16>().is_ok()) { t.to_string() } else { format!("{t}:3389") }
+        } else if self.is_files() {
+            let (host, _) = crate::tunnel::split_host(t, 0);
+            let port = self.files_port();
+            if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") }
         } else if self.ssh.on || self.hp.on {
             let (host, _) = crate::tunnel::split_host(t, 5900);
             let port = if self.ssh.port == 0 { 22 } else { self.ssh.port };
@@ -941,6 +958,27 @@ mod tests {
         assert!(!super::Settings::default().share.trust_near);
         let old: super::Settings = serde_json::from_str(r#"{"share":{"on":true,"port":5900,"ask":true,"trust_near":true}}"#).unwrap();
         assert!(old.share.trust_near, "a saved choice must survive the new default");
+    }
+
+    #[test]
+    fn files_only_devices_are_reached_over_ssh() {
+        let mut h = super::Host { host: "nas.local".into(), kind: "files".into(), os: "linux".into(), ..Default::default() };
+        assert!(h.is_files() && !h.is_rdp());
+        assert_eq!(h.probe_addr(&h.host), "nas.local:22");
+        h.ssh.port = 2200;
+        assert_eq!(h.probe_addr(&h.host), "nas.local:2200");
+        // A port written with the address is the SSH port here (not VNC's).
+        h.host = "nas.local:2222".into();
+        h.lan = "192.168.0.30".into();
+        assert_eq!(h.probe_addr(&h.host), "nas.local:2222");
+        assert_eq!(h.probe_addr(&h.at_lan().host), "192.168.0.30:2222");
+        h.files.port = 2022;
+        assert_eq!(h.files_port(), 2022);
+        // Not a Mac: never routed through high-performance sharing.
+        assert!(h.hp_route(std::slice::from_ref(&h)).is_none());
+        // Kept as written by versions that don't know it.
+        let back: super::Host = serde_json::from_str(&serde_json::to_string(&h).unwrap()).unwrap();
+        assert!(back.is_files());
     }
 
     #[test]

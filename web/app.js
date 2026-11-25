@@ -219,6 +219,7 @@ function onMessage(m) {
       if (f) { f.value = m.path; f.dispatchEvent(new Event('input')); }
       break;
     }
+    case 'open_files': { const h = hostById(m.id); if (h) window.ItdaFiles.launch(h); break; }
     case 'toast':
       toast(m.text, m.err ? 'E783' : 'E73E', !!m.err);
       break;
@@ -442,6 +443,7 @@ function thumb(h) {
 // visible words remain part of the name, so voice control still finds them).
 const named = (text) => `aria-label="${esc(text)}"`;
 function primaryAction(h) {
+  if (filesOnly(h)) return `<button class="btn primary" data-act="connect" data-id="${esc(h.id)}" ${named(T('files.openFilesOf', { name: label(h) }))}>${I('E8B7')}${T('card.openFiles')}</button>`;
   const s = S.sessions[h.id];
   if (!s) return `<button class="btn primary" data-act="connect" data-id="${esc(h.id)}" ${named(T('card.aria.connect', { name: label(h) }))}>${I('E768')}${T('card.connect')}</button>`;
   if (s.state === 'connecting') return `<button class="btn" data-act="cancel" data-id="${esc(h.id)}" ${named(T('card.aria.cancel', { name: label(h) }))}>${I('E711')}${T('common.cancel')}</button>`;
@@ -1328,15 +1330,21 @@ const KINDS = {
     get pass() { return T('kind.rdp.pass'); }, get passHint() { return T('kind.rdp.passHint'); }, ssh: false },
   linux: { kind: '', os: 'linux', get label() { return T('onboard.choice.linux'); }, get hint() { return T('kind.linux.hint'); }, hostPh: 'raspberrypi.local, 192.168.0.30:5901',
     get user() { return T('kind.linux.user'); }, get userPh() { return T('kind.linux.userPh'); }, get userHint() { return T('kind.linux.userHint'); }, get pass() { return T('row.vncPassword'); }, ssh: true },
+  // No screen: only its files, over SSH (a headless server or NAS).
+  files: { kind: 'files', os: 'linux', get label() { return T('kind.files.label'); }, get hint() { return T('kind.files.hint'); }, hostPh: 'nas.local, 192.168.0.30:2222',
+    get user() { return T('kind.files.user'); }, get userPh() { return T('kind.files.userPh'); }, get userHint() { return T('kind.files.userHint'); },
+    get pass() { return T('kind.files.pass'); }, get passHint() { return T('kind.files.passHint'); }, ssh: false, files: true },
 };
+const filesOnly = (h) => !!h && h.kind === 'files';
 // Which editor kind a saved host is; older hosts without `os` were Macs (or Itda PCs with no user).
 function kindOf(h) {
   if (h.kind === 'rdp') return 'rdp';
+  if (h.kind === 'files') return 'files';
   if (KINDS[h.os]) return h.os;
   return 'mac';
 }
 // Words for a host's device in prompts and errors.
-const devWord = (h) => (!h ? 'Mac' : { mac: 'Mac', windows: 'PC', rdp: 'PC', linux: T('error.device') }[kindOf(h)]);
+const devWord = (h) => (!h ? 'Mac' : { mac: 'Mac', windows: 'PC', rdp: 'PC', linux: T('error.device'), files: T('error.device') }[kindOf(h)]);
 
 function openEdit(init = {}, mode = {}) {
   const existing = init.id ? hostById(init.id) : null;
@@ -1524,6 +1532,14 @@ ${quick ? sshBox : ''}
   };
   const pass = m.querySelector('#f-pass');
   m.querySelector('.reveal').onclick = () => { pass.type = pass.type === 'password' ? 'text' : 'password'; pass.focus(); };
+  // A files-only device has no screen: no display or keyboard settings, and saving opens files.
+  const screenParts = (d) => {
+    m.querySelectorAll('[data-tab="display"], [data-tab="input"]').forEach((t) => (t.hidden = !!d.files));
+    m.querySelectorAll('[data-pane="conn"] [data-opt]').forEach((c) => (c.closest('.opt').hidden = !!d.files));
+    const go = m.querySelector('.foot [data-x="connect"]');
+    if (go && !quick) go.innerHTML = d.files ? `${I('E8B7')}${T('editor.saveOpenFiles')}` : `${I('E768')}${T('editor.saveConnect')}`;
+  };
+  screenParts(KD);
   m.querySelectorAll('.kind-seg button').forEach((b) => (b.onclick = () => {
     m.querySelectorAll('.kind-seg button').forEach((x) => x.classList.toggle('on', x === b));
     const d = KINDS[b.dataset.kind];
@@ -1541,6 +1557,7 @@ ${quick ? sshBox : ''}
     m.querySelector('#f-host').placeholder = d.hostPh;
     const hpb = m.querySelector('.hp-box');
     if (hpb) hpb.hidden = d.kind === 'rdp' || d.os !== 'mac';
+    screenParts(d);
   }));
   m.querySelector('#f-account').onchange = (e) => {
     if (e.target.value === '__new') {
@@ -1639,6 +1656,8 @@ function askDelete(id) {
 // ---------------------------------------------------------------- connect flow
 
 function connect(id) {
+  // A files-only device has no screen: opening it opens its files.
+  if (filesOnly(hostById(id))) return window.ItdaFiles.launch(hostById(id));
   const s = S.sessions[id];
   if (s && s.state !== 'connecting') return send('focus', { id });
   showConnecting(id);
@@ -1691,7 +1710,7 @@ function showPassword(id, retry = false) {
   const m = openModal('password', `<div class="dialog small"><div class="body">
       <div class="state-icon info">${I('E72E')}</div>
       <h2>${T('password.title', { name: esc(label(h)) })}</h2>
-      <p class="lead">${retry ? T('password.retry') : { mac: T('password.lead.mac'), windows: T('password.lead.windows'), rdp: T('password.lead.rdp'), linux: T('password.lead.linux') }[kindOf(h)]}</p>
+      <p class="lead">${retry ? T('password.retry') : { mac: T('password.lead.mac'), windows: T('password.lead.windows'), rdp: T('password.lead.rdp'), linux: T('password.lead.linux'), files: T('password.lead.files') }[kindOf(h)]}</p>
       <div class="field" ${KINDS[kindOf(h)].user ? '' : 'hidden'}><label>${KINDS[kindOf(h)].user || ''}</label><input class="input" id="p-user" value="${esc(h.user)}" placeholder="${KINDS[kindOf(h)].userPh || ''}"></div>
       <div class="field"><label>${KINDS[kindOf(h)].pass}</label><div class="input-wrap"><input class="input" id="p-pass" type="password" autofocus><button class="reveal i" tabindex="-1" title="${T('common.showPassword')}">&#xE7B3;</button></div></div>
       <label class="check"><input type="checkbox" id="p-save" checked>${T('common.savePassword')}</label>
@@ -1793,11 +1812,12 @@ function showCtx(id, x, y, trigger = null) {
   if (!h) return;
   const s = S.sessions[id];
   const items = [];
-  if (!s) items.push(['connect', 'E768', T('common.connect')]);
+  if (filesOnly(h)) items.push(['files', 'E8B7', T('ctx.files')]);
+  else if (!s) items.push(['connect', 'E768', T('common.connect')]);
   else if (s.state === 'connecting') items.push(['cancel', 'E711', T('ctx.cancel')]);
   else items.push(['focus', 'E8A7', T('card.focus')], ['disconnect', 'E711', T('ctx.disconnect')]);
   if (MAC && ['mac', 'macos'].includes(h.os) && h.kind !== 'rdp') items.push(['apple-screen-sharing', 'E7F4', T('ctx.appleScreenSharing')]);
-  items.push(['files', 'E8B7', T('ctx.files')]);
+  if (!filesOnly(h)) items.push(['files', 'E8B7', T('ctx.files')]);
   if(h.os!=='linux')items.push(['remote-setup','E896',T('ctx.remoteSetup')]);
   items.push('-', ['edit', 'E70F', T('common.edit')], ['dup', 'E8C8', T('ctx.duplicate')], ['fav', h.favorite ? 'E8D9' : 'E734', h.favorite ? T('card.unfavorite') : T('ctx.favorite')]);
   items.push(['thumb-pick', 'E91B', T('ctx.thumbPick')]);

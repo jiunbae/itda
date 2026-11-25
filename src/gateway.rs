@@ -549,6 +549,8 @@ fn hosts_json() -> serde_json::Value {
     #[cfg_attr(not(windows), allow(unused_mut))]
     let mut list: Vec<_> = hosts
         .iter()
+        // A files-only device has no screen to show here.
+        .filter(|h| !h.is_files())
         .map(|h| {
             let login = store::resolve(h, &accounts);
             json!({
@@ -813,7 +815,8 @@ fn edit(c: &mut TcpStream, req: &Req) -> io::Result<()> {
                 h.normalize_groups();
             }
             if let Some(k) = str_of("kind") {
-                h.kind = if k == "rdp" { k } else { String::new() };
+                // The web editor doesn't offer files-only devices: editing one keeps its kind.
+                h.kind = if k == "rdp" { k } else if h.is_files() { h.kind.clone() } else { String::new() };
             }
             if let Some(os) = str_of("os").filter(|o| ["mac", "windows", "linux"].contains(&o.as_str())) {
                 h.os = os;
@@ -1042,7 +1045,7 @@ fn proxy(c: TcpStream, id: &str, peer: SocketAddr, local: bool, size: Option<(u3
         r
     } else {
         let hosts = store::load_hosts();
-        let Some(host) = hosts.iter().find(|h| h.id == id) else {
+        let Some(host) = hosts.iter().find(|h| h.id == id && !h.is_files()) else {
             return fail(4004, tr!("gw.notFound").into());
         };
         let login = store::resolve(host, &store::load_accounts());
